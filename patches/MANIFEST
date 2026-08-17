@@ -9,8 +9,10 @@
 # 原料桶 patches/vendor/fanboy/ = OpenW1700k ubi2-oc 全 20 commit（git format-patch，2026-08-17 抓取），
 #   供评审/拆分后移入正式桶；patches/ORDER 是档位视图（评审用），本文件是实际应用清单。
 
-# ── packages：regdb（决策=默认 500/510/520；555=OC 档；530 停用）──
-patches/packages/regdb-0500-world-5ghz-no-no-ir.patch                  package/firmware/wireless-regdb/patches/
+# ── packages：regdb（决策=默认 510/520；500 world 去 NO-IR 已上游自带 500-world-regd-5GHz.patch；
+#     555=OC 档（0520 后应用，顺序固化）；530 停用）──
+# F20：regdb-0500 与 OpenWrt 自带 500-world-regd-5GHz.patch 内容完全一致（重复补丁，2026-08-17 删除）；
+#     0555 于 2026-08-17 按 0510/0520 应用后状态重建（wireless-regdb 2026.05.30 上下文漂移）
 patches/packages/regdb-0510-us-6ghz-no-no-ir.patch                     package/firmware/wireless-regdb/patches/
 patches/packages/regdb-0520-us-power-limits-uni1-29-6g-29.patch        package/firmware/wireless-regdb/patches/
 #OC patches/packages/regdb-0555-w1700k-unii4-6g-30.patch               package/firmware/wireless-regdb/patches/

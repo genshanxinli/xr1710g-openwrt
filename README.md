@@ -57,7 +57,7 @@ git clone https://github.com/openwrt/openwrt.git openwrt
 | 项 | 状态 |
 |---|---|
 | #22397 XR1710G 板级支持 | 携带（对 master 重建三件套 `patches/root/9000-9002`，含 dts/uboot/envtools/02_network/mk；合入即删） |
-| US regdb 功率（500/510/520） | 内置；555（UNII-4/6GHz 30dBm）= OC 档；530 实验室 SP 停用 |
+| US regdb 功率（510/520） | 内置（world 5GHz 去 NO-IR 已上游自带 500-world-regd-5GHz.patch，F20 删重复 0500）；555（UNII-4/6GHz 30dBm）= OC 档；530 实验室 SP 停用 |
 | mt76 txpower（0006/0007） | 内置（YYH2913 家族；fanboy 0010/0011 备选对比） |
 | cpufreq / PM domain（#22029） | 已自持（`vendor/fanboy/03`，含 direct-PLL fallback，OC 前置） |
 | CPU 超频 | `scripts/prepare-oc.sh`（1.3/1.4 两档）+ OC 变体默认限频 1300（`files/etc/init.d/oc-limit`） |
