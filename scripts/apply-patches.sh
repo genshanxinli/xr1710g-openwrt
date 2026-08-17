@@ -6,7 +6,10 @@
 #   - 冲突即报错退出（修复而不是降级）：人工处理冲突补丁后重跑。
 #   - --dry-run：ROOT 补丁按序真实应用（--index）后 git reset --hard 回滚——累计校验，
 #     正确反映补丁间依赖；要求工作区相对 HEAD 干净（CI 全新克隆满足）。
-#     拷贝项（packages 等）校验目标目录存在性。
+#     拷贝项（packages 等）除目标目录存在性外，另由 scripts/verify-copy-patches.sh 做
+#     真实应用校验（F20：下载包源码→patch -p1→逐包校验，失败即红）；派生包补丁
+#     （ROOT 补丁生成，如 9002→uboot 9990-…，F21）同法校验——避免上下文漂移/命名排序/
+#     生成物残缺漏检到构建期。verify 在回滚前调用（派生文件依赖 ROOT 应用后的树状态）。
 #   - --experimental：应用 #EXP 前缀条目（实验档）。
 #   - --oc：应用 #OC 前缀条目（OC 档，激进资产如 regdb 555）。
 set -euo pipefail
@@ -80,9 +83,15 @@ done < "$MANIFEST"
 echo "----"
 echo "处理：$applied  实验档跳过：$skipped  缺失文件：$missing"
 if (( DRY )); then
+  # F20/F21 制度化：拷贝类/派生包补丁真实应用校验（失败即红；下载失败=⚠ 未校验不红，构建兜底）。
+  # 必须在 git reset 之前调用：派生目标（如 9002 → uboot patches/9990-…）由 ROOT 补丁生成，
+  # 回滚后文件即消失。始终回滚工作区，以 verify 的退出码为准。
+  OC_FLAG=""; (( OC )) && OC_FLAG="--oc"
+  "$ROOT/scripts/verify-copy-patches.sh" "$TREE" $OC_FLAG
+  vrc=$?
   (cd "$TREE" && git reset --hard -q)
   echo "（dry-run 完成，工作区已回滚；未跟踪文件不受影响）"
-  exit 0
+  exit $vrc
 fi
 [[ "$missing" -gt 0 ]] && { echo "存在缺失补丁——先运行 scripts/fetch-sources.sh 或按 patches/specs 取源。" >&2; exit 1; }
 exit 0

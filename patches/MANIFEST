@@ -17,6 +17,8 @@ patches/packages/regdb-0510-us-6ghz-no-no-ir.patch                     package/f
 patches/packages/regdb-0520-us-power-limits-uni1-29-6g-29.patch        package/firmware/wireless-regdb/patches/
 #OC patches/packages/regdb-0555-w1700k-unii4-6g-30.patch               package/firmware/wireless-regdb/patches/
 #DISABLED patches/packages/regdb-0530-us-6ghz-lab-indoor-sp-override-DISABLED.patch package/firmware/wireless-regdb/patches/
+# 0530 实测（2026-08-17，verify-copy-patches 实证）：在 wireless-regdb 2026.05.30 上按
+#   500→0510→0520 后状态可应用但带 fuzz 2（上下文漂移）——启用前必须按当前状态重建消除 fuzz。
 
 # ── packages：mt76 txpower（YYH2913 integration 家族，默认档核心）──
 # 注：package/kernel/mt76/patches/ 在 master 不存在，由脚本 mkdir 创建，OpenWrt 构建时自动应用
@@ -38,8 +40,11 @@ patches/root/9017-w1700k-apps-pack-core.patch ROOT
 patches/root/9010-wifi-scripts-txpower-ucode.patch ROOT
 # HW GRO/LRO 默认开启（11 号定档 default——README 声明的 HW-GRO/LRO 能力载体；kernel 6.18 编译期验证中）
 patches/vendor/fanboy/11-airoha-lro-default-0e90a420.patch ROOT
-# mt76 token/NPU debugfs 计数器（14 号定档 default——NPU 诊断低风险；15 号 0010/0011 与默认 0006/0007 重复，仅留备选不启用）
-patches/vendor/fanboy/14-mt76-patches-80f79586.patch ROOT
+# mt76 token/NPU debugfs 计数器（14 号定档 default——F13 评审基于旧 mt76；F21 复查 2026-08-17：
+#   相对 pin 版 mt76 59676919 已完全上游化——0001 与 debugfs.c:908 逐字一致、0003 的功能性改动
+#   （MCU 采集调用）mac.c:2895-2896 已存在，剩余 diff 只是删除上游已无调用者的死代码 mt7996_mac_sta_poll。
+#   能力保留（上游自带），本层补丁冗余且应用失败——#DISABLED，非降级，见 FIXES F22）
+#DISABLED patches/vendor/fanboy/14-mt76-patches-80f79586.patch ROOT
 # 08 号切片（2026-08-17 F13 收尾：从 vendor/fanboy/08-reliability-compat 切出的六项 default；9014 依赖 9010 先行——
 # 同文件（mac80211.sh）尾部上下文按 9010 后状态重建，应用顺序已在 MANIFEST 固化）
 patches/root/9011-xr1710g-spi33mhz.patch ROOT

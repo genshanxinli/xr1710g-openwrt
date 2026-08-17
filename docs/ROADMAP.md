@@ -32,6 +32,7 @@
 ## P4 工程化
 - [x] 构建产出后自动打 pre-release（含 FIXES 变更摘要；2026-08-17 实现——但 F19 假绿修复前 release 是空壳，真绿后才有意义）
 - [x] 构建退出码硬化（F19：pipefail + no-files-found=error，2026-08-17）
+- [x] 拷贝类补丁 dry-run 真实应用校验（F20 制度化，2026-08-17：新增 `scripts/verify-copy-patches.sh` 接入 `apply-patches.sh --dry-run`——按构建语义解包包源码 + glob 排序真实 `patch -p1`，regdb 附 dbparse 校验；2h sync cron 尽早暴露而非等构建）
 - [ ] 实验档毕业的自动化：experimental 构建通过 + ACCEPTANCE 子集 → PR 式合并到默认 MANIFEST
 - [ ] vermagic 注入接入 CI（F14，让自建 kmod 兼容官方 opkg）
 - [ ] 2h 同步工作流稳定后，把"冲突出现 → 修复 → 回归"流程沉淀为 CI 注释/文档（sync-upstream.yml 已就位）

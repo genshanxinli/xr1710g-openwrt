@@ -1,12 +1,15 @@
-# Source: openwrt/openwrt PR #22397（999-airoha-add-gemtek-xr1710g.patch 原样提取，2026-08-17）
+# Source: openwrt/openwrt PR #22397（999-airoha-add-gemtek-xr1710g.patch 提取，2026-08-17）
 # Upstream: open（#22397）；合入即删
 # Reason: XR1710G 链加载 U-Boot 板级（configs/defenvs/dts，BMT/BBT 规避，与 W1700K 同法）
-# 命名 1000-：master 已有 998/999（W1700K 系），PR 内部重编号不采用
-diff --git a/package/boot/uboot-airoha/patches/1000-airoha-add-gemtek-xr1710g.patch b/package/boot/uboot-airoha/patches/1000-airoha-add-gemtek-xr1710g.patch
+# F21 修复（2026-08-17 构建真红定位）：① 提取时 3 个新建文件 hunk 的 `+++ b/` 行丢失
+#   （首 hunk 靠 diff --git 头侥幸应用，2/3 号 patch 拿不到文件名必挂）——已补回；
+#   ② 命名 1000- 的 glob 序实际排在 100- 与 101- 之间（字节序 "1000" < "101"），
+#   在 defenvs/（999 创建）之前应用——改为 9990-（排在 998/999 之后、未来 1000+- 之前）。
+diff --git a/package/boot/uboot-airoha/patches/9990-airoha-add-gemtek-xr1710g.patch b/package/boot/uboot-airoha/patches/9990-airoha-add-gemtek-xr1710g.patch
 new file mode 100644
 --- /dev/null
-+++ b/package/boot/uboot-airoha/patches/1000-airoha-add-gemtek-xr1710g.patch
-@@ -0,0 +1,295 @@
++++ b/package/boot/uboot-airoha/patches/9990-airoha-add-gemtek-xr1710g.patch
+@@ -0,0 +1,298 @@
 +From 57220b54f7f9749112da635659707d274825d1cc Mon Sep 17 00:00:00 2001
 +From: Kenneth Kasilag <kenneth@kasilag.me>
 +Date: Wed, 11 Mar 2026 11:37:34 +0000
@@ -32,6 +35,7 @@ new file mode 100644
 +new file mode 100644
 +index 1230e879da2664..ad3b2bf9ecbf03 100644
 +--- /dev/null
+++++ b/configs/an7581_xr1710g_defconfig
 +@@ -0,0 +1,107 @@
 ++CONFIG_ARM=y
 ++CONFIG_ARCH_AIROHA=y
@@ -141,6 +145,7 @@ new file mode 100644
 ++CONFIG_ENV_DEFAULT_ENV_TEXT_FILE="defenvs/an7581_xr1710g_env"
 ++CONFIG_SHA512=y
 +--- /dev/null
+++++ b/defenvs/an7581_xr1710g_env
 +@@ -0,0 +1,27 @@
 ++loadaddr=0x81800000
 ++initaddr=0x89000000
@@ -170,6 +175,7 @@ new file mode 100644
 ++ubi_read_production=ubi read $loadaddr fit && iminfo $loadaddr
 ++ubi_read_recovery=ubi check recovery && ubi read $initaddr recovery
 +--- /dev/null
+++++ b/dts/upstream/src/arm64/airoha/an7581-xr1710g-ubi.dts
 +@@ -0,0 +1,131 @@
 ++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 ++/dts-v1/;
