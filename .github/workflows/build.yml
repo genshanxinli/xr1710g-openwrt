@@ -111,3 +111,45 @@ jobs:
             ${{ env.TREE }}/bin/targets/airoha/an7581/*.itb
             ${{ env.TREE }}/bin/targets/airoha/an7581/*.manifest
             !${{ env.TREE }}/bin/targets/airoha/an7581/*-factory*
+
+  # P4（ROADMAP）：构建产出自动 pre-release。仅手动 dispatch 生成（push 触发只做门禁，
+  # 不刷 release 噪音）；matrix 全档成功后才聚合发布，一个 run 一个 tag。
+  release:
+    if: github.event_name == 'workflow_dispatch' && needs.build.result == 'success'
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 下载全档固件产物
+        uses: actions/download-artifact@v4
+        with:
+          path: _rel
+          pattern: firmware-*
+          merge-multiple: true
+
+      - uses: actions/checkout@v4
+      - name: 生成 release 备注（自上次 tag 的提交 + FIXES 台账头部）
+        id: notes
+        run: |
+          prev=$(git describe --tags --abbrev=0 2>/dev/null || echo '（首次）')
+          {
+            echo "### 自上次版本（$prev）以来的提交"
+            git log --oneline -30 --no-merges
+            echo
+            echo "### 修复台账最近变更"
+            sed -n '1,4p' docs/FIXES.md
+            echo
+            echo "### 刷机提醒"
+            echo "请核对 docs/FLASHING.md（HTTP U-Boot 主路径，锁版 SHA256 以 YYH2913 release 页为准）。"
+          } > relnotes.md
+          echo "prev=$prev" >> "$GITHUB_OUTPUT"
+
+      - name: 创建 pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ci-${{ github.run_number }}
+          name: "CI 构建 #${{ github.run_number }}（${{ github.ref_name }} @ ${{ steps.notes.outputs.prev }} 起）"
+          body_path: relnotes.md
+          files: _rel/**
+          prerelease: true
