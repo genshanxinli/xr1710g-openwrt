@@ -1,0 +1,174 @@
+From 33ac9c6632b6206f49cabfca97763ced598011be Mon Sep 17 00:00:00 2001
+From: Ryan Chen <rchen14b@gmail.com>
+Date: Mon, 23 Mar 2026 16:23:43 -0500
+Subject: [PATCH] airoha: enable bridge offload for AN7581 target
+
+Enable L2 bridge hardware flow offloading on AN7581 using the
+bridge-family flowtable from the 675 patch series (no kmod-br-netfilter).
+
+Add bridge-flow-offload package:
+  - Detects bridge member ports dynamically from /sys/class/net/br-lan/brif
+  - Generates a bridge-family nftables flowtable and forward-chain rule in
+    /usr/share/nftables.d/ruleset-post/30-bridge-offload.nft
+  - Triggers fw4 reload to apply the ruleset-post include
+  - DEPENDS: kmod-nft-bridge, firewall4
+
+Add iface hotplug script (51-bridge-flow-offload) that fires on ifup of
+the lan interface with a 10-second settle time, allowing WiFi AP
+interfaces to join br-lan before bridge port detection. Uses flock to
+serialize concurrent events.
+
+The bridge-family flowtable itself is provided by kmod-nft-offload
+(nf_flow_table_inet.ko), which registers the NFPROTO_BRIDGE flowtable
+type per the 675 patch series; it is pulled in transitively via
+firewall4, so no separate kmod is needed.
+
+Add bridge-flow-offload to DEFAULT_PACKAGES in target.mk so it is
+included in all images.
+
+Assisted-By: OpenCode <assist@opencode.ai>
+Signed-off-by: Ryan Chen <rchen14b@gmail.com>
+---
+ .../config/bridge-flow-offload/Makefile       | 37 +++++++++++++
+ .../share/bridge-flow-offload/apply-rules.sh  | 52 +++++++++++++++++++
+ .../hotplug.d/iface/51-bridge-flow-offload    | 13 +++++
+ target/linux/airoha/an7581/target.mk          |  3 +-
+ 4 files changed, 104 insertions(+), 1 deletion(-)
+ create mode 100644 package/network/config/bridge-flow-offload/Makefile
+ create mode 100644 package/network/config/bridge-flow-offload/files/usr/share/bridge-flow-offload/apply-rules.sh
+ create mode 100755 target/linux/airoha/an7581/base-files/etc/hotplug.d/iface/51-bridge-flow-offload
+
+diff --git a/package/network/config/bridge-flow-offload/Makefile b/package/network/config/bridge-flow-offload/Makefile
+new file mode 100644
+index 00000000000000..187bb4dfa8a08c
+--- /dev/null
++++ b/package/network/config/bridge-flow-offload/Makefile
+@@ -0,0 +1,37 @@
++include $(TOPDIR)/rules.mk
++
++PKG_NAME:=bridge-flow-offload
++PKG_VERSION:=1.0
++PKG_RELEASE:=1
++PKG_LICENSE:=GPL-2.0
++
++include $(INCLUDE_DIR)/package.mk
++
++define Package/bridge-flow-offload
++  SECTION:=net
++  CATEGORY:=Network
++  SUBMENU:=Firewall
++  TITLE:=Bridge hardware flow offloading
++  DEPENDS:=+kmod-nft-bridge +firewall4
++endef
++
++define Package/bridge-flow-offload/description
++  Adds nftables bridge flowtable offloading rules after firewall4
++  initialization. Detects bridge member ports dynamically and creates
++  a bridge-family flowtable with hardware offload support.
++endef
++
++define Build/Configure
++	true
++endef
++
++define Build/Compile
++	true
++endef
++
++define Package/bridge-flow-offload/install
++	$(INSTALL_DIR) $(1)/usr/share/bridge-flow-offload
++	$(INSTALL_BIN) ./files/usr/share/bridge-flow-offload/apply-rules.sh $(1)/usr/share/bridge-flow-offload/apply-rules.sh
++endef
++
++$(eval $(call BuildPackage,bridge-flow-offload))
+diff --git a/package/network/config/bridge-flow-offload/files/usr/share/bridge-flow-offload/apply-rules.sh b/package/network/config/bridge-flow-offload/files/usr/share/bridge-flow-offload/apply-rules.sh
+new file mode 100644
+index 00000000000000..3c412dbc9a84e3
+--- /dev/null
++++ b/package/network/config/bridge-flow-offload/files/usr/share/bridge-flow-offload/apply-rules.sh
+@@ -0,0 +1,52 @@
++#!/bin/sh
++# Bridge flow offloading rule generator
++# Detects bridge member ports and writes a persistent .nft file
++# that fw4 includes via its ruleset-post mechanism.
++#
++# After writing the file, triggers fw4 reload to apply the rules.
++
++BRIDGE="${1:-br-lan}"
++RULES_DIR="/usr/share/nftables.d/ruleset-post"
++RULES_FILE="${RULES_DIR}/30-bridge-offload.nft"
++FLOWTABLE="br_offload"
++
++detect_bridge_ports() {
++    local brif_dir="/sys/class/net/${BRIDGE}/brif"
++    [ -d "$brif_dir" ] || return 1
++    local ports=""
++    for port_dir in "$brif_dir"/*; do
++        [ -d "$port_dir" ] || continue
++        ports="${ports:+${ports}, }$(basename "$port_dir")"
++    done
++    [ -n "$ports" ] && echo "$ports"
++}
++
++main() {
++    local devices
++    devices=$(detect_bridge_ports)
++    if [ -z "$devices" ]; then
++        logger -t bridge-flow-offload "No bridge ports found for ${BRIDGE}, skipping"
++        return 1
++    fi
++
++    mkdir -p "$RULES_DIR"
++    cat > "$RULES_FILE" <<EOF
++destroy table bridge fw4
++
++table bridge fw4 {
++    flowtable ${FLOWTABLE} {
++        hook ingress priority 0; devices = { ${devices} }; flags offload;
++    }
++
++    chain forward {
++        type filter hook forward priority 0; policy accept;
++        meta l4proto { tcp, udp } flow offload @${FLOWTABLE}
++    }
++}
++EOF
++
++    # Reload fw4 so it picks up our ruleset-post include
++    /etc/init.d/firewall reload >/dev/null 2>&1 &
++}
++
++main
+diff --git a/target/linux/airoha/an7581/base-files/etc/hotplug.d/iface/51-bridge-flow-offload b/target/linux/airoha/an7581/base-files/etc/hotplug.d/iface/51-bridge-flow-offload
+new file mode 100755
+index 00000000000000..6cca7adec1573d
+--- /dev/null
++++ b/target/linux/airoha/an7581/base-files/etc/hotplug.d/iface/51-bridge-flow-offload
+@@ -0,0 +1,13 @@
++#!/bin/sh
++
++[ "$ACTION" = ifup ] || exit 0
++[ "$INTERFACE" = lan ] || exit 0
++
++(
++	exec 9>/var/lock/bridge-flow-offload.lock
++	flock -n 9 || exit 0
++	sleep 10
++	/usr/share/bridge-flow-offload/apply-rules.sh
++) &
++
++exit 0
+diff --git a/target/linux/airoha/an7581/target.mk b/target/linux/airoha/an7581/target.mk
+index bc101fb4e10a7c..a3d6ab8fef20ad 100644
+--- a/target/linux/airoha/an7581/target.mk
++++ b/target/linux/airoha/an7581/target.mk
+@@ -6,7 +6,8 @@ KERNELNAME:=Image dtbs
+ FEATURES+=pwm
+ 
+ DEFAULT_PACKAGES += \
+-	airoha-en7581-npu-firmware uboot-envtools kmod-crypto-hw-eip93
++	airoha-en7581-npu-firmware uboot-envtools kmod-crypto-hw-eip93 \
++	bridge-flow-offload
+ 
+ define Target/Description
+ 	Build firmware images for Airoha an7581 ARM based boards.

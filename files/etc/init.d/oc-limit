@@ -1,0 +1,15 @@
+#!/bin/sh /etc/rc.common
+# oc-limit — OC 变体默认限频 1300MHz（决策：1.4G 能力 + 默认保守；sysfs 可解锁 1400，重启回退）
+# 对 stock（cpuinfo_max_freq=1200）/ oc-1.3（=1300）自动 no-op；仅 oc-1.4（=1400）生效。
+# 解锁激进档：echo 1400000 > /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq
+START=97
+
+boot() {
+	for p in /sys/devices/system/cpu/cpufreq/policy*; do
+		[ -f "$p/scaling_max_freq" ] || continue
+		max="$(cat "$p/cpuinfo_max_freq" 2>/dev/null)" || continue
+		[ "${max:-0}" -gt 1300000 ] || continue
+		echo 1300000 > "$p/scaling_max_freq"
+		logger -t oc-limit "默认限频 1300MHz（cpuinfo_max_freq=${max}；可 sysfs 解锁，重启回退）"
+	done
+}

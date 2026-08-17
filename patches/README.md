@@ -12,12 +12,14 @@
 | `patches/packages/` | 包级补丁（regdb / mt76 / kmod…） | 按 `MANIFEST` 指定目录拷贝 |
 | `patches/root/` | 跨目录补丁（如 #22397 板级支持，13 文件） | 树根 `git apply` |
 | `patches/specs/` | 补丁**说明书**（来源 URL/上游状态/待取源）或暂存参考补丁 | 不自动应用 |
+| `patches/vendor/fanboy/` | **原料桶**：OpenW1700k `ubi2-oc` 全 20 commit（git format-patch，2026-08-17 抓取） | 评审/拆分后移入正式桶或按 MANIFEST 引用 |
 
 ## MANIFEST（应用清单）
 
 `patches/MANIFEST` 每行一条：`<补丁相对路径> <目标目录|ROOT>`。
 
-- `#` 开头 = 注释/停用；`#EXP ` 开头 = 实验档（`apply-patches.sh --experimental` 才应用）。
+- `#` 开头 = 注释/停用；`#EXP ` 开头 = 实验档（`apply-patches.sh --experimental` 才应用）；`#OC ` 开头 = OC 档（`apply-patches.sh --oc` 才应用）。
+- `patches/ORDER` 是档位视图（tier: 文件，评审用）；**MANIFEST 是实际应用清单**。
 - **实验档 → 默认档毕业条件**：在 known-good 周期内跑通 `docs/ACCEPTANCE.md` 全项 → 取消 `#EXP` 注释并入默认，并在 `docs/FIXES.md` 对应条目改状态。
 
 ## 补丁文件元数据头约定
@@ -34,7 +36,8 @@
 
 OC 依赖 master 树当前形态（`an7581.dtsi` OPP 表、`config-6.18` governor、PM domain 的 PLL 公式位置随内核版本漂移），因此不放在 MANIFEST，
 由 `scripts/prepare-oc.sh <1.3|1.4>` 在**构建前**对树做确定性编辑（失败即报错，不静默降级）。原始参考补丁见
-`patches/specs/original-oc-80096373b5-6.12-reference.patch`（fanboy OpenW1700k `ubi2-oc` commit 80096373b5，6.12 路径，仅作机制参考）。
+`patches/vendor/fanboy/20-oc-governor-200mhz-ed7cbc80.patch` 与 `patches/specs/original-oc-80096373b5-6.12-reference.patch`。
+OC 变体的**默认限频 1300MHz** 由 `files/etc/init.d/oc-limit` 实现（1.4G 能力 + 保守默认，sysfs 可解锁，重启回退）。
 
 ## 新增补丁流程
 

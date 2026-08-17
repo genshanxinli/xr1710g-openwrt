@@ -21,7 +21,8 @@ JOBS="${JOBS:-$(nproc)}"
 [[ -d "$TREE/.git" && -f "$TREE/scripts/feeds" ]] || { echo "错误：$TREE 不是 openwrt 源码树（缺 scripts/feeds）" >&2; exit 1; }
 
 echo "== [1/5] 同步补丁层（$TIER）=="
-"$ROOT/scripts/apply-patches.sh" "$TREE"
+OC_FLAG=""; [[ "$TIER" != "stock" ]] && OC_FLAG="--oc"
+"$ROOT/scripts/apply-patches.sh" "$TREE" $OC_FLAG
 
 echo "== [2/5] OC 档位 =="
 if [[ "$TIER" != "stock" ]]; then
@@ -29,6 +30,10 @@ if [[ "$TIER" != "stock" ]]; then
 else
   "$ROOT/scripts/prepare-oc.sh" stock "$TREE" || true   # 撤销可能残留的 OC 编辑
 fi
+
+echo "== [2.5/5] files/ overlay（网络/Wi-Fi/风扇/OC 限频默认配置）=="
+mkdir -p "$TREE/files"
+cp -rf "$ROOT/files/." "$TREE/files/"
 
 echo "== [3/5] feeds（官方默认 + 本仓库自定义）=="
 cd "$TREE"

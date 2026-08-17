@@ -1,0 +1,26 @@
+# 补丁应用顺序表  format: <tier> <相对路径>  tier=default|oc|experimental
+# 说明：08 混入 555 regdb（激进档），集成时需拆分，见 docs/FIXES.md#08 拆分
+default vendor/fanboy/01-vermagic-inject-85005e10.patch
+default vendor/fanboy/03-cpufreq-pmdomain-22029-e5d23549.patch
+default vendor/fanboy/08-reliability-compat-36da8e02.patch
+default vendor/fanboy/11-airoha-lro-default-0e90a420.patch
+default vendor/fanboy/12-lorenzo-airoha-patches-8d1947c0.patch
+default vendor/fanboy/13-mt76-plus-firmware-612255dd.patch
+default vendor/fanboy/14-mt76-patches-80f79586.patch
+default vendor/fanboy/15-txpower-control-d7aa0235.patch
+default vendor/fanboy/16-wifi-scripts-txpower-ucode-41b9e3ac.patch
+default vendor/fanboy/19-w1700k-apps-pack-fd705cd9.patch
+default vendor/pr/22397-xr1710g-board-support.diff
+default regdb/510-us-regd-6GHz.patch
+default regdb/520-w1700k-us-power-limits.patch
+oc vendor/fanboy/20-oc-governor-200mhz-ed7cbc80.patch
+oc regdb/555-w1700k-fix.patch
+experimental vendor/fanboy/02-eip93-f80d0507.patch
+experimental vendor/fanboy/04-dsa-kmod-netlink-22532-aa531917.patch
+experimental vendor/fanboy/05-bridge-offload-22533-33ac9c66.patch
+experimental vendor/fanboy/06-nft-flow-offload-l2-22533-bdfd1ae2.patch
+experimental vendor/fanboy/07-mt76-bypass-hw-rro-e880d0db.patch
+experimental vendor/fanboy/09-hw11-hw21-compat-afc6dc93.patch
+experimental vendor/fanboy/17-cmonroe-stability-8c530f05.patch
+experimental vendor/fanboy/18-smartrg-stability-b45d5117.patch
+experimental regdb/530-us-6ghz-lab-indoor-sp-override.patch

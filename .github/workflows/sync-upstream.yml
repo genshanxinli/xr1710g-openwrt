@@ -1,0 +1,42 @@
+name: sync-upstream
+
+# 决策：2h 自动同步上游 + 补丁层 dry-run 校验（借鉴 fanboy 每 2h rebase 模型；
+# 补丁层冲突面越小越好——同步越勤，冲突越少。冲突=CI 红，处理=修补丁层，不降级。）
+
+on:
+  schedule:
+    - cron: '15 */2 * * *'
+  workflow_dispatch:
+  push:
+    paths:
+      - 'patches/**'
+      - 'scripts/apply-patches.sh'
+      - 'scripts/prepare-oc.sh'
+      - 'config/**'
+      - 'files/**'
+
+jobs:
+  sync-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 克隆最新 openwrt master 并叠加本仓库
+        run: |
+          git clone -q --depth 1 https://github.com/openwrt/openwrt.git openwrt
+          rsync -a --exclude='.git' --exclude='audit-ubi2oc' --exclude='.github' --exclude='openwrt' \
+            "$GITHUB_WORKSPACE/" openwrt/
+          cd openwrt
+          chmod +x scripts/*.sh
+
+      - name: 补丁层 dry-run（默认 + OC 档）
+        run: |
+          cd openwrt
+          ./scripts/apply-patches.sh . --dry-run --oc
+          echo "上游 HEAD: $(git rev-parse --short HEAD)"
+
+      - name: OC 脚本语法与档位自检
+        run: |
+          cd openwrt
+          bash -n scripts/prepare-oc.sh && echo "prepare-oc.sh 语法 OK"
+          bash -n scripts/build.sh && echo "build.sh 语法 OK"

@@ -34,7 +34,7 @@
 
 ## 超频与功率
 
-- **超频（OC）** — AN7581 CPU 超频。唯一社区实现：OpenW1700k 分支 `ubi2-oc`（commit 80096373b5）三文件补丁——DTS `cpu_opp_table` 15 档整体 +200MHz（500–1200 → 700–1400）、PM domain PLL 公式 `freq_mhz = 700 + state*50` 同步、默认 governor=performance。**前置依赖**：cpufreq/PM domain 修复（openwrt #22029）。实测上限 1.4GHz（静态电压 546–650mV 不可调，1.5GHz 无一成功）；个别机器内置 OC 启动即 kernel panic（体质差异，非软件可修）→ 落地为双 release（stock 默认 + oc 变体 1.3/1.4 两档）。
+- **超频（OC）** — AN7581 CPU 超频。社区唯一**参考实现**：OpenW1700k 分支 `ubi2-oc`（注意：该分支每轮整体重压栈、hash 不稳定；审计日期 2026-08-16 对应 commit `ed7cbc80` = openwrt main HEAD + 20 commits，before 引用值 80096373b5 已被 rebase）——三提交联动：`939-cpufreq`（an7581 compatible + PLL 直写回退；主线上 an7581 不注册 cpufreq，此为**必需项**而非可选）+ `940-pmdomain`（PLL 公式 `freq_mhz = 700 + state*50`，= #22029 的 6.18 化，PR 仍 open 未合并）+ `ed7cbc80`（DTS `cpu_opp_table` 15 档**整梯平移** +200MHz：500–1200 → 700–1400；config governor=performance）。**落地两档**：1.4GHz 激进档 = +200 平移；1.3GHz 保守档 = +100 平移（OPP→600–1300、公式→`600+state*50`）——dtsi 与 940 必须同 commit 同改（驱动按公式算频率），不用 DTBO overlay（会造成"DTS 与驱动公式双源真相"）。实测上限 1.4GHz（静态电压 546–650mV 不可调，1.5GHz 无一成功）；个别机器内置 OC 启动即 kernel panic（体质差异，非软件可修）→ 双 release（stock 默认 + oc 变体）。
 
 ## 项目政策
 

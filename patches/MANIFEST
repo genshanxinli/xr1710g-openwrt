@@ -2,28 +2,54 @@
 # 格式：<补丁相对路径> <目标目录|ROOT>
 #   - ROOT = 在 openwrt 树根 git apply（跨目录补丁）
 #   - 其它目标 = 补丁拷贝目录（相对树根），由 OpenWrt 构建时应用
-# 前缀 #EXP = 实验档（scripts/apply-patches.sh --experimental 才应用；毕业并入后取消注释）
+# 前缀 #EXP = 实验档（apply-patches.sh --experimental 才应用；毕业并入后取消注释）
+# 前缀 #OC  = OC 档（apply-patches.sh --oc 才应用；激进档资产）
 # 前缀 #DISABLED = 停用项（默认不应用）
+# 注意：活动行不允许尾随注释（会破坏目标解析）；说明一律写成整行注释。
+# 原料桶 patches/vendor/fanboy/ = OpenW1700k ubi2-oc 全 20 commit（git format-patch，2026-08-17 抓取），
+#   供评审/拆分后移入正式桶；patches/ORDER 是档位视图（评审用），本文件是实际应用清单。
 
-# ─────────── packages：regdb（US 功率体系，决策=默认带 500/510/520，530 停用）───────────
+# ── packages：regdb（决策=默认 500/510/520；555=OC 档；530 停用）──
 patches/packages/regdb-0500-world-5ghz-no-no-ir.patch                  package/firmware/wireless-regdb/patches/
 patches/packages/regdb-0510-us-6ghz-no-no-ir.patch                     package/firmware/wireless-regdb/patches/
 patches/packages/regdb-0520-us-power-limits-uni1-29-6g-29.patch        package/firmware/wireless-regdb/patches/
+#OC patches/packages/regdb-0555-w1700k-unii4-6g-30.patch               package/firmware/wireless-regdb/patches/
 #DISABLED patches/packages/regdb-0530-us-6ghz-lab-indoor-sp-override-DISABLED.patch package/firmware/wireless-regdb/patches/
 
-# ─────────── packages：mt76 补丁（YYH2913 integration，默认档核心）───────────
+# ── packages：mt76 txpower（YYH2913 integration 家族，默认档核心）──
+# 注：package/kernel/mt76/patches/ 在 master 不存在，由脚本 mkdir 创建，OpenWrt 构建时自动应用
 patches/packages/mt76-0006-wifi-mt76-mt7996-refresh-power-limits-on-txpower-changes.patch       package/kernel/mt76/patches/
 patches/packages/mt76-0007-wifi-mt76-mt7996-enable-firmware-txpower-limit-controls.patch        package/kernel/mt76/patches/
 
-# ─────────── root：跨目录（#22397 板级支持，13 文件：dts/image/uboot/fan/02_network）───────────
-patches/root/9000-openwrt-22397-xr1710g-board-support.patch ROOT
+# ── root：跨目录 git apply（默认档）──
+# XR1710G 板级支持（2026-08-17 对 master 重建三件套，替代 PR 原 diff——PR 对 master 5 文件冲突，见 FIXES F01）
+patches/root/9000-xr1710g-common.patch ROOT
+patches/root/9001-xr1710g-dts.patch ROOT
+patches/root/9002-xr1710g-uboot.patch ROOT
+# #22029 等价：939/940 + direct-PLL fallback（OC 前置，F07；上游合入即删）
+patches/vendor/fanboy/03-cpufreq-pmdomain-22029-e5d23549.patch ROOT
+# #22473 kernel 侧 ramoops（uboot 侧仍待上游，F09）
+patches/vendor/fanboy/10-pstore-ramoops-22473-2f7d2d02.patch ROOT
+# 应用包：npu/flowsense/mlo/fancontrol/filemanager…（含 fastfetch/netspeedtest 冗余——集成时拆包精简 F13）
+patches/vendor/fanboy/19-w1700k-apps-pack-fd705cd9.patch ROOT
 
-# ─────────── 实验档（--experimental；毕业并入默认档后取消 #EXP）───────────
-#EXP patches/specs/openwrt-22532-dsa-netlink.md ROOT
-#EXP patches/specs/openwrt-22533-nft-l2-offload.md ROOT
+# ── 实验档（--experimental；毕业并入默认档后取消 #EXP）──
+#EXP patches/vendor/fanboy/02-eip93-f80d0507.patch ROOT
+#EXP patches/vendor/fanboy/04-dsa-kmod-netlink-22532-aa531917.patch ROOT
+#EXP patches/vendor/fanboy/05-bridge-offload-22533-33ac9c66.patch ROOT
+#EXP patches/vendor/fanboy/06-nft-flow-offload-l2-22533-bdfd1ae2.patch ROOT
+#EXP patches/vendor/fanboy/07-mt76-bypass-hw-rro-e880d0db.patch ROOT
+#EXP patches/vendor/fanboy/09-hw11-hw21-compat-afc6dc93.patch ROOT
+#EXP patches/vendor/fanboy/17-cmonroe-stability-8c530f05.patch ROOT
+#EXP patches/vendor/fanboy/18-smartrg-stability-b45d5117.patch ROOT
 
-# ─────────── 待取源后解锁（fetch-sources.sh / 手动取 PR diff 放进桶）───────────
-# patches/kernel/openwrt-22029-cpufreq-pm-domain.patch  target/linux/airoha/patches-6.18/   # OC 前置依赖，见 specs
-# patches/kernel/openwrt-22473-uboot-pstore.md         package/boot/uboot-airoha/patches/   # 见 specs
-# patches/packages/openwrt-24034-rtl826x-led.patch     package/firmware/                    # 见 specs
-# patches/kernel/openwrt-24619-mt7530-led.patch        target/linux/generic/                # 见 specs
+# ── 待拆分/评审后解锁（原料桶已有，见 FIXES F13/F14）──
+# patches/vendor/fanboy/08-reliability-compat-36da8e02.patch ROOT
+# patches/vendor/fanboy/11-airoha-lro-default-0e90a420.patch ROOT
+# patches/vendor/fanboy/12-lorenzo-airoha-patches-8d1947c0.patch ROOT
+# patches/vendor/fanboy/13-mt76-plus-firmware-612255dd.patch ROOT
+# patches/vendor/fanboy/14-mt76-patches-80f79586.patch ROOT
+# patches/vendor/fanboy/15-txpower-control-d7aa0235.patch ROOT
+# patches/vendor/fanboy/16-wifi-scripts-txpower-ucode-41b9e3ac.patch ROOT
+# patches/vendor/fanboy/01-vermagic-inject-85005e10.patch ROOT
+# patches/vendor/fanboy/20-oc-governor-200mhz-ed7cbc80.patch ROOT

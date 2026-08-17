@@ -5,18 +5,20 @@
 
 | # | 项目 | 问题/背景 | 根因 | 本层载体 | 上游状态 | 备注 |
 |---|---|---|---|---|---|---|
-| F01 | XR1710G 板级支持 | master 无 xr1710g 文件 | #22397 未合入 | `patches/root/9000-...-board-support.patch`（PR diff 快照） | upstream-open（#22397，2026-08-14 最后活动） | 合入即删；PR diff 会漂移，重取源后更新 |
+| F01 | XR1710G 板级支持 | master 无 xr1710g 文件 | #22397 未合入 | **已对 master 重建**（2026-08-17）：`patches/root/9000-xr1710g-common.patch` + `9001-xr1710g-dts.patch` + `9002-xr1710g-uboot.patch`。与 PR 的偏离：① 不做 common-dtsi 重构（w1700k dts 保持上游原样，冲突面最小）；② 网口命名按自用决策（WAN=1G-1，PR 默认 10G-1=wan）；③ uboot 补丁命名 1000-（master 已有 998/999）；④ 未采纳 PR 的 airoha_fan 改动（我们的 `files/etc/init.d/fan` 动态探测覆盖 xr1710g，避免双脚本抢 PWM） | upstream-open（#22397，2026-08-14 最后活动） | 合入即删；PR 更新后 diff 对照，重取源见 fetch-sources.sh --22397 |
 | F02 | 6GHz 不可用 | US 默认 regdb 6GHz NO-IR 限制 | regdb 未含设备功率 | `regdb-0510/0520`（+0500 world 5GHz） | n/a（功率补丁不打算上游） | 530 实验室 SP 默认停用（#DISABLED） |
 | F03 | NPU 内存/卸载 | 只在未装 Wi-Fi 板保留 NPU 内存 | 上游 #24593 | 无需携带（master 已合 2026-08-11） | merged | 跟踪：若回移分支需重拾 |
 | F04 | 10G PHY 启动/link | 非 Realtek SoC 上 rtl8261 劣化、boot 失败 | #21777/#22564/#23078/#23383 系列 | 依赖：#22397 板级（含 phylink 配置）；kmod-phy-realtek + rtl826x-firmware | 部分 merged；PHY LED #24034 仍 open | 见 F06 |
 | F05 | 风扇温控 | 传感器版本差异（NCT7802/NCT7511Y）；上游 airoha_fan 只覆盖 nct7802 | hwmon 动态探测缺失 | `files/etc/init.d/fan`（动态探测+曲线，覆盖 #22391 修复） | n/a（版本差异不适合上游单一脚本） | 社区实测 NCT7802 为主 |
-| F06 | 10G/1G LED 行为 | XR1710G LED 由交换芯片驱动、与 W1700K 相反 | 板级差异 | 待取源：#24034（RTL826x LED）、#24619（mt7530 LED） | upstream-open | 见 specs；同步后解锁 MANIFEST |
-| F07 | cpufreq / PM domain | OC 前置依赖；驱动修复 6.18 下仍不稳 | #22029 未合 | 待取源 `openwrt-22029-...`（fetch-sources.sh） | upstream-open | **OC 前必须先合**（F08 前置） |
-| F08 | CPU 超频 | stock 500–1200MHz；部分机器内置 OC 启动 panic（体质差异） | OPP/PLL/governor 需整体 +200MHz（上限 1.4GHz，电压不可调） | `scripts/prepare-oc.sh`（1.3/1.4 两档，不做 1.35/1.5） | n/a（硬件体质差异 + 超频非上游议题） | 双 release：stock 默认 + oc 变体 |
-| F09 | U-Boot pstore | 崩溃日志无处持久化 | #22473 未合 | 待取源 | upstream-open | 可选增强 |
+| F06 | 10G/1G LED 行为 | XR1710G LED 由交换芯片驱动、与 W1700K 相反 | 板级差异 | 1G LED 已实现（9001 dts gsw_phy*_led*，MT7530 驱动）；10G RTL826x LED 待 #24034（实验档候选）；#24619（mt7530 LED 内核侧）跟进 | upstream-open | 实机确认 LED 行为后定去留 |
+| F07 | cpufreq / PM domain | OC 前置依赖；驱动修复 6.18 下仍不稳 | #22029 未合 | **已自持** `patches/vendor/fanboy/03-cpufreq-pmdomain-22029-e5d23549.patch`（939/940 + **direct-PLL fallback**，fanboy 实机验证过） | upstream-open | **OC 前必须先合**（F08 前置）；上游合入即删 |
+| F08 | CPU 超频 | stock 500–1200MHz；部分机器内置 OC 启动 panic（体质差异） | OPP/PLL/governor 需整体 +200MHz（上限 1.4GHz，电压不可调） | `scripts/prepare-oc.sh`（1.3/1.4 两档，不做 1.35/1.5）+ OC 变体**默认限频 1300**（`files/etc/init.d/oc-limit`，可解锁重启回退） | n/a（硬件体质差异 + 超频非上游议题） | 双 release：stock 默认 + oc 变体 |
+| F09 | U-Boot pstore | 崩溃日志无处持久化 | #22473 未合 | kernel 侧已自持（`vendor/fanboy/10-pstore-ramoops-...`）；uboot 侧待上游 | upstream-open | 可选增强 |
 | F10 | DSA 重构 | switch 端口架构迁移（实验档） | #22532 未合 | specs（不默认应用） | upstream-open | 毕业条件见 patches/README |
 | F11 | L2 桥接卸载 | nft flow offload L2（实验档） | #22533 未合 | specs | upstream-open | 同上 |
-| F12 | NPU/MLO/诊断应用 | 应用包无独立 feed | 散落在各家 fork 内 | feeds.custom.conf TODO + ROADMAP | n/a | luci-app-mlo（锁 911912b1）、fancontrol（锁 2c6cc7a3）已供给 |
+| F12 | NPU/MLO/诊断应用 | 应用包无独立 feed | 散落在各家 fork 内 | **已供给**：`vendor/fanboy/19-w1700k-apps-pack`（npu/flowsense/mlo/fancontrol/filemanager 随树内置，MANIFEST 默认档）；独立 feed 保留为备选（feeds.custom.conf 注释） | n/a | recovery 仍待供给（ROADMAP P1） |
+| F13 | fanboy 资产拆分 | 原料桶 20 commit 是打包历史，混多项改动 | 打包粒度 vs 我们的档位/可追溯要求 | **555 已拆出**（`regdb-0555-...`，#OC 档）；08 号（SPI 33MHz/LED 配色/dropbear 静默/wifi-scripts）待拆分；19 号应用包含 fastfetch/netspeedtest 冗余待精简；11/13/14/15/16 号待评审定档 | n/a | 拆分完成前对应条目不启用（MANIFEST 注释） |
+| F14 | vermagic 注入 | 自建 kmod 与官方 opkg 兼容 | 构建层机制（fanboy 85005e10 + extract-distfeeds） | 原料桶 01 号已入库，评估后接入 CI | n/a | 非阻塞 |
 
 ## 未确认/待实机核实清单
 - 接口名映射（10G/1G 与 eth* 对应）→ 首次实机 `ip -br link` 核对（FIXME 于 files/etc/config/network）
