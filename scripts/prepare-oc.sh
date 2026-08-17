@@ -34,7 +34,13 @@ revert_stock() {
   FILES+=("$DTS" "$CFG")
   # shellcheck disable=SC2207
   for f in $(printf '%s\n' "${FILES[@]}" | sort -u); do
-    (cd "$TREE" && git restore -- "$f" 2>/dev/null && echo "restored $f") || echo "  跳过（无改动或非 git 跟踪）：$f"
+    if (cd "$TREE" && git ls-files --error-unmatch -- "$f" >/dev/null 2>&1); then
+      (cd "$TREE" && git restore -- "$f" && echo "restored $f") || echo "  跳过（无改动）：$f"
+    else
+      # 未跟踪 = 生成文件（如 apply-patches 展开的 patches-6.18/940-*.patch）：
+      # git 无法还原，删除回到 apply 前状态，下次 apply-patches 重建纯净版本（防 OC 公式残留）
+      rm -f "$TREE/$f" && echo "removed 生成文件 $f（未跟踪；下次 apply-patches 重建）"
+    fi
   done
 }
 

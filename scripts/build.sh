@@ -20,8 +20,14 @@ JOBS="${JOBS:-$(nproc)}"
 
 [[ -d "$TREE/.git" && -f "$TREE/scripts/feeds" ]] || { echo "错误：$TREE 不是 openwrt 源码树（缺 scripts/feeds）" >&2; exit 1; }
 
-echo "== [0/6] 叠加本仓库到树（叠加层模型：补丁/内置包/配置/脚本；fork 模型下自动跳过）=="
+echo "== [0/6] 树复位 + 叠加本仓库（叠加层模型：可重复构建；fork 模型下自动跳过）=="
 if [[ "$(readlink -f "$TREE")" != "$(readlink -f "$ROOT")" ]]; then
+  # 叠加层模型下树是 disposable 的 master 克隆：先撤销上次构建/补丁的残留再叠加，
+  # 否则 apply-patches 的 git apply 一次性语义会让第二次 build.sh 直接失败。
+  (cd "$TREE" && git reset --hard -q HEAD)
+  # 清除上次 apply-patches 生成但未跟踪的文件（package/ target/ 内；顶层叠加层文件不受影响）
+  (cd "$TREE" && git clean -fdq -- target package) || echo "  ⚠ 生成文件清理失败（继续）"
+  echo "  已复位：tracked 改动物还原 + package/target 未跟踪生成物清除"
   rsync -a --exclude='.git' --exclude='audit-ubi2oc' --exclude='.github' --exclude='openwrt' --exclude='build-*.log' "$ROOT/" "$TREE/"
   echo "  已叠加：$ROOT → $TREE"
 fi
