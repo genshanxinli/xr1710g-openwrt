@@ -14,6 +14,7 @@ feeds.conf
 # 本地工作树与探针
 openwrt/
 audit-ubi2oc/
+HANDOFF.md
 # 编辑器/系统
 *.swp
 *~
