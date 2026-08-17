@@ -15,7 +15,7 @@ default vendor/fanboy/10-pstore-ramoops-22473-2f7d2d02.patch
 default root/9017-w1700k-apps-pack-core.patch   # 19 号精简（npu/flowsense/mlo/fancontrol/wifi7；去 fastfetch/netspeedtest）
 default root/9010-wifi-scripts-txpower-ucode.patch   # 16 号重建（pr-23990 按 radio 独立 txpower）
 default vendor/fanboy/11-airoha-lro-default-0e90a420.patch   # HW GRO/LRO 默认
-default vendor/fanboy/14-mt76-patches-80f79586.patch   # mt76 token/NPU debugfs
+disabled vendor/fanboy/14-mt76-patches-80f79586.patch   # F22（2026-08-17）：相对 pin mt76 59676919 完全冗余（token/NPU debugfs + MCU 采集已上游），撤下非降级
 default root/9011-xr1710g-spi33mhz.patch   # 08 切片：SPI 33MHz（sysupgrade 可靠性）
 default root/9012-xr1710g-banner-colored.patch   # 08 切片：彩色 banner
 default root/9013-xr1710g-dropbear-quiet-logs.patch   # 08 切片：dropbear 静默会话日志
