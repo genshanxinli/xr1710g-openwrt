@@ -3,14 +3,15 @@
 按优先级排序。原则：**修复而不是降级**——所有"暂缓"都是排队，不是放弃。
 
 ## P0 首次实机（刷机后第一轮）
+- [ ] **真绿门禁**（2026-08-17 F19 修复后）：重建 stock + oc-1.3 + oc-1.4，以 **firmware artifact 存在** 为成功判据（此前三次构建假绿、artifact 从未产出）
 - [ ] 物理口 ↔ 逻辑名实机核对（netdev-name 已固化：lan1/lan2=双 10G、wan=1G-1（gsw_port1）、lan3=1G-2（gsw_port2），见 9001；`ip -br link` 验证后定稿 files/etc/config/network）
 - [ ] 核对 6GHz EHT320 实际生效（`iw phy` / hostapd 日志），不生效则修 mt76/hostapd 至生效
 - [ ] NPU 加载与卸载验证（luci-app-airoha-npu 已由 19-pack 内置）
 - [ ] 风扇曲线实测（温度点/转速），按 NCT7802 实测修正曲线参数
 - [ ] 跑 `docs/ACCEPTANCE.md` 全项 → 首个 known-good tag
 
-## P1 资产评审与供给（2026-08-17：应用供给已闭环，剩逐支评审定档）
-- [ ] **F13 拆分**：08 号（regdb 已拆净；SPI33MHz/banner/dropbear/wifi-scripts/dtsi 评审完成——六项待切片入 default，feeds.conf.default/w1700k dts 否决）；19 号应用包精简（fastfetch/netspeedtest 移除，保留 npu/flowsense/mlo/fancontrol）
+## P1 资产评审与供给（2026-08-17：应用供给已闭环；08 切片 + 19 精简已收口）
+- [x] **F13 拆分**：08 号六项切片入 default（root/9011-9016，2026-08-17 完成）；19 号精简为 root/9017 19-core（去 fastfetch/netspeedtest，2026-08-17 完成）
 - [x] 评审 11/13/14/15/16 号定档位（2026-08-17：11 LRO→default；13 mt76 源 pin→否决(供应链)；14 mt76 debugfs→default；15 txpower 备选→不启用；16 wifi-scripts ucode→重建为 root/9010→default）
 - [x] `luci-app-airoha-recovery` 供给（2026-08-17：packages-xr1710g/ src-link，源 naoki66@dd9ecfeef）
 
@@ -29,7 +30,8 @@
 - [ ] 530 实验室 6GHz SP 补丁——默认停用；如需高功率实验，手动启用并在验收注明非合规
 
 ## P4 工程化
-- [ ] 构建产出后自动打 pre-release（含 FIXES 变更摘要）
+- [x] 构建产出后自动打 pre-release（含 FIXES 变更摘要；2026-08-17 实现——但 F19 假绿修复前 release 是空壳，真绿后才有意义）
+- [x] 构建退出码硬化（F19：pipefail + no-files-found=error，2026-08-17）
 - [ ] 实验档毕业的自动化：experimental 构建通过 + ACCEPTANCE 子集 → PR 式合并到默认 MANIFEST
 - [ ] vermagic 注入接入 CI（F14，让自建 kmod 兼容官方 opkg）
 - [ ] 2h 同步工作流稳定后，把"冲突出现 → 修复 → 回归"流程沉淀为 CI 注释/文档（sync-upstream.yml 已就位）

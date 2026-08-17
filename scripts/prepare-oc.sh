@@ -50,23 +50,24 @@ echo "== OC 档位 $TIER（OPP base=$BASE MHz）=="
 [[ -f "$DTS" ]] || { echo "错误：无 $DTS——#22397 板级补丁未应用？先跑 apply-patches.sh" >&2; exit 1; }
 touched "$DTS"
 
-# 1) OPP 表整体平移：hz + (BASE-500)；opp-<label> 同步改名
+# 1) OPP 表整体平移：hz + (BASE-500)*1e6；opp-<label> 同步改名（保留 { 花括号）
 python3 - "$DTS" "$BASE" <<'PY'
 import re, sys
 path, base = sys.argv[1], int(sys.argv[2])
-delta = base - 500
+delta_mhz = base - 500
+delta_hz = delta_mhz * 1000000
 s = open(path, encoding="utf-8").read()
 def shift_hz(m):
-    hz = int(m.group(1)) + delta
+    hz = int(m.group(1)) + delta_hz
     return f"opp-hz = /bits/ 64 <{hz}>;"
 def shift_label(m):
-    hz = int(m.group(1)) + delta
-    return f"opp-{hz}"
+    hz = int(m.group(1)) + delta_hz
+    return f"opp-{hz} {{"
 n_hz = len(re.findall(r"opp-hz = /bits/ 64 <(\d+)>;", s))
 s = re.sub(r"opp-hz = /bits/ 64 <(\d+)>;", shift_hz, s)
 s = re.sub(r"\bopp-(\d+)\s*\{", shift_label, s)
 open(path, "w", encoding="utf-8").write(s)
-print(f"  dts OPP：平移 {n_hz} 个频率点 +{delta}MHz")
+print(f"  dts OPP：平移 {n_hz} 个频率点 +{delta_mhz}MHz")
 PY
 touched "$DTS"
 

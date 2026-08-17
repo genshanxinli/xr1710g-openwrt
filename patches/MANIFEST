@@ -30,14 +30,22 @@ patches/root/9002-xr1710g-uboot.patch ROOT
 patches/vendor/fanboy/03-cpufreq-pmdomain-22029-e5d23549.patch ROOT
 # #22473 kernel 侧 ramoops（uboot 侧仍待上游，F09）
 patches/vendor/fanboy/10-pstore-ramoops-22473-2f7d2d02.patch ROOT
-# 应用包：npu/flowsense/mlo/fancontrol/filemanager…（含 fastfetch/netspeedtest 冗余——集成时拆包精简 F13）
-patches/vendor/fanboy/19-w1700k-apps-pack-fd705cd9.patch ROOT
+# 应用包：npu/flowsense/mlo/fancontrol/wifi7 五包（19-core，2026-08-17 从 19 号切片去 fastfetch/netspeedtest，F13）
+patches/root/9017-w1700k-apps-pack-core.patch ROOT
 # wifi-scripts 按 radio 独立 txpower（pr-23990/YYH2913；2026-08-17 对 master 重建，源于 fanboy 16 号 41b9e3ac，F13）
 patches/root/9010-wifi-scripts-txpower-ucode.patch ROOT
 # HW GRO/LRO 默认开启（11 号定档 default——README 声明的 HW-GRO/LRO 能力载体；kernel 6.18 编译期验证中）
 patches/vendor/fanboy/11-airoha-lro-default-0e90a420.patch ROOT
 # mt76 token/NPU debugfs 计数器（14 号定档 default——NPU 诊断低风险；15 号 0010/0011 与默认 0006/0007 重复，仅留备选不启用）
 patches/vendor/fanboy/14-mt76-patches-80f79586.patch ROOT
+# 08 号切片（2026-08-17 F13 收尾：从 vendor/fanboy/08-reliability-compat 切出的六项 default；9014 依赖 9010 先行——
+# 同文件（mac80211.sh）尾部上下文按 9010 后状态重建，应用顺序已在 MANIFEST 固化）
+patches/root/9011-xr1710g-spi33mhz.patch ROOT
+patches/root/9012-xr1710g-banner-colored.patch ROOT
+patches/root/9013-xr1710g-dropbear-quiet-logs.patch ROOT
+patches/root/9014-xr1710g-wifi-antenna-memo.patch ROOT
+patches/root/9015-xr1710g-snd-soc-off.patch ROOT
+patches/root/9016-xr1710g-silence-phy-led-error.patch ROOT
 
 # ── 实验档（--experimental；毕业并入默认档后取消 #EXP）──
 #EXP patches/vendor/fanboy/02-eip93-f80d0507.patch ROOT
@@ -50,9 +58,11 @@ patches/vendor/fanboy/14-mt76-patches-80f79586.patch ROOT
 #EXP patches/vendor/fanboy/18-smartrg-stability-b45d5117.patch ROOT
 
 # ── 待拆分/评审后解锁（原料桶已有，见 FIXES F13/F14）──
-# 08-reliability-compat：2026-08-17 评审——SPI33MHz(dtsi)/banner/dropbear/wifi-antenna-memo/snd-off(config-6.18)/LED-pinctrl-silence 六项
-#   建议切片入默认档（均已实证可应用）；feeds.conf.default 与 w1700k dts LED 改动否决（ADR-0001 master 保真 + 非目标设备）。切片拆包待做。
-# patches/vendor/fanboy/08-reliability-compat-36da8e02.patch ROOT
+# 08-reliability-compat：2026-08-17 切片完成——六项（SPI33MHz/banner/dropbear/antenna-memo/snd-off/LED-silence）
+#   已切为 patches/root/9011-9016 入 default（上方活动行）；feeds.conf.default 与 w1700k dts LED 改动否决
+#   （ADR-0001 master 保真 + 非目标设备）。原料桶保留 08 原 patch 供对照（不再应用）。
+# 19-w1700k-apps-pack：2026-08-17 精简为 19-core（patches/root/9017，去 fastfetch/netspeedtest 两包，
+#   保留 npu/flowsense/mlo/fancontrol/wifi7）；原料桶保留原 19 供对照。
 # 12-lorenzo-airoha-patches：调试脚本 + NPU ser + usb-pcie 杂项 → 维持实验档候选，不默认。
 # 13-mt76-plus-firmware：否决（PKG_SOURCE_URL 指向个人 fork 且 PKG_MIRROR_HASH=skip，违反锁源/可复现铁律）
 # 15-txpower-control：与默认 mt76/0006-0007 功能重复（fanboy 旧谱系）→ 仅备选对比，不启用

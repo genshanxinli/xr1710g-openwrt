@@ -65,7 +65,8 @@ git clone https://github.com/openwrt/openwrt.git openwrt
 | pstore / ramoops（#22473） | kernel 侧已自持（`vendor/fanboy/10`）；uboot 侧待上游 |
 | 风扇温控 | `files/etc/init.d/fan` 动态探测（NCT7802/NCT7511Y） |
 | 实验档（#22532/#22533/eip93 等） | 原料桶已入库（vendor/fanboy 02/04-09/17/18），默认不编 |
-| npu/flowsense/mlo/fancontrol/filemanager/recovery 应用 | 决策五件套全就绪：npu/flowsense/mlo/fancontrol=19-pack 内置；filemanager=官方 luci feed；recovery=packages-xr1710g src-link（锁 dd9ecfeef） |
+| npu/flowsense/mlo/fancontrol/filemanager/recovery 应用 | 决策五件套全就绪：npu/flowsense/mlo/fancontrol/wifi7=9017 19-core（2026-08-17 从 19 号切片去 fastfetch/netspeedtest）；filemanager=官方 luci feed；recovery=packages-xr1710g src-link（锁 dd9ecfeef） |
+| 08 号可靠性/兼容切片 | 六项已切为 `patches/root/9011-9016` 入 default（SPI33MHz/banner/dropbear 静默日志/antenna-memo/snd-off/LED-silence，2026-08-17） |
 
 ## 风险声明（自用范围）
 

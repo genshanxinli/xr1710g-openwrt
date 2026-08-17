@@ -91,7 +91,10 @@ jobs:
           "${GITHUB_WORKSPACE}/overlay/scripts/audit-config.sh" "${GITHUB_WORKSPACE}/overlay/config/seed-config.diff" .config
 
       - name: 构建
+        # F19：显式 pipefail——make 失败必须红（默认 bash 无 pipefail，`make | tee` 会把失败吞成假绿；
+        #   曾导致 2026-08-17 三次构建（openssl 下载失败）全部假绿、firmware artifact 从未产出）
         run: |
+          set -euo pipefail
           cd "$TREE"
           make -j"$(nproc)" V=s 2>&1 | tee "$GITHUB_WORKSPACE/build-$PROFILE.log"
 
@@ -107,6 +110,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: firmware-${{ env.PROFILE }}
+          # F19：构建成功但无 itb 产物 = 静默失败（如目标未选中/打包异常），必须红
+          if-no-files-found: error
           path: |
             ${{ env.TREE }}/bin/targets/airoha/an7581/*.itb
             ${{ env.TREE }}/bin/targets/airoha/an7581/*.manifest
