@@ -1,0 +1,54 @@
+# files/etc/config/wireless — 默认无线（决策：三频全开、统一 SSID「K2P」、WPA2/WPA3 混合）
+# 密码为占位 123456789，强烈建议在 LuCI 改强（决策备注）。
+# MLO 通过 luci-app-mlo 管理（同 SSID 多频是 MLO 前提；EHT320 回程/802.11s 见 ROADMAP 漫游优化计划）。
+
+config wifi-device 'radio0'
+	option type 'mac80211'
+	option phy 'phy0'
+	option band '2g'
+	option htmode 'HE40'
+	option country 'US'                    # 决策：US regdb（6GHz 全开；520 功率补丁）
+	option cell_density '0'
+	option disabled '0'
+
+config wifi-iface 'default_radio0'
+	option device 'radio0'
+	option network 'lan'
+	option mode 'ap'
+	option ssid 'K2P'
+	option encryption 'sae-mixed'          # WPA2/WPA3 混合
+	option key '123456789'                 # TODO 建议改强
+
+config wifi-device 'radio1'
+	option type 'mac80211'
+	option phy 'phy1'
+	option band '5g'
+	option htmode 'HE160'                  # 5G 160MHz；若需 EHT 可改 EHT160（hostapd 版本支持后）
+	option country 'US'
+	option cell_density '0'
+	option disabled '0'
+
+config wifi-iface 'default_radio1'
+	option device 'radio1'
+	option network 'lan'
+	option mode 'ap'
+	option ssid 'K2P'
+	option encryption 'sae-mixed'
+	option key '123456789'                 # TODO 建议改强
+
+config wifi-device 'radio2'
+	option type 'mac80211'
+	option phy 'phy2'
+	option band '6g'
+	option htmode 'EHT320'                 # 6GHz 320MHz（EHT320；若驱动不支持回退 HE160——修复而不是降级：修到支持为止）
+	option country 'US'
+	option cell_density '0'
+	option disabled '0'
+
+config wifi-iface 'default_radio2'
+	option device 'radio2'
+	option network 'lan'
+	option mode 'ap'
+	option ssid 'K2P'
+	option encryption 'sae-mixed'
+	option key '123456789'                 # TODO 建议改强

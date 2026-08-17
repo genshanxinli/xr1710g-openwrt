@@ -1,0 +1,36 @@
+# 验收清单（ACCEPTANCE）——"可用固件"的定义
+
+**用途**：known-good 冻结门槛。一个版本只有**全项通过**才打 known-good tag；任何一项失败 → 修复（不改清单、不降级），修复后重测。
+**实机环境**：设备已固化 HTTP U-Boot（docs/FLASHING.md 主路径）；测试机通过 10G 电口/千兆口接入。
+
+## 启动与引导
+- [ ] A1 冷启动：HTTP U-Boot 引导 → OpenWrt 完整启动（无 kernel panic / 无 fit0 等待）
+- [ ] A2 sysupgrade 往返：由旧版 sysupgrade 升到本版本；再由本版本 sysupgrade 回退旧版（均成功、配置保留/提示）
+- [ ] A3 恢复兜底：192.168.255.1 恢复页可进入（10G 口 + reset 时序）
+
+## 网络
+- [ ] B1 WAN（1G 口 1）：DHCP 获取 IP；外网连通（ping 8.8.8.8 / 域名解析）
+- [ ] B2 双 10G 口：均能 10Gbps 链路（ethtool speed 10000）；10G 对打带宽 ≥ 8Gbps
+- [ ] B3 剩余 1G 口：接入正常（speed 1000）
+- [ ] B4 LAN 网关 192.168.123.1：DHCP 分发、LAN 互访、NAT 上网正常
+- [ ] B5 硬件 flow offload / NPU 卸载生效（luci-app-airoha-npu 显示 NPU 已加载；卸载计数增长）
+
+## Wi-Fi
+- [ ] C1 三频全部起来且可连接：2.4G / 5G / 6G，统一 SSID「K2P」、WPA2/WPA3 混合
+- [ ] C2 6GHz 正常工作（US regdb、EHT320 or 160MHz fallback 注明当前实际）
+- [ ] C3 速率冒烟：5G ≥ 1200Mbps（160MHz 客户端）；6G ≥ 2400Mbps（320MHz 客户端）
+- [ ] C4 MLO 可配置且生效（luci-app-mlo：多频绑定成功）
+
+## 温控与稳定
+- [ ] D1 风扇曲线接管（`/etc/init.d/fan` 运行，温度点切换 PWM 正确）
+- [ ] D2 温度读数正常（CPU / 10G PHY / switch / Wi-Fi；fancontrol 页面无 N/A）
+- [ ] D3 72h 连续运行（含 2×10G + 三频负载）无重启、无内核报错（dmesg 检查）
+
+## 固件本体
+- [ ] E1 OC 档位（oc-1.3/oc-1.4 时）：`cpuinfo_max_freq` 分别为 1300000/1400000 kHz；启动正常（无 panic）；烤机 77°C 上限内
+- [ ] E2 版本元数据正确（DISTRIB_DESCRIPTION 含档位标识与 commit）
+
+## 验收结论（每次冻结时填写）
+| 版本（commit/tag） | 档位 | 测试日期 | 结果 | 备注 |
+|---|---|---|---|---|
+|  |  |  |  |  |

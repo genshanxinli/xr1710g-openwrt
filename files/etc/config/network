@@ -1,0 +1,33 @@
+# files/etc/config/network — 默认网络（决策：主路由，WAN=1G 口 1，LAN=192.168.123.1）
+# ⚠ 接口名占位：实际端口命名由 #22397 板级补丁的 02_network 决定（10G ~ eth0/eth1，1G 经 MT7530 ~ eth2/eth3，以实机 ip -br link 为准）。
+# 首刷后请按 ROOT 笔记核对：docs/ROADMAP.md「首次实机确认接口名并固化」。
+
+config interface 'loopback'
+	option device 'lo'
+	option proto 'static'
+	option ipaddr '127.0.0.1'
+	option netmask '255.0.0.0'
+
+config interface 'lan'
+	option device 'br-lan'
+	option proto 'static'
+	option ipaddr '192.168.123.1'          # 决策：LAN 网关
+	option netmask '255.255.255.0'
+	option ip6assign '60'
+
+config device
+	option name 'br-lan'
+	option type 'bridge'
+	list ports 'eth0'                      # TODO 实机确认：一个 10G 口
+	list ports 'eth1'                      # TODO 实机确认：另一个 10G 口
+	list ports 'eth3'                      # TODO 实机确认：剩余一个 1G 口（WAN 占用了 eth2）
+
+config interface 'wan'
+	option device 'eth2'                   # 决策：WAN = 1G 口 1（光猫千兆上联）
+	option proto 'dhcp'                    # DHCP 上网为主；PPPoE 在 LuCI 面板改（决策：占位不预置）
+
+config interface 'wan6'
+	option device 'eth2'
+	option proto 'dhcpv6'
+	option reqaddress 'try'
+	option reqprefix 'auto'

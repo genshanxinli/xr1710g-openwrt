@@ -1,0 +1,29 @@
+# 补丁层应用清单（MANIFEST）
+# 格式：<补丁相对路径> <目标目录|ROOT>
+#   - ROOT = 在 openwrt 树根 git apply（跨目录补丁）
+#   - 其它目标 = 补丁拷贝目录（相对树根），由 OpenWrt 构建时应用
+# 前缀 #EXP = 实验档（scripts/apply-patches.sh --experimental 才应用；毕业并入后取消注释）
+# 前缀 #DISABLED = 停用项（默认不应用）
+
+# ─────────── packages：regdb（US 功率体系，决策=默认带 500/510/520，530 停用）───────────
+patches/packages/regdb-0500-world-5ghz-no-no-ir.patch                  package/firmware/wireless-regdb/patches/
+patches/packages/regdb-0510-us-6ghz-no-no-ir.patch                     package/firmware/wireless-regdb/patches/
+patches/packages/regdb-0520-us-power-limits-uni1-29-6g-29.patch        package/firmware/wireless-regdb/patches/
+#DISABLED patches/packages/regdb-0530-us-6ghz-lab-indoor-sp-override-DISABLED.patch package/firmware/wireless-regdb/patches/
+
+# ─────────── packages：mt76 补丁（YYH2913 integration，默认档核心）───────────
+patches/packages/mt76-0006-wifi-mt76-mt7996-refresh-power-limits-on-txpower-changes.patch       package/kernel/mt76/patches/
+patches/packages/mt76-0007-wifi-mt76-mt7996-enable-firmware-txpower-limit-controls.patch        package/kernel/mt76/patches/
+
+# ─────────── root：跨目录（#22397 板级支持，13 文件：dts/image/uboot/fan/02_network）───────────
+patches/root/9000-openwrt-22397-xr1710g-board-support.patch ROOT
+
+# ─────────── 实验档（--experimental；毕业并入默认档后取消 #EXP）───────────
+#EXP patches/specs/openwrt-22532-dsa-netlink.md ROOT
+#EXP patches/specs/openwrt-22533-nft-l2-offload.md ROOT
+
+# ─────────── 待取源后解锁（fetch-sources.sh / 手动取 PR diff 放进桶）───────────
+# patches/kernel/openwrt-22029-cpufreq-pm-domain.patch  target/linux/airoha/patches-6.18/   # OC 前置依赖，见 specs
+# patches/kernel/openwrt-22473-uboot-pstore.md         package/boot/uboot-airoha/patches/   # 见 specs
+# patches/packages/openwrt-24034-rtl826x-led.patch     package/firmware/                    # 见 specs
+# patches/kernel/openwrt-24619-mt7530-led.patch        target/linux/generic/                # 见 specs

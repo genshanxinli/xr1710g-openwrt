@@ -1,0 +1,58 @@
+#!/bin/sh /etc/rc.common
+# fan — XR1710G 风扇温控（动态探测传感器，覆盖 NCT7802 / NCT7511Y 版本差异）
+# 决策：温控默认开启；曲线参考 airoha_fan（#22391 修复版）温度点 40/50/60/70/80℃ → PWM 54/69/95/130/199/255。
+# 说明：上游 airoha_fan（#22397 板级补丁内）只覆盖 nct7802 case，NCT7511Y 版本未配置曲线（FIXES.md 条目）。
+#       本脚本动态探测 hwmon name（nct7802/nct7511*），无匹配则退化为「最后一个 hwmon」。
+
+START=99
+STOP=10
+
+HWMON=""
+
+find_hwmon() {
+	for d in /sys/class/hwmon/hwmon*; do
+		[ -d "$d" ] || continue
+		n="$(cat "$d/name" 2>/dev/null)"
+		case "$n" in
+			nct7802|nct7511*|nct75*) HWMON="$d"; return 0 ;;
+		esac
+	done
+	# fallback：最后一个 hwmon（参考 #22391 hwmon3 退化思路）
+	HWMON="$(ls -d /sys/class/hwmon/hwmon* 2>/dev/null | tail -1)"
+	[ -n "$HWMON" ]
+}
+
+start() {
+	find_hwmon || { logger -t fan "未找到温度传感器 hwmon，风扇保持自动模式"; return 1; }
+	PWM="$HWMON/pwm1"
+	PIDF=/var/run/fan.pid
+	[ -f "$PWM" ] || { logger -t fan "无 $PWM，风扇保持自动模式"; return 1; }
+
+	echo 1 > "$PWM"_enable   # 关闭温控自动、进入手动 PWM 写
+
+	# shellcheck disable=SC2016
+	(
+		while :; do
+			tmp="$(cat "$HWMON/temp1_input" 2>/dev/null)" || tmp=40000
+			t=$(( ${tmp:-40000} / 1000 ))
+			if   [ "$t" -lt 40 ]; then p=54
+			elif [ "$t" -lt 50 ]; then p=69
+			elif [ "$t" -lt 60 ]; then p=95
+			elif [ "$t" -lt 70 ]; then p=130
+			elif [ "$t" -lt 80 ]; then p=199
+			else p=255; fi
+			echo "$p" > "$PWM"
+			sleep 10
+		done
+	) &
+	echo $! > "$PIDF"
+	logger -t fan "风扇曲线已接管：传感器=$HWMON（$(cat "$HWMON/name")）"
+}
+
+stop() {
+	[ -f /var/run/fan.pid ] && kill "$(cat /var/run/fan.pid)" 2>/dev/null
+	rm -f /var/run/fan.pid
+	# 恢复硬件自动温控
+	[ -n "$HWMON" ] && echo 2 > "$HWMON/pwm1_enable" 2>/dev/null || true
+	logger -t fan "风扇控制停止，交还自动模式"
+}

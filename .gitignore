@@ -1,0 +1,17 @@
+# OpenWrt 构建产物
+bin/
+build_dir/
+staging_dir/
+dl/
+tmp/
+.log
+*.log
+build-*.log
+.config
+.config.old
+.config.seed
+feeds.conf
+# 编辑器/系统
+*.swp
+*~
+.DS_Store
