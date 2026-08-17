@@ -42,5 +42,12 @@ OC 变体的**默认限频 1300MHz** 由 `files/etc/init.d/oc-limit` 实现（1.
 ## 新增补丁流程
 
 1. 取源（PR diff / 分支 commit）放入对应桶，写元数据头 + `MANIFEST` 条目（或 `#EXP`）；
-2. `scripts/apply-patches.sh <树> --dry-run` 验证可应用；
+2. `scripts/apply-patches.sh <树> --dry-run` 验证可应用——**dry-run 含真实应用校验**（F20/F21 制度化）：
+   - ROOT 补丁在树根 `git apply --index` 按序真实应用；
+   - 拷贝类（packages）与派生包补丁（ROOT 补丁生成的，如 9002→uboot）由 `scripts/verify-copy-patches.sh`
+     按构建语义真实校验：树内包 Makefile 派生源码 tarball（缓存于 `$COPY_PATCH_CACHE` 或 /tmp）→ 解包 →
+     「树内已有补丁 + 本层补丁」同目录 → 构建同款 `patch-kernel.sh` glob 排序 `patch -f -p1` → regdb 附
+     dbparse.py 校验；**应用失败=红（2h sync cron 尽早暴露），下载失败=⚠ 不红（构建兜底）**；
+   - 包补丁命名注意 **glob 字节序**（F21 教训）：`1000-` 排在 `100-` 与 `101-` 之间，`9990-` 才在 `999-` 后；
+   - 新增拷贝类补丁目标（新包）时需在 verify-copy-patches.sh 登记包源映射，否则 ⚠ 跳过不校验；
 3. 首次构建验证；构建/启动问题 → 修本层补丁（修复不是降级），并记 `docs/FIXES.md`。
