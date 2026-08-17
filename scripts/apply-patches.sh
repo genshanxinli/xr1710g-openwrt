@@ -44,7 +44,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
       if (cd "$TREE" && git apply --check "$pf" 2>/tmp/apply-err); then
         echo "✓ [dry-run] $src"
       else
-        echo "✗ 冲突：$src"; sed 's/^/    /' /tmp/apply-err; applied=$((applied+1))
+        echo "✗ 冲突：$src"; sed 's/^/    /' /tmp/apply-err
       fi
     else
       (cd "$TREE" && git apply "$pf")
