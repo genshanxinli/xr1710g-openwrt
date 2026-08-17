@@ -32,6 +32,12 @@ patches/vendor/fanboy/03-cpufreq-pmdomain-22029-e5d23549.patch ROOT
 patches/vendor/fanboy/10-pstore-ramoops-22473-2f7d2d02.patch ROOT
 # 应用包：npu/flowsense/mlo/fancontrol/filemanager…（含 fastfetch/netspeedtest 冗余——集成时拆包精简 F13）
 patches/vendor/fanboy/19-w1700k-apps-pack-fd705cd9.patch ROOT
+# wifi-scripts 按 radio 独立 txpower（pr-23990/YYH2913；2026-08-17 对 master 重建，源于 fanboy 16 号 41b9e3ac，F13）
+patches/root/9010-wifi-scripts-txpower-ucode.patch ROOT
+# HW GRO/LRO 默认开启（11 号定档 default——README 声明的 HW-GRO/LRO 能力载体；kernel 6.18 编译期验证中）
+patches/vendor/fanboy/11-airoha-lro-default-0e90a420.patch ROOT
+# mt76 token/NPU debugfs 计数器（14 号定档 default——NPU 诊断低风险；15 号 0010/0011 与默认 0006/0007 重复，仅留备选不启用）
+patches/vendor/fanboy/14-mt76-patches-80f79586.patch ROOT
 
 # ── 实验档（--experimental；毕业并入默认档后取消 #EXP）──
 #EXP patches/vendor/fanboy/02-eip93-f80d0507.patch ROOT
@@ -44,12 +50,13 @@ patches/vendor/fanboy/19-w1700k-apps-pack-fd705cd9.patch ROOT
 #EXP patches/vendor/fanboy/18-smartrg-stability-b45d5117.patch ROOT
 
 # ── 待拆分/评审后解锁（原料桶已有，见 FIXES F13/F14）──
+# 08-reliability-compat：2026-08-17 评审——SPI33MHz(dtsi)/banner/dropbear/wifi-antenna-memo/snd-off(config-6.18)/LED-pinctrl-silence 六项
+#   建议切片入默认档（均已实证可应用）；feeds.conf.default 与 w1700k dts LED 改动否决（ADR-0001 master 保真 + 非目标设备）。切片拆包待做。
 # patches/vendor/fanboy/08-reliability-compat-36da8e02.patch ROOT
-# patches/vendor/fanboy/11-airoha-lro-default-0e90a420.patch ROOT
-# patches/vendor/fanboy/12-lorenzo-airoha-patches-8d1947c0.patch ROOT
-# patches/vendor/fanboy/13-mt76-plus-firmware-612255dd.patch ROOT
-# patches/vendor/fanboy/14-mt76-patches-80f79586.patch ROOT
-# patches/vendor/fanboy/15-txpower-control-d7aa0235.patch ROOT
-# patches/vendor/fanboy/16-wifi-scripts-txpower-ucode-41b9e3ac.patch ROOT
+# 12-lorenzo-airoha-patches：调试脚本 + NPU ser + usb-pcie 杂项 → 维持实验档候选，不默认。
+# 13-mt76-plus-firmware：否决（PKG_SOURCE_URL 指向个人 fork 且 PKG_MIRROR_HASH=skip，违反锁源/可复现铁律）
+# 15-txpower-control：与默认 mt76/0006-0007 功能重复（fanboy 旧谱系）→ 仅备选对比，不启用
+# 16-wifi-scripts-txpower-ucode：原版参考（pr-23990）；已对 master 重建为 root/9010（唯一失效资产，F13）
+# 01-vermagic-inject 与 20-oc-governor 见 F14/F08（01 待评估；20 为 fanboy 原版参考不直接应用）
 # patches/vendor/fanboy/01-vermagic-inject-85005e10.patch ROOT
 # patches/vendor/fanboy/20-oc-governor-200mhz-ed7cbc80.patch ROOT

@@ -10,8 +10,8 @@
 - [ ] 跑 `docs/ACCEPTANCE.md` 全项 → 首个 known-good tag
 
 ## P1 资产评审与供给（2026-08-17：应用供给已闭环，剩逐支评审定档）
-- [ ] **F13 拆分**：08 号（regdb 已拆净；SPI33MHz/banner/dropbear/wifi-scripts/dtsi 逐项评审）；19 号应用包精简（fastfetch/netspeedtest 移除，保留 npu/flowsense/mlo/fancontrol）
-- [ ] 评审 11/13/14/15/16 号（LRO 默认/mt76 源 pin/mt76 patches/txpower 备选/wifi-scripts ucode）定档位
+- [ ] **F13 拆分**：08 号（regdb 已拆净；SPI33MHz/banner/dropbear/wifi-scripts/dtsi 评审完成——六项待切片入 default，feeds.conf.default/w1700k dts 否决）；19 号应用包精简（fastfetch/netspeedtest 移除，保留 npu/flowsense/mlo/fancontrol）
+- [x] 评审 11/13/14/15/16 号定档位（2026-08-17：11 LRO→default；13 mt76 源 pin→否决(供应链)；14 mt76 debugfs→default；15 txpower 备选→不启用；16 wifi-scripts ucode→重建为 root/9010→default）
 - [x] `luci-app-airoha-recovery` 供给（2026-08-17：packages-xr1710g/ src-link，源 naoki66@dd9ecfeef）
 
 ## P2 上游 PR 跟追（合入即删本层补丁）

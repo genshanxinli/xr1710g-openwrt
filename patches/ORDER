@@ -1,6 +1,8 @@
 # 补丁应用顺序表  format: <tier> <相对路径>  tier=default|oc|experimental|pending
 # 权威应用清单 = patches/MANIFEST（本表是档位评审视图；不一致时以 MANIFEST 为准并修正本表）
-# 2026-08-17：08 号 regdb 555 已拆净（→ 独立 regdb/0555，#OC 档，与 08 原内容一致）；08 余项待评审降为 pending。
+# 2026-08-17：08 号 regdb 555 已拆净（→ 独立 regdb/0555，#OC 档，与 08 原内容一致）。
+# 2026-08-17 F13 评审：11/14 定档 default；16 重建为 root/9010 定档 default；13 否决（fork+hash=skip）；
+# 15 与 0006/0007 重复仅备选；08 余项（SPI33MHz/banner/dropbear/antenna-memo/snd-off/LED-silence）待切片入 default。
 
 # ── default（MANIFEST 默认档活动行）──
 default root/9000-xr1710g-common.patch
@@ -9,6 +11,9 @@ default root/9002-xr1710g-uboot.patch
 default vendor/fanboy/03-cpufreq-pmdomain-22029-e5d23549.patch
 default vendor/fanboy/10-pstore-ramoops-22473-2f7d2d02.patch
 default vendor/fanboy/19-w1700k-apps-pack-fd705cd9.patch
+default root/9010-wifi-scripts-txpower-ucode.patch   # 16 号重建（pr-23990 按 radio 独立 txpower）
+default vendor/fanboy/11-airoha-lro-default-0e90a420.patch   # HW GRO/LRO 默认
+default vendor/fanboy/14-mt76-patches-80f79586.patch   # mt76 token/NPU debugfs
 default regdb/0500-world-5ghz-no-no-ir.patch
 default regdb/0510-us-6ghz-no-no-ir.patch
 default regdb/0520-us-power-limits-uni1-29-6g-29.patch
@@ -31,12 +36,10 @@ experimental vendor/fanboy/18-smartrg-stability-b45d5117.patch
 experimental regdb/0530-us-6ghz-lab-indoor-sp-override-DISABLED.patch
 
 # ── pending（原料已入库，待评审定档/拆分后解锁，对应 FIXES F13/F14）──
-pending vendor/fanboy/01-vermagic-inject-85005e10.patch
-pending vendor/fanboy/08-reliability-compat-36da8e02.patch   # regdb 已拆净；SPI33MHz/banner/dropbear/wifi-scripts/dtsi 待评审
-pending vendor/fanboy/11-airoha-lro-default-0e90a420.patch
-pending vendor/fanboy/12-lorenzo-airoha-patches-8d1947c0.patch
-pending vendor/fanboy/13-mt76-plus-firmware-612255dd.patch
-pending vendor/fanboy/14-mt76-patches-80f79586.patch
-pending vendor/fanboy/15-txpower-control-d7aa0235.patch
-pending vendor/fanboy/16-wifi-scripts-txpower-ucode-41b9e3ac.patch
+pending vendor/fanboy/01-vermagic-inject-85005e10.patch   # F14 评估后接 CI
+pending vendor/fanboy/08-reliability-compat-36da8e02.patch   # 评审完成：切片待做（SPI33MHz/banner/dropbear/antenna-memo/snd-off/LED-silence→default；feeds.conf.default/w1700k dts 否决）
+pending vendor/fanboy/12-lorenzo-airoha-patches-8d1947c0.patch   # 实验档候选（调试脚本/npu ser/usb-pcie 杂项）
+pending vendor/fanboy/13-mt76-plus-firmware-612255dd.patch   # 否决（fork+hash=skip，锁源违反）
+pending vendor/fanboy/15-txpower-control-d7aa0235.patch   # 备选对比（与默认 0006/0007 重复）
+pending vendor/fanboy/16-wifi-scripts-txpower-ucode-41b9e3ac.patch   # 原版参考；重建版=root/9010（default）
 pending vendor/fanboy/20-oc-governor-200mhz-ed7cbc80.patch   # OC 已由 prepare-oc.sh 实现；本补丁为 fanboy 原版参考（6.12 系）
