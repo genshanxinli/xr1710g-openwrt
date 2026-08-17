@@ -6,8 +6,9 @@
 # ── 目标：gemtek_xr1710g-ubi（#22397 板级补丁提供）──
 CONFIG_TARGET_airoha=y
 CONFIG_TARGET_airoha_an7581=y
-CONFIG_TARGET_airoha_an7581_gemtek_xr1710g-ubi=y
-# 备选：同源 W1700K（官方已合入）CONFIG_TARGET_airoha_an7581_gemtek_w1700k-ubi=y
+# 设备符号 = CONFIG_TARGET_<board>_<subtarget>_DEVICE_<device>（metadata.pm confstr 清洗 target 名，profile id 保留 DEVICE_ 前缀与连字符）
+CONFIG_TARGET_airoha_an7581_DEVICE_gemtek_xr1710g-ubi=y
+# 备选：同源 W1700K（官方已合入）CONFIG_TARGET_airoha_an7581_DEVICE_gemtek_w1700k-ubi=y
 
 # ── 基础系统（O）──
 CONFIG_PACKAGE_dnsmasq-full=y

@@ -52,7 +52,7 @@ fi
 # 应用 seed diff（见 config/seed-config.diff 内注释：依赖外部 feed 的包先 TODO）
 cat "$ROOT/config/seed-config.diff" >> .config
 make defconfig
-grep -q "CONFIG_TARGET_airoha_an7581_gemtek_xr1710g-ubi=y" .config \
+grep -q "CONFIG_TARGET_airoha_an7581_DEVICE_gemtek_xr1710g-ubi=y" .config \
   && echo "✓ XR1710G 目标已选中" \
   || { echo "⚠ .config 中未选中 gemtek_xr1710g-ubi——检查 seed-config.diff 与 #22397 补丁" >&2; }
 

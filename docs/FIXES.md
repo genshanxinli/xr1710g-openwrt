@@ -19,6 +19,7 @@
 | F12 | NPU/MLO/诊断应用 | 应用包无独立 feed | 散落在各家 fork 内 | **已供给**（2026-08-17）：`vendor/fanboy/19-w1700k-apps-pack`（npu/flowsense/mlo/fancontrol 随树内置，MANIFEST 默认档）+ `packages-xr1710g/` src-link feed（luci-app-airoha-recovery，源 naoki66@dd9ecfeef）+ filemanager=官方 luci feed；独立 feed 保留为备选（feeds.custom.conf 注释） | n/a | 决策五件套全部就绪 |
 | F13 | fanboy 资产拆分 | 原料桶 20 commit 是打包历史，混多项改动 | 打包粒度 vs 我们的档位/可追溯要求 | **555 已拆出**（`regdb-0555-...`，#OC 档）；**08 号 regdb 已拆净**（2026-08-17，与独立 0555 内容一致），余项（SPI33MHz/banner/dropbear/wifi-scripts/dtsi）待评审；19 号应用包含 fastfetch/netspeedtest 冗余待精简；11/13/14/15/16 号待评审定档 | n/a | 拆分完成前对应条目不启用（MANIFEST 注释） |
 | F14 | vermagic 注入 | 自建 kmod 与官方 opkg 兼容 | 构建层机制（fanboy 85005e10 + extract-distfeeds） | 原料桶 01 号已入库，评估后接入 CI | n/a | 非阻塞 |
+| F15 | 首次构建验证（2026-08-17 CI 红） | `make defconfig` 后 XR1710G 目标未选中 | **设备 kconfig 符号拼写错误**：真实符号 = `CONFIG_TARGET_<board>_<subtarget>_DEVICE_<device>`（`scripts/metadata.pm` 的 `confstr` 只清洗 target 名；profile id 原样保留 `DEVICE_` 前缀与连字符）；seed/CI/build.sh 写成 `CONFIG_TARGET_airoha_an7581_gemtek_xr1710g-ubi=y`（缺 `_DEVICE_` 中缀）→ kconfig 静默忽略未知符号 → 默认选中 **EVB 参考板**（`DEVICE_airoha_an7581-evb`） | 修复三处为 `CONFIG_TARGET_airoha_an7581_DEVICE_gemtek_xr1710g-ubi=y`（seed-config.diff / build.yml grep / build.sh grep）；本地 defconfig 实证：修复后 `CONFIG_TARGET_PROFILE="DEVICE_gemtek_xr1710g-ubi"` | n/a（仓库自持配置） | 教训：追加 .config 的符号必须与 metadata.pm 生成器一致，忘记 `_DEVICE_` 是静默失败 |
 
 ## 未确认/待实机核实清单
 - 物理口 ↔ 逻辑名（netdev-name 已固化：lan1/lan2=双 10G、wan=1G-1（gsw_port1）、lan3=1G-2（gsw_port2），见 9001）→ 首次实机 `ip -br link` 核对
