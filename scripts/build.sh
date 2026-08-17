@@ -55,6 +55,8 @@ make defconfig
 grep -q "CONFIG_TARGET_airoha_an7581_DEVICE_gemtek_xr1710g-ubi=y" .config \
   && echo "✓ XR1710G 目标已选中" \
   || { echo "⚠ .config 中未选中 gemtek_xr1710g-ubi——检查 seed-config.diff 与 #22397 补丁" >&2; }
+# seed 符号审计（F15 教训：kconfig 静默忽略未知符号——所有 seed 符号必须逐一进 .config）
+"$ROOT/scripts/audit-config.sh" "$ROOT/config/seed-config.diff" .config
 
 echo "== [5/6] 构建（-j$JOBS, 日志 build.log）=="
 make -j"$JOBS" V=s 2>&1 | tee "$ROOT/build-$TIER.log"

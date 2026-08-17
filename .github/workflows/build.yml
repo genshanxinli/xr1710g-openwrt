@@ -88,6 +88,7 @@ jobs:
           cat "$GITHUB_WORKSPACE/overlay/config/seed-config.diff" >> .config
           make defconfig
           grep -q "CONFIG_TARGET_airoha_an7581_DEVICE_gemtek_xr1710g-ubi=y" .config || { echo "XR1710G 目标未选中——检查 #22397 补丁与 seed"; exit 1; }
+          "${GITHUB_WORKSPACE}/overlay/scripts/audit-config.sh" "${GITHUB_WORKSPACE}/overlay/config/seed-config.diff" .config
 
       - name: 构建
         run: |
