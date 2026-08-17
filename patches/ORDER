@@ -1,20 +1,25 @@
-# 补丁应用顺序表  format: <tier> <相对路径>  tier=default|oc|experimental
-# 说明：08 混入 555 regdb（激进档），集成时需拆分，见 docs/FIXES.md#08 拆分
-default vendor/fanboy/01-vermagic-inject-85005e10.patch
+# 补丁应用顺序表  format: <tier> <相对路径>  tier=default|oc|experimental|pending
+# 权威应用清单 = patches/MANIFEST（本表是档位评审视图；不一致时以 MANIFEST 为准并修正本表）
+# 2026-08-17：08 号 regdb 555 已拆净（→ 独立 regdb/0555，#OC 档，与 08 原内容一致）；08 余项待评审降为 pending。
+
+# ── default（MANIFEST 默认档活动行）──
+default root/9000-xr1710g-common.patch
+default root/9001-xr1710g-dts.patch
+default root/9002-xr1710g-uboot.patch
 default vendor/fanboy/03-cpufreq-pmdomain-22029-e5d23549.patch
-default vendor/fanboy/08-reliability-compat-36da8e02.patch
-default vendor/fanboy/11-airoha-lro-default-0e90a420.patch
-default vendor/fanboy/12-lorenzo-airoha-patches-8d1947c0.patch
-default vendor/fanboy/13-mt76-plus-firmware-612255dd.patch
-default vendor/fanboy/14-mt76-patches-80f79586.patch
-default vendor/fanboy/15-txpower-control-d7aa0235.patch
-default vendor/fanboy/16-wifi-scripts-txpower-ucode-41b9e3ac.patch
+default vendor/fanboy/10-pstore-ramoops-22473-2f7d2d02.patch
 default vendor/fanboy/19-w1700k-apps-pack-fd705cd9.patch
-default vendor/pr/22397-xr1710g-board-support.diff
-default regdb/510-us-regd-6GHz.patch
-default regdb/520-w1700k-us-power-limits.patch
-oc vendor/fanboy/20-oc-governor-200mhz-ed7cbc80.patch
-oc regdb/555-w1700k-fix.patch
+default regdb/0500-world-5ghz-no-no-ir.patch
+default regdb/0510-us-6ghz-no-no-ir.patch
+default regdb/0520-us-power-limits-uni1-29-6g-29.patch
+default mt76/0006-wifi-mt76-mt7996-refresh-power-limits-on-txpower-changes.patch
+default mt76/0007-wifi-mt76-mt7996-enable-firmware-txpower-limit-controls.patch
+
+# ── oc（--oc 才应用）──
+oc regdb/0555-w1700k-unii4-6g-30.patch
+# OC 本体（OPP/PLL/governor）由 scripts/prepare-oc.sh 树编辑实现（不占 MANIFEST）
+
+# ── experimental（--experimental 才应用）──
 experimental vendor/fanboy/02-eip93-f80d0507.patch
 experimental vendor/fanboy/04-dsa-kmod-netlink-22532-aa531917.patch
 experimental vendor/fanboy/05-bridge-offload-22533-33ac9c66.patch
@@ -23,4 +28,15 @@ experimental vendor/fanboy/07-mt76-bypass-hw-rro-e880d0db.patch
 experimental vendor/fanboy/09-hw11-hw21-compat-afc6dc93.patch
 experimental vendor/fanboy/17-cmonroe-stability-8c530f05.patch
 experimental vendor/fanboy/18-smartrg-stability-b45d5117.patch
-experimental regdb/530-us-6ghz-lab-indoor-sp-override.patch
+experimental regdb/0530-us-6ghz-lab-indoor-sp-override-DISABLED.patch
+
+# ── pending（原料已入库，待评审定档/拆分后解锁，对应 FIXES F13/F14）──
+pending vendor/fanboy/01-vermagic-inject-85005e10.patch
+pending vendor/fanboy/08-reliability-compat-36da8e02.patch   # regdb 已拆净；SPI33MHz/banner/dropbear/wifi-scripts/dtsi 待评审
+pending vendor/fanboy/11-airoha-lro-default-0e90a420.patch
+pending vendor/fanboy/12-lorenzo-airoha-patches-8d1947c0.patch
+pending vendor/fanboy/13-mt76-plus-firmware-612255dd.patch
+pending vendor/fanboy/14-mt76-patches-80f79586.patch
+pending vendor/fanboy/15-txpower-control-d7aa0235.patch
+pending vendor/fanboy/16-wifi-scripts-txpower-ucode-41b9e3ac.patch
+pending vendor/fanboy/20-oc-governor-200mhz-ed7cbc80.patch   # OC 已由 prepare-oc.sh 实现；本补丁为 fanboy 原版参考（6.12 系）

@@ -16,11 +16,11 @@
 | F09 | U-Boot pstore | 崩溃日志无处持久化 | #22473 未合 | kernel 侧已自持（`vendor/fanboy/10-pstore-ramoops-...`）；uboot 侧待上游 | upstream-open | 可选增强 |
 | F10 | DSA 重构 | switch 端口架构迁移（实验档） | #22532 未合 | specs（不默认应用） | upstream-open | 毕业条件见 patches/README |
 | F11 | L2 桥接卸载 | nft flow offload L2（实验档） | #22533 未合 | specs | upstream-open | 同上 |
-| F12 | NPU/MLO/诊断应用 | 应用包无独立 feed | 散落在各家 fork 内 | **已供给**：`vendor/fanboy/19-w1700k-apps-pack`（npu/flowsense/mlo/fancontrol/filemanager 随树内置，MANIFEST 默认档）；独立 feed 保留为备选（feeds.custom.conf 注释） | n/a | recovery 仍待供给（ROADMAP P1） |
-| F13 | fanboy 资产拆分 | 原料桶 20 commit 是打包历史，混多项改动 | 打包粒度 vs 我们的档位/可追溯要求 | **555 已拆出**（`regdb-0555-...`，#OC 档）；08 号（SPI 33MHz/LED 配色/dropbear 静默/wifi-scripts）待拆分；19 号应用包含 fastfetch/netspeedtest 冗余待精简；11/13/14/15/16 号待评审定档 | n/a | 拆分完成前对应条目不启用（MANIFEST 注释） |
+| F12 | NPU/MLO/诊断应用 | 应用包无独立 feed | 散落在各家 fork 内 | **已供给**（2026-08-17）：`vendor/fanboy/19-w1700k-apps-pack`（npu/flowsense/mlo/fancontrol 随树内置，MANIFEST 默认档）+ `packages-xr1710g/` src-link feed（luci-app-airoha-recovery，源 naoki66@dd9ecfeef）+ filemanager=官方 luci feed；独立 feed 保留为备选（feeds.custom.conf 注释） | n/a | 决策五件套全部就绪 |
+| F13 | fanboy 资产拆分 | 原料桶 20 commit 是打包历史，混多项改动 | 打包粒度 vs 我们的档位/可追溯要求 | **555 已拆出**（`regdb-0555-...`，#OC 档）；**08 号 regdb 已拆净**（2026-08-17，与独立 0555 内容一致），余项（SPI33MHz/banner/dropbear/wifi-scripts/dtsi）待评审；19 号应用包含 fastfetch/netspeedtest 冗余待精简；11/13/14/15/16 号待评审定档 | n/a | 拆分完成前对应条目不启用（MANIFEST 注释） |
 | F14 | vermagic 注入 | 自建 kmod 与官方 opkg 兼容 | 构建层机制（fanboy 85005e10 + extract-distfeeds） | 原料桶 01 号已入库，评估后接入 CI | n/a | 非阻塞 |
 
 ## 未确认/待实机核实清单
-- 接口名映射（10G/1G 与 eth* 对应）→ 首次实机 `ip -br link` 核对（FIXME 于 files/etc/config/network）
+- 物理口 ↔ 逻辑名（netdev-name 已固化：lan1/lan2=双 10G、wan=1G-1（gsw_port1）、lan3=1G-2（gsw_port2），见 9001）→ 首次实机 `ip -br link` 核对
 - U-Boot flash-slot.bin 的 SHA256 全文 → 以 YYH2913/http-uboot release 页为准（升级时校验）
 - 6.18 下 PM domain PLL 公式的树内位置（prepare-oc.sh 找不到即报错并指导定位）

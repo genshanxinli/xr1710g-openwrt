@@ -7,8 +7,6 @@ Use github for more reliable feeds
 
 subtle LED colors
 
-patch wireless regdb to enable UNII-4 and 6Ghz in United States
-from @stangri: https://github.com/stangri/w1700k-wireless-regdb/blob/main/patches/555-w1700k-fix.patch
 
 bring down SPI freq to 33Mhz for better sysupgrade reliability
 
@@ -24,15 +22,13 @@ wifi-scripts: fix "command failed: Not supported (-95)" error
 ---
  feeds.conf.default                            | 10 +--
  package/base-files/files/etc/banner           |  4 +-
- .../patches/555-w1700k-fix.patch              | 18 +++++
  .../lib/netifd/wireless/mac80211.sh           |  8 ++-
  .../patches/500-quiet-session-logs.patch      | 69 +++++++++++++++++++
  target/linux/airoha/an7581/config-6.18        | 13 +---
  target/linux/airoha/dts/an7581-w1700k-ubi.dts |  6 +-
  target/linux/airoha/dts/an7581.dtsi           |  2 +-
  .../998-silence-PHY-LED-pinctrl-error.patch   | 12 ++++
- 9 files changed, 117 insertions(+), 25 deletions(-)
- create mode 100644 package/firmware/wireless-regdb/patches/555-w1700k-fix.patch
+ 8 files changed, 99 insertions(+), 25 deletions(-)
  create mode 100644 package/network/services/dropbear/patches/500-quiet-session-logs.patch
  create mode 100644 target/linux/airoha/patches-6.18/998-silence-PHY-LED-pinctrl-error.patch
 
@@ -69,30 +65,6 @@ index f3af3c014f20f1..0c78ac86a71757 100644
   -----------------------------------------------------
   %D %V, %C
   -----------------------------------------------------
-diff --git a/package/firmware/wireless-regdb/patches/555-w1700k-fix.patch b/package/firmware/wireless-regdb/patches/555-w1700k-fix.patch
-new file mode 100644
-index 00000000000000..350dddafc05fac
---- /dev/null
-+++ b/package/firmware/wireless-regdb/patches/555-w1700k-fix.patch
-@@ -0,0 +1,18 @@
-+--- a/db.txt
-++++ b/db.txt
-+@@ -2036,13 +2036,12 @@ country US: DFS-FCC
-+ 	# requirements, we can extend the range by 5 MHz to make the kernel
-+ 	# happy and be able to use channel 144.
-+ 	(5470 - 5730 @ 160), (24), DFS
-+-	(5730 - 5850 @ 80), (30), AUTO-BW
-++	(5730 - 5895 @ 160), (30), AUTO-BW
-+ 	# https://www.federalregister.gov/documents/2021/05/03/2021-08802/use-of-the-5850-5925-ghz-band
-+ 	# max. 33 dBm AP @ 20MHz, 36 dBm AP @ 40Mhz+, 6 dB less for clients
-+-	(5850 - 5895 @ 40), (27), NO-OUTDOOR, AUTO-BW, NO-IR
-+ 	# 6g band
-+ 	# https://www.federalregister.gov/documents/2020/05/26/2020-11236/unlicensed-use-of-the-6ghz-band
-+-	(5925 - 7125 @ 320), (12), NO-OUTDOOR, NO-IR
-++	(5925 - 7125 @ 320), (30), NO-OUTDOOR
-+ 	# 60g band
-+ 	# reference: section IV-D https://docs.fcc.gov/public/attachments/FCC-16-89A1.pdf
-+ 	# channels 1-6 EIRP=40dBm(43dBm peak)
 diff --git a/package/network/config/wifi-scripts/files-ucode/lib/netifd/wireless/mac80211.sh b/package/network/config/wifi-scripts/files-ucode/lib/netifd/wireless/mac80211.sh
 index a0aeed487ae74c..0f0b5728f76de9 100755
 --- a/package/network/config/wifi-scripts/files-ucode/lib/netifd/wireless/mac80211.sh

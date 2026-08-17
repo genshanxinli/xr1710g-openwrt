@@ -20,29 +20,31 @@ JOBS="${JOBS:-$(nproc)}"
 
 [[ -d "$TREE/.git" && -f "$TREE/scripts/feeds" ]] || { echo "错误：$TREE 不是 openwrt 源码树（缺 scripts/feeds）" >&2; exit 1; }
 
-echo "== [1/5] 同步补丁层（$TIER）=="
+echo "== [0/6] 叠加本仓库到树（叠加层模型：补丁/内置包/配置/脚本；fork 模型下自动跳过）=="
+if [[ "$(readlink -f "$TREE")" != "$(readlink -f "$ROOT")" ]]; then
+  rsync -a --exclude='.git' --exclude='audit-ubi2oc' --exclude='.github' --exclude='openwrt' --exclude='build-*.log' "$ROOT/" "$TREE/"
+  echo "  已叠加：$ROOT → $TREE"
+fi
+
+echo "== [1/6] 同步补丁层（$TIER）=="
 OC_FLAG=""; [[ "$TIER" != "stock" ]] && OC_FLAG="--oc"
 "$ROOT/scripts/apply-patches.sh" "$TREE" $OC_FLAG
 
-echo "== [2/5] OC 档位 =="
+echo "== [2/6] OC 档位 =="
 if [[ "$TIER" != "stock" ]]; then
   "$ROOT/scripts/prepare-oc.sh" "${TIER#oc-}" "$TREE"
 else
   "$ROOT/scripts/prepare-oc.sh" stock "$TREE" || true   # 撤销可能残留的 OC 编辑
 fi
 
-echo "== [2.5/5] files/ overlay（网络/Wi-Fi/风扇/OC 限频默认配置）=="
-mkdir -p "$TREE/files"
-cp -rf "$ROOT/files/." "$TREE/files/"
-
-echo "== [3/5] feeds（官方默认 + 本仓库自定义）=="
+echo "== [3/6] feeds（官方默认 + 本仓库自定义）=="
 cd "$TREE"
 cp -f feeds.conf.default feeds.conf
 cat "$ROOT/config/feeds.custom.conf" >> feeds.conf
 ./scripts/feeds update -a
 ./scripts/feeds install -a
 
-echo "== [4/5] 配置 =="
+echo "== [4/6] 配置 =="
 # 首次需先建 .config；之后每次用 seed 差量刷新（决策：可复现、显式）
 if [[ ! -f .config ]]; then
   make defconfig
@@ -54,7 +56,7 @@ grep -q "CONFIG_TARGET_airoha_an7581_gemtek_xr1710g-ubi=y" .config \
   && echo "✓ XR1710G 目标已选中" \
   || { echo "⚠ .config 中未选中 gemtek_xr1710g-ubi——检查 seed-config.diff 与 #22397 补丁" >&2; }
 
-echo "== [5/5] 构建（-j$JOBS, 日志 build.log）=="
+echo "== [5/6] 构建（-j$JOBS, 日志 build.log）=="
 make -j"$JOBS" V=s 2>&1 | tee "$ROOT/build-$TIER.log"
 echo "产物："
 ls -la bin/targets/airoha/an7581/*.itb 2>/dev/null || find bin/targets -name '*.itb' -exec ls -la {} \;

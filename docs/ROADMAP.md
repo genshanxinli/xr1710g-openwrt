@@ -3,16 +3,16 @@
 按优先级排序。原则：**修复而不是降级**——所有"暂缓"都是排队，不是放弃。
 
 ## P0 首次实机（刷机后第一轮）
-- [ ] 核对接口名映射（`ip -br link` / LuCI），固化 `files/etc/config/network` 的真实端口名（WAN=1G-1、LAN=双 10G + 1G-2）
+- [ ] 物理口 ↔ 逻辑名实机核对（netdev-name 已固化：lan1/lan2=双 10G、wan=1G-1（gsw_port1）、lan3=1G-2（gsw_port2），见 9001；`ip -br link` 验证后定稿 files/etc/config/network）
 - [ ] 核对 6GHz EHT320 实际生效（`iw phy` / hostapd 日志），不生效则修 mt76/hostapd 至生效
-- [ ] NPU 加载与卸载验证（`luci-app-airoha-npu` 供给 feed 后）
+- [ ] NPU 加载与卸载验证（luci-app-airoha-npu 已由 19-pack 内置）
 - [ ] 风扇曲线实测（温度点/转速），按 NCT7802 实测修正曲线参数
 - [ ] 跑 `docs/ACCEPTANCE.md` 全项 → 首个 known-good tag
 
-## P1 资产评审与供给（2026-08-17 已入库原料桶，逐支评审定档）
-- [ ] **F13 拆分**：08 号（SPI 33MHz/LED 配色/dropbear 静默/wifi-scripts 逐项评审）；19 号应用包精简（fastfetch/netspeedtest 移除，保留 npu/flowsense/mlo/fancontrol/filemanager）
+## P1 资产评审与供给（2026-08-17：应用供给已闭环，剩逐支评审定档）
+- [ ] **F13 拆分**：08 号（regdb 已拆净；SPI33MHz/banner/dropbear/wifi-scripts/dtsi 逐项评审）；19 号应用包精简（fastfetch/netspeedtest 移除，保留 npu/flowsense/mlo/fancontrol）
 - [ ] 评审 11/13/14/15/16 号（LRO 默认/mt76 源 pin/mt76 patches/txpower 备选/wifi-scripts ucode）定档位
-- [ ] `luci-app-airoha-recovery` 供给（源：naoki66 / orangeyoo xr1710g-recovery；无独立仓库，抽取建 feed 或 vendor）
+- [x] `luci-app-airoha-recovery` 供给（2026-08-17：packages-xr1710g/ src-link，源 naoki66@dd9ecfeef）
 
 ## P2 上游 PR 跟追（合入即删本层补丁）
 - [ ] #22397（板级）——合入后删 `patches/root/9000-xr1710g-common.patch` 等三件套

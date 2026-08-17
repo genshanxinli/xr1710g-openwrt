@@ -71,7 +71,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     else
       mkdir -p "$dt"
       cp -f "$pf" "$dt/"
-  echo "✓ copied   $src -> $dest"
+      echo "✓ copied   $src -> $dest"
     fi
   fi
   applied=$((applied+1))

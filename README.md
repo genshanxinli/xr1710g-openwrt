@@ -22,6 +22,7 @@ in-band phylink、PCIe x2、MLO/EHT320、US regdb 功率体系、CPU 超频）�
 patches/            补丁层（root/packages/specs 正式桶 + vendor/fanboy 原料桶 + MANIFEST/ORDER）
 scripts/            apply-patches.sh / prepare-oc.sh / build.sh / fetch-sources.sh / sync-upstream.sh
 config/             feeds.custom.conf（外部 feed 锁 commit）+ seed-config.diff（预装包）
+packages-xr1710g/   内置包 feed（luci-app-airoha-recovery，src-link 供给，锁源 commit）
 files/              根文件系统 overlay（network/wireless/system/风扇守护/OC 限频）
 docs/               FIXES 台账 / ACCEPTANCE 验收 / ROADMAP / FLASHING 刷机 / adr/
 .github/workflows/  build.yml（手动构建 matrix）+ sync-upstream.yml（每 2h 上游同步+补丁校验）
@@ -39,8 +40,7 @@ git clone https://github.com/openwrt/openwrt.git openwrt
 
 ### 1) 构建
 ```bash
-./scripts/fetch-sources.sh          # 拉取开放 PR 补丁（依赖网络；已内置 regdb/mt76/#22397/OC）
-./scripts/build.sh stock            # 默认档（或 oc-1.3 / oc-1.4）
+./scripts/build.sh stock            # 默认档（或 oc-1.3 / oc-1.4）；补丁原料已 vendor 入库，fetch-sources.sh 仅用于重取/刷新
 ```
 产物：`bin/targets/airoha/an7581/*-sysupgrade.itb`（+ initramfs）。
 
@@ -65,11 +65,11 @@ git clone https://github.com/openwrt/openwrt.git openwrt
 | pstore / ramoops（#22473） | kernel 侧已自持（`vendor/fanboy/10`）；uboot 侧待上游 |
 | 风扇温控 | `files/etc/init.d/fan` 动态探测（NCT7802/NCT7511Y） |
 | 实验档（#22532/#22533/eip93 等） | 原料桶已入库（vendor/fanboy 02/04-09/17/18），默认不编 |
-| npu/flowsense/mlo/fancontrol/filemanager 应用 | 已由 `vendor/fanboy/19` 应用包随树内置；recovery 待供给（ROADMAP P1） |
+| npu/flowsense/mlo/fancontrol/filemanager/recovery 应用 | 决策五件套全就绪：npu/flowsense/mlo/fancontrol=19-pack 内置；filemanager=官方 luci feed；recovery=packages-xr1710g src-link（锁 dd9ecfeef） |
 
 ## 风险声明（自用范围）
 
 - 6GHz/功率补丁（US regdb 520）**无 AFC/合规背书**，自用责任自负；
 - 超频存在**个体体质差异**（部分机器启动 panic）——默认档 stock 无此风险；OC 档按 FIXES F08 使用；
 - 第三方 U-Boot 刷入后厂商恢复通道失效——锁版 + 校验，救砖通道见 FLASHING；
-- 接口名占位（network 配置）需首次实机核对（ROADMAP P0）。
+- 网口命名已固化（netdev-name：lan1/lan2=10G、wan=1G-1、lan3=1G-2），物理口 ↔ 逻辑名仍需首次实机核对（ROADMAP P0）。
