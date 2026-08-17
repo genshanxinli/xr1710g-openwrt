@@ -17,8 +17,8 @@ patches/packages/regdb-0510-us-6ghz-no-no-ir.patch                     package/f
 patches/packages/regdb-0520-us-power-limits-uni1-29-6g-29.patch        package/firmware/wireless-regdb/patches/
 #OC patches/packages/regdb-0555-w1700k-unii4-6g-30.patch               package/firmware/wireless-regdb/patches/
 #DISABLED patches/packages/regdb-0530-us-6ghz-lab-indoor-sp-override-DISABLED.patch package/firmware/wireless-regdb/patches/
-# 0530 实测（2026-08-17，verify-copy-patches 实证）：在 wireless-regdb 2026.05.30 上按
-#   500→0510→0520 后状态可应用但带 fuzz 2（上下文漂移）——启用前必须按当前状态重建消除 fuzz。
+# 0530 已于 2026-08-17 按 wireless-regdb 2026.05.30「500→0510→0520 后」状态重建（fuzz 2 → 0，
+#   语义不变：US 6g 29→36dBm 实验室 SP）；启用时按 verify 流程再实证即可。
 
 # ── packages：mt76 txpower（YYH2913 integration 家族，默认档核心）──
 # 注：package/kernel/mt76/patches/ 在 master 不存在，由脚本 mkdir 创建，OpenWrt 构建时自动应用

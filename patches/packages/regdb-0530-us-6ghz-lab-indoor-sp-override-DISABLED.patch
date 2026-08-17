@@ -7,8 +7,12 @@ standard-power AP type on the hostapd side.
 ---
 --- a/db.txt
 +++ b/db.txt
-@@ -2053,3 +2053,3 @@ country US: DFS-FCC
+@@ -2094,7 +2094,7 @@
+ 	(5850 - 5895 @ 40), (27), NO-OUTDOOR, AUTO-BW, NO-IR
  	# 6g band
  	# https://www.federalregister.gov/documents/2020/05/26/2020-11236/unlicensed-use-of-the-6ghz-band
 -	(5925 - 7125 @ 320), (29), NO-OUTDOOR
 +	(5925 - 7125 @ 320), (36), NO-OUTDOOR
+ 	# 60g band
+ 	# reference: section IV-D https://docs.fcc.gov/public/attachments/FCC-16-89A1.pdf
+ 	# channels 1-6 EIRP=40dBm(43dBm peak)
