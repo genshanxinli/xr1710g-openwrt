@@ -33,6 +33,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MANIFEST="$ROOT/patches/MANIFEST"
 [[ -f "$MANIFEST" ]] || { echo "错误：找不到 $MANIFEST" >&2; exit 1; }
 
+# F21③/9001 教训制度化：hunk 行数一致性审计（git apply 对声明行数≠实际行数的包裹补丁会
+# 静默截断创建文件——9001 丢 97 行致内核 DTS 语法错误，构建期才暴露）。dry 与真实模式都先审计。
+OC_FLAG_AUDIT=""; (( OC )) && OC_FLAG_AUDIT="--oc"
+"$ROOT/scripts/audit-patches.sh" $OC_FLAG_AUDIT
+
 applied=0; skipped=0; missing=0
 while IFS= read -r line || [[ -n "$line" ]]; do
   line="${line%"${line##*[![:space:]]}"}"   # rtrim
