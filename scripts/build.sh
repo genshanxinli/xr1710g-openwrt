@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # build.sh — 本地一键构建（完整源码构建，OpenWrt 官方流程）
-# 用法：build.sh <stock|oc-1.3|oc-1.4> [openwrt树目录]
+# 用法：build.sh <stock|oc-1.3|oc-1.4|experimental> [openwrt树目录]
 #   TIER 缺省 = stock（决策：双 release，stock 为默认 known-good，oc 变体可选）
+#   experimental = 默认档 + 实验档（MANIFEST #EXP 条目；F25 起可本地构建验证）
 #   树目录缺省 = ./openwrt（或 $OPENWRT_DIR）
 #
 # 前置（首次）：
@@ -13,7 +14,7 @@
 set -euo pipefail
 
 TIER="${1:-stock}"
-case "$TIER" in stock|oc-1.3|oc-1.4) ;; *) echo "错误：TIER ∈ stock|oc-1.3|oc-1.4" >&2; exit 1 ;; esac
+case "$TIER" in stock|oc-1.3|oc-1.4|experimental) ;; *) echo "错误：TIER ∈ stock|oc-1.3|oc-1.4|experimental" >&2; exit 1 ;; esac
 TREE="${2:-${OPENWRT_DIR:-./openwrt}}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 JOBS="${JOBS:-$(nproc)}"
@@ -33,11 +34,12 @@ if [[ "$(readlink -f "$TREE")" != "$(readlink -f "$ROOT")" ]]; then
 fi
 
 echo "== [1/6] 同步补丁层（$TIER）=="
-OC_FLAG=""; [[ "$TIER" != "stock" ]] && OC_FLAG="--oc"
-"$ROOT/scripts/apply-patches.sh" "$TREE" $OC_FLAG
+EXP_FLAG=""; [[ "$TIER" == "experimental" ]] && EXP_FLAG="--experimental"
+OC_FLAG=""; [[ "$TIER" == "oc-1.3" || "$TIER" == "oc-1.4" ]] && OC_FLAG="--oc"
+"$ROOT/scripts/apply-patches.sh" "$TREE" $OC_FLAG $EXP_FLAG
 
 echo "== [2/6] OC 档位 =="
-if [[ "$TIER" != "stock" ]]; then
+if [[ "$TIER" == "oc-1.3" || "$TIER" == "oc-1.4" ]]; then
   "$ROOT/scripts/prepare-oc.sh" "${TIER#oc-}" "$TREE"
 else
   "$ROOT/scripts/prepare-oc.sh" stock "$TREE" || true   # 撤销可能残留的 OC 编辑

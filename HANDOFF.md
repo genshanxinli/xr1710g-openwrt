@@ -27,15 +27,20 @@ Gemtek XR1710G（Airoha AN7581GT + MT7996 三频 Wi-Fi7、2×10G+2×1G）的**�
   - `scripts/verify-copy-patches.sh`（15976d0）接入 `apply-patches.sh --dry-run`——**按构建语义真实应用拷贝类/派生包补丁**：树内包 Makefile 派生源码 tarball（PKG_VERSION/PKG_SOURCE_VERSION 单一事实源，不手工 pin）→ 缓存下载（损坏缓存自动删除重下；下载失败=⚠ 不红，构建兜底；uboot 多镜像后备）→ 解包 → 组装「树内已有补丁+本层补丁」同目录 → 树内自带 `scripts/patch-kernel.sh`（=构建 KPATCH）glob 排序 `patch -f -p1` 真实应用 → regdb 逐包 dbparse.py 校验。应用失败=红（2h cron 尽早暴露而非等构建）。**派生目标**（ROOT 补丁生成的包补丁，如 9002→uboot、fanboy14→mt76）注册于 DERIVED_DESTS；**verify 必须在 dry-run 的 git reset 之前调用**——apply-patches.sh 已保证并正确传播退出码。CI 实证：sync-upstream 32047198944/32053502231 绿（regdb/mt76/uboot 3 目标全过）。
   - `scripts/audit-patches.sh`（83f07db，F23）接入 apply-patches.sh 应用前——**逐 hunk 核对声明行数 vs 实际**：git apply 对行数不匹配的包裹补丁静默截断创建文件不报错（F21③ 9002、F23 9001 两例），此审计补上该盲区；dry+真实模式都跑。
 - **✅ P0 真绿门禁达成（2026-08-17 19:2x，第五次重建 83f07db 全绿）**：push stock=32053502298 ✓ + dispatch all=32053692044（stock/oc-1.3/oc-1.4 全 ✓）；**firmware-stock/oc-1.3/oc-1.4 artifact 各 ~33.5MB 产出**（sysupgrade+initramfs+chainload-uboot+manifest，FIT 魔数 d00dfeed 验证）；release ci-26 已建且**真产物已补传**（F24：release job 顺序 bug 致自动上传空壳，手动补传 + build.yml 已修——checkout 先于 download、去 merge-multiple 保三档同名 itb）。首个 known-good 前的可用候选 = ci-26 pre-release。
+- **✅ F25 实验档工程化（2026-08-18，分支 feat/experimental-tier，commit b821bc6）**：
+  - **实验档可构建化**：build.sh 加 `experimental` 档；build.yml profile 校验 + OC/EXP 标志分离（'all' 仍三 release 档）；sync-upstream 2h cron dry-run 加 `--experimental`（实验档漂移检测）；audit-patches/verify-copy-patches 加 `--experimental`（#EXP 行纳入 hunk 审计与拷贝类真实应用校验）；apply-patches.sh 修 set -e 缺陷（verify 失败不再跳过 git reset）+ 透传 `--no-download`（本地离线 dry-run）。
+  - **mt76 integration 9990-9993 评审（ROADMAP P3 勾掉）**：9990 EHT 广告 / 9991 160MHz BF fallback / 9993 op_mode 传递 → 重建入实验档（`patches/packages/mt76-999x-…`，对 pin 59676919 原生态可应用、master b2704cf5 无）；**9992 PS-sync 校验否决**（mt76 master 2026-08-01 已上游合入，pin 升级自然获得）。
+  - **8 条 #EXP 补丁实测**：对 master 按序全应用（05-bridge-offload 依赖 02-eip93 先行——hunk 旧上下文含 02 加入的 kmod-crypto-hw-eip93 行）。
+  - **CI 实证（2026-08-18 21:20）**：experimental 构建 32179841824 **成功**——firmware-experimental artifact 33.5MB（sysupgrade+initramfs+chainload-uboot+manifest）；**release job 自动上传闭环（F24 首验）**：ci-32 pre-release 4 真资产（此前 F24 修复未验证）；三次构建迭代暴露并修复两个真实问题：EXP-18 生成的 992-21 冗余超时 hunk（上游内核已 100ms）→ 29778aa；9993 的 mac80211 cap helper 编译依赖（backport 未导出）→ 携带 subsys 411 → 54fb458。
 - 本地宿主缺陷备忘：容器缺 gawk（scan.awk asort）/mkhash → 本地 defconfig/feeds 索引不完备；定向验证（`feeds update <feed名>`、apply-patches --dry-run）可做，仓库代码以 CI（gawk 全工具）为准。**本会话额外发现**：本宿主访问 github.com 常遇 429/500/空包（archive/codeload 下载不稳定）——verify 的缓存损坏守卫能自愈；取 mt76 源码可用 `git -c http.version=HTTP/1.1 clone` + `git fetch <sha>` 精确检出 pin commit（git 协议比 tarball 稳）。
 
 ## 下一步任务（按优先级）
 
 1. **首个 known-good 定位**（需设备）：按 ACCEPTANCE 全项实机验收（物理口↔逻辑名、6GHz EHT320、NPU、风扇曲线、OC 档实测）→ 打 known-good tag。**在此之前的可用候选 = ci-26 pre-release（真产物，三档各含 sysupgrade/initramfs/chainload-uboot + manifest）**。
-2. **release 自动化验证**（F24 修复后）：下次 dispatch 构建后核对 release job 自动上传是否带三档产物（firmware-<profile>/ 子目录结构）；若不再空壳即闭环。
-3. **上游跟踪**：#22397 合入即删 9000-9002 三件套（uboot 补丁命名改回 PR 编号时注意 glob 序）；#22029 合入即删 vendor/03；#22473 剩 uboot 侧；#24034/#24619 LED 视实机。上游 mt76 若合入 sta_poll 死代码清理/其余能力，复查 fanboy14 与 15 号备选。
-4. **实验档毕业候选**：#22532（DSA）/#22533（L2 offload）——experimental 构建跑通 + 实机验证后并入默认档。
-5. **工程化续**：① DISABLED 的 `regdb-0530` 已按当前状态重建（fuzz 2→0，2026-08-17），启用时过一遍 verify 即可；② 本地全量构建宿主缺 gawk 的规避文档化；③ verify-copy-patches 的未知拷贝目标会⚠跳过——新增包补丁目标时先在本脚本登记源映射；④ 2h 同步稳定后把「冲突→修复→回归」流程沉淀为文档。
+2. **release 自动化验证（F24 闭环）**：F25 的 experimental dispatch（32166293045）顺带核验 release job 是否自动带产物（firmware-experimental/）；下次 'all' dispatch 再核对三档 + 各档子目录。
+3. **上游跟踪**：#22397 合入即删 9000-9002 三件套（uboot 补丁命名改回 PR 编号时注意 glob 序）；#22029 合入即删 vendor/03；#22473 剩 uboot 侧；#24034/#24619 LED 视实机。上游 mt76 若合入 EHT 广告/320 BF fallback/op_mode 之一，复查 9990/9991/9993 冗余性（9992 已上游，pin 升级即自然获得）。**mt76 pin 升级时：先跑 sync-upstream 验证 0006/0007/9990/9991/9993 在新 pin 上的应用**。
+4. **实验档**：8 条 #EXP（02/04-09/17/18 + mt76 9990/9991/9993）已可构建验证——`build.sh experimental` 或 CI dispatch `profile=experimental`；**毕业候选**：#22532（DSA）/#22533（L2 offload）实验构建跑通 + 实机验证后并入默认档；mt76 三补丁实机 EHT320 客户端验证后毕业。
+5. **工程化续**：① DISABLED 的 `regdb-0530` 已按当前状态重建（fuzz 2→0，2026-08-17），启用时过一遍 verify 即可；② 本地全量构建宿主缺 gawk 的规避文档化；③ verify-copy-patches 的未知拷贝目标会⚠跳过——新增包补丁目标时先在本脚本登记源映射（wifi-scripts/hostapd 的 EXP-17 生成补丁目录暂未登记，属已知缺口）；④ 2h 同步稳定后把「冲突→修复→回归」流程沉淀为文档；⑤ 实验档毕业自动化（ROADMAP P4：experimental 构建过 + ACCEPTANCE 子集 → PR 式并入默认 MANIFEST）。
 
 ## 环境与事实速查
 

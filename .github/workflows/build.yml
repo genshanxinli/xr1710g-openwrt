@@ -1,13 +1,15 @@
 name: build
 
-# 构建：手动触发（matrix stock/oc-1.3/oc-1.4）或 main push。
+# 构建：手动触发（matrix stock/oc-1.3/oc-1.4/experimental）或 main push。
 # 上游同步不在此处——由 sync-upstream.yml 每 2h 自动校验补丁层（决策：同步越勤冲突越少）。
+# experimental 档（F25，2026-08-18）：默认档 + MANIFEST #EXP 条目，供实验补丁构建验证；
+#   'all' 仍只聚合三个 release 档位（stock/oc-1.3/oc-1.4），experimental 单独 dispatch。
 
 on:
   workflow_dispatch:
     inputs:
       profile:
-        description: '构建档位（stock / oc-1.3 / oc-1.4 / all）'
+        description: '构建档位（stock / oc-1.3 / oc-1.4 / experimental / all）'
         default: 'all'
         required: true
   push:
@@ -25,6 +27,7 @@ jobs:
       - id: set-matrix
         run: |
           P='${{ github.event.inputs.profile || 'stock' }}'
+          case "$P" in stock|oc-1.3|oc-1.4|experimental|all) ;; *) echo "错误：未知档位 $P" >&2; exit 1 ;; esac
           if [ "$P" = "all" ]; then echo "matrix={\"profile\":[\"stock\",\"oc-1.3\",\"oc-1.4\"]}" >> "$GITHUB_OUTPUT"
           else echo "matrix={\"profile\":[\"$P\"]}" >> "$GITHUB_OUTPUT"; fi
 
@@ -61,17 +64,19 @@ jobs:
         with:
           key: openwrt-${{ env.PROFILE }}
 
-      - name: 应用补丁层（OC 档补丁）+ files overlay
+      - name: 应用补丁层（OC/实验档补丁）+ files overlay
         run: |
           cd "$TREE"
-          OC_FLAG=""; [[ "$PROFILE" != stock ]] && OC_FLAG="--oc"
-          ./scripts/apply-patches.sh . $OC_FLAG
+          OC_FLAG=""; EXP_FLAG=""
+          [[ "$PROFILE" == "oc-1.3" || "$PROFILE" == "oc-1.4" ]] && OC_FLAG="--oc"
+          [[ "$PROFILE" == "experimental" ]] && EXP_FLAG="--experimental"
+          ./scripts/apply-patches.sh . $OC_FLAG $EXP_FLAG
           mkdir -p files && cp -rf "$GITHUB_WORKSPACE/overlay/files/." files/
 
       - name: OC 档位（prepare-oc.sh：1.3/1.4 两档，OC 变体默认限频 1300 由 files/etc/init.d/oc-limit 实现）
         run: |
           cd "$TREE"
-          if [[ "$PROFILE" != stock ]]; then ./scripts/prepare-oc.sh "${PROFILE#oc-}" .; fi
+          if [[ "$PROFILE" == "oc-1.3" || "$PROFILE" == "oc-1.4" ]]; then ./scripts/prepare-oc.sh "${PROFILE#oc-}" .; fi
 
       - name: feeds
         run: |
@@ -129,7 +134,11 @@ jobs:
       # F24（2026-08-17）：checkout 必须在 download 之前——download-artifact 先跑的话，
       # 后续 checkout 的默认 clean:true 会把 _rel/（未跟踪）清掉，softprops 报
       # "Pattern '_rel/**' does not match any files"（ci-26 首次空壳，真产物手动补传）。
+      # fetch-depth: 0（F25 2026-08-18）：默认 depth=1 无 tag，git describe 失败
+      # → release 备注恒显示"（首次）"；全量取回让 prev tag 正常显示。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: 下载全档固件产物
         uses: actions/download-artifact@v4
         with:
@@ -152,7 +161,7 @@ jobs:
             echo "请核对 docs/FLASHING.md（HTTP U-Boot 主路径，锁版 SHA256 以 YYH2913 release 页为准）。"
             echo
             echo "### 产物说明"
-            echo "firmware-stock / firmware-oc-1.3 / firmware-oc-1.4 三档各自含 sysupgrade + initramfs + chainload-uboot + manifest（同名文件在三档子目录下）。"
+            echo "firmware-<profile>/ 各档子目录内含 sysupgrade + initramfs + chainload-uboot + manifest（同名文件按档位目录区分）；本次档位：${{ github.event.inputs.profile }}。"
           } > relnotes.md
           echo "prev=$prev" >> "$GITHUB_OUTPUT"
 

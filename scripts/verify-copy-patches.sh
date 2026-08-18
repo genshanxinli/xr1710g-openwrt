@@ -29,10 +29,11 @@
 #     有重试语义，拷贝补丁最终由真实构建兜底（构建应用失败即红，天然成立）。
 set -euo pipefail
 
-TREE=""; OC=0; NODL=0
+TREE=""; OC=0; NODL=0; EXP=0
 for a in "$@"; do
   case "$a" in
     --oc) OC=1 ;;
+    --experimental) EXP=1 ;;
     --no-download) NODL=1 ;;
     *) TREE="$a" ;;
   esac
@@ -64,7 +65,10 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     (( OC )) || continue
     line="${line:4}"
   fi
-  [[ "${line:0:5}" == "#EXP " ]] && continue
+  if [[ "${line:0:5}" == "#EXP " ]]; then
+    (( EXP )) || continue
+    line="${line:5}"
+  fi
   [[ "$line" =~ ^[[:space:]]*# ]] && continue
   src="${line%%[[:space:]]*}"
   dest="${line##*[[:space:]]}"; dest="${dest%/}"

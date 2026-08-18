@@ -67,6 +67,7 @@ git clone https://github.com/openwrt/openwrt.git openwrt
 | 实验档（#22532/#22533/eip93 等） | 原料桶已入库（vendor/fanboy 02/04-09/17/18），默认不编 |
 | npu/flowsense/mlo/fancontrol/filemanager/recovery 应用 | 决策五件套全就绪：npu/flowsense/mlo/fancontrol/wifi7=9017 19-core（2026-08-17 从 19 号切片去 fastfetch/netspeedtest）；filemanager=官方 luci feed；recovery=packages-xr1710g src-link（锁 dd9ecfeef） |
 | 08 号可靠性/兼容切片 | 六项已切为 `patches/root/9011-9016` 入 default（SPI33MHz/banner/dropbear 静默日志/antenna-memo/snd-off/LED-silence，2026-08-17） |
+| 实验档（experimental） | F25（2026-08-18）起可构建/校验：`build.sh experimental` 或 CI dispatch `profile=experimental`；2h cron 与本地 dry-run 覆盖实验档（audit/verify 感知 `#EXP`）；mt76 EHT 9990/9991/9993 已入实验档（9992 上游已合否决） |
 
 ## 风险声明（自用范围）
 

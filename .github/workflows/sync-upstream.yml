@@ -29,10 +29,12 @@ jobs:
           cd openwrt
           chmod +x scripts/*.sh
 
-      - name: 补丁层 dry-run（默认 + OC 档）
+      - name: 补丁层 dry-run（默认 + OC + 实验档）
         run: |
           cd openwrt
-          ./scripts/apply-patches.sh . --dry-run --oc
+          # F25（2026-08-18）：加 --experimental——实验档补丁同样需要 2h 漂移检测，
+          # 否则 #EXP 条目只在手动构建时才暴露上下文漂移（F20/F21/F23 盲区同型）
+          ./scripts/apply-patches.sh . --dry-run --oc --experimental
           echo "上游 HEAD: $(git rev-parse --short HEAD)"
 
       - name: OC 脚本语法与档位自检

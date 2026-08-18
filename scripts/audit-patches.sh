@@ -7,11 +7,14 @@
 #   创建文件（F21③ 9002 丢尾部 gdm1 块；9001 丢 97 行致内核 DTS 语法错误——两例均
 #   在构建期才暴露）。本审计逐 hunk 核对声明行数，不一致即红。
 #
-# 覆盖：MANIFEST 全部活动条目（ROOT + 拷贝 + --oc 时 #OC 行）的每个 hunk。
+# 覆盖：MANIFEST 全部活动条目（ROOT + 拷贝 + --oc 时 #OC 行 + --experimental 时 #EXP 行）的每个 hunk。
 set -euo pipefail
 
-OC=0
-for a in "$@"; do [[ "$a" == "--oc" ]] && OC=1; done
+OC=0; EXP=0
+for a in "$@"; do
+  [[ "$a" == "--oc" ]] && OC=1
+  [[ "$a" == "--experimental" ]] && EXP=1
+done
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MANIFEST="$ROOT/patches/MANIFEST"
 [[ -f "$MANIFEST" ]] || { echo "错误：找不到 $MANIFEST" >&2; exit 1; }
@@ -26,7 +29,10 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     (( OC )) || continue
     line="${line:4}"
   fi
-  [[ "${line:0:5}" == "#EXP " ]] && continue
+  if [[ "${line:0:5}" == "#EXP " ]]; then
+    (( EXP )) || continue
+    line="${line:5}"
+  fi
   [[ "$line" =~ ^[[:space:]]*# ]] && continue
   src="${line%%[[:space:]]*}"
   [[ -f "$ROOT/$src" ]] && patches_list+=("$ROOT/$src")

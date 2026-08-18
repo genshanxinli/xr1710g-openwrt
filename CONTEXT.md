@@ -32,6 +32,15 @@
 - **regdb** — 无线监管域数据库，决定信道与功率；6GHz 可用性取决于所选 regdb。
 - **US regdb 补丁体系** — YYH2913 wireless-regdb patches：520 = UNII-1 23→29dBm + 6GHz LPI 12→29dBm（默认携带）；555 = 6GHz 12→30dBm + UNII-3 扩展至 5895MHz（功率激进档携带）。社区无 UNII-1=30dBm 补丁（30dBm 为 FCC 授权值，固件取整 29dBm）。
 
+## 补丁层与档位
+
+- **补丁层（patch layer）** — 本仓库的叠加层（ADR-0001：openwrt master fork + 自维护补丁层）：`patches/` 下按桶存放，`MANIFEST` 是**权威应用清单**（每行 `<补丁> <目标|ROOT>`，前缀表档位），`ORDER` 是档位评审视图（须与 MANIFEST 一致）。
+- **档位（tier）** — 补丁层的应用档位：**default**（默认，无前缀）/ **oc**（`--oc`，激进档资产如 regdb 555）/ **experimental**（`--experimental`，实验档）/ **disabled**（`#DISABLED`，停用）。前缀是权威，脚本按前缀决定应用。
+- **实验档（experimental）** — `#EXP` 条目的收容所：入库但**未毕业**的能力（需实机验证的 Wi-Fi/网络改动）。2026-08-18（F25）起可由 `build.sh experimental` / CI dispatch `experimental` 构建验证，且 2h 同步 cron 与本地 dry-run 的 audit/verify 均覆盖实验档。
+- **毕业（graduation）** — 实验档 → 默认档的转正动作：known-good 周期内跑通 `docs/ACCEPTANCE.md` 全项（实机）→ 取消 `#EXP` 前缀并入默认 MANIFEST，FIXES 对应条目改状态。
+- **integration 树** — YYH2913/openwrt `xr1710g-6.18-integration` 分支：mt76 实验补丁（9990 EHT 广告 / 9991 320M BF fallback / 9992 PS-sync 校验 / 9993 op_mode 传递）与 txpower 家族（0006/0007）的**来源树**；其 mt76 pin 与本仓库一致（59676919）。
+- **锁源（pin）** — 包源码 commit 锁定（如 mt76 `59676919`），保证可复现构建；供应商 fork + `PKG_MIRROR_HASH=skip` 违反锁源铁律（F13 否决 13 号的判据）；升级 feed/补丁后在 FIXES 登记。
+
 ## 超频与功率
 
 - **超频（OC）** — AN7581 CPU 超频。社区唯一**参考实现**：OpenW1700k 分支 `ubi2-oc`（注意：该分支每轮整体重压栈、hash 不稳定；审计日期 2026-08-16 对应 commit `ed7cbc80` = openwrt main HEAD + 20 commits，before 引用值 80096373b5 已被 rebase）——三提交联动：`939-cpufreq`（an7581 compatible + PLL 直写回退；主线上 an7581 不注册 cpufreq，此为**必需项**而非可选）+ `940-pmdomain`（PLL 公式 `freq_mhz = 700 + state*50`，= #22029 的 6.18 化，PR 仍 open 未合并）+ `ed7cbc80`（DTS `cpu_opp_table` 15 档**整梯平移** +200MHz：500–1200 → 700–1400；config governor=performance）。**落地两档**：1.4GHz 激进档 = +200 平移；1.3GHz 保守档 = +100 平移（OPP→600–1300、公式→`600+state*50`）——dtsi 与 940 必须同 commit 同改（驱动按公式算频率），不用 DTBO overlay（会造成"DTS 与驱动公式双源真相"）。实测上限 1.4GHz（静态电压 546–650mV 不可调，1.5GHz 无一成功）；个别机器内置 OC 启动即 kernel panic（体质差异，非软件可修）→ 双 release（stock 默认 + oc 变体）。

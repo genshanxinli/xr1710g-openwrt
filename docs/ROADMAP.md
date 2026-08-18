@@ -26,13 +26,14 @@
 - [ ] **漫游优化**（决策：暂不设置，固件稳定后实施）：802.11s/EHT320 回程、usteer/802.11k/v/r、（如多设备）mesh 配置
 - [ ] OC 实机验证报告：oc-1.3 与 oc-1.4 在实机的稳定性/温度，归档到 FIXES F08
 - [ ] 科学上网（OpenClash/PassWall）+ Docker——暂缓项，稳定后再决策 feed 与体积预算
-- [ ] mt76 实验补丁（integration 树 9990-9993：EHT 广告/320M BF fallback/PS-sync/rate control）——评估后进实验档
+- [x] mt76 实验补丁（integration 树 9990-9993：EHT 广告/320M BF fallback/PS-sync/rate control）——**F25 评审（2026-08-18）**：9990/9991/9993 重建入实验档（`patches/packages/mt76-999x-…`，对 pin 59676919 实测可应用、master 无此改动）；**9992 否决**（PS-sync TLV 校验上游 mt76 master 2026-08-01 已合，pin 升级自然获得）；实机 EHT320 验证后毕业
 - [ ] 530 实验室 6GHz SP 补丁——默认停用；如需高功率实验，手动启用并在验收注明非合规
 
 ## P4 工程化
 - [x] 构建产出后自动打 pre-release（含 FIXES 变更摘要；2026-08-17 实现——但 F19 假绿修复前 release 是空壳，真绿后才有意义）
 - [x] 构建退出码硬化（F19：pipefail + no-files-found=error，2026-08-17）
 - [x] 拷贝类补丁 dry-run 真实应用校验（F20 制度化，2026-08-17：新增 `scripts/verify-copy-patches.sh` 接入 `apply-patches.sh --dry-run`——按构建语义解包包源码 + glob 排序真实 `patch -p1`，regdb 附 dbparse 校验；2h sync cron 尽早暴露而非等构建）
-- [ ] 实验档毕业的自动化：experimental 构建通过 + ACCEPTANCE 子集 → PR 式合并到默认 MANIFEST
+- [x] 实验档可构建化（F25，2026-08-18）：build.sh 加 `experimental` 档 + build.yml dispatch 支持 + sync-upstream cron 的 dry-run 加 `--experimental`（实验档享受 2h 漂移检测）；audit-patches/verify-copy-patches 感知 `#EXP` 行（apply-patches.sh 透传）；apply-patches.sh dry-run 的 set -e 缺陷修复（verify 失败不再跳过 git reset）
+- [ ] 实验档毕业的自动化：experimental 构建通过 + ACCEPTANCE 子集 → PR 式合并到默认 MANIFEST（地基已就绪：实验档已可构建/校验，待实机验收流程落地）
 - [ ] vermagic 注入接入 CI（F14，让自建 kmod 兼容官方 opkg）
 - [ ] 2h 同步工作流稳定后，把"冲突出现 → 修复 → 回归"流程沉淀为 CI 注释/文档（sync-upstream.yml 已就位）

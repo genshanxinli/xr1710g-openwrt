@@ -18,11 +18,13 @@ TREE=""
 DRY=0
 EXP=0
 OC=0
+NODL=0
 for a in "$@"; do
   case "$a" in
     --dry-run) DRY=1 ;;
     --experimental) EXP=1 ;;
     --oc) OC=1 ;;
+    --no-download) NODL=1 ;;
     *) TREE="$a" ;;
   esac
 done
@@ -36,7 +38,8 @@ MANIFEST="$ROOT/patches/MANIFEST"
 # F21③/9001 教训制度化：hunk 行数一致性审计（git apply 对声明行数≠实际行数的包裹补丁会
 # 静默截断创建文件——9001 丢 97 行致内核 DTS 语法错误，构建期才暴露）。dry 与真实模式都先审计。
 OC_FLAG_AUDIT=""; (( OC )) && OC_FLAG_AUDIT="--oc"
-"$ROOT/scripts/audit-patches.sh" $OC_FLAG_AUDIT
+EXP_FLAG_AUDIT=""; (( EXP )) && EXP_FLAG_AUDIT="--experimental"
+"$ROOT/scripts/audit-patches.sh" $OC_FLAG_AUDIT $EXP_FLAG_AUDIT
 
 applied=0; skipped=0; missing=0
 while IFS= read -r line || [[ -n "$line" ]]; do
@@ -92,8 +95,15 @@ if (( DRY )); then
   # 必须在 git reset 之前调用：派生目标（如 9002 → uboot patches/9990-…）由 ROOT 补丁生成，
   # 回滚后文件即消失。始终回滚工作区，以 verify 的退出码为准。
   OC_FLAG=""; (( OC )) && OC_FLAG="--oc"
-  "$ROOT/scripts/verify-copy-patches.sh" "$TREE" $OC_FLAG
+  EXP_FLAG=""; (( EXP )) && EXP_FLAG="--experimental"
+  NODL_FLAG=""; (( NODL )) && NODL_FLAG="--no-download"
+  # F25（2026-08-18）：set -e 下 verify 失败会中止脚本、跳过下方 git reset——本地二次
+  # dry-run 时树残留已应用状态（git apply 一次性语义）致误报冲突。verify 退出码仍传播，
+  # 但回滚必须无条件执行（CI 全新克隆不受影响，本地工作流必须可重复）。
+  set +e
+  "$ROOT/scripts/verify-copy-patches.sh" "$TREE" $OC_FLAG $EXP_FLAG $NODL_FLAG
   vrc=$?
+  set -e
   (cd "$TREE" && git reset --hard -q)
   echo "（dry-run 完成，工作区已回滚；未跟踪文件不受影响）"
   exit $vrc

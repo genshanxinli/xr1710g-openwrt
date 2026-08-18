@@ -141,8 +141,8 @@ Explicitly NOT carried over from the smartrg B002 patch:
   - extern declarations airoha_npu_l4s_setup and airoha_npu_extra_init
 ---
  .../992-20-net-airoha-stability.patch         | 184 ++++++++++++++++++
- ...992-21-net-airoha-npu-init-stability.patch |  83 ++++++++
- 2 files changed, 267 insertions(+)
+ ...992-21-net-airoha-npu-init-stability.patch |  74 ++++++++
+ 2 files changed, 258 insertions(+)
  create mode 100644 target/linux/airoha/patches-6.18/992-20-net-airoha-stability.patch
  create mode 100644 target/linux/airoha/patches-6.18/992-21-net-airoha-npu-init-stability.patch
 
@@ -341,18 +341,9 @@ new file mode 100644
 index 00000000000000..e1195d809e9abd
 --- /dev/null
 +++ b/target/linux/airoha/patches-6.18/992-21-net-airoha-npu-init-stability.patch
-@@ -0,0 +1,83 @@
+@@ -0,0 +1,74 @@
 +--- a/drivers/net/ethernet/airoha/airoha_npu.c
 ++++ b/drivers/net/ethernet/airoha/airoha_npu.c
-+@@ -202,7 +202,7 @@ static int __airoha_npu_send_msg(struct
-+ 	ret = regmap_read_poll_timeout_atomic(npu->regmap,
-+ 					      REG_CR_MBQ0_CTRL(3) + offset,
-+ 					      val, (val & MBOX_MSG_DONE),
-+-					      100, 1000 * MSEC_PER_SEC);
-++					      100, 500 * MSEC_PER_SEC);
-+ 	if (!ret && FIELD_GET(MBOX_MSG_STATUS, val) != NPU_MBOX_SUCCESS)
-+ 		ret = -EINVAL;
-+ 
 +@@ -549,29 +549,55 @@ airoha_npu_wlan_set_reserved_memory(stru
 + 					sizeof(val), GFP_KERNEL);
 + }

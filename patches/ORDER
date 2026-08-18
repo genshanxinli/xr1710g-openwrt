@@ -40,6 +40,10 @@ experimental vendor/fanboy/07-mt76-bypass-hw-rro-e880d0db.patch
 experimental vendor/fanboy/09-hw11-hw21-compat-afc6dc93.patch
 experimental vendor/fanboy/17-cmonroe-stability-8c530f05.patch
 experimental vendor/fanboy/18-smartrg-stability-b45d5117.patch
+experimental mt76/9990-wifi-mt76-mt7996-advertise-eht-to-firmware-rate-control.patch   # F25 评审（2026-08-18）：EHT 广告（9990）/320 BF fallback（9991）/op_mode 传递（9993）；9992 PS-sync 校验上游已合否决
+experimental mt76/9991-wifi-mt76-mt7996-fill-160mhz-bf-fallback-for-eht-320.patch
+experimental mt76/9993-wifi-mt76-mt7996-pass-operating-mode-to-rate-control.patch
+experimental packages/mac80211-411-export-link-sta-capability-limits.patch   # 9993 编译依赖：mac80211 backport 导出 cap_bw/cap_nss（integration subsys 411）
 experimental regdb/0530-us-6ghz-lab-indoor-sp-override-DISABLED.patch
 
 # ── pending（原料已入库，待评审定档/拆分后解锁，对应 FIXES F13/F14）──

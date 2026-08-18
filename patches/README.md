@@ -20,7 +20,7 @@
 
 - `#` 开头 = 注释/停用；`#EXP ` 开头 = 实验档（`apply-patches.sh --experimental` 才应用）；`#OC ` 开头 = OC 档（`apply-patches.sh --oc` 才应用）。
 - `patches/ORDER` 是档位视图（tier: 文件，评审用）；**MANIFEST 是实际应用清单**。
-- **实验档 → 默认档毕业条件**：在 known-good 周期内跑通 `docs/ACCEPTANCE.md` 全项 → 取消 `#EXP` 注释并入默认，并在 `docs/FIXES.md` 对应条目改状态。
+- **实验档构建/校验（F25，2026-08-18）**：`./scripts/build.sh experimental` 或 CI dispatch `profile=experimental` 可完整构建实验档；本地 `apply-patches.sh --dry-run --experimental` 与 2h sync-upstream cron 均覆盖实验档（audit-patches/verify-copy-patches 已感知 `#EXP` 行，拷贝类实验补丁同样真实应用校验）。**实验档 → 默认档毕业条件**：在 known-good 周期内跑通 `docs/ACCEPTANCE.md` 全项 → 取消 `#EXP` 注释并入默认，并在 `docs/FIXES.md` 对应条目改状态。
 
 ## 补丁文件元数据头约定
 
