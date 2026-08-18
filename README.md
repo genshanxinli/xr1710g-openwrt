@@ -40,7 +40,7 @@ git clone https://github.com/openwrt/openwrt.git openwrt
 
 ### 1) 构建
 ```bash
-./scripts/build.sh stock            # 默认档（或 oc-1.3 / oc-1.4）；补丁原料已 vendor 入库，fetch-sources.sh 仅用于重取/刷新
+./scripts/build.sh stock            # 默认档（或 oc-1.3 / oc-1.4 / experimental）；补丁原料已 vendor 入库，fetch-sources.sh 仅用于重取/刷新
 ```
 产物：`bin/targets/airoha/an7581/*-sysupgrade.itb`（+ initramfs）。
 
@@ -52,7 +52,7 @@ git clone https://github.com/openwrt/openwrt.git openwrt
 ### 3) 验收与冻结
 按 **`docs/ACCEPTANCE.md`** 全项实机验收，通过后在 FIXES/README 记录 commit 并打 known-good tag。
 
-## 当前补丁层状态（2026-08-17）
+## 当前补丁层状态（2026-08-18）
 
 | 项 | 状态 |
 |---|---|
@@ -64,10 +64,9 @@ git clone https://github.com/openwrt/openwrt.git openwrt
 | NPU（#24593） | master 已合，无需携带 |
 | pstore / ramoops（#22473） | kernel 侧已自持（`vendor/fanboy/10`）；uboot 侧待上游 |
 | 风扇温控 | `files/etc/init.d/fan` 动态探测（NCT7802/NCT7511Y） |
-| 实验档（#22532/#22533/eip93 等） | 原料桶已入库（vendor/fanboy 02/04-09/17/18），默认不编 |
+| 实验档（experimental） | F25（2026-08-18）起可构建/校验：`build.sh experimental` 或 CI dispatch `profile=experimental`；2h cron 与本地 dry-run 覆盖实验档（audit/verify 感知 `#EXP`）；内容 = #22532/#22533/eip93 等 8 条（vendor/fanboy 02/04-09/17/18）+ mt76 EHT 9990/9991/9993 + mac80211 411 依赖（9992 上游已合否决）；`build.sh experimental` 构建已实证绿（ci-32） |
 | npu/flowsense/mlo/fancontrol/filemanager/recovery 应用 | 决策五件套全就绪：npu/flowsense/mlo/fancontrol/wifi7=9017 19-core（2026-08-17 从 19 号切片去 fastfetch/netspeedtest）；filemanager=官方 luci feed；recovery=packages-xr1710g src-link（锁 dd9ecfeef） |
 | 08 号可靠性/兼容切片 | 六项已切为 `patches/root/9011-9016` 入 default（SPI33MHz/banner/dropbear 静默日志/antenna-memo/snd-off/LED-silence，2026-08-17） |
-| 实验档（experimental） | F25（2026-08-18）起可构建/校验：`build.sh experimental` 或 CI dispatch `profile=experimental`；2h cron 与本地 dry-run 覆盖实验档（audit/verify 感知 `#EXP`）；mt76 EHT 9990/9991/9993 已入实验档（9992 上游已合否决） |
 
 ## 风险声明（自用范围）
 

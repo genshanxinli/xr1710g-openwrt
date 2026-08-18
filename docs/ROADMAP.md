@@ -3,7 +3,7 @@
 按优先级排序。原则：**修复而不是降级**——所有"暂缓"都是排队，不是放弃。
 
 ## P0 首次实机（刷机后第一轮）
-- [ ] **真绿门禁**（2026-08-17 F19 修复后）：重建 stock + oc-1.3 + oc-1.4，以 **firmware artifact 存在** 为成功判据。历程：F20（regdb）→ F21（uboot 9002，glob 序/+++/hunk 截断）→ F22（fanboy14 mt76 冗余撤下）→ **F23（9001 内核 DTS hunk 行数 330→427，git apply 静默截断丢 97 行）** 均已修复；**2026-08-17 17:30 第五次重建（commit 83f07db）进行中**（push stock=32053502298 + dispatch all=32053692044）；同步验证：sync-upstream 32053502231 绿（新 audit+verify 全通过）
+- [x] **真绿门禁**（2026-08-17 F19 修复后）：重建 stock + oc-1.3 + oc-1.4，以 **firmware artifact 存在** 为成功判据。历程：F20（regdb）→ F21（uboot 9002，glob 序/+++/hunk 截断）→ F22（fanboy14 mt76 冗余撤下）→ **F23（9001 内核 DTS hunk 行数 330→427，git apply 静默截断丢 97 行）** 均已修复；**2026-08-17 第五次重建（commit 83f07db）全绿**（push stock=32053502298 + dispatch all=32053692044，firmware artifact 各 ~33.5MB）；同步验证：sync-upstream 32053502231 绿（audit+verify 全通过）。release 自动化闭环由 F25 的 ci-32 验证（2026-08-18，F24）
 - [ ] 物理口 ↔ 逻辑名实机核对（netdev-name 已固化：lan1/lan2=双 10G、wan=1G-1（gsw_port1）、lan3=1G-2（gsw_port2），见 9001；`ip -br link` 验证后定稿 files/etc/config/network）
 - [ ] 核对 6GHz EHT320 实际生效（`iw phy` / hostapd 日志），不生效则修 mt76/hostapd 至生效
 - [ ] NPU 加载与卸载验证（luci-app-airoha-npu 已由 19-pack 内置）
