@@ -16,6 +16,7 @@
 patches/packages/regdb-0510-us-6ghz-no-no-ir.patch                     package/firmware/wireless-regdb/patches/
 patches/packages/regdb-0520-us-power-limits-uni1-29-6g-29.patch        package/firmware/wireless-regdb/patches/
 #OC patches/packages/regdb-0555-w1700k-unii4-6g-30.patch               package/firmware/wireless-regdb/patches/
+#OC patches/packages/mt76-0008-wifi-mt76-mt7996-eeprom-power-unlock.patch package/kernel/mt76/patches/
 #DISABLED patches/packages/regdb-0530-us-6ghz-lab-indoor-sp-override-DISABLED.patch package/firmware/wireless-regdb/patches/
 # 0530 已于 2026-08-17 按 wireless-regdb 2026.05.30「500→0510→0520 后」状态重建（fuzz 2 → 0，
 #   语义不变：US 6g 29→36dBm 实验室 SP）；启用时按 verify 流程再实证即可。
