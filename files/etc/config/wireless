@@ -7,6 +7,7 @@ config wifi-device 'radio0'
 	option phy 'phy0'
 	option band '2g'
 	option htmode 'HE40'
+	option he_mu_beamformer '0'            # 07 天线报告：2.4G 波束成形增益仅 +1.33dB，MU-MIMO 默认关（naoki66 基线）
 	option country 'US'                    # 决策：US regdb（6GHz 全开；520 功率补丁）
 	option cell_density '0'
 	option disabled '0'
@@ -23,7 +24,7 @@ config wifi-device 'radio1'
 	option type 'mac80211'
 	option phy 'phy1'
 	option band '5g'
-	option htmode 'HE160'                  # 5G 160MHz；若需 EHT 可改 EHT160（hostapd 版本支持后）
+	option htmode 'EHT80'                  # 07 天线报告：5G 覆盖默认 EHT80（可试 EHT160；勿全局开 320）
 	option country 'US'
 	option cell_density '0'
 	option disabled '0'
@@ -34,12 +35,15 @@ config wifi-iface 'default_radio1'
 	option mode 'ap'
 	option ssid 'K2P'
 	option encryption 'sae-mixed'
+	option max_inactivity '86400'          # 07 天线报告：5G 防周期清退（恩山 tid-8484444）
+	option disassoc_low_ack '0'
 	option key '123456789'                 # TODO 建议改强
 
 config wifi-device 'radio2'
 	option type 'mac80211'
 	option phy 'phy2'
 	option band '6g'
+	option channel '37'                    # 07 天线报告：低段 LPI 完整 EHT320 落点（中心 6105，全落在 5925-6425）
 	option htmode 'EHT320'                 # 6GHz 320MHz（EHT320；若驱动不支持回退 HE160——修复而不是降级：修到支持为止）
 	option country 'US'
 	option cell_density '0'
