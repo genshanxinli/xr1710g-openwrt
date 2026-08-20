@@ -161,9 +161,18 @@ jobs:
             echo "请核对 docs/FLASHING.md（HTTP U-Boot 主路径，锁版 SHA256 以 YYH2913 release 页为准）。"
             echo
             echo "### 产物说明"
-            echo "firmware-<profile>/ 各档子目录内含 sysupgrade + initramfs + chainload-uboot + manifest（同名文件按档位目录区分）；本次档位：${{ github.event.inputs.profile }}。"
+            echo "firmware-<profile>.tar.gz 各档打包产物（sysupgrade + initramfs + chainload-uboot + manifest）；本次档位：${{ github.event.inputs.profile }}。"
           } > relnotes.md
           echo "prev=$prev" >> "$GITHUB_OUTPUT"
+
+      - name: 打包各档产物（同名 itb 会被 softprops 按 basename 去重覆盖——先打包避免资产冲突）
+        run: |
+          cd _rel
+          for d in firmware-*/; do
+            [ -d "$d" ] || continue
+            profile="${d%/}"
+            tar -czf "${profile}.tar.gz" "$d"
+          done
 
       - name: 创建 pre-release
         uses: softprops/action-gh-release@v2
@@ -171,5 +180,5 @@ jobs:
           tag_name: ci-${{ github.run_number }}
           name: "CI 构建 #${{ github.run_number }}（${{ github.ref_name }} @ ${{ steps.notes.outputs.prev }} 起）"
           body_path: relnotes.md
-          files: _rel/**
+          files: _rel/*.tar.gz
           prerelease: true
