@@ -12,11 +12,11 @@
 # ── packages：regdb（决策=默认 510/520；500 world 去 NO-IR 已上游自带 500-world-regd-5GHz.patch；
 #     555=OC 档（0520 后应用，顺序固化）；530 停用）──
 # F20：regdb-0500 与 OpenWrt 自带 500-world-regd-5GHz.patch 内容完全一致（重复补丁，2026-08-17 删除）；
-#     0555 于 2026-08-17 按 0510/0520 应用后状态重建（wireless-regdb 2026.05.30 上下文漂移）
+#     0521 为 5G UNII-3/4@160/30 默认档；0555 按 0510→0520→0521 应用后状态重建（仅 6G 30）。
 patches/packages/regdb-0510-us-6ghz-no-no-ir.patch                     package/firmware/wireless-regdb/patches/
 patches/packages/regdb-0520-us-power-limits-uni1-29-6g-29.patch        package/firmware/wireless-regdb/patches/
+patches/packages/regdb-0521-us-unii3-4-160mhz-30.patch           package/firmware/wireless-regdb/patches/
 #OC patches/packages/regdb-0555-w1700k-unii4-6g-30.patch               package/firmware/wireless-regdb/patches/
-#OC patches/packages/mt76-0008-wifi-mt76-mt7996-eeprom-power-unlock.patch package/kernel/mt76/patches/
 #DISABLED patches/packages/regdb-0530-us-6ghz-lab-indoor-sp-override-DISABLED.patch package/firmware/wireless-regdb/patches/
 # 0530 已于 2026-08-17 按 wireless-regdb 2026.05.30「500→0510→0520 后」状态重建（fuzz 2 → 0，
 #   语义不变：US 6g 29→36dBm 实验室 SP）；启用时按 verify 流程再实证即可。
@@ -25,6 +25,7 @@ patches/packages/regdb-0520-us-power-limits-uni1-29-6g-29.patch        package/f
 # 注：package/kernel/mt76/patches/ 在 master 不存在，由脚本 mkdir 创建，OpenWrt 构建时自动应用
 patches/packages/mt76-0006-wifi-mt76-mt7996-refresh-power-limits-on-txpower-changes.patch       package/kernel/mt76/patches/
 patches/packages/mt76-0007-wifi-mt76-mt7996-enable-firmware-txpower-limit-controls.patch        package/kernel/mt76/patches/
+patches/packages/mt76-0008-wifi-mt76-mt7996-eeprom-power-unlock.patch          package/kernel/mt76/patches/
 # ── packages：mt76 EHT 实验补丁（F25 评审 2026-08-18，integration 树 9990-9993）──
 #   评审结论：9990/9991/9993 携带（对 pin mt76 59676919 原生态可应用；mt76 master b2704cf5 均无
 #   此改动——真补丁非冗余）；9992（PS-sync TLV 校验）**否决**——mt76 master 2026-08-01 已上游
@@ -37,10 +38,6 @@ patches/packages/mt76-0007-wifi-mt76-mt7996-enable-firmware-txpower-limit-contro
 # 9993 的编译依赖（F25 二次构建暴露）：mac80211 backport 未导出 cap_bw/cap_nss helper，
 #   integration 树以 mac80211 包 subsys 补丁补充——随实验档携带（9020，ROOT 生成该包补丁）。
 #EXP patches/packages/mac80211-411-export-link-sta-capability-limits.patch package/kernel/mac80211/patches/subsys/
-# 07 天线改善报告（2026-08-18）附A.1/附A.2：eeprom 功率解锁补丁（mt76 驱动层）
-#   2G 0x2c->0x30、5G UNII-3 0x1305 0x27->0x2a；NAND 直改会被 U-Boot 还原，只能驱动层做。
-#   真机逐 dB 实验 + eeprom 备份后毕业。
-#EXP patches/packages/mt76-0008-wifi-mt76-mt7996-eeprom-power-unlock.patch package/kernel/mt76/patches/
 
 # ── root：跨目录 git apply（默认档）──
 # XR1710G 板级支持（2026-08-17 对 master 重建三件套，替代 PR 原 diff——PR 对 master 5 文件冲突，见 FIXES F01）

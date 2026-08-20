@@ -24,12 +24,13 @@ default root/9015-xr1710g-snd-soc-off.patch   # 08 切片：显式关闭板载�
 default root/9016-xr1710g-silence-phy-led-error.patch   # 08 切片：静默 PHY LED pinctrl 报错
 default regdb/0510-us-6ghz-no-no-ir.patch   # 500 world 去 NO-IR 已上游自带（500-world-regd-5GHz.patch，F20）
 default regdb/0520-us-power-limits-uni1-29-6g-29.patch
+default regdb/0521-us-unii3-4-160mhz-30.patch
 default mt76/0006-wifi-mt76-mt7996-refresh-power-limits-on-txpower-changes.patch
 default mt76/0007-wifi-mt76-mt7996-enable-firmware-txpower-limit-controls.patch
+default mt76/0008-wifi-mt76-mt7996-eeprom-power-unlock.patch   # 07 天线报告附A.1/附A.2：eeprom 功率解锁（2G 28->30、5G UNII-3 28->30）；默认档全开
 
 # ── oc（--oc 才应用）──
-oc regdb/0555-w1700k-unii4-6g-30.patch
-oc mt76/0008-wifi-mt76-mt7996-eeprom-power-unlock.patch   # 与 555 配套：5G UNII-3/4 HE160@30（eeprom grp4 0x27->0x2a）
+oc regdb/0555-w1700k-unii4-6g-30.patch   # 仅 6G 29->30；5G UNII-3/4@160 已由默认档 0521 承载
 # OC 本体（OPP/PLL/governor）由 scripts/prepare-oc.sh 树编辑实现（不占 MANIFEST）
 
 # ── experimental（--experimental 才应用）──
@@ -45,7 +46,6 @@ experimental mt76/9990-wifi-mt76-mt7996-advertise-eht-to-firmware-rate-control.p
 experimental mt76/9991-wifi-mt76-mt7996-fill-160mhz-bf-fallback-for-eht-320.patch
 experimental mt76/9993-wifi-mt76-mt7996-pass-operating-mode-to-rate-control.patch
 experimental packages/mac80211-411-export-link-sta-capability-limits.patch   # 9993 编译依赖：mac80211 backport 导出 cap_bw/cap_nss（integration subsys 411）
-experimental mt76/0008-wifi-mt76-mt7996-eeprom-power-unlock.patch   # 07 天线报告附A.1/附A.2：eeprom 功率解锁（2G 0x2c->0x30、5G UNII-3 0x27->0x2a）；真机逐 dB 实验后毕业
 experimental regdb/0530-us-6ghz-lab-indoor-sp-override-DISABLED.patch
 
 # ── pending（原料已入库，待评审定档/拆分后解锁，对应 FIXES F13/F14）──

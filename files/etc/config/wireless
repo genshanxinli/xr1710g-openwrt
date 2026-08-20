@@ -24,7 +24,8 @@ config wifi-device 'radio1'
 	option type 'mac80211'
 	option phy 'phy1'
 	option band '5g'
-	option htmode 'EHT80'                  # 07 天线报告：5G 覆盖默认 EHT80（可试 EHT160；勿全局开 320）
+	option channel '149'                   # 默认 UNII-3/4 160MHz（报告附A.2；regdb 0521 已默认支持）
+	option htmode 'HE160'                  # 5G 160MHz；30dBm 需 mt76-0008（已默认）+ regdb 0521
 	option country 'US'
 	option cell_density '0'
 	option disabled '0'
