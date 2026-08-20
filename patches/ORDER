@@ -44,6 +44,7 @@ experimental mt76/9990-wifi-mt76-mt7996-advertise-eht-to-firmware-rate-control.p
 experimental mt76/9991-wifi-mt76-mt7996-fill-160mhz-bf-fallback-for-eht-320.patch
 experimental mt76/9993-wifi-mt76-mt7996-pass-operating-mode-to-rate-control.patch
 experimental packages/mac80211-411-export-link-sta-capability-limits.patch   # 9993 编译依赖：mac80211 backport 导出 cap_bw/cap_nss（integration subsys 411）
+experimental mt76/0008-wifi-mt76-mt7996-eeprom-power-unlock.patch   # 07 天线报告附A.1/附A.2：eeprom 功率解锁（2G 0x2c->0x30、5G UNII-3 0x27->0x2a）；真机逐 dB 实验后毕业
 experimental regdb/0530-us-6ghz-lab-indoor-sp-override-DISABLED.patch
 
 # ── pending（原料已入库，待评审定档/拆分后解锁，对应 FIXES F13/F14）──

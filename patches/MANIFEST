@@ -36,6 +36,10 @@ patches/packages/mt76-0007-wifi-mt76-mt7996-enable-firmware-txpower-limit-contro
 # 9993 的编译依赖（F25 二次构建暴露）：mac80211 backport 未导出 cap_bw/cap_nss helper，
 #   integration 树以 mac80211 包 subsys 补丁补充——随实验档携带（9020，ROOT 生成该包补丁）。
 #EXP patches/packages/mac80211-411-export-link-sta-capability-limits.patch package/kernel/mac80211/patches/subsys/
+# 07 天线改善报告（2026-08-18）附A.1/附A.2：eeprom 功率解锁补丁（mt76 驱动层）
+#   2G 0x2c->0x30、5G UNII-3 0x1305 0x27->0x2a；NAND 直改会被 U-Boot 还原，只能驱动层做。
+#   真机逐 dB 实验 + eeprom 备份后毕业。
+#EXP patches/packages/mt76-0008-wifi-mt76-mt7996-eeprom-power-unlock.patch package/kernel/mt76/patches/
 
 # ── root：跨目录 git apply（默认档）──
 # XR1710G 板级支持（2026-08-17 对 master 重建三件套，替代 PR 原 diff——PR 对 master 5 文件冲突，见 FIXES F01）
