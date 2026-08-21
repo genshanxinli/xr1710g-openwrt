@@ -52,13 +52,14 @@ git clone https://github.com/openwrt/openwrt.git openwrt
 ### 3) 验收与冻结
 按 **`docs/ACCEPTANCE.md`** 全项实机验收，通过后在 FIXES/README 记录 commit 并打 known-good tag。
 
-## 当前补丁层状态（2026-08-18）
+## 当前补丁层状态（2026-08-20）
 
 | 项 | 状态 |
 |---|---|
 | #22397 XR1710G 板级支持 | 携带（对 master 重建三件套 `patches/root/9000-9002`，含 dts/uboot/envtools/02_network/mk；合入即删） |
-| US regdb 功率（510/520） | 内置（world 5GHz 去 NO-IR 已上游自带 500-world-regd-5GHz.patch，F20 删重复 0500）；555（UNII-4/6GHz 30dBm）= OC 档；530 实验室 SP 停用 |
-| mt76 txpower（0006/0007） | 内置（YYH2913 家族；fanboy 0010/0011 备选对比） |
+| US regdb 功率（510/520/521） | 内置（world 5GHz 去 NO-IR 已上游自带 500-world-regd-5GHz.patch，F20 删重复 0500）；521（UNII-3/4 160MHz 30dBm）= 默认档；555（仅 6GHz 30dBm）= OC 档；530 实验室 SP 停用 |
+| mt76 txpower（0006/0007/0008） | 内置（YYH2913 家族；0006/0007 功率执行链 + 0008 eeprom 功率解锁 2G/5G，默认档；fanboy 0010/0011 备选对比） |
+| 天线优化（07 报告） | 默认无线：5G ch149/HE160（UNII-3/4 160MHz）、6G ch37/EHT320、2.4G MU-MIMO 关；eeprom 解锁见 mt76 0008 |
 | cpufreq / PM domain（#22029） | 已自持（`vendor/fanboy/03`，含 direct-PLL fallback，OC 前置） |
 | CPU 超频 | `scripts/prepare-oc.sh`（1.3/1.4 两档）+ OC 变体默认限频 1300（`files/etc/init.d/oc-limit`） |
 | NPU（#24593） | master 已合，无需携带 |
@@ -70,7 +71,7 @@ git clone https://github.com/openwrt/openwrt.git openwrt
 
 ## 风险声明（自用范围）
 
-- 6GHz/功率补丁（US regdb 520）**无 AFC/合规背书**，自用责任自负；
+- 6GHz/功率补丁（US regdb 520/521、mt76-0008 eeprom 解锁）**无 AFC/合规背书**，自用责任自负；
 - 超频存在**个体体质差异**（部分机器启动 panic）——默认档 stock 无此风险；OC 档按 FIXES F08 使用；
 - 第三方 U-Boot 刷入后厂商恢复通道失效——锁版 + 校验，救砖通道见 FLASHING；
 - 网口命名已固化（netdev-name：lan1/lan2=10G、wan=1G-1、lan3=1G-2），物理口 ↔ 逻辑名仍需首次实机核对（ROADMAP P0）。

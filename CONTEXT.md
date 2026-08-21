@@ -30,7 +30,8 @@
 - **EHT320 回程 / 802.11s mesh** — 6GHz 320MHz 无线回程的 mesh 组网形态。
 - **MLO** — 多链路操作（Multi-Link Operation），Wi-Fi 7 核心能力，由 hostapd EHT 选项与 luci-app-mlo 管理。
 - **regdb** — 无线监管域数据库，决定信道与功率；6GHz 可用性取决于所选 regdb。
-- **US regdb 补丁体系** — YYH2913 wireless-regdb patches：520 = UNII-1 23→29dBm + 6GHz LPI 12→29dBm（默认携带）；555 = 6GHz 12→30dBm + UNII-3 扩展至 5895MHz（功率激进档携带）。社区无 UNII-1=30dBm 补丁（30dBm 为 FCC 授权值，固件取整 29dBm）。
+- **US regdb 补丁体系** — 默认档：510（6GHz 去 NO-IR）+ 520（UNII-1 23→29dBm + 6GHz LPI 12→29dBm）+ 521（UNII-3/4 5730-5895 @160 30dBm）；OC 档：555（仅 6GHz 29→30dBm）。社区无 UNII-1=30dBm 补丁（30dBm 为 FCC 授权值，固件取整 29dBm）。
+- **eeprom 功率解锁（mt76-0008）** — 默认档驱动层补丁：2G 0x1300 0x2c→0x30（28→30dBm，较 FCC 29.5 高 0.5dB）、5G UNII-3/4 0x1305 0x27→0x2a（28→30dBm，FCC 非BF 授权 30）。NAND 直改会被 U-Boot 还原，只能在驱动层做（07 天线报告 附A.1/附A.2）。
 
 ## 补丁层与档位
 

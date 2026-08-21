@@ -13,6 +13,8 @@ Gemtek XR1710G（Airoha AN7581GT + MT7996 三频 Wi-Fi7、2×10G+2×1G）的**�
 
 ## 已收口的状态（2026-08-17 晚起，本会话+8-18 F25，别重复做）
 
+- **07 天线改善落地（2026-08-20，分支 feat/antenna-eeprom-power-unlock）**：regdb-0521 默认档（UNII-3/4 160MHz 30dBm）+ mt76-0008 默认档（eeprom 2G/5G 解锁）+ 默认无线 5G ch149/HE160、6G ch37、2.4G MU-MIMO 关；release 资产改 tar.gz 避免同名冲突（F26）；all=32407079282 / experimental=32400014053 全绿，ci-36/ci-37 产物。待实机验收后合并 main。
+
 - **远程仓库**：`github.com/genshanxinli/xr1710g-openwrt`（public，gh 认证账户 genshanxinli）。一切改动 push 到 main。
 - **F13/F18/F19 已收口**（d87fd4e）：08 切片 root/9011-9016 + 19-core root/9017；prepare-oc.sh OPP 平移单位+花括号修复；CI 假绿修复（pipefail + no-files-found=error）。
 - **F20 已修**（d2506dd）：删重复 regdb-0500（上游自带 500-world-regd-5GHz.patch）+ 重建 0555（按 0510/0520 应用后状态）。**本地验证流程沉淀**：`/tmp/regdb/verify`、`/tmp/r530`（0530 实证：当前源码上带 fuzz 2 可应用，启用前须重建）。
