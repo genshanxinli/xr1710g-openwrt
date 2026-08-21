@@ -32,6 +32,8 @@ patches/packages/mt76-0008-wifi-mt76-mt7996-eeprom-power-unlock.patch          p
 #   合入同款加固（pin 升级时自然获得，携带即 F22 式冗余）。位域核对：nrow/ncol_gt_bw80 高半字节
 #   =320MHz、低半字节=160MHz，与既有 160 case 的整字节写法一致。入实验档：需实机 Wi-Fi7 客户端
 #   验证 EHT320 行为后毕业，不默认携带。
+# 0005 TXFREE 截断静默（2026-08-21 同步自 ubi2-oc 496c0f5e；实验档，实机/构建验证后毕业）
+#EXP patches/packages/mt76-0005-wifi-mt76-mt7996-guard-txfree-overrun.patch          package/kernel/mt76/patches/
 #EXP patches/packages/mt76-9990-wifi-mt76-mt7996-advertise-eht-to-firmware-rate-control.patch    package/kernel/mt76/patches/
 #EXP patches/packages/mt76-9991-wifi-mt76-mt7996-fill-160mhz-bf-fallback-for-eht-320.patch       package/kernel/mt76/patches/
 #EXP patches/packages/mt76-9993-wifi-mt76-mt7996-pass-operating-mode-to-rate-control.patch       package/kernel/mt76/patches/
@@ -72,8 +74,9 @@ patches/root/9016-xr1710g-silence-phy-led-error.patch ROOT
 #EXP patches/vendor/fanboy/02-eip93-f80d0507.patch ROOT
 #EXP patches/vendor/fanboy/04-dsa-kmod-netlink-22532-aa531917.patch ROOT
 #EXP patches/vendor/fanboy/05-bridge-offload-22533-33ac9c66.patch ROOT
-#EXP patches/vendor/fanboy/06-nft-flow-offload-l2-22533-bdfd1ae2.patch ROOT
-#EXP patches/vendor/fanboy/07-mt76-bypass-hw-rro-e880d0db.patch ROOT
+# 06/07 已同步 ubi2-oc 当前快照（2026-08-21；06 五补丁合并为三补丁，07 改为 release HW_RRO session）
+#EXP patches/vendor/fanboy/06-nft-flow-offload-l2-22533-649ef957.patch ROOT
+#EXP patches/vendor/fanboy/07-mt76-release-hw-rro-session-4d61493e.patch ROOT
 #EXP patches/vendor/fanboy/09-hw11-hw21-compat-afc6dc93.patch ROOT
 #EXP patches/vendor/fanboy/17-cmonroe-stability-8c530f05.patch ROOT
 #EXP patches/vendor/fanboy/18-smartrg-stability-b45d5117.patch ROOT

@@ -19,7 +19,7 @@
 | head | `c052cc75` "switch to performance governor and overclock +200mhz"（author 2026-02-14，整枝 rebase 于 08-20；08-16 快照 `ed7cbc80` 已被 rebase 重写） |
 | base | openwrt master `725cbf11`（2026-08-20T21:49Z），内核 6.18.44 |
 | 相对 upstream | ahead 21 / behind 0（merge_base = openwrt main tip `725cbf11`） |
-| 相对 08-16 快照的新增 commit | `496c0f5eab36` "mt76: mt7996: handle truncated txfree events silently"（2026-08-19）——本仓库未携带（候选评审） |
+| 相对 08-16 快照的新增 commit | `496c0f5eab36` "mt76: mt7996: handle truncated txfree events silently"（2026-08-19）——已同步入本仓库实验档 `mt76-0005`（2026-08-21） |
 | 自身分支 | `ubi2` = ubi2-oc 去顶 commit（stock 档）；`ubi2-oc-auto` 为自动 rebase 通道；旧 OC sha `80096373b5` 与 08-16 快照 `ed7cbc80` 均已在 rebase 中重写不可达 |
 | 同步机制 | `update-all.yaml` cron `15 */2 * * *` 每 2h rebase 到 openwrt/main 后 force-push |
 | 构建触发 | 全部手动（workflow_dispatch），无 CI 验收 |
@@ -69,13 +69,13 @@
 | regdb 555（UNII-4/6GHz 30dBm） | **fanboy 自持**（36da8e02，源自 stangri） | **借用**（激进档） |
 | mt76 txpower（我们：YYH2913 0006/0007） | fanboy 等价物：**0010/0011 + iwinfo 999 + wifi-scripts ucode（pr-23990）** | 二选一，以 YYH2913 为准，fanboy 备选对比 |
 | #22532 DSA（实验档） | fanboy 自持 `aa531917` | **借用**（实验档） |
-| #22533 L2 bridge offload（实验档） | fanboy 自持 `bdfd1ae2` + `33ac9c66` | **借用**（实验档） |
+| #22533 L2 bridge offload（实验档） | fanboy 自持 `649ef957`（nft_flow_offload）+ `701b33a48`（bridge offload） | **借用**（实验档，2026-08-21 同步） |
 | 稳定性资产（992-20 net / 992-21 npu-init / 745 rx-calib / 746 mt7530 时序 / SPI-NAND 33MHz） | fanboy 自持 | **评估后借用**（进 ACCEPTANCE 实机验证） |
 | eip93 驱动 | fanboy 自持（f80d0507 启用） | 证据冲突（恩山称无硬件加速），实验档待实机 |
 | vermagic 注入（buildbot vermagic + extract-distfeeds 每 6h） | fanboy 自持（85005e10 + workflow） | **借用机制**（CI 中让自建 kmod 兼容官方 opkg） |
-| mt76 TXFREE 截断事件静默处理 | **fanboy 自持**（`496c0f5eab36`，2026-08-19 新增，生成 `0005-wifi-mt76-mt7996-guard-txfree-overrun.patch`） | 未携带——候选评审（可对 pin `59676919` 实证后定档） |
+| mt76 TXFREE 截断事件静默处理 | **fanboy 自持**（`496c0f5eab36`，2026-08-19 新增，生成 `0005-wifi-mt76-mt7996-guard-txfree-overrun.patch`） | **已同步**（实验档 `patches/packages/mt76-0005-…`；已对 pin `59676919` 实证可应用，待实验档构建/实机验证后毕业） |
 
-> 注：上表“fanboy 自持”的 commit hash 为 08-16/17 提取快照，当前分支 rebase 后 hash 已全重写。2026-08-21 逐条 diff 复核：本仓库 20 条 vendor 补丁中 15 条与当前对应 commit 内容完全一致，1 条仅 commit message 尾注不同；06（L2 offload）与 07（HW_RRO）在 fanboy 侧已有实质更新（本仓库实验档仍为旧版，待评审跟进）；08/18 为本地有意切片/构建修复。
+> 注：上表“fanboy 自持”的 commit hash 为 08-16/17 提取快照，当前分支 rebase 后 hash 已全重写。2026-08-21 逐条 diff 复核并同步：06（L2 offload）与 07（HW_RRO）已更新为当前 fanboy 内容并更新 MANIFEST/ORDER；新增 `mt76-0005` 入实验档；其余 18 条中 17 条与当前对应 commit 内容完全一致（仅 hash 重写），05 仅 commit message 尾注不同；08/18 为本地有意切片/构建修复，不随 fanboy 覆盖。
 
 ## 5. 模型对比（最大决策点）
 
