@@ -303,7 +303,7 @@ index 00000000000000..56610093c9d09f
 +
 +```
 +config jitter 'jitter'
-+    option target '1.1.1.1'
++    option target '223.5.5.5'
 +```
 +
 +Change the target to any reachable host for latency monitoring:
@@ -1994,7 +1994,7 @@ index 00000000000000..564a0da9d9475c
 +++ b/package/luci-app-airoha-flowsense/root/etc/config/npu-monitor
 @@ -0,0 +1,2 @@
 +config jitter 'jitter'
-+	option target '1.1.1.1'
++	option target '223.5.5.5'
 diff --git a/package/luci-app-airoha-flowsense/root/etc/init.d/npu-jitter b/package/luci-app-airoha-flowsense/root/etc/init.d/npu-jitter
 new file mode 100755
 index 00000000000000..db04a8443c5826
