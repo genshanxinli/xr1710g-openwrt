@@ -33,4 +33,4 @@
 ## 验收结论（每次冻结时填写）
 | 版本（commit/tag） | 档位 | 测试日期 | 结果 | 备注 |
 |---|---|---|---|---|
-|  |  |  |  |  |
+| `feat/antenna-eeprom-power-unlock` @ 77170e1（+F28 实机修复） | experimental | 2026-08-21 | **未冻结**（远程可验项通过；B2/C3/C4/D3/A2/A3 待补测） | 详细记录：`docs/acceptance-results/2026-08-21-experimental.md` |

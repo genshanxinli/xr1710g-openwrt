@@ -5,6 +5,7 @@
 config wifi-device 'radio0'
 	option type 'mac80211'
 	option phy 'phy0'
+	option radio '0'
 	option band '2g'
 	option htmode 'HE40'
 	option he_mu_beamformer '0'            # 07 天线报告：2.4G 波束成形增益仅 +1.33dB，MU-MIMO 默认关（naoki66 基线）
@@ -22,7 +23,8 @@ config wifi-iface 'default_radio0'
 
 config wifi-device 'radio1'
 	option type 'mac80211'
-	option phy 'phy1'
+	option phy 'phy0'
+	option radio '1'
 	option band '5g'
 	option channel '149'                   # 默认 UNII-3/4 160MHz（报告附A.2；regdb 0521 已默认支持）
 	option htmode 'HE160'                  # 5G 160MHz；30dBm 需 mt76-0008（已默认）+ regdb 0521
@@ -42,7 +44,8 @@ config wifi-iface 'default_radio1'
 
 config wifi-device 'radio2'
 	option type 'mac80211'
-	option phy 'phy2'
+	option phy 'phy0'
+	option radio '2'
 	option band '6g'
 	option channel '37'                    # 07 天线报告：低段 LPI 完整 EHT320 落点（中心 6105，全落在 5925-6425）
 	option htmode 'EHT320'                 # 6GHz 320MHz（EHT320；若驱动不支持回退 HE160——修复而不是降级：修到支持为止）
