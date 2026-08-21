@@ -26,3 +26,5 @@ audit-ubi2oc/
 .gh-device-flow.log
 .gh-device-flow.json
 .gh-device-flow.stdout
+# 本地 SSH 密钥/known_hosts/快捷脚本（勿提交）
+.ssh/
