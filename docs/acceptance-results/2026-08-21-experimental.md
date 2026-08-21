@@ -43,6 +43,7 @@
 - [x] L2 offload / DSA（#22533/#22532）：lan3/wan 为 DSA 用户口（DEVTYPE=dsa）；nft flowtable `flags offload`；PPE 存在 `L2B` 条目。
 - [x] mt76-0005 txfree guard / 9990/9991/9993：WiFi 稳定 up，EHT320 与 HE160 正常启用；具体 EHT 广告/op_mode 传递未做客户端侧验证。
 - [x] 修复项 F28 实机闭环：修复前 5G/6G 无法绑定（phy1/phy2 不存在），修复后三频 up、txpower 正确。
+- [x] 修复项 F29 实机闭环：`luci.airoha_npu getVlanOffload` → `{"enabled":1}`、`getPPPoEOffload` → `{"enabled":1}`；`setPPPoEOffload enabled=1` 返回 ok（9018 已应用）。
 
 ## 发现与遗留
 1. `DISTRIB_DESCRIPTION` 缺少档位标识（experimental）——E2 部分不达标，建议构建层按档位注入 `CONFIG_VERSION_DIST`。
