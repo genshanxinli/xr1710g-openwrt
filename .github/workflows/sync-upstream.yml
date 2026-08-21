@@ -11,6 +11,8 @@ on:
     paths:
       - 'patches/**'
       - 'scripts/apply-patches.sh'
+      - 'scripts/audit-patches.sh'
+      - 'scripts/verify-copy-patches.sh'
       - 'scripts/prepare-oc.sh'
       - 'config/**'
       - 'files/**'

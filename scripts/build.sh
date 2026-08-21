@@ -68,6 +68,10 @@ grep -q "CONFIG_TARGET_airoha_an7581_DEVICE_gemtek_xr1710g-ubi=y" .config \
 
 echo "== [5/6] 构建（-j$JOBS, 日志 build.log）=="
 make -j"$JOBS" V=s 2>&1 | tee "$ROOT/build-$TIER.log"
+if ! ls bin/targets/airoha/an7581/*.itb >/dev/null 2>&1; then
+  echo "错误：构建完成但未找到 .itb 产物（目标未生成/打包异常？）" >&2
+  exit 1
+fi
 echo "产物："
 ls -la bin/targets/airoha/an7581/*.itb 2>/dev/null || find bin/targets -name '*.itb' -exec ls -la {} \;
 echo "完成：$TIER"

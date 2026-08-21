@@ -23,9 +23,14 @@ find_hwmon() {
 }
 
 start() {
+	PIDF=/var/run/fan.pid
+	if [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF" 2>/dev/null)" 2>/dev/null; then
+		logger -t fan "风扇温控已在运行"
+		return 0
+	fi
+	rm -f "$PIDF"
 	find_hwmon || { logger -t fan "未找到温度传感器 hwmon，风扇保持自动模式"; return 1; }
 	PWM="$HWMON/pwm1"
-	PIDF=/var/run/fan.pid
 	[ -f "$PWM" ] || { logger -t fan "无 $PWM，风扇保持自动模式"; return 1; }
 
 	echo 1 > "$PWM"_enable   # 关闭温控自动、进入手动 PWM 写

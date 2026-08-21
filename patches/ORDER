@@ -46,7 +46,7 @@ experimental mt76/9990-wifi-mt76-mt7996-advertise-eht-to-firmware-rate-control.p
 experimental mt76/9991-wifi-mt76-mt7996-fill-160mhz-bf-fallback-for-eht-320.patch
 experimental mt76/9993-wifi-mt76-mt7996-pass-operating-mode-to-rate-control.patch
 experimental packages/mac80211-411-export-link-sta-capability-limits.patch   # 9993 编译依赖：mac80211 backport 导出 cap_bw/cap_nss（integration subsys 411）
-experimental regdb/0530-us-6ghz-lab-indoor-sp-override-DISABLED.patch
+disabled regdb/0530-us-6ghz-lab-indoor-sp-override-DISABLED.patch   # MANIFEST #DISABLED；启用前按 0510→0520→0521 后状态过 verify
 
 # ── pending（原料已入库，待评审定档/拆分后解锁，对应 FIXES F13/F14）──
 pending vendor/fanboy/01-vermagic-inject-85005e10.patch   # F14 评估后接 CI
