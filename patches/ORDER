@@ -13,6 +13,7 @@ default root/9002-xr1710g-uboot.patch
 default vendor/fanboy/03-cpufreq-pmdomain-22029-e5d23549.patch
 default vendor/fanboy/10-pstore-ramoops-22473-2f7d2d02.patch
 default root/9017-w1700k-apps-pack-core.patch   # 19 号精简（npu/flowsense/mlo/fancontrol/wifi7；去 fastfetch/netspeedtest）
+default root/9018-flowsense-offload-new-arch.patch   # F29：无 br_netfilter 时 VLAN/PPPoE offload 开关改走 nft flowtable/HW Flow Offload
 default root/9010-wifi-scripts-txpower-ucode.patch   # 16 号重建（pr-23990 按 radio 独立 txpower）
 default vendor/fanboy/11-airoha-lro-default-0e90a420.patch   # HW GRO/LRO 默认
 disabled vendor/fanboy/14-mt76-patches-80f79586.patch   # F22（2026-08-17）：相对 pin mt76 59676919 完全冗余（token/NPU debugfs + MCU 采集已上游），撤下非降级
