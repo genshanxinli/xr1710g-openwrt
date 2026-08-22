@@ -41,6 +41,7 @@
 - **毕业（graduation）** — 实验档 → 默认档的转正动作：known-good 周期内跑通 `docs/ACCEPTANCE.md` 全项（实机）→ 取消 `#EXP` 前缀并入默认 MANIFEST，FIXES 对应条目改状态。
 - **integration 树** — YYH2913/openwrt `xr1710g-6.18-integration` 分支：mt76 实验补丁（9990 EHT 广告 / 9991 320M BF fallback / 9992 PS-sync 校验 / 9993 op_mode 传递）与 txpower 家族（0006/0007）的**来源树**；其 mt76 pin 与本仓库一致（59676919）。
 - **锁源（pin）** — 包源码 commit 锁定（如 mt76 `59676919`），保证可复现构建；供应商 fork + `PKG_MIRROR_HASH=skip` 违反锁源铁律（F13 否决 13 号的判据）；升级 feed/补丁后在 FIXES 登记。
+- **mt76 上游追踪** — 以 `openwrt/mt76` master 为追踪对象，每次会话 / 2h sync 后与 openwrt main 当前 mt76 pin 对比；有更新及时评估吸收。当前 pin `59676919`（2026-07-01），最新 master `c5a3bd91`（2026-08-22，147 commits 领先）。吸收原则：openwrt main bump 优先跟；main 不 bump 时，在遵守锁源铁律（`PKG_SOURCE_VERSION` + 实算 `PKG_MIRROR_HASH`）的前提下自行 bump `package/kernel/mt76`，并重验全套 mt76 补丁（下一步见 `HANDOFF.md` §7）。
 
 ## 超频与功率
 

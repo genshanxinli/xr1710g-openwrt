@@ -82,7 +82,11 @@ mt76 包补丁默认档：`mt76-0001/0003/0006/0007/0008`。
 - `openwrt/openwrt` master：`3d1645ee`（08-21）。本地 dry-run 绿。
 - `OpenWRT-fanboy/OpenW1700k` `ubi2-oc`：`ba58ba46`（08-21）。**已再同步**：06=`c0ed8295`、07=`5b917d4b`、mt76-0005=`e7a8143`；实际 diff 均与仓库内一致，仅 hash/文件名更新。
 - `YYH2913/openwrt` `xr1710g-6.18-integration`：`e88fbe28`（08-19）。**已再核对**：mt76 0006/0007/9990/9991/9993、mac80211-411、regdb 510/520/530 均无需重建；新增携带 9992（F59）。
-- `openwrt/mt76` master：`c5a3bd91`（08-22）。仍无 `token_info`，`mac.c` 仍调用 `mt7996_mac_sta_poll`；我们的 `mt76-0001/0003` 在 mt76 master 上仍必要。OpenWrt main 仍 pin mt76 `59676919`。
+- `openwrt/mt76` master：`c5a3bd91`（08-22）。**本仓库 mt76 追踪对象**：每次会话 / 2h sync 后查询 `openwrt/mt76` 最新 master，并与 OpenWrt main 当前 pin 对比；有更新及时评估吸收，不得只看不跟。
+- `59676919...c5a3bd91` compare（GitHub compare API / `git diff`）：**147 commits、76 files、+3038/-482**。
+  关键已上游更新（MT7996 相关）：PS-sync 死循环修复（=`mt76-9992`，pin 升级后可删）；EEPROM 长度/地址边界校验；`mt7996_mcu_get_chip_config` TLV 遍历边界；RX `band_idx` 校验；mmio copy 越界修复；SER/full reset 稳定性一批；MLD/MLO 修复；EHT-MCS15/HE DCM/VHT STBC 能力修复；WED/NPU/RRO offload 修复。
+  我们仍独有的补丁：`mt76-0001/0003`（token_info/NPU debugfs、MCU 站点统计替代 WTBL 轮询，master 仍无 `token_info` 且仍调用 `mt7996_mac_sta_poll`）、`0006/0007/0008`（txpower/eeprom 功率解锁）、`0005/9990/9991/9993`（TXFREE 静默/EHT 广告/320M BF fallback/op_mode 传递）。
+- `openwrt/openwrt` main 仍 pin mt76 `59676919`（`package/kernel/mt76/Makefile`，2026-07-01）。**追踪原则**：OpenWrt main bump 则优先跟 bump；若 main 迟迟不 bump 且 master 含有影响 MT7996 的重要修复/安全更新，在遵守锁源铁律（`PKG_SOURCE_VERSION` + `PKG_MIRROR_HASH` 实算，禁止 fork/hash=skip）的前提下，以本仓库补丁自行 bump `package/kernel/mt76` 到指定 commit。
 - 跟踪 PR：
   - 仍 open：#22397、#22029、#22473、#22532、#22533、#24034、#24619、#23990。
   - 已 merged：#21777/#23078/#23383/#21978/#22391/#24593/#22289/#23427。
@@ -99,7 +103,15 @@ mt76 包补丁默认档：`mt76-0001/0003/0006/0007/0008`。
 2. **#10**：当前固件 3 轮 down/up 未复现；新固件刷入后再跑 5 轮 + 串口。
 3. **#5/#6/#13/#16**：维持 issue 跟踪；#6 需实机 xfrm/ESP 评估；#13 等 #24034；#16 可在新主线基础上重测 Gen3 x1。
 4. **#7**：用户明确“护栏暂时不做”，保持 F34/F49 跟踪，等串口复现。
-5. **pin 升级后**：删除 `mt76-9992`（F59 携带理由消失）并复核 0001/0003 是否仍必要。
+5. **吸收 mt76 最新内容（下一步重点）**：
+   - 目标：从当前 pin `59676919` 吸收 `openwrt/mt76` master `c5a3bd91` 中与 MT7996 相关的修复（清单见第 6 节）。
+   - 首选路径：等待/推动 OpenWrt main bump `package/kernel/mt76`；若 main 已 bump，`sync-upstream.sh` 后重新验证本仓库 mt76 补丁。
+   - 自 bump 路径（main 未 bump 时）：新增 `patches/root/9028-mt76-bump-<sha>.patch`，修改 `package/kernel/mt76/Makefile` 的 `PKG_SOURCE_DATE/PKG_SOURCE_VERSION/PKG_MIRROR_HASH`（hash 从官方 tarball 实算，禁 `skip`）；随后用 `verify-copy-patches.sh` 对 mt76 全套补丁真实应用验证。
+   - 升级后清理/复核：
+     1) 删除 `mt76-9992`（上游 `06b6976` 已合入同款 PS-sync 修复，携带理由消失）；
+     2) 逐条复核 `0001/0003/0006/0007/0008` 与 `0005/9990/9991/9993` 是否仍可应用、是否仍必要（`git apply --check` + 源码语义比对）；
+     3) `scripts/audit-patches.sh --experimental` + `scripts/apply-patches.sh <tree> --dry-run --experimental` 全绿；
+     4) CI `all` + `experimental` 构建绿后实机回归：token_info、PS-sync 事件日志、三频功率、EHT320。
 6. **注意**：`lav_select` 后端仍 402 余额不足，调用前先 `lav_ping`；不可用时按工程判断并记录。
 
 ## 8. 宿主环境备忘
