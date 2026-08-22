@@ -47,6 +47,8 @@ CONFIG_PACKAGE_ethtool=y
 CONFIG_PACKAGE_ip-bridge=y
 CONFIG_PACKAGE_tcpdump=y
 CONFIG_PACKAGE_iperf3=y
+# busybox devmem applet：必须同时开启 BUSYBOX_CUSTOM，BUSYBOX_CONFIG_DEVMEM 才会出现在 .config
+CONFIG_BUSYBOX_CUSTOM=y
 CONFIG_BUSYBOX_CONFIG_DEVMEM=y
 # 应用包（C：packages-xr1710g src-link / patches/vendor/fanboy/19 随树内置；拆包评审后可选 src-git feed，见 FIXES F13）：
 CONFIG_PACKAGE_luci-app-mlo=y
