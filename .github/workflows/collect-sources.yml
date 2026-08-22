@@ -61,7 +61,10 @@ jobs:
             drivers/net/phy/mediatek/mtk-ge-soc.c \
             drivers/net/phy/mediatek/mtk-phy-lib.c \
             drivers/net/phy/mediatek/mtk.h \
-            drivers/net/ethernet/airoha/airoha_eth.c; do
+            drivers/net/ethernet/airoha/airoha_eth.c \
+            drivers/leds/trigger/ledtrig-netdev.c \
+            drivers/leds/led-class.c \
+            drivers/leds/led-triggers.c; do
             if [ -f "$KROOT/$f" ]; then
               mkdir -p "$OUT/$(dirname "$f")"
               cp -v "$KROOT/$f" "$OUT/$f"
