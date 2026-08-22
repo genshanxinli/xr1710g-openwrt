@@ -28,7 +28,7 @@
 - [ ] **iQOO 5G 兼容性实机复核（F41，2026-08-22）**：新增 5G-only SSID `K2P-5G` + HE80@ch149 做二分定位；若 HE80 可连而 HE160 不可连，则增加 5G HE80 兼容档（国行机 5.8G 仅 80MHz）；若需 160MHz，评估 ch36-64（DFS）。实测 `ieee80211k/v + bss_transition` 可在 wifi-iface 上生成配置，作为漫游优化备选
 - [ ] OC 实机验证报告：oc-1.3 与 oc-1.4 在实机的稳定性/温度，归档到 FIXES F08
 - [ ] 科学上网（OpenClash/PassWall）+ Docker——暂缓项，稳定后再决策 feed 与体积预算
-- [x] mt76 实验补丁（integration 树 9990-9993：EHT 广告/320M BF fallback/PS-sync/rate control）——**F25 评审（2026-08-18）**：9990/9991/9993 重建入实验档（`patches/packages/mt76-999x-…`，对 pin 59676919 实测可应用、master 无此改动）；**9992 否决**（PS-sync TLV 校验上游 mt76 master 2026-08-01 已合，pin 升级自然获得）；实机 EHT320 验证后毕业
+- [x] mt76 实验补丁（integration 树 9990-9993：EHT 广告/320M BF fallback/PS-sync/rate control）——**F25 评审（2026-08-18）+ F59 复核（2026-08-22）**：9990/9991/9993 重建入实验档（对 pin 59676919 实测可应用、master 无此改动）；**9992 复核后改为携带**（上游 mt76 master 2026-08-01 已合，但 pin 59676919 尚未包含；pin 升级后删除）；实机 EHT320 验证后毕业
 - [ ] **IPsec/站点间 VPN 硬件卸载探索（EIP93，issue #6/F52）**：驱动已在实验档编译、/proc/crypto 注册正常；先实机验证 xfrm 连通性与 EIP93 refcnt，再按档位预装 strongswan/kmod-ipsec/ip-full；注意 EIP93 未注册 GCM-AEAD，rfc4106(gcm(aes)) 可能落软加密
 - [ ] 530 实验室 6GHz SP 补丁——默认停用；如需高功率实验，手动启用并在验收注明非合规
 

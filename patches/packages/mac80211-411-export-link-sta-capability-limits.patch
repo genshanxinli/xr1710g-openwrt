@@ -1,4 +1,4 @@
-# Source: YYH2913/openwrt xr1710g-6.18-integration package/kernel/mac80211/patches/subsys（fetched 2026-08-18）
+# Source: YYH2913/openwrt xr1710g-6.18-integration package/kernel/mac80211/patches/subsys（fetched 2026-08-22；diff 与 e88fbe28 一致，仅签名顺序不同）
 # Upstream: n/a（integration 树携带；导出 mac80211 link_sta 能力上限 helper，供 mt76 9993 使用）
 # Reason: 9993（op_mode 传递）的编译依赖——mac80211 backport 未导出 cap_bw/cap_nss，实验档随 9993 一起携带
 From: Yanghan Ye <yyh94306@gmail.com>

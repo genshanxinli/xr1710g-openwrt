@@ -1,4 +1,4 @@
-# Source: YYH2913/openwrt xr1710g-6.18-integration package/kernel/mt76/patches（fetched 2026-08-18）
+# Source: YYH2913/openwrt xr1710g-6.18-integration package/kernel/mt76/patches（fetched 2026-08-22；diff 与 e88fbe28 一致）
 # Upstream: n/a（integration 树携带；评审 2026-08-18：mt76 master b2704cf5 无此改动）
 # Reason: 向固件传实际 operating mode（cap vs 当前 NSS/带宽），避免协商 2x2 EHT320 站退化为 NSS1 速率
 From: Yanghan Ye <yyh94306@gmail.com>

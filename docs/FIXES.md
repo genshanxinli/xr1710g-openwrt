@@ -67,6 +67,7 @@
 | F56 | mt7996e-hif 仅 Gen2 x1（#16） | 端点能力 Gen3 x2，根端口仅 x1/Gen2 | pcie2 共享 USB3 PHY 单 lane 硬件约束；pcie0 x2 已上游（#21978 merged，openwrt main patches-6.18 已含 609-04 x2/913 PCIe HB reset）；pcie2 Gen3 x1 仍无验证 | docs/comment only；验收以 pcie0 x2 主数据面为准 | upstream-open（#21978 merged；x1 Gen3 待验证） | 不伪造 num-lanes；后续可在新主线基础上重测 Gen3 x1 |
 | F57 | 1G 口黄灯不亮（#17） | gpio43/44 UNCLAIMED | 9001 DTS pinctrl-1 未应用 | 已修复：commit 9adafd9 + 8e33788（pinctrl-0 合并 + amber LED 配置） | n/a | 仅需关闭 issue |
 | F58 | CLIENTS 0 offloaded（#18/F39） | 路由型 Wi-Fi 流被漏计 | PPE eth= 不含 station MAC | 已修复：commit a13bb0c + 9019 补丁 | n/a | 仅需关闭 issue |
+| F59 | 9992 否决复核（2026-08-22） | F25 以“mt76 master 2026-08-01 已合入”否决 9992，但 openwrt main pin mt76 59676919（07-01）尚未包含该加固 | pin 未升级，漏洞（PS-sync 畸形 TLV 解析死循环/越界）仍存在 | `patches/packages/mt76-9992-wifi-mt76-mt7996-validate-PS-sync-event-TLVs.patch`（#EXP；对 pin 59676919 `patch -p1 --dry-run` 零失败） | merged（mt76 master）/ carried（pin 59676919 未升级前） | pin 升级后删 9992；F25 历史记录保留 |
 
 ## 未确认/待实机核实清单
 - 物理口 ↔ 逻辑名（netdev-name 已固化：lan1/lan2=双 10G、wan=1G-1（gsw_port1）、lan3=1G-2（gsw_port2），见 9001）→ 首次实机 `ip -br link` 核对

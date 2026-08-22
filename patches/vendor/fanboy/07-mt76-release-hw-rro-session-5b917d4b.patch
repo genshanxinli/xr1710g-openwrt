@@ -1,4 +1,4 @@
-From 4d61493e4c16568b8acd0a2d18676cd59003a410 Mon Sep 17 00:00:00 2001
+From 5b917d4b0b6378a615dc8501837e138ce4bfec74 Mon Sep 17 00:00:00 2001
 From: Tao <gongtao0607@gmail.com>
 Date: Sun, 16 Aug 2026 06:01:01 +0000
 Subject: [PATCH] mt76: mt7996: release HW_RRO session on BlockAck teardown

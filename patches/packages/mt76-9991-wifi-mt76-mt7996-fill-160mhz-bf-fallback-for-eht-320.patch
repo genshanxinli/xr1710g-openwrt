@@ -1,4 +1,4 @@
-# Source: YYH2913/openwrt xr1710g-6.18-integration package/kernel/mt76/patches（fetched 2026-08-18）
+# Source: YYH2913/openwrt xr1710g-6.18-integration package/kernel/mt76/patches（fetched 2026-08-22；diff 与 e88fbe28 一致）
 # Upstream: n/a（integration 树携带；评审 2026-08-18：mt76 master b2704cf5 无此改动）
 # Reason: 填充 EHT320 站点的 160MHz BF fallback 半字节（320→160 收缩时波束赋形矩阵仍有效）
 From: Jihong Min <hurryman2212@gmail.com>

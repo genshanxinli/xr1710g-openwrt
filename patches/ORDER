@@ -46,16 +46,17 @@ oc regdb/0555-w1700k-unii4-6g-30.patch   # 仅 6G 29->30；5G UNII-3/4@160 已�
 experimental vendor/fanboy/02-eip93-f80d0507.patch
 experimental vendor/fanboy/04-dsa-kmod-netlink-22532-aa531917.patch
 experimental vendor/fanboy/05-bridge-offload-22533-33ac9c66.patch
-experimental vendor/fanboy/06-nft-flow-offload-l2-22533-649ef957.patch   # 2026-08-21 同步 ubi2-oc：五补丁合并为三补丁，去 kmod-br-netfilter 依赖
+experimental vendor/fanboy/06-nft-flow-offload-l2-22533-c0ed8295.patch   # 2026-08-22 再同步 ubi2-oc ba58ba46：五补丁合并为三补丁，去 kmod-br-netfilter 依赖
 experimental root/9024-bridge-flow-offload-deps-table.patch   # issue #1 E1/E3：DEPENDS 改 kmod-nft-offload + 独立表名 flow_offload
 experimental root/9026-bridge-flow-offload-init-conntrack.patch   # issue #1 E2：bridge 族 flow 表达式 init/destroy 复用 inet conntrack
-experimental vendor/fanboy/07-mt76-release-hw-rro-session-4d61493e.patch   # 2026-08-21 同步 ubi2-oc：改为 teardown 时释放 HW_RRO session
+experimental vendor/fanboy/07-mt76-release-hw-rro-session-5b917d4b.patch   # 2026-08-22 再同步 ubi2-oc ba58ba46：改为 teardown 时释放 HW_RRO session
 experimental vendor/fanboy/09-hw11-hw21-compat-afc6dc93.patch
 experimental vendor/fanboy/17-cmonroe-stability-8c530f05.patch
 experimental vendor/fanboy/18-smartrg-stability-b45d5117.patch
-experimental mt76/0005-wifi-mt76-mt7996-guard-txfree-overrun.patch   # 2026-08-21 同步 ubi2-oc 496c0f5e（TXFREE 截断静默）
-experimental mt76/9990-wifi-mt76-mt7996-advertise-eht-to-firmware-rate-control.patch   # F25 评审（2026-08-18）：EHT 广告（9990）/320 BF fallback（9991）/op_mode 传递（9993）；9992 PS-sync 校验上游已合否决
+experimental mt76/0005-wifi-mt76-mt7996-guard-txfree-overrun.patch   # 2026-08-22 再同步 ubi2-oc e7a8143（TXFREE 截断静默；diff 对 pin 59676919 无变化）
+experimental mt76/9990-wifi-mt76-mt7996-advertise-eht-to-firmware-rate-control.patch   # 2026-08-22 再同步 integration e88fbe28：EHT 广告（9990）/320 BF fallback（9991）/PS-sync 校验（9992，F59 复核携带）/op_mode 传递（9993）
 experimental mt76/9991-wifi-mt76-mt7996-fill-160mhz-bf-fallback-for-eht-320.patch
+experimental mt76/9992-wifi-mt76-mt7996-validate-PS-sync-event-TLVs.patch
 experimental mt76/9993-wifi-mt76-mt7996-pass-operating-mode-to-rate-control.patch
 experimental packages/mac80211-411-export-link-sta-capability-limits.patch   # 9993 编译依赖：mac80211 backport 导出 cap_bw/cap_nss（integration subsys 411）
 disabled regdb/0530-us-6ghz-lab-indoor-sp-override-DISABLED.patch   # MANIFEST #DISABLED；启用前按 0510→0520→0521 后状态过 verify

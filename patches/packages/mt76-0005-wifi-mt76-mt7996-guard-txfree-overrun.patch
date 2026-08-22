@@ -1,8 +1,8 @@
-# Source: OpenWRT-fanboy/OpenW1700k ubi2-oc 496c0f5eab36（fetched 2026-08-21）
+# Source: OpenWRT-fanboy/OpenW1700k ubi2-oc e7a8143b1e67（fetched 2026-08-22；rebuilt diff against openwrt/mt76 59676919）
 # Upstream: n/a（fanboy 自持；mt76 master b2704cf5 仍为 WARN_ON_ONCE+return，未合入）
 # Reason: TXFREE 截断事件静默处理，避免良性固件事件打 WARN 并漏 cleanup
 
-From 496c0f5eab368b97822ecb9a19ca8f61ab6546db Mon Sep 17 00:00:00 2001
+From e7a8143b1e670c9afc2405b152f46917bfef6662 Mon Sep 17 00:00:00 2001
 From: fanboy <fanboy@openwrt.org>
 Date: Wed, 19 Aug 2026 15:54:54 +0000
 Subject: [PATCH] mt76: mt7996: handle truncated txfree events silently
