@@ -59,6 +59,8 @@ jobs:
           for f in \
             net/netfilter/nft_flow_offload.c \
             drivers/net/phy/mediatek/mtk-ge-soc.c \
+            drivers/net/phy/mediatek/mtk-phy-lib.c \
+            drivers/net/phy/mediatek/mtk.h \
             drivers/net/ethernet/airoha/airoha_eth.c; do
             if [ -f "$KROOT/$f" ]; then
               mkdir -p "$OUT/$(dirname "$f")"
