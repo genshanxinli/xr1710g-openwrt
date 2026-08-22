@@ -72,8 +72,8 @@
 | # | 发现 | 严重度 | 处置建议 |
 |---|---|---|---|
 | V6-1 | IPv6 TCP offload 实机可用：多源并发 2s 内达 `[HW_OFFLOAD]`+PPE BND，10 流并发稳定 | 信息 | 纳入验收基线 |
-| V6-2 | IPv6 UDP offload 实机可用但不可见为 BND：conntrack `[HW_OFFLOAD]` 有，PPE `bind` 无 BND，`entries` 仅 UNB | 中 | PPE/诊断口径需区分 TCP BND 与 UDP UNB；LuCI 不应仅按 BND 数判读 UDP 卸载 |
-| V6-3 | RPC `getPpeEntries` 的 `band_bnd`/`client_bnd` 无法计 IPv6 客户端：`client_bnd` 仅从 `/tmp/dhcp.leases` + IPv4 `ip neigh` 建 IP 映射；`@NEIGH` 显式跳过 IPv6（`index(ipx,":")==0`）；`band_bnd` 的 IP 匹配虽经 `ip neigh show` 混入压缩式 IPv6，但 PPE BND `orig=` 为展开式 IPv6（如 `2409:8a55:c966:6fd0:0000:0000:0000:0011:42796`），压缩式 `2409:...:6fd0::11` 无法匹配 | 中 | 扩展 `9019-npu-client-offload-accounting.patch`：见下方进化路径 P1 |
+| V6-2 | IPv6 UDP offload 实机可用但不可见为 BND：conntrack `[HW_OFFLOAD]` 有，PPE `bind` 无 BND，`entries` 仅 UNB | 中 | PPE/诊断口径需区分 TCP BND 与 UDP UNB；LuCI 不应仅按 BND 数判读 UDP 卸载（issue #20） |
+| V6-3 | RPC `getPpeEntries` 的 `band_bnd`/`client_bnd` 无法计 IPv6 客户端：`client_bnd` 仅从 `/tmp/dhcp.leases` + IPv4 `ip neigh` 建 IP 映射；`@NEIGH` 显式跳过 IPv6（`index(ipx,":")==0`）；`band_bnd` 的 IP 匹配虽经 `ip neigh show` 混入压缩式 IPv6，但 PPE BND `orig=` 为展开式 IPv6（如 `2409:8a55:c966:6fd0:0000:0000:0000:0011:42796`），压缩式 `2409:...:6fd0::11` 无法匹配 | 中 | 扩展 `9019-npu-client-offload-accounting.patch`：见下方进化路径 P1（issue #19） |
 | V6-4 | `bnd.ipv6` 已能统计 IPv6 BND 总数（本次实测 16–20），但 `band_bnd`/`client_bnd` 的 IPv6 缺口会导致 LuCI `CLIENTS N offloaded` 在纯 IPv6 客户端场景再次假阴性 | 中 | 同 V6-3；应在 F39 修复基础上补 IPv6 归一化匹配 |
 | V6-5 | `ip neigh show` 与 `ip -6 neigh show` 输出 IPv6 压缩式，PPE/conntrack 输出展开式；任何 IPv6 匹配必须做地址规范化 | 中 | 见 P1 的 awk `canon6()` 方案 |
 | V6-6 | 短 TCP 流也能卸载：`ipv6.baidu.com`/`www.qq.com`/`www.163.com` 的 200–500B HTTPS 流在 conntrack 中均出现 `[HW_OFFLOAD]` | 信息 | 卸载判定不依赖流长；短流用 conntrack 标志更可靠 |
@@ -129,6 +129,7 @@ LAN6_PREFIX=2409:8a55:c966:6fd0 ./scripts/device-npu-ipv6-probe.sh
 
 ## 关联 issue
 
+- #19 IPv6 client_bnd/band_bnd 假阴性（本次提交）
+- #20 IPv6 UDP HW_OFFLOAD 在 PPE bind 无 BND、entries 仅 UNB（本次提交）
 - #18 CLIENTS 0 offloaded 假阴性（F39 IPv4 修复；本次提出 IPv6 扩展）
 - #5 PPE debugfs packets/bytes 恒 0（本次 IPv6 下再次确认）
-- 新增问题建议以新 issue 提交：IPv6 client_bnd/band_bnd 假阴性 + UDP UNB 可视化
