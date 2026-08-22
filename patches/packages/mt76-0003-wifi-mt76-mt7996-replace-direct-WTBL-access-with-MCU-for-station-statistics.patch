@@ -232,40 +232,6 @@ diff --git a/mt7996/mcu.c b/mt7996/mcu.c
 index 1bd32c0..6069a53 100644
 --- a/mt7996/mcu.c
 +++ b/mt7996/mcu.c
-@@ -513,6 +513,33 @@ mt7996_mcu_ie_countdown(struct mt7996_dev *dev, struct sk_buff *skb)
- 					IEEE80211_IFACE_ITER_RESUME_ALL,
- 					mt7996_mcu_cca_finish, &cdata);
- 			break;
-+		case UNI_ALL_STA_TXRX_AIR_TIME: {
-+			static const u8 ac_to_tid[] = {
-+				[IEEE80211_AC_BE] = 0,
-+				[IEEE80211_AC_BK] = 1,
-+				[IEEE80211_AC_VI] = 4,
-+				[IEEE80211_AC_VO] = 6
-+			};
-+			struct ieee80211_sta *sta;
-+
-+			wlan_idx = le16_to_cpu(res->airtime[i].wlan_idx);
-+			wcid = mt76_wcid_ptr(dev, wlan_idx);
-+			sta = wcid_to_sta(wcid);
-+			if (!sta)
-+				break;
-+
-+			for (ac = 0; ac < IEEE80211_NUM_ACS; ac++) {
-+				u8 lmac_ac = mt76_connac_lmac_mapping(ac);
-+				u32 tx_cur = le32_to_cpu(res->airtime[i].tx[lmac_ac]);
-+				u32 rx_cur = le32_to_cpu(res->airtime[i].rx[lmac_ac]);
-+
-+				if (!tx_cur && !rx_cur)
-+					continue;
-+
-+				ieee80211_sta_register_airtime(sta, ac_to_tid[ac], tx_cur, rx_cur);
-+			}
-+			break;
-+		}
- 		default:
- 			break;
- 		}
 @@ -696,6 +723,33 @@ mt7996_mcu_rx_all_sta_info_event(struct mt7996_dev *dev, struct sk_buff *skb)
  			wcid->stats.rx_packets +=
  				le32_to_cpu(res->msdu_cnt[i].rx_msdu_cnt);
