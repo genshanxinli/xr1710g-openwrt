@@ -64,7 +64,7 @@
 | F53 | 10G 口 LED 无 sysfs/DTS 节点（#13） | RTL8261BE 无 LED class 设备 | 上游 realtek 驱动未暴露 LED；fanboy09 实际无 LED 代码 | docs/comment only；跟踪上游 #24034/#24619，合入后补 9001 leds 子节点 | upstream-open | 不做无实测依据的寄存器逆向 |
 | F54 | AN7581 PHY LED 第二个 netdev 写回 EINVAL（#14） | 值已生效但 store 返回 -EINVAL，led start 退出码 1 | ledtrig-netdev：hw_control_get 预置 `TRIGGER_NETDEV_LINK` + 具体 link speed 位，`netdev_led_attr_store` 互斥检查拒绝写 `link` | `patches/root/9027-ledtrig-netdev-link-mode-mutex.patch`（生成 `680-ledtrig-netdev-link-mode-mutex.patch`：写 generic link 时清除具体 link speed 位；写具体 link speed 时清除 generic link） | n/a（自持补丁） | 已基于 prepare 后内核源码生成并 dry-run 验证；待构建+实机 led start 复验 |
 | F55 | lan1 无链路 down/up 时 rx_errors/rx_dropped 虚增（#15/F38） | 每次 down/up +0~3 | airoha_eth 无 carrier 时仍把 USXGMII 伪帧计入 MIB | `patches/root/9025-xr1710g-airoha-no-carrier-rx-stats.patch`（生成 9991 内核补丁：`netif_carrier_ok()` 门控，无 carrier 只清 MIB 不并入统计） | n/a（自持补丁） | 已基于 prepare 后内核源码生成并 dry-run 验证；待构建+实机 TOGGLE_10G=1 复验 |
-| F56 | mt7996e-hif 仅 Gen2 x1（#16） | 端点能力 Gen3 x2，根端口仅 x1/Gen2 | EN7581 pcie2 共享 USB3 PHY 单 lane 硬件约束；Gen3 重训上游 #21978 未进 6.18 | docs/comment only；验收以 pcie0 x2 主数据面为准 | upstream-open | 不伪造 num-lanes |
+| F56 | mt7996e-hif 仅 Gen2 x1（#16） | 端点能力 Gen3 x2，根端口仅 x1/Gen2 | pcie2 共享 USB3 PHY 单 lane 硬件约束；pcie0 x2 已上游（#21978 merged，openwrt main patches-6.18 已含 609-04 x2/913 PCIe HB reset）；pcie2 Gen3 x1 仍无验证 | docs/comment only；验收以 pcie0 x2 主数据面为准 | upstream-open（#21978 merged；x1 Gen3 待验证） | 不伪造 num-lanes；后续可在新主线基础上重测 Gen3 x1 |
 | F57 | 1G 口黄灯不亮（#17） | gpio43/44 UNCLAIMED | 9001 DTS pinctrl-1 未应用 | 已修复：commit 9adafd9 + 8e33788（pinctrl-0 合并 + amber LED 配置） | n/a | 仅需关闭 issue |
 | F58 | CLIENTS 0 offloaded（#18/F39） | 路由型 Wi-Fi 流被漏计 | PPE eth= 不含 station MAC | 已修复：commit a13bb0c + 9019 补丁 | n/a | 仅需关闭 issue |
 
