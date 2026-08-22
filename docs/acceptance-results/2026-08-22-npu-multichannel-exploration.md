@@ -67,3 +67,12 @@
 - 清理了上一会话遗留的 4 个 `yes` CPU 压力进程（PID 12482-12489）。
 - 3 路并发 HTTP（20MB each，经设备 PPPoE 到 speed.cloudflare.com）：2.27/2.57/2.54s，合计约 60MB，瞬时吞吐约 70Mbps。
 - 该 3 条流在 conntrack 中仅 `[OFFLOAD]` 未达 `[HW_OFFLOAD]`；PPE bind 未出现对应记录。与 F30 观察一致：硬件绑定与流建立时机/目标 IP 相关；建议后续用更长流并采样。
+
+## 已提交 GitHub Issues
+
+- #1 实验档 L2 bridge offload（#22533）实机不可用：包未安装且 bridge 族 flow offload 规则注入报 Protocol error
+- #2 NPU 诊断 RPC 缺口：缺 devmem/ethtool/bridge，getFrameEngine 报错、pll_freq_mhz 恒 0
+- #3 getStatus 的 memory_regions 漏报第 5 个 NPU 保留区 npu-ba
+- #4 mt76 pin 59676919 实机无 token_info debugfs，getTokenInfo 恒返回 0；需复查 F22 结论
+- #5 PPE debugfs bind/entries 的 packets/bytes 恒为 0，建议增加单流硬件转发统计
+- #6 EIP93 硬件 crypto 已编译但完全未使用：建议评估 IPsec/xfrm 硬件卸载作为 NPU 未开发用途
