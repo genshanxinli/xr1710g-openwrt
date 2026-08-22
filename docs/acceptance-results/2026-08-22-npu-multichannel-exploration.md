@@ -22,7 +22,7 @@
 | E3 | `bridge-flow-offload` 生成的规则会 `destroy table bridge fw4`，若与用户自有 bridge fw4 表冲突有破坏风险 | 中 | 改用独立表名/只在包自己的 include 内管理 |
 | E4 | `luci.airoha_npu`/`luci.airoha_flowsense` 的 `getFrameEngine` 因缺 `devmem` 返回 error；`pll_freq_mhz` 恒 0 | 中 | 镜像补入 `devmem`（或 io 工具）或 RPC 优雅降级 |
 | E5 | `getStatus` 的 `memory_regions` 只取 dmesg 前 4 条，漏报第 5 个 `npu-ba`（2048 KiB） | 低 | `head -4` 改 `head -5` 或按 of_node 解析 |
-| E6 | mt76 pin 59676919 实机无 `token_info` debugfs；`getTokenInfo` 恒返回 token_count=0/空队列 | 中 | 复查 F22「已上游」结论；恢复 token_info 补丁或适配 RPC |
+| E6 | mt76 pin 59676919 实机无 `token_info` debugfs；`getTokenInfo` 恒返回 token_count=0/空队列；**经 API 核对源码，F22「fanboy14 0001/0003 已上游」结论不成立**（debugfs.c 无 token_info；mac.c 仍含 mt7996_mac_sta_poll） | 高 | 按 pin 59676919 重建并重新启用 fanboy14 0001/0003，或补自持等价补丁 |
 | E7 | PPE debugfs `bind`/`entries` 的 `packets=`/`bytes=` 恒 0 | 低 | 上游/自持补丁增加 PPE 单流统计；当前用 conntrack 综合判断 |
 | E8 | EIP93 硬件 crypto 已注册（priority 1500）但 `crypto_hw_eip93` refcnt=0，无 IPsec/xfrm 配置使用 | 低 | 评估 strongSwan/xfrm + EIP93 的 IPsec 硬件卸载，作为 NPU 未开发用途 |
 | E9 | 设备缺 `ethtool`/`bridge`/`tcpdump`/`iperf3`，深度诊断受限 | 低 | 下轮镜像补入诊断工具包 |
@@ -73,6 +73,6 @@
 - #1 实验档 L2 bridge offload（#22533）实机不可用：包未安装且 bridge 族 flow offload 规则注入报 Protocol error
 - #2 NPU 诊断 RPC 缺口：缺 devmem/ethtool/bridge，getFrameEngine 报错、pll_freq_mhz 恒 0
 - #3 getStatus 的 memory_regions 漏报第 5 个 NPU 保留区 npu-ba
-- #4 mt76 pin 59676919 实机无 token_info debugfs，getTokenInfo 恒返回 0；需复查 F22 结论
+- #4 F22 结论需复查：pin 59676919 实机无 token_info，且 mac.c 仍含 mt7996_mac_sta_poll（fanboy14 0001/0003 并非冗余）
 - #5 PPE debugfs bind/entries 的 packets/bytes 恒为 0，建议增加单流硬件转发统计
 - #6 EIP93 硬件 crypto 已编译但完全未使用：建议评估 IPsec/xfrm 硬件卸载作为 NPU 未开发用途
