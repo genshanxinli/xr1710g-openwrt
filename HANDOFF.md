@@ -45,15 +45,16 @@ Gemtek XR1710G（Airoha AN7581 + MT7996 三频 Wi-Fi7、2×10G + 2×1G）的**�
    - all = `32578257466`（commit 3c4ee17）
    - experimental = `32578259118`（commit 3c4ee17）
 
-## 3. 构建与验证状态（截至本会话收口）
+## 3. 构建与验证状态（2026-08-22 第三会话进行中）
 
-- 四档 CI 曾全部失败：`32576097284`、`32576100468`（旧）；`32578257466`、`32578259118`（resync 后）。失败点均为 `package/kernel/mt76`——`mt76_connac_mcu.h` `UNI_PER_STA_INFO_TAG` redeclaration（F60）。
-- 根因：`patches/packages/mt76-0003-…` 重建时两处重复——① 第一 hunk `PER_STA_INFO_MAX_NUM`+`enum UNI_PER_STA_INFO_TAG` 块重复；② mcu.c hunk `mt7996_mcu_get_per_sta_info()` 整个函数重复。
-- 已修复（commit `d52fdfa`）：① 第一 hunk 去重，行数 `+1409,20`→`+1409,13`；② mcu.c hunk 删除第二份函数，行数 `+5576,218`→`+5576,112`。
-- 本地复验：`audit-patches.sh --experimental` ✅（46）；对 mt76 pin 59676919 全序应用 10 个 mt76 补丁 ✅，`UNI_PER_STA_INFO_TAG` 与 `mt7996_mcu_get_per_sta_info` 各仅 1 处，`mt7996_mac_sta_poll` 已删净。
-- 已知坏 run 已取消（`32588295907`、`32588297146`）；新 dispatched（commit `d52fdfa`）：
-  - all = `32588516036`
-  - experimental = `32588517827`
+- 四档 CI 全红：F60（`UNI_PER_STA_INFO_TAG` redeclaration，已修 d52fdfa）后，d52fdfa 构建仍全红——F61：`mt7996/mcu.c` `wlan_idx`/`res`/`i`/`wcid`/`ac` undeclared。根因：0003 重建时把 `UNI_ALL_STA_TXRX_AIR_TIME` case 同时插入到 `mt7996_mcu_rx_all_sta_info_event` 与 `mt7996_mcu_ie_countdown`；后者作用域无这些变量。
+- 已修复（commit `4805814`）：删除 `mt7996_mcu_ie_countdown` 中的重复 hunk，仅保留正确位置 case；F61 已登记。
+- 同时完成 mt76 自 bump（commit `7ab2633`）：`9028` 将 `package/kernel/mt76` pin `59676919` → `c5a3bd91`（`PKG_SOURCE_DATE=2026-08-22`，hash `a1bc7450...` 按 OpenWrt dl_github_archive 语义实算）；0003 已对 c5a3bd91 重建（GENMASK 31:14→31:24）；9992 随 bump 删除（F59）。
+- 本地复验（commit `4805814`）：`audit-patches.sh` ✅（default 31 / experimental 46）；`apply-patches.sh --dry-run --experimental` ✅（ROOT 全绿；拷贝补丁真实应用 regdb 4、mt76 9、uboot 41）；mt76 c5a3bd91 全序真实应用 9 个补丁 ✅，airtime case 仅 1 处、`UNI_PER_STA_INFO_TAG` 与 `mt7996_mcu_get_per_sta_info` 各仅 1 处、`mt7996_mac_sta_poll` 已删净。
+- 已推送并 dispatched（commit `4805814`）：
+  - all = `32592330583`
+  - experimental = `32592333937`
+  - push 触发的 sync-upstream = `32592320160` ✅
 
 ## 4. 实机可用命令
 
