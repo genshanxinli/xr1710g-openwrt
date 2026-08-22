@@ -1,6 +1,6 @@
-# Source: fanboy14 0003 rebuilt against openwrt/mt76 59676919 (2026-08-22)
+# Source: fanboy14 0003 rebuilt against openwrt/mt76 c5a3bd91 (2026-08-22)
 # Upstream: n/a
-# Reason: replace direct WTBL polling with MCU station-stat query; pin 59676919 still calls mt7996_mac_sta_poll
+# Reason: replace direct WTBL polling with MCU station-stat query; c5a3bd91 still calls mt7996_mac_sta_poll
 
 From 80f79586770a493fc337d3212ce4c4111ab5253e Mon Sep 17 00:00:00 2001
 From: Ryan Chen <rchen14b@gmail.com>
@@ -127,7 +127,7 @@ index 9f03f98..f2910d9 100644
 -		rssi[0] = to_rssi(GENMASK(7, 0), val);
 -		rssi[1] = to_rssi(GENMASK(15, 8), val);
 -		rssi[2] = to_rssi(GENMASK(23, 16), val);
--		rssi[3] = to_rssi(GENMASK(31, 14), val);
+-		rssi[3] = to_rssi(GENMASK(31, 24), val);
 -
 -		mlink = rcu_dereference(msta->vif->mt76.link[wcid->link_id]);
 -		if (mlink) {

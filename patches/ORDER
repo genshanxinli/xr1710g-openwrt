@@ -21,10 +21,11 @@ default root/9022-npu-ipv6-udp-visibility.patch   # F40/#19/#20：IPv6 地址规
 default root/9023-npu-rpc-graceful-tools.patch   # #2：缺 devmem 时 getFrameEngine/pll_freq_mhz 优雅降级
 default root/9025-xr1710g-airoha-no-carrier-rx-stats.patch   # F38/#15：无 carrier 只清 MIB，rx_errors/rx_dropped 不虚增
 default root/9027-ledtrig-netdev-link-mode-mutex.patch   # F37③/#14：ledtrig-netdev 写 link 时清除冲突的 link_speed 模式
+default root/9028-mt76-bump-c5a3bd91.patch   # mt76 pin 59676919→c5a3bd91；MT7996 修复吸收；0001/0003 已对 c5a3bd91 重建；9992 随 bump 删除（F59）
 default root/9010-wifi-scripts-txpower-ucode.patch   # 16 号重建（pr-23990 按 radio 独立 txpower）
 default vendor/fanboy/11-airoha-lro-default-0e90a420.patch   # HW GRO/LRO 默认
-default mt76/0001-wifi-mt76-mt7996-add-token-and-NPU-debugfs-counters.patch   # fanboy14 0001 重建（issue #4）：pin 59676919 实机无 token_info，非冗余
-default mt76/0003-wifi-mt76-mt7996-replace-direct-WTBL-access-with-MCU-for-station-statistics.patch   # fanboy14 0003 重建（issue #4）：mac.c 仍直接 WTBL 轮询
+default mt76/0001-wifi-mt76-mt7996-add-token-and-NPU-debugfs-counters.patch   # fanboy14 0001 重建（issue #4）：c5a3bd91 无 token_info，非冗余
+default mt76/0003-wifi-mt76-mt7996-replace-direct-WTBL-access-with-MCU-for-station-statistics.patch   # fanboy14 0003 重建（issue #4）：c5a3bd91 mac.c 仍直接 WTBL 轮询
 default root/9011-xr1710g-spi33mhz.patch   # 08 切片：SPI 33MHz（sysupgrade 可靠性）
 default root/9012-xr1710g-banner-colored.patch   # 08 切片：彩色 banner
 default root/9013-xr1710g-dropbear-quiet-logs.patch   # 08 切片：dropbear 静默会话日志
@@ -53,10 +54,9 @@ experimental vendor/fanboy/07-mt76-release-hw-rro-session-5b917d4b.patch   # 202
 experimental vendor/fanboy/09-hw11-hw21-compat-afc6dc93.patch
 experimental vendor/fanboy/17-cmonroe-stability-8c530f05.patch
 experimental vendor/fanboy/18-smartrg-stability-b45d5117.patch
-experimental mt76/0005-wifi-mt76-mt7996-guard-txfree-overrun.patch   # 2026-08-22 再同步 ubi2-oc e7a8143（TXFREE 截断静默；diff 对 pin 59676919 无变化）
-experimental mt76/9990-wifi-mt76-mt7996-advertise-eht-to-firmware-rate-control.patch   # 2026-08-22 再同步 integration e88fbe28：EHT 广告（9990）/320 BF fallback（9991）/PS-sync 校验（9992，F59 复核携带）/op_mode 传递（9993）
+experimental mt76/0005-wifi-mt76-mt7996-guard-txfree-overrun.patch   # 2026-08-22 再同步 ubi2-oc e7a8143（TXFREE 截断静默；对 c5a3bd91 可应用）
+experimental mt76/9990-wifi-mt76-mt7996-advertise-eht-to-firmware-rate-control.patch   # 2026-08-22 再同步 integration e88fbe28：EHT 广告（9990）/320 BF fallback（9991）/op_mode 传递（9993）；9992 已随 9028 bump 删除（F59）
 experimental mt76/9991-wifi-mt76-mt7996-fill-160mhz-bf-fallback-for-eht-320.patch
-experimental mt76/9992-wifi-mt76-mt7996-validate-PS-sync-event-TLVs.patch
 experimental mt76/9993-wifi-mt76-mt7996-pass-operating-mode-to-rate-control.patch
 experimental packages/mac80211-411-export-link-sta-capability-limits.patch   # 9993 编译依赖：mac80211 backport 导出 cap_bw/cap_nss（integration subsys 411）
 disabled regdb/0530-us-6ghz-lab-indoor-sp-override-DISABLED.patch   # MANIFEST #DISABLED；启用前按 0510→0520→0521 后状态过 verify

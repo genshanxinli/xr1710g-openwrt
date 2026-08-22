@@ -23,23 +23,21 @@ patches/packages/regdb-0521-us-unii3-4-160mhz-30.patch           package/firmwar
 
 # ── packages：mt76 txpower / NPU debugfs（默认档核心）──
 # 注：package/kernel/mt76/patches/ 在 master 不存在，由脚本 mkdir 创建，OpenWrt 构建时自动应用
-# fanboy14 0001/0003 已对 pin 59676919 重建并启用（2026-08-22，F22 复核/issue #4）
+# fanboy14 0001/0003 已对 openwrt/mt76 c5a3bd91 重建（0003 删除 hunk 随上游 GENMASK 31:14→31:24 调整，2026-08-22）
 patches/packages/mt76-0001-wifi-mt76-mt7996-add-token-and-NPU-debugfs-counters.patch       package/kernel/mt76/patches/
 patches/packages/mt76-0003-wifi-mt76-mt7996-replace-direct-WTBL-access-with-MCU-for-station-statistics.patch       package/kernel/mt76/patches/
 patches/packages/mt76-0006-wifi-mt76-mt7996-refresh-power-limits-on-txpower-changes.patch       package/kernel/mt76/patches/
 patches/packages/mt76-0007-wifi-mt76-mt7996-enable-firmware-txpower-limit-controls.patch        package/kernel/mt76/patches/
 patches/packages/mt76-0008-wifi-mt76-mt7996-eeprom-power-unlock.patch          package/kernel/mt76/patches/
 # ── packages：mt76 EHT 实验补丁（2026-08-22 再同步 integration e88fbe28；9990-9993 评审 F25/F59）──
-#   评审结论：9990/9991/9993 携带（对 pin mt76 59676919 原生态可应用；mt76 master b2704cf5 均无
-#   此改动——真补丁非冗余）；9992（PS-sync TLV 校验）2026-08-22 复核后改为携带：上游 mt76 master
-#   2026-08-01 已合入，但 openwrt main pin mt76 59676919（07-01）尚未包含——pin 未升级前不是冗余。
+#   评审结论：9990/9991/9993 携带（对 c5a3bd91 原生态可应用；mt76 master 均无此改动——真补丁非冗余）；
+#   9992（PS-sync TLV 校验）已随 9028 bump c5a3bd91 删除：上游 mt76 master 已合入同款修复（F59）。
 #   位域核对：nrow/ncol_gt_bw80 高半字节=320MHz、低半字节=160MHz，与既有 160 case 的整字节写法一致。
-#   入实验档：需实机 Wi-Fi7 客户端验证 EHT320 行为后毕业，不默认携带；pin 升级后删 9992。
-# 0005 TXFREE 截断静默（2026-08-22 再同步自 ubi2-oc e7a8143；diff 对 pin mt76 59676919 无变化；实验档，实机/构建验证后毕业）
+#   入实验档：需实机 Wi-Fi7 客户端验证 EHT320 行为后毕业，不默认携带。
+# 0005 TXFREE 截断静默（2026-08-22 再同步自 ubi2-oc e7a8143；对 c5a3bd91 可应用；实验档，实机/构建验证后毕业）
 #EXP patches/packages/mt76-0005-wifi-mt76-mt7996-guard-txfree-overrun.patch          package/kernel/mt76/patches/
 #EXP patches/packages/mt76-9990-wifi-mt76-mt7996-advertise-eht-to-firmware-rate-control.patch    package/kernel/mt76/patches/
 #EXP patches/packages/mt76-9991-wifi-mt76-mt7996-fill-160mhz-bf-fallback-for-eht-320.patch       package/kernel/mt76/patches/
-#EXP patches/packages/mt76-9992-wifi-mt76-mt7996-validate-PS-sync-event-TLVs.patch    package/kernel/mt76/patches/
 #EXP patches/packages/mt76-9993-wifi-mt76-mt7996-pass-operating-mode-to-rate-control.patch       package/kernel/mt76/patches/
 # 9993 的编译依赖（F25 二次构建暴露）：mac80211 backport 未导出 cap_bw/cap_nss helper，
 #   integration 树以 mac80211 包 subsys 补丁补充——随实验档携带（9020，ROOT 生成该包补丁）。
@@ -73,6 +71,8 @@ patches/root/9023-npu-rpc-graceful-tools.patch ROOT
 patches/root/9025-xr1710g-airoha-no-carrier-rx-stats.patch ROOT
 # 9027：ledtrig-netdev 在 hw-control get 预置 link+link_speed 时写 link 返回 EINVAL（F37③/#14）
 patches/root/9027-ledtrig-netdev-link-mode-mutex.patch ROOT
+# 9028：mt76 pin 59676919 → c5a3bd91（2026-08-22，master 147 commits 领先；吸收 MT7996 修复；锁源实算 hash，禁 skip）
+patches/root/9028-mt76-bump-c5a3bd91.patch ROOT
 # wifi-scripts 按 radio 独立 txpower（pr-23990/YYH2913；2026-08-17 对 master 重建，源于 fanboy 16 号 41b9e3ac，F13）
 patches/root/9010-wifi-scripts-txpower-ucode.patch ROOT
 # HW GRO/LRO 默认开启（11 号定档 default——README 声明的 HW-GRO/LRO 能力载体；kernel 6.18 编译期验证中）
