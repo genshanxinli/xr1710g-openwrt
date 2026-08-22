@@ -7,7 +7,7 @@ diff --git a/target/linux/airoha/dts/an7581-xr1710g-ubi.dts b/target/linux/airoh
 new file mode 100644
 --- /dev/null
 +++ b/target/linux/airoha/dts/an7581-xr1710g-ubi.dts
-@@ -0,0 +1,427 @@
+@@ -0,0 +1,425 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 +
 +/dts-v1/;
@@ -386,8 +386,7 @@ new file mode 100644
 +	status = "okay";
 +	interrupts = <1>;
 +	pinctrl-names = "gbe-led";
-+	pinctrl-0 = <&gswp1_led0_pins>;
-+	pinctrl-1 = <&gswp1_led1_pins>;
++	pinctrl-0 = <&gswp1_led0_pins>, <&gswp1_led1_pins>;
 +};
 +
 +&gsw_port1 {
@@ -413,8 +412,7 @@ new file mode 100644
 +	status = "okay";
 +	interrupts = <2>;
 +	pinctrl-names = "gbe-led";
-+	pinctrl-0 = <&gswp2_led0_pins>;
-+	pinctrl-1 = <&gswp2_led1_pins>;
++	pinctrl-0 = <&gswp2_led0_pins>, <&gswp2_led1_pins>;
 +};
 +
 +&gsw_port2 {
