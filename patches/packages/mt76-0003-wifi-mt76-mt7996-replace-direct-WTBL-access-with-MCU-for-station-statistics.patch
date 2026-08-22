@@ -11,17 +11,10 @@ diff --git a/mt76_connac_mcu.h b/mt76_connac_mcu.h
 index 1e81c02..f4a9e66 100644
 --- a/mt76_connac_mcu.h
 +++ b/mt76_connac_mcu.h
-@@ -1409,6 +1409,20 @@ enum {
+@@ -1409,6 +1409,13 @@ enum {
  	UNI_OFFLOAD_OFFLOAD_BMC_RPY_DETECT,
  };
  
-+#define PER_STA_INFO_MAX_NUM	90
-+
-+enum UNI_PER_STA_INFO_TAG {
-+	UNI_PER_STA_RSSI,
-+	UNI_PER_STA_MAX_NUM
-+};
-+
 +#define PER_STA_INFO_MAX_NUM	90
 +
 +enum UNI_PER_STA_INFO_TAG {

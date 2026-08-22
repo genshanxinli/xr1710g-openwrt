@@ -68,6 +68,7 @@
 | F57 | 1G 口黄灯不亮（#17） | gpio43/44 UNCLAIMED | 9001 DTS pinctrl-1 未应用 | 已修复：commit 9adafd9 + 8e33788（pinctrl-0 合并 + amber LED 配置） | n/a | 仅需关闭 issue |
 | F58 | CLIENTS 0 offloaded（#18/F39） | 路由型 Wi-Fi 流被漏计 | PPE eth= 不含 station MAC | 已修复：commit a13bb0c + 9019 补丁 | n/a | 仅需关闭 issue |
 | F59 | 9992 否决复核（2026-08-22） | F25 以“mt76 master 2026-08-01 已合入”否决 9992，但 openwrt main pin mt76 59676919（07-01）尚未包含该加固 | pin 未升级，漏洞（PS-sync 畸形 TLV 解析死循环/越界）仍存在 | `patches/packages/mt76-9992-wifi-mt76-mt7996-validate-PS-sync-event-TLVs.patch`（#EXP；对 pin 59676919 `patch -p1 --dry-run` 零失败） | merged（mt76 master）/ carried（pin 59676919 未升级前） | pin 升级后删 9992；F25 历史记录保留 |
+| F60 | mt76 编译失败：`mt76_connac_mcu.h` `UNI_PER_STA_INFO_TAG` redeclaration（2026-08-22 四档 CI 全红） | 0003 重建时第一 hunk（mt76_connac_mcu.h）把 `#define PER_STA_INFO_MAX_NUM` + `enum UNI_PER_STA_INFO_TAG` 整块重复添加了两遍；补丁可应用但编译时 mt7915/mt7996 均报 redeclaration | `patches/packages/mt76-0003-…` 第一 hunk 去重，hunk 行数 `+1409,20`→`+1409,13`；`apply-patches.sh --dry-run --experimental` 重新全绿（mt76 11 补丁真实应用通过） | n/a（自持补丁） | 教训：补丁“可应用”≠“可编译”；重建补丁后应 grep 关键标识符是否重复/缺失，编译期错误才暴露 |
 
 ## 未确认/待实机核实清单
 - 物理口 ↔ 逻辑名（netdev-name 已固化：lan1/lan2=双 10G、wan=1G-1（gsw_port1）、lan3=1G-2（gsw_port2），见 9001）→ 首次实机 `ip -br link` 核对
