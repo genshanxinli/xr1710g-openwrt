@@ -47,13 +47,13 @@ Gemtek XR1710G（Airoha AN7581 + MT7996 三频 Wi-Fi7、2×10G + 2×1G）的**�
 
 ## 3. 构建与验证状态（截至本会话收口）
 
-- 上一会话 dispatched（不含 fanboy/YYH resync、9992）：all=`32576097284`、experimental=`32576100468`。**收口时仍在进行中。**
-- 本会话 dispatched（含全部 resync + 9992）：all=`32578257466`、experimental=`32578259118`。**收口时仍在进行中。**
-- 本地已通过：
-  - `scripts/audit-patches.sh --experimental` ✅（46）
-  - `scripts/audit-patches.sh` ✅（30）
-  - `scripts/apply-patches.sh /tmp/openwrt-src --dry-run --experimental` ✅（ROOT 46 应用 + verify：regdb/mt76/uboot 真实 patch 应用通过）
-- 本会话使用本地浅克隆 openwrt master：`/tmp/openwrt-src` @ `3d1645ee`（blobless partial clone，约 18M .git + lazily fetched blobs）。
+- 四档 CI 曾全部失败：`32576097284`、`32576100468`（旧）；`32578257466`、`32578259118`（resync 后）。失败点均为 `package/kernel/mt76`——`mt76_connac_mcu.h` `UNI_PER_STA_INFO_TAG` redeclaration（F60）。
+- 根因：`patches/packages/mt76-0003-…` 重建时两处重复——① 第一 hunk `PER_STA_INFO_MAX_NUM`+`enum UNI_PER_STA_INFO_TAG` 块重复；② mcu.c hunk `mt7996_mcu_get_per_sta_info()` 整个函数重复。
+- 已修复（commit `d52fdfa`）：① 第一 hunk 去重，行数 `+1409,20`→`+1409,13`；② mcu.c hunk 删除第二份函数，行数 `+5576,218`→`+5576,112`。
+- 本地复验：`audit-patches.sh --experimental` ✅（46）；对 mt76 pin 59676919 全序应用 10 个 mt76 补丁 ✅，`UNI_PER_STA_INFO_TAG` 与 `mt7996_mcu_get_per_sta_info` 各仅 1 处，`mt7996_mac_sta_poll` 已删净。
+- 已知坏 run 已取消（`32588295907`、`32588297146`）；新 dispatched（commit `d52fdfa`）：
+  - all = `32588516036`
+  - experimental = `32588517827`
 
 ## 4. 实机可用命令
 
@@ -90,7 +90,7 @@ mt76 包补丁默认档：`mt76-0001/0003/0006/0007/0008`。
 
 ## 7. 遗留/下一步
 
-1. **查四个 build**：`32576097284`、`32576100468`（旧，无 resync）；`32578257466`（all，新）、`32578259118`（experimental，新）。四个都绿后刷机验证：
+1. **查 build**：`32588516036`（all）、`32588517827`（experimental）。都绿后刷机验证：
    - #4：`cat /sys/kernel/debug/ieee80211/phy0/mt76/token_info`；`strings mt7996e.ko | grep mt7996_mac_sta_poll` 应消失。
    - #14：`/etc/init.d/led start` 退出码 0，无 `write error`。
    - #15：`TOGGLE_10G=1 ./scripts/device-hw-probe.sh` 复验增量归零。
