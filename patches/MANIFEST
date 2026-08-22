@@ -54,6 +54,9 @@ patches/vendor/fanboy/10-pstore-ramoops-22473-2f7d2d02.patch ROOT
 patches/root/9017-w1700k-apps-pack-core.patch ROOT
 # 9017 的 FlowSense/NPU RPC 后端在无 br_netfilter 的新 offload 架构下修复 VLAN/PPPoE 开关（F29）
 patches/root/9018-flowsense-offload-new-arch.patch ROOT
+# 9017 的 CLIENTS offload 计数修正（F39）：BND eth= 对路由型 Wi-Fi 客户端不含 station MAC，
+# 增补 BND orig/new IP 匹配 + conntrack [HW_OFFLOAD] 兜底；band_bnd 同步修复
+patches/root/9019-npu-client-offload-accounting.patch ROOT
 # wifi-scripts 按 radio 独立 txpower（pr-23990/YYH2913；2026-08-17 对 master 重建，源于 fanboy 16 号 41b9e3ac，F13）
 patches/root/9010-wifi-scripts-txpower-ucode.patch ROOT
 # HW GRO/LRO 默认开启（11 号定档 default——README 声明的 HW-GRO/LRO 能力载体；kernel 6.18 编译期验证中）
