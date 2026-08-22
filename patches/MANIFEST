@@ -21,8 +21,11 @@ patches/packages/regdb-0521-us-unii3-4-160mhz-30.patch           package/firmwar
 # 0530 已于 2026-08-17 按 wireless-regdb 2026.05.30「500→0510→0520 后」状态重建（fuzz 2 → 0，
 #   语义不变：US 6g 29→36dBm 实验室 SP）；启用时按 verify 流程再实证即可。
 
-# ── packages：mt76 txpower（YYH2913 integration 家族，默认档核心）──
+# ── packages：mt76 txpower / NPU debugfs（默认档核心）──
 # 注：package/kernel/mt76/patches/ 在 master 不存在，由脚本 mkdir 创建，OpenWrt 构建时自动应用
+# fanboy14 0001/0003 已对 pin 59676919 重建并启用（2026-08-22，F22 复核/issue #4）
+patches/packages/mt76-0001-wifi-mt76-mt7996-add-token-and-NPU-debugfs-counters.patch       package/kernel/mt76/patches/
+patches/packages/mt76-0003-wifi-mt76-mt7996-replace-direct-WTBL-access-with-MCU-for-station-statistics.patch       package/kernel/mt76/patches/
 patches/packages/mt76-0006-wifi-mt76-mt7996-refresh-power-limits-on-txpower-changes.patch       package/kernel/mt76/patches/
 patches/packages/mt76-0007-wifi-mt76-mt7996-enable-firmware-txpower-limit-controls.patch        package/kernel/mt76/patches/
 patches/packages/mt76-0008-wifi-mt76-mt7996-eeprom-power-unlock.patch          package/kernel/mt76/patches/
@@ -77,7 +80,7 @@ patches/vendor/fanboy/11-airoha-lro-default-0e90a420.patch ROOT
 #   相对 pin 版 mt76 59676919 已完全上游化——0001 与 debugfs.c:908 逐字一致、0003 的功能性改动
 #   （MCU 采集调用）mac.c:2895-2896 已存在，剩余 diff 只是删除上游已无调用者的死代码 mt7996_mac_sta_poll。
 #   能力保留（上游自带），本层补丁冗余且应用失败——#DISABLED，非降级，见 FIXES F22）
-#DISABLED patches/vendor/fanboy/14-mt76-patches-80f79586.patch ROOT
+# fanboy/14 已重建为上方 mt76-0001/0003 并启用；原料桶保留 14 供对照（F22 复核/issue #4）
 # 08 号切片（2026-08-17 F13 收尾：从 vendor/fanboy/08-reliability-compat 切出的六项 default；9014 依赖 9010 先行——
 # 同文件（mac80211.sh）尾部上下文按 9010 后状态重建，应用顺序已在 MANIFEST 固化）
 patches/root/9011-xr1710g-spi33mhz.patch ROOT

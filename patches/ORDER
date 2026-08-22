@@ -23,7 +23,8 @@ default root/9025-xr1710g-airoha-no-carrier-rx-stats.patch   # F38/#15：无 car
 default root/9027-ledtrig-netdev-link-mode-mutex.patch   # F37③/#14：ledtrig-netdev 写 link 时清除冲突的 link_speed 模式
 default root/9010-wifi-scripts-txpower-ucode.patch   # 16 号重建（pr-23990 按 radio 独立 txpower）
 default vendor/fanboy/11-airoha-lro-default-0e90a420.patch   # HW GRO/LRO 默认
-disabled vendor/fanboy/14-mt76-patches-80f79586.patch   # F22（2026-08-17）：相对 pin mt76 59676919 完全冗余（token/NPU debugfs + MCU 采集已上游），撤下非降级
+default mt76/0001-wifi-mt76-mt7996-add-token-and-NPU-debugfs-counters.patch   # fanboy14 0001 重建（issue #4）：pin 59676919 实机无 token_info，非冗余
+default mt76/0003-wifi-mt76-mt7996-replace-direct-WTBL-access-with-MCU-for-station-statistics.patch   # fanboy14 0003 重建（issue #4）：mac.c 仍直接 WTBL 轮询
 default root/9011-xr1710g-spi33mhz.patch   # 08 切片：SPI 33MHz（sysupgrade 可靠性）
 default root/9012-xr1710g-banner-colored.patch   # 08 切片：彩色 banner
 default root/9013-xr1710g-dropbear-quiet-logs.patch   # 08 切片：dropbear 静默会话日志
