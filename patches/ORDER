@@ -15,6 +15,10 @@ default vendor/fanboy/10-pstore-ramoops-22473-2f7d2d02.patch
 default root/9017-w1700k-apps-pack-core.patch   # 19 号精简（npu/flowsense/mlo/fancontrol/wifi7；去 fastfetch/netspeedtest）
 default root/9018-flowsense-offload-new-arch.patch   # F29：无 br_netfilter 时 VLAN/PPPoE offload 开关改走 nft flowtable/HW Flow Offload
 default root/9019-npu-client-offload-accounting.patch   # F39：CLIENTS offload 计数修正（BND orig/new IP + conntrack HW_OFFLOAD 兜底；band_bnd 同步）
+default root/9020-npu-memory-regions-dt.patch   # F35/#3/#8：getStatus.memory_regions 改设备树数据源，补 npu-ba 第 5 区
+default root/9021-flowsense-sysfs-stats.patch   # F36/#9：getWanHealth/getBridgeStats 改读 /sys/class/net/*/statistics
+default root/9022-npu-ipv6-udp-visibility.patch   # F40/#19/#20：IPv6 地址规范化 + UDP HW_OFFLOAD conntrack 判读
+default root/9023-npu-rpc-graceful-tools.patch   # #2：缺 devmem 时 getFrameEngine/pll_freq_mhz 优雅降级
 default root/9010-wifi-scripts-txpower-ucode.patch   # 16 号重建（pr-23990 按 radio 独立 txpower）
 default vendor/fanboy/11-airoha-lro-default-0e90a420.patch   # HW GRO/LRO 默认
 disabled vendor/fanboy/14-mt76-patches-80f79586.patch   # F22（2026-08-17）：相对 pin mt76 59676919 完全冗余（token/NPU debugfs + MCU 采集已上游），撤下非降级
@@ -40,6 +44,7 @@ experimental vendor/fanboy/02-eip93-f80d0507.patch
 experimental vendor/fanboy/04-dsa-kmod-netlink-22532-aa531917.patch
 experimental vendor/fanboy/05-bridge-offload-22533-33ac9c66.patch
 experimental vendor/fanboy/06-nft-flow-offload-l2-22533-649ef957.patch   # 2026-08-21 同步 ubi2-oc：五补丁合并为三补丁，去 kmod-br-netfilter 依赖
+experimental root/9024-bridge-flow-offload-deps-table.patch   # issue #1 E1/E3：DEPENDS 改 kmod-nft-offload + 独立表名 flow_offload
 experimental vendor/fanboy/07-mt76-release-hw-rro-session-4d61493e.patch   # 2026-08-21 同步 ubi2-oc：改为 teardown 时释放 HW_RRO session
 experimental vendor/fanboy/09-hw11-hw21-compat-afc6dc93.patch
 experimental vendor/fanboy/17-cmonroe-stability-8c530f05.patch

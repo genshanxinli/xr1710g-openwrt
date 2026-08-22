@@ -1,0 +1,38 @@
+diff --git a/package/network/config/bridge-flow-offload/Makefile b/package/network/config/bridge-flow-offload/Makefile
+index 187bb4d..48cd0c0 100644
+--- a/package/network/config/bridge-flow-offload/Makefile
++++ b/package/network/config/bridge-flow-offload/Makefile
+@@ -12,7 +12,7 @@ define Package/bridge-flow-offload
+   CATEGORY:=Network
+   SUBMENU:=Firewall
+   TITLE:=Bridge hardware flow offloading
+-  DEPENDS:=+kmod-nft-bridge +firewall4
++  DEPENDS:=+kmod-nft-offload +firewall4
+ endef
+ 
+ define Package/bridge-flow-offload/description
+diff --git a/package/network/config/bridge-flow-offload/files/usr/share/bridge-flow-offload/apply-rules.sh b/package/network/config/bridge-flow-offload/files/usr/share/bridge-flow-offload/apply-rules.sh
+index 3c412db..4634697 100644
+--- a/package/network/config/bridge-flow-offload/files/usr/share/bridge-flow-offload/apply-rules.sh
++++ b/package/network/config/bridge-flow-offload/files/usr/share/bridge-flow-offload/apply-rules.sh
+@@ -31,9 +31,9 @@ main() {
+ 
+     mkdir -p "$RULES_DIR"
+     cat > "$RULES_FILE" <<EOF
+-destroy table bridge fw4
++destroy table bridge flow_offload
+ 
+-table bridge fw4 {
++table bridge flow_offload {
+     flowtable ${FLOWTABLE} {
+         hook ingress priority 0; devices = { ${devices} }; flags offload;
+     }
+@@ -46,7 +46,7 @@ table bridge fw4 {
+ EOF
+ 
+     # Reload fw4 so it picks up our ruleset-post include
+-    /etc/init.d/firewall reload >/dev/null 2>&1 &
++    /etc/init.d/firewall reload >/dev/null 2>&1
+ }
+ 
+ main

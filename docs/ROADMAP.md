@@ -29,6 +29,7 @@
 - [ ] OC 实机验证报告：oc-1.3 与 oc-1.4 在实机的稳定性/温度，归档到 FIXES F08
 - [ ] 科学上网（OpenClash/PassWall）+ Docker——暂缓项，稳定后再决策 feed 与体积预算
 - [x] mt76 实验补丁（integration 树 9990-9993：EHT 广告/320M BF fallback/PS-sync/rate control）——**F25 评审（2026-08-18）**：9990/9991/9993 重建入实验档（`patches/packages/mt76-999x-…`，对 pin 59676919 实测可应用、master 无此改动）；**9992 否决**（PS-sync TLV 校验上游 mt76 master 2026-08-01 已合，pin 升级自然获得）；实机 EHT320 验证后毕业
+- [ ] **IPsec/站点间 VPN 硬件卸载探索（EIP93，issue #6/F52）**：驱动已在实验档编译、/proc/crypto 注册正常；先实机验证 xfrm 连通性与 EIP93 refcnt，再按档位预装 strongswan/kmod-ipsec/ip-full；注意 EIP93 未注册 GCM-AEAD，rfc4106(gcm(aes)) 可能落软加密
 - [ ] 530 实验室 6GHz SP 补丁——默认停用；如需高功率实验，手动启用并在验收注明非合规
 
 ## P4 工程化

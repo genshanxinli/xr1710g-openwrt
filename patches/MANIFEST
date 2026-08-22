@@ -57,6 +57,14 @@ patches/root/9018-flowsense-offload-new-arch.patch ROOT
 # 9017 的 CLIENTS offload 计数修正（F39）：BND eth= 对路由型 Wi-Fi 客户端不含 station MAC，
 # 增补 BND orig/new IP 匹配 + conntrack [HW_OFFLOAD] 兜底；band_bnd 同步修复
 patches/root/9019-npu-client-offload-accounting.patch ROOT
+# 9020：9017 的 getStatus memory_regions 从易失 dmesg 改为 /proc/device-tree/reserved-memory/npu-*（F35/#3/#8）
+patches/root/9020-npu-memory-regions-dt.patch ROOT
+# 9021：9017 的 getWanHealth/getBridgeStats 不再使用 BusyBox 不支持的 ip -s，改读 sysfs（F36/#9）
+patches/root/9021-flowsense-sysfs-stats.patch ROOT
+# 9022：9019 的 IPv6 客户端 offload 计数规范化 + UDP HW_OFFLOAD 以 conntrack 判读（F40/#19/#20）
+patches/root/9022-npu-ipv6-udp-visibility.patch ROOT
+# 9023：NPU RPC 诊断工具缺失时优雅降级（getFrameEngine available:false / pll_freq_mhz:null）（#2）
+patches/root/9023-npu-rpc-graceful-tools.patch ROOT
 # wifi-scripts 按 radio 独立 txpower（pr-23990/YYH2913；2026-08-17 对 master 重建，源于 fanboy 16 号 41b9e3ac，F13）
 patches/root/9010-wifi-scripts-txpower-ucode.patch ROOT
 # HW GRO/LRO 默认开启（11 号定档 default——README 声明的 HW-GRO/LRO 能力载体；kernel 6.18 编译期验证中）
@@ -81,6 +89,8 @@ patches/root/9016-xr1710g-silence-phy-led-error.patch ROOT
 #EXP patches/vendor/fanboy/05-bridge-offload-22533-33ac9c66.patch ROOT
 # 06/07 已同步 ubi2-oc 当前快照（2026-08-21；06 五补丁合并为三补丁，07 改为 release HW_RRO session）
 #EXP patches/vendor/fanboy/06-nft-flow-offload-l2-22533-649ef957.patch ROOT
+# 9024：bridge-flow-offload 依赖改为 kmod-nft-offload，规则表名避开用户 fw4 桥表（issue #1 E1/E3）
+#EXP patches/root/9024-bridge-flow-offload-deps-table.patch ROOT
 #EXP patches/vendor/fanboy/07-mt76-release-hw-rro-session-4d61493e.patch ROOT
 #EXP patches/vendor/fanboy/09-hw11-hw21-compat-afc6dc93.patch ROOT
 #EXP patches/vendor/fanboy/17-cmonroe-stability-8c530f05.patch ROOT
