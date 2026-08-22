@@ -88,5 +88,5 @@ LuCI 长期显示 `CLIENTS 0 offloaded`，即使同一客户端已有 PPE BND �
 
 ## 关联 issue
 
-- #17 CLIENTS 0 offloaded 假阴性（本次修复）
+- #18 CLIENTS 0 offloaded 假阴性（本次修复）
 - #2 诊断 RPC 工具缺口；#3/#8 memory_regions；#4 token_info；#5 packets/bytes 恒 0；#9 ip -s 统计
