@@ -65,6 +65,8 @@ patches/root/9021-flowsense-sysfs-stats.patch ROOT
 patches/root/9022-npu-ipv6-udp-visibility.patch ROOT
 # 9023：NPU RPC 诊断工具缺失时优雅降级（getFrameEngine available:false / pll_freq_mhz:null）（#2）
 patches/root/9023-npu-rpc-graceful-tools.patch ROOT
+# 9025：lan1 无链路 down/up 时 rx_errors/rx_dropped 虚增（F38/#15）：无 carrier 时只清 MIB 不并入统计
+patches/root/9025-xr1710g-airoha-no-carrier-rx-stats.patch ROOT
 # wifi-scripts 按 radio 独立 txpower（pr-23990/YYH2913；2026-08-17 对 master 重建，源于 fanboy 16 号 41b9e3ac，F13）
 patches/root/9010-wifi-scripts-txpower-ucode.patch ROOT
 # HW GRO/LRO 默认开启（11 号定档 default——README 声明的 HW-GRO/LRO 能力载体；kernel 6.18 编译期验证中）
@@ -91,6 +93,8 @@ patches/root/9016-xr1710g-silence-phy-led-error.patch ROOT
 #EXP patches/vendor/fanboy/06-nft-flow-offload-l2-22533-649ef957.patch ROOT
 # 9024：bridge-flow-offload 依赖改为 kmod-nft-offload，规则表名避开用户 fw4 桥表（issue #1 E1/E3）
 #EXP patches/root/9024-bridge-flow-offload-deps-table.patch ROOT
+# 9026：bridge 族 nft_flow_offload_init/destroy 复用 inet conntrack 语义（issue #1 E2）
+#EXP patches/root/9026-bridge-flow-offload-init-conntrack.patch ROOT
 #EXP patches/vendor/fanboy/07-mt76-release-hw-rro-session-4d61493e.patch ROOT
 #EXP patches/vendor/fanboy/09-hw11-hw21-compat-afc6dc93.patch ROOT
 #EXP patches/vendor/fanboy/17-cmonroe-stability-8c530f05.patch ROOT
