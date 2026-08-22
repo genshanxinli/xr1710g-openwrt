@@ -44,10 +44,10 @@ CONFIG_PACKAGE_luci-app-irqbalance=y
 CONFIG_PACKAGE_irqbalance=y
 # 诊断工具（issue #2/F42）：NPU RPC 依赖 devmem/ethtool/bridge；tcpdump/iperf3 供深度排障
 CONFIG_PACKAGE_ethtool=y
-CONFIG_PACKAGE_bridge=y
+CONFIG_PACKAGE_ip-bridge=y
 CONFIG_PACKAGE_tcpdump=y
 CONFIG_PACKAGE_iperf3=y
-CONFIG_BUSYBOX_DEFAULT_DEVMEM=y
+CONFIG_BUSYBOX_CONFIG_DEVMEM=y
 # 应用包（C：packages-xr1710g src-link / patches/vendor/fanboy/19 随树内置；拆包评审后可选 src-git feed，见 FIXES F13）：
 CONFIG_PACKAGE_luci-app-mlo=y
 CONFIG_PACKAGE_luci-app-w1700k-fancontrol=y
