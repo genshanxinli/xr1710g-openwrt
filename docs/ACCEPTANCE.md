@@ -13,7 +13,7 @@
 - [ ] B2 双 10G 口：均能 10Gbps 链路（ethtool speed 10000）；10G 对打带宽 ≥ 8Gbps
 - [ ] B3 剩余 1G 口：接入正常（speed 1000）
 - [ ] B4 LAN 网关 192.168.123.1：DHCP 分发、LAN 互访、NAT 上网正常
-- [ ] B5 硬件 flow offload / NPU 卸载生效（luci-app-airoha-npu 显示 NPU 已加载；卸载计数增长）
+- [ ] B5 硬件 flow offload / NPU 卸载生效（luci-app-airoha-npu 显示 NPU 已加载；卸载计数增长；IPv6 TCP 多源并发达 `[HW_OFFLOAD]`+PPE BND v6、IPv6 UDP 长流达 `[HW_OFFLOAD]`）
 
 ## Wi-Fi
 - [ ] C1 三频全部起来且可连接：2.4G / 5G / 6G，统一 SSID「K2P」、WPA2/WPA3 混合
