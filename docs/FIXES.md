@@ -36,6 +36,8 @@
 
 | F29 | FlowSense VLAN/PPPoE Offload 开关报错（2026-08-22 实机验收暴露，experimental 档） | LuCI 页面选择 Enabled 后 RPC 返回 `failed - bridge module may not be loaded`；`/proc/sys/net/bridge/bridge-nf-filter-*` 不存在 | `luci-app-airoha-flowsense` / `luci-app-airoha-npu` 的 RPC 后端仍写 br_netfilter 旧 sysctl；experimental 档的 06 号补丁已改为原生 NFPROTO_BRIDGE flowtable 架构，固件内不再有 br_netfilter，旧 sysctl 路径永远不存在 | 新增 `patches/root/9018-flowsense-offload-new-arch.patch`（MANIFEST/ORDER 置于 9017 后）：两 RPC 后端在 sysctl 存在时保持旧行为；sysctl 缺失时 VLAN/PPPoE offload 状态改由 HW Flow Offload + fw4 flowtable 判定，Enabled 操作确保 `flow_offloading`/`flow_offloading_hw` 开启并 reload fw4，Disabled 返回明确错误（当前固件由 HW Flow Offload 总开关控制）。实机 ubus 验证：get 返回 `{"enabled":1}`、set enabled 返回 ok | n/a（自持补丁） | 教训：实验档内核能力切换后，依赖旧内核接口的应用层补丁必须同步适配；实机验收应覆盖 LuCI 全部可操作项 |
 
+| F30 | NPU offload 深度测试暴露的监控与诊断问题（2026-08-22 实机，experimental 档） | 35 分钟 3 路并发 HTTP 下载（约 3.38GB）实测 NPU offload 稳定，但暴露：① npu-monitor 默认 target `1.1.1.1` 在现网不可达，jitter 采样恒 unreachable；② PPE debugfs `bind`/`entries` 的 `packets=`/`bytes=` 恒为 0，无法按流统计；③ 单流 `.102 -> 183.232.52.102` 仅 `[OFFLOAD]`/UNB，同客户端换 `.100` 或并发后可达 `[HW_OFFLOAD]`+BND；④ 设备缺 `bridge`/`ethtool`/`devmem`，`getFrameEngine` 报错 | ① 包默认 UCI 配置了不可达 target，而 init 脚本的网关 fallback 仅在未配置 target 时生效；② PPE debugfs 统计字段不更新；③ 硬件绑定与目标 IP/流建立时机相关，非功能故障；④ 镜像未包含诊断工具 | ① `ae9a2fd`：`patches/root/9017` 默认 target 改为 `223.5.5.5`；② 测试记录：`docs/acceptance-results/2026-08-22-npu-offload-stress.md`；③④ 留待后续镜像增强/补丁修复 | n/a（自持维护） | 硬件卸载判定应综合 conntrack `[HW_OFFLOAD]` + PPE BND + CPU/中断，勿只看 PPE debugfs 统计；诊断工具缺口建议下轮镜像补入 |
+
 ## 未确认/待实机核实清单
 - 物理口 ↔ 逻辑名（netdev-name 已固化：lan1/lan2=双 10G、wan=1G-1（gsw_port1）、lan3=1G-2（gsw_port2），见 9001）→ 首次实机 `ip -br link` 核对
 - U-Boot flash-slot.bin 的 SHA256 全文 → 以 YYH2913/http-uboot release 页为准（升级时校验）
