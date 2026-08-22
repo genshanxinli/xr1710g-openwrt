@@ -67,6 +67,8 @@ patches/root/9022-npu-ipv6-udp-visibility.patch ROOT
 patches/root/9023-npu-rpc-graceful-tools.patch ROOT
 # 9025：lan1 无链路 down/up 时 rx_errors/rx_dropped 虚增（F38/#15）：无 carrier 时只清 MIB 不并入统计
 patches/root/9025-xr1710g-airoha-no-carrier-rx-stats.patch ROOT
+# 9027：ledtrig-netdev 在 hw-control get 预置 link+link_speed 时写 link 返回 EINVAL（F37③/#14）
+patches/root/9027-ledtrig-netdev-link-mode-mutex.patch ROOT
 # wifi-scripts 按 radio 独立 txpower（pr-23990/YYH2913；2026-08-17 对 master 重建，源于 fanboy 16 号 41b9e3ac，F13）
 patches/root/9010-wifi-scripts-txpower-ucode.patch ROOT
 # HW GRO/LRO 默认开启（11 号定档 default——README 声明的 HW-GRO/LRO 能力载体；kernel 6.18 编译期验证中）
