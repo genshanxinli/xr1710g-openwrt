@@ -128,6 +128,17 @@ stock 基本项通过后，同法刷 experimental（或同布局 sysupgrade）�
 - 继续跟踪 mt76/mac80211 上游联动 bump；合入后删 `9028`/`9994`，再验。
 - 跑 `docs/ACCEPTANCE.md` 全项，冻结 known-good tag。
 
+### 7.4 CI#70 experimental 实机结果（2026-08-23）
+
+> 用户已把 CI#70（run `32621217391`，experimental，commit `46600b2`）刷入设备。详细记录：`docs/acceptance-results/2026-08-23-experimental-ci70.md`。
+
+- 已通过：F64 新布局（bad PEBs=0）、F65 `sysupgrade -T`、F67 风扇单控制器、F68 tx_failed（2.4G/5G 站点）、LED 修复后 `led start` rc=0、wifi down/up 5 轮不复发、B1 WAN、B5 NPU 活动。
+- 未通过/待办：
+  - F66 仍见 `rdinit=/init failed`——9001 chosen bootargs 被 HTTP U-Boot 默认 env `bootargs` 覆盖；已写 UBI env 验证 U-Boot 不读取。需 U-Boot 侧补 rdinit 或换用 9002 U-Boot 后重验。
+  - F69/F71/C2/C3/C4/B2 需物理对端/客户端，未测。
+  - `device-hw-probe.sh` B2.1 VEND1 0x103/0x104 仍读不到（phytool 返回 -95），需换 MDIO 访问路径。
+- 本会话已修：LED sysfs 回归 `mt7530_dsa-0` → `mt7530-0`（`files/etc/config/system`、`scripts/device-hw-probe.sh`）；设备 UCI 已同步并验证。B6 按用户要求取消。
+
 ## 8. 宿主环境备忘
 
 - 容器缺 `make/gawk/mkhash` 等完整 OpenWrt 构建工具；本地只做 patch 生成、审计、ssh 实机验证。真正构建以 GitHub Actions 为准。
