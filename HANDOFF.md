@@ -48,10 +48,11 @@ Gemtek XR1710G（Airoha AN7581 + MT7996 三频 Wi-Fi7、2×10G + 2×1G）的**�
 ## 3. 构建与验证状态（2026-08-22 第三会话）
 
 - F60 后 d52fdfa 构建仍全红——F61：`mt7996/mcu.c` `wlan_idx`/`res`/`i`/`wcid`/`ac` undeclared（0003 把 `UNI_ALL_STA_TXRX_AIR_TIME` case 重复插入到 `mt7996_mcu_ie_countdown`）。已修（commit `4805814`）。
-- 尝试 mt76 自 bump c5a3bd91（commit `7ab2633`），四档 CI 仍全红——F62：c5a3bd91 期望新版 mac80211 API（`ieee80211_get_{fils_discovery,unsol_bcast_probe_resp}_tmpl(hw,vif,link_id)`、`IEEE80211_MIN_ACTION_SIZE(action_code)` 等），openwrt main 当前 mac80211/kernel 头文件不匹配。
-- 已回滚自 bump（commit `cdfe85d`）：恢复 pin 59676919 + 9992 携带，保留 F61 修复。本地复验：`audit-patches.sh` ✅（default 30 / experimental 46）；`apply-patches.sh --dry-run --experimental` ✅（regdb 4、mt76 11、uboot 41 真实应用通过）。
-- 坏 run：`32592330583`（all）❌、`32592333937`（experimental）❌；push 触发 sync-upstream `32592320160` ✅。
-- 下一步重新 dispatch（commit `cdfe85d` 之后）all + experimental，并观察 pin 59676919 构建是否恢复。
+- 尝试 mt76 自 bump c5a3bd91（commit `7ab2633`），四档 CI 仍全红——F62：c5a3bd91 期望新版 mac80211 API，openwrt main 当前 mac80211/kernel 头文件不匹配。
+- 已解决：保留 bump，新增 `mt76-9994-mac80211-api-compat.patch` 把上述调用适配回 6.18 API（两参 tmpl、`IEEE80211_MIN_ACTION_SIZE+1`、`u.action.u.addba_req.*`）；commit `438a4f8`。
+- 本地复验：`audit-patches.sh` ✅（default 32 / experimental 47）；`apply-patches.sh --dry-run --experimental` ✅（regdb 4、mt76 11、uboot 41 真实应用通过）。
+- 坏 run：`32592330583`（all）❌、`32592333937`（experimental）❌；`32608174821`/`32608178233`（rollback 后 dispatch，已取消/待取消）。
+- 下一步：重新 dispatch（commit `438a4f8` 之后）all + experimental，验证 mt76 c5a3bd91 + 9994 兼容层。
 
 ## 4. 实机可用命令
 
@@ -102,10 +103,10 @@ mt76 包补丁默认档：`mt76-0001/0003/0006/0007/0008`。
 3. **#5/#6/#13/#16**：维持 issue 跟踪；#6 需实机 xfrm/ESP 评估；#13 等 #24034；#16 可在新主线基础上重测 Gen3 x1。
 4. **#7**：用户明确“护栏暂时不做”，保持 F34/F49 跟踪，等串口复现。
 5. **吸收 mt76 最新内容（下一步重点，F62 后更新）**：
-   - c5a3bd91 自 bump 已试过（7ab2633），构建四档全红：mt76 master 依赖新版 mac80211 API，openwrt main 当前 mac80211/kernel 头文件不匹配。单纯 bump `package/kernel/mt76` 不可行。
-   - 首选路径不变：等待/推动 OpenWrt main **联动 bump** `package/kernel/mt76` 与 `package/kernel/mac80211`（或 kernel）；合入后 `sync-upstream.sh` 再验。
-   - 若 main 长期不 bump：自 bump 必须做成 **mt76+mac80211 锁步 bump**（两个包的 pin/hash 同时实算），并先本地核对 mac80211 API（`ieee80211_get_fils_discovery_tmpl`/`ieee80211_get_unsol_bcast_probe_resp_tmpl` 签名、`IEEE80211_MIN_ACTION_SIZE` 宏）后再上 CI。
-   - 升级后清理/复核：同前——删 9992、逐条复核 mt76 补丁、audit + apply-patches 全绿、CI all+experimental 绿后实机回归。
+   - 当前已携带 c5a3bd91 bump（9028）+ `mt76-9994` 兼容层（适配 openwrt main 6.18 mac80211 API）。待 CI all+experimental 验证编译。
+   - 首选路径不变：等待/推动 OpenWrt main **联动 bump** `package/kernel/mt76` 与 `package/kernel/mac80211`；合入后删 `9028` 与 `9994`，`sync-upstream.sh` 再验。
+   - 若 CI 仍暴露其它 API 不匹配：继续扩充 `9994`（先本地用 `apply-patches.sh` + `patch -f -p1` 验证，再上 CI）。
+   - 升级后清理/复核：删 9992（已删）、逐条复核 mt76 补丁、audit + apply-patches 全绿、CI all+experimental 绿后实机回归（token_info、PS-sync 事件日志、三频功率、EHT320）。
 6. **注意**：`lav_select` 后端仍 402 余额不足，调用前先 `lav_ping`；不可用时按工程判断并记录。
 
 ## 8. 宿主环境备忘
