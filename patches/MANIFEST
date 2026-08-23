@@ -73,6 +73,8 @@ patches/root/9023-npu-rpc-graceful-tools.patch ROOT
 patches/root/9025-xr1710g-airoha-no-carrier-rx-stats.patch ROOT
 # 9027：ledtrig-netdev 在 hw-control get 预置 link+link_speed 时写 link 返回 EINVAL（F37③/#14）
 patches/root/9027-ledtrig-netdev-link-mode-mutex.patch ROOT
+# 9031：hw-offloaded netdev LED 的 interval 属性不可写（内核故意拒绝），led 脚本跳过写入避免 led start 退出 1（#14）
+patches/root/9031-base-files-led-skip-interval-hw-offload.patch ROOT
 # 9028：mt76 pin 59676919 → c5a3bd91（2026-08-22，master 147 commits 领先；吸收 MT7996 修复；锁源实算 hash，禁 skip）
 patches/root/9028-mt76-bump-c5a3bd91.patch ROOT
 # wifi-scripts 按 radio 独立 txpower（pr-23990/YYH2913；2026-08-17 对 master 重建，源于 fanboy 16 号 41b9e3ac，F13）

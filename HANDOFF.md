@@ -113,11 +113,11 @@ mt76 包补丁默认档：`mt76-0001/0003/0006/0007/0008`。
 
 1. **查 build**：`32588516036`（all）、`32588517827`（experimental）。已刷 #66（experimental，commit bde3f69）复查：
    - #4 ✅：`token_info` 存在；`strings mt7996e.ko` 无 `mt7996_mac_sta_poll`；getTokenInfo 返回正常。issue #4 已关闭。
-   - #14 ⚠️：link/rx/tx 写入均 rc=0；但 `interval` 写入 4 个 PHY LED 均 EINVAL，`/etc/init.d/led start` 仍 rc=1（issue #14 保持 open）。
+   - #14 ⚠️：link/rx/tx 写入均 rc=0；但 `interval` 写入 4 个 PHY LED 均 EINVAL，`/etc/init.d/led start` 仍 rc=1。已提交 `9031`（hw-offloaded LED 跳过 interval 写入），待构建验证。
    - #15 ✅：lan1/lan2 down/up 各一次，rx_errors delta=0。issue #15 已关闭。
    - #1 E2 ✅：`nft add rule bridge npu_probe forward meta l4proto { tcp, udp } flow offload @ft` 返回 0；但 E1 `bridge-flow-offload` 包仍未安装（issue #1 保持 open）。
    - 9992：PS-sync 未做专项事件注入；`dmesg` 无 mt7996 MCU 异常。
-   - 新增 issue #22：`getStatus` RPC 因 9020 的 `$((16#...))` 在 BusyBox ash 上不工作而整体 `Invalid argument`（F63）。
+   - 新增 issue #22：`getStatus` RPC 因 9020 的 `$((16#...))` 在 BusyBox ash 上不工作而整体 `Invalid argument`（F63）；已修复 9020 为 `$((0x...))`，待构建验证。
 2. **#10**：#66 已复测 5 轮 `wifi down/up`，三频 AP 均恢复、logread 无 `Could not set STA`/`handle_assoc_cb`；仍未抓串口，issue 保持 open。
 3. **#5/#6/#13/#16**：维持 issue 跟踪；#6 需实机 xfrm/ESP 评估；#13 等 #24034；#16 可在新主线基础上重测 Gen3 x1。
 4. **#7**：用户明确“护栏暂时不做”，保持 F34/F49 跟踪，等串口复现。
