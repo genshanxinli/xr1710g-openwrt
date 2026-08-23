@@ -50,7 +50,7 @@ Gemtek XR1710G（Airoha AN7581 + MT7996 三频 Wi-Fi7、2×10G + 2×1G）的**�
 
 ## 3. 构建与验证状态（2026-08-23）
 
-- 当前等待 `46600b2` 的 CI all + experimental 结果。
+- `46600b2` 的 CI 已绿：all = `32621215717`（success）、experimental = `32621217391`（success）。
 - `sync-upstream`（push 触发）对 `46600b2` 已绿：run `32621204454`。
 - 历史参考：
   - F60–F62 已解决：mt76 c5a3bd91 bump（`9028`）+ `9994` mac80211 6.18 API 兼容层；`0001/0003` 已对 c5a3bd91 重建。
