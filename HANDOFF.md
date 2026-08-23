@@ -6,7 +6,7 @@
 
 - 本地仓库：`/root/workspace/xr1710g-openwrt`
 - 当前分支：`feat/antenna-eeprom-power-unlock`
-- 当前 commit：`2780c8a`（已推送；CI 构建 commit 为 `46600b2`，本 commit 仅更新 HANDOFF）
+- 当前 commit：以 `git log --oneline -1` 为准；本批 CI 构建 commit 为 `46600b2`（之后的提交均为 HANDOFF 文档更新）
 - 远程：`https://github.com/genshanxinli/xr1710g-openwrt`（默认分支 `main`）
 - 推送到当前分支：
   ```bash
