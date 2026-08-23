@@ -1,0 +1,59 @@
+# Source: XR1710G self-held kernel patch (IP10/IP-EVAL 2026-08-23)
+# Upstream: n/a (to be proposed once 10G peer link validation passes)
+# Reason: lane-1 10G PCS JCPLL VCO TCLVAR needs rewrite after PHYA bringup; see FIXES.md A8
+diff --git a/target/linux/airoha/patches-6.18/9992-net-pcs-airoha-jcpll-tclvar-recal.patch b/target/linux/airoha/patches-6.18/9992-net-pcs-airoha-jcpll-tclvar-recal.patch
+new file mode 100644
+--- /dev/null
++++ b/target/linux/airoha/patches-6.18/9992-net-pcs-airoha-jcpll-tclvar-recal.patch
+@@ -0,0 +1,51 @@
++From: XR1710G self-held <noreply@example.invalid>
++Date: Sat, 23 Aug 2026 00:00:00 +0000
++Subject: [PATCH] net: pcs: airoha: recalc JCPLL VCO TCLVAR after PHYA bringup
++
++On XR1710G/W1700K the lane-1 10G PCS can fail to link because the
++JCPLL VCO TCLVAR tuning word is first written before the PLL is
++enabled, and the subsequent PHYA/lane bringup sequence (global reset
++and CDR reset) leaves that tuning ineffective.
++
++Rewrite the same VCOVAR/TCLVAR fields after PHYA bringup succeeds so
++the JCPLL is re-tuned with the lane configuration already settled.
++
++Not yet upstream; validate on real 10G peer and then propose.
++---
++ drivers/net/pcs/airoha/pcs-an7581.c | 17 ++++++++++++++++-
++ 1 file changed, 16 insertions(+), 1 deletion(-)
++
++--- a/drivers/net/pcs/airoha/pcs-an7581.c
+++++ b/drivers/net/pcs/airoha/pcs-an7581.c
++@@ -1922,6 +1922,7 @@
++ 		       phy_interface_t interface)
++ {
++ 	struct regmap_field **pcs_ana_fields = priv->pcs_ana_fields[index];
+++	int ret;
++ 
++ 	/* Enable Analog Common Lane */
++ 	regmap_field_write(pcs_ana_fields[AN7581_PCS_CMN_EN], 0x1);
++@@ -1932,7 +1933,22 @@
++ 	msleep(100);
++ 
++ 	/* Setup PHYA */
++-	return an7581_pcs_phya_bringup(priv, index, interface);
+++	ret = an7581_pcs_phya_bringup(priv, index, interface);
+++	if (ret)
+++		return ret;
+++
+++	/* Recalibrate JCPLL VCO TCLVAR after lane/PCS bringup has settled:
+++	 * the first write in an7581_pcs_jcpll_bringup() happens before PLL
+++	 * enable, and the lane configuration sequence (global reset + CDR
+++	 * reset) can leave the VCO tuning word ineffective on lane 1.  On
+++	 * XR1710G/W1700K the lan2 10G PCS needs this second write after
+++	 * PHYA bringup or the lane may not link.
+++	 */
+++	regmap_field_write(pcs_ana_fields[AN7581_PCS_JCPLL_VCO_VCOVAR_BIAS_L], 0x0);
+++	regmap_field_write(pcs_ana_fields[AN7581_PCS_JCPLL_VCO_VCOVAR_BIAS_H], 0x3);
+++	regmap_field_write(pcs_ana_fields[AN7581_PCS_JCPLL_VCO_TCLVAR], 0x3);
+++
+++	return 0;
++ }
++ 
++ int an7581_pcs_usb_bringup(struct airoha_pcs_priv *priv,

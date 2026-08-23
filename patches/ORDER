@@ -13,6 +13,7 @@ default root/9002-xr1710g-uboot.patch
 default vendor/fanboy/03-cpufreq-pmdomain-22029-e5d23549.patch
 default vendor/fanboy/10-pstore-ramoops-22473-2f7d2d02.patch
 default root/9017-w1700k-apps-pack-core.patch   # 19 号精简（npu/flowsense/mlo/fancontrol/wifi7；去 fastfetch/netspeedtest）
+default root/9030-flowsense-bump-1.1.8-r5.patch   # A7/IP08：FlowSense 1.1.8-r5（9018-9023 已重放至 9030 基线）
 default root/9018-flowsense-offload-new-arch.patch   # F29：无 br_netfilter 时 VLAN/PPPoE offload 开关改走 nft flowtable/HW Flow Offload
 default root/9019-npu-client-offload-accounting.patch   # F39：CLIENTS offload 计数修正（BND orig/new IP + conntrack HW_OFFLOAD 兜底；band_bnd 同步）
 default root/9020-npu-memory-regions-dt.patch   # F35/#3/#8：getStatus.memory_regions 改设备树数据源，补 npu-ba 第 5 区
@@ -39,6 +40,7 @@ default regdb/0521-us-unii3-4-160mhz-30.patch
 default mt76/0006-wifi-mt76-mt7996-refresh-power-limits-on-txpower-changes.patch
 default mt76/0007-wifi-mt76-mt7996-enable-firmware-txpower-limit-controls.patch
 default mt76/0008-wifi-mt76-mt7996-eeprom-power-unlock.patch   # 07 天线报告附A.1/附A.2：eeprom 功率解锁（2G 28->30、5G UNII-3 28->30）；默认档全开
+default mt76/0009-report-only-terminal-tx-failures.patch   # A5/IP25/IP26：tx_failed 只记终端失败
 default mt76/9994-mac80211-api-compat.patch   # F62：c5a3bd91 新 mac80211 API 适配 6.18；main 联动 bump 后删除
 
 # ── oc（--oc 才应用）──
@@ -52,11 +54,13 @@ experimental vendor/fanboy/05-bridge-offload-22533-33ac9c66.patch
 experimental vendor/fanboy/06-nft-flow-offload-l2-22533-c0ed8295.patch   # 2026-08-22 再同步 ubi2-oc ba58ba46：五补丁合并为三补丁，去 kmod-br-netfilter 依赖
 experimental root/9024-bridge-flow-offload-deps-table.patch   # issue #1 E1/E3：DEPENDS 改 kmod-nft-offload + 独立表名 flow_offload
 experimental root/9026-bridge-flow-offload-init-conntrack.patch   # issue #1 E2：bridge 族 flow 表达式 init/destroy 复用 inet conntrack
+experimental root/9029-xr1710g-airoha-pcs-jcpll-tclvar-recal.patch   # A8/IP10：lan2 10G JCPLL VCO TCLVAR 重写（毕业转 default）
 experimental vendor/fanboy/07-mt76-release-hw-rro-session-5b917d4b.patch   # 2026-08-22 再同步 ubi2-oc ba58ba46：改为 teardown 时释放 HW_RRO session
 experimental vendor/fanboy/09-hw11-hw21-compat-afc6dc93.patch
 experimental vendor/fanboy/17-cmonroe-stability-8c530f05.patch
 experimental vendor/fanboy/18-smartrg-stability-b45d5117.patch
 experimental mt76/0005-wifi-mt76-mt7996-guard-txfree-overrun.patch   # 2026-08-22 再同步 ubi2-oc e7a8143（TXFREE 截断静默；对 c5a3bd91 可应用）
+experimental mt76/0010-set-skb-device-for-npu-rx.patch   # A6/IP25/IP26：NPU RX 设 skb->dev，PPE miss 回退 bridge/FDB 上下文
 experimental mt76/9990-wifi-mt76-mt7996-advertise-eht-to-firmware-rate-control.patch   # 2026-08-22 再同步 integration e88fbe28：EHT 广告（9990）/320 BF fallback（9991）/op_mode 传递（9993）；9992 已随 9028 bump 删除（F59）
 experimental mt76/9991-wifi-mt76-mt7996-fill-160mhz-bf-fallback-for-eht-320.patch
 experimental mt76/9993-wifi-mt76-mt7996-pass-operating-mode-to-rate-control.patch

@@ -6,7 +6,7 @@
 | # | 项目 | 问题/背景 | 根因 | 本层载体 | 上游状态 | 备注 |
 |---|---|---|---|---|---|---|
 | F01 | XR1710G 板级支持 | master 无 xr1710g 文件 | #22397 未合入 | **已对 master 重建**（2026-08-17）：`patches/root/9000-xr1710g-common.patch` + `9001-xr1710g-dts.patch` + `9002-xr1710g-uboot.patch`。与 PR 的偏离：① 不做 common-dtsi 重构（w1700k dts 保持上游原样，冲突面最小）；② 网口命名按自用决策（WAN=1G-1，PR 默认 10G-1=wan）；③ uboot 补丁命名 1000-（master 已有 998/999）；④ 未采纳 PR 的 airoha_fan 改动（我们的 `files/etc/init.d/fan` 动态探测覆盖 xr1710g，避免双脚本抢 PWM） | upstream-open（#22397，2026-08-14 最后活动） | 合入即删；PR 更新后 diff 对照，重取源见 fetch-sources.sh --22397 |
-| F02 | 6GHz 不可用 | US 默认 regdb 6GHz NO-IR 限制 | regdb 未含设备功率 | `regdb-0510/0520`（world 5GHz 去 NO-IR 已上游自带 `500-world-regd-5GHz.patch`，F20 删重复 0500） | n/a（功率补丁不打算上游） | 530 实验室 SP 默认停用（#DISABLED） |
+| F02 | 6GHz 不可用 | US 默认 regdb 6GHz NO-IR 限制 | regdb 未含设备功率 | `regdb-0510/0520`（world 5GHz 去 NO-IR 已上游自带 `500-world-regd-5GHz.patch`，F20 删重复 0500） | n/a（功率补丁不打算上游） | 530 实验室 SP 默认停用（#DISABLED）；验收 C2 需双侧国家码判据——客户端非 US 看不到 6G 属预期（IP14） |
 | F03 | NPU 内存/卸载 | 只在未装 Wi-Fi 板保留 NPU 内存 | 上游 #24593 | 无需携带（master 已合 2026-08-11） | merged | 跟踪：若回移分支需重拾 |
 | F04 | 10G PHY 启动/link | 非 Realtek SoC 上 rtl8261 劣化、boot 失败 | #21777/#22564/#23078/#23383 系列 | 依赖：#22397 板级（含 phylink 配置）；kmod-phy-realtek + rtl826x-firmware | 部分 merged；PHY LED #24034 仍 open | 见 F06 |
 | F05 | 风扇温控 | 传感器版本差异（NCT7802/NCT7511Y）；上游 airoha_fan 只覆盖 nct7802 | hwmon 动态探测缺失 | `files/etc/init.d/fan`（动态探测+曲线，覆盖 #22391 修复） | n/a（版本差异不适合上游单一脚本） | 社区实测 NCT7802 为主 |
@@ -73,26 +73,25 @@
 | F62 | mt76 c5a3bd91 自 bump 构建四档全红（2026-08-22，commit 4805814） | c5a3bd91 期望新版 mac80211 API：`ieee80211_get_fils_discovery_tmpl(hw,vif,link_id)`、`ieee80211_get_unsol_bcast_probe_resp_tmpl(hw,vif,link_id)`、`IEEE80211_MIN_ACTION_SIZE(action_code)`/`mgmt->u.action.action_code`；openwrt main 当前 mac80211/kernel 仍是旧两参 API | 新增 `mt76-9994-mac80211-api-compat.patch`：将上述调用适配回 6.18 API（两参 tmpl、`IEEE80211_MIN_ACTION_SIZE+1`、`u.action.u.addba_req.*`）；重新携带 9028 bump c5a3bd91（commit `438a4f8`） | carried（等待 openwrt main 联动 bump mt76+mac80211，届时删 9994） | 教训：mt76 master 不能单独 bump——必须核对 openwrt main 的 mac80211 包/kernel 头文件 API 是否匹配；下次自 bump 前先 compare mac80211 包 pin |
 | F63 | `getStatus` RPC 整体报 `Invalid argument`（#66 实机复查，issue #22） | 9020 DT 解析用 `$((16#${b0}...))`，BusyBox ash 不支持 `base#` 算术，`read_npu_memory_regions` 报 `arithmetic syntax error` 后只输出 `[`，JSON 非法 | `patches/root/9020-npu-memory-regions-dt.patch` 改用 `$((0x${b0}...))`（ash 可用） | n/a（自持补丁） | 修复已本地/设备侧函数级验证返回 5 区；待构建+实机 `ubus call ... getStatus` 复核 |
 
+| F64 | reserved_bmt 66MiB 布局对齐（A1/IP02/05/06/07/15） | 上游已证旧 2MiB 布局与厂商 BMT 尾部 528 块重叠，会损坏 UBI；本仓库 9001/9002 原为旧 2MiB 布局 | `patches/root/9001-xr1710g-dts.patch` + `9002-xr1710g-uboot.patch`：ubi `0x1b700000`、`reserved_bmt@1be00000 0x04200000`；`docs/FLASHING.md` 布局表 | carried（对齐 openwrt main 3d1645e 的 W1700K 布局；上游已含 ee771d3d/72ed389 同类修复） | 实机 `ubinfo -a` 无坏块、多轮重启不新增；新布局镜像须用 HTTP U-Boot 布局选择器 UBI 2.0 刷入 |
+| F65 | sysupgrade compat 一致性（A2/IP15） | 9000 曾抄 W1700K 的 `DEVICE_COMPAT_VERSION := 2.0`，但当时布局仍是旧 1.0 | 本轮 A1 已把布局升到 2.0，9000 保持 `DEVICE_COMPAT_VERSION := 2.0` 与布局一致（无需 2.0→1.0 过渡） | n/a（自持一致） | `sysupgrade -T` 同版镜像返回可升级；旧 1.0 布局设备因 compat 主版本不同会被拒（正确） |
+| F66 | rdinit 修复（A3/IP17） | U-Boot env bootargs 覆盖 DTS chosen，缺 `rdinit=/sbin/init` 导致每次开机 `rdinit=/init failed: -2` 假警告 | `patches/root/9001-xr1710g-dts.patch`：chosen bootargs 末尾加 `rdinit=/sbin/init` | carried | 开机日志无 `rdinit=/init failed` |
+| F67 | 风扇双控制器去重（A4/IP25） | `files/etc/init.d/fan` 与 9017 fancontrol 的 `/etc/init.d/fan` 双入口抢 PWM | `files/etc/init.d/fan` 合并为单控制器 + 动态探测 + 迟滞/最低稳定档/失效满速兜底；9017 移除 `root/etc/init.d/fan`，仅留 LuCI 前端/RPC | n/a（自持脚本） | `/etc/init.d/fan start` 后 `pwm1` 仅一个写入者；温度曲线实机复核 |
+| F68 | mt76 tx_failed 记账修复（A5/IP25/IP26） | c5a3bd91 仍把 retries 计入 tx_failed，终端计数失真 | 新增 `patches/packages/mt76-0009-report-only-terminal-tx-failures.patch`（default） | carried | 有损链路 `iw dev wlanX station dump` 中 `tx_retries>0` 而 `tx_failed≈0` |
+| F69 | mt76 NPU RX skb->dev（A6/IP25/IP26） | NPU RX 路径不设 `skb->dev`，PPE 未命中回退时 bridge/FDB 上下文缺失 | 新增 `patches/packages/mt76-0010-set-skb-device-for-npu-rx.patch`（experimental；用 `mt76_queue_is_npu_rx(q)` 覆盖全部 NPU RX 队列） | carried | 桥接 6G 客户端 `conntrack -F` 后新建流，br-lan 无丢包、CLIENTS 计数一致；毕业转 default |
+| F70 | FlowSense 1.1.8-r5 bump（A7/IP08） | 1.1.8 新增 airtime 离载吞吐估计 + UI 重绘；修复 offload 场景吞吐针恒 0 | 新增 `patches/root/9030-flowsense-bump-1.1.8-r5.patch`；MANIFEST 顺序：9017→9030→9018→…→9023；9022 已在 9030 基线上重建 | carried（experimental） | `npu-monitor` air_eff 生效；B5/C4 下吞吐针非 0；9018-9023 全序应用通过 |
+| F71 | JCPLL TCLVAR recal（A8/IP10） | lan2 10G 不 link 根因：PLL enable 前写 TCLVAR，lane 配置完成后未重写 | 新增 `patches/root/9029-xr1710g-airoha-pcs-jcpll-tclvar-recal.patch`（生成 `target/linux/airoha/patches-6.18/9992-net-pcs-airoha-jcpll-tclvar-recal.patch`） | carried（experimental） | 10G 对端直连 lan2，`ethtool` 10G link 且 rx/tx errors=0；毕业转 default |
+| F72 | 6GHz 客户端国家码判据（A9/IP14） | 客户端国家码与 AP 不一致时看不到 6G SSID，会造成“广播了但连不上”误判 | `docs/ACCEPTANCE.md` C2 增客户端国家码双侧判据；`docs/FIXES.md` F02 备注补一行 | n/a（验收门槛） | C2 双侧判据：AP 侧 US regdb + 客户端 US 可见可连 |
+| F73 | FLASHING 坏版本/救砖（A10/IP19） | 8/8 U-Boot 恢复页上传必 failed；缺 OS 内覆写 chainloader 的救砖路径 | `docs/FLASHING.md`：坏版本清单（8/8 `g93da8f980ef0`）+ 8/11 `b7710e5cc851` 候选锁版 + kmod-mtd-rw 救砖步骤 | n/a（文档/运维） | 文档自查；后续升级按 ADR-0002 核对 SHA256 |
+| F74 | 验收方法学补洞（A11/IP20/24/28） | 吞吐测试端点误跑路由器本机；管理面改址回连从未自验；C3 缺外部端点判据 | `docs/ACCEPTANCE.md`：测试方法学节 + B6 管理面改址回连 + C3 外部端点判据；`OC与高功率实现-调研报告.md` §①D 本机 iperf3 降级为 CPU 基线 | n/a（验收门槛） | 下一轮验收按新判据执行 |
+| F75 | device-hw-probe 增强（A12/IP04） | 10G PHY 型号判据写死/缺失；EFR32 去除未断言 | `scripts/device-hw-probe.sh`：新增 B2.1 10G PHY VEND1 `0x103/0x104` 判据（phytool）+ B7 EFR32 去除断言 | n/a（脚本） | 实机 probe 全绿 |
+
 ## 已评估待吸收清单（IP-EVAL 2026-08-23，下一轮执行）
 
 > 来源：`docs/IP-EVAL-2026-08-23.md` 的 28 个信息点深究。以下为本轮判定“可立即吸收”的条目，按执行顺序排列。
 > 执行完成后，将本表对应条目转正为上方 F63+ 台账行（问题→根因→载体→上游状态），并从本清单移除。
 
-| A# | 项目 | 根因/来源 | 本层载体 | 档位 | 验证/判据 |
-|---|---|---|---|---|---|
-| A1 | reserved_bmt 66MiB 布局对齐（IP02/05/06/07/15） | 上游已证旧 2MiB 布局与厂商 BMT 尾部 528 块重叠，会损坏 UBI；本仓库 9001/9002 仍为旧布局 | `patches/root/9001-xr1710g-dts.patch` + `9002-xr1710g-uboot.patch`：ubi `0x1b700000`、`reserved_bmt@1be00000 0x04200000`；`docs/FLASHING.md` 布局表 | default | 先实机抓 stock bootlog 核 XR1710G BMT 池；应用后 `ubinfo -a` 无坏块、多轮重启不新增 |
-| A2 | sysupgrade compat 一致性（IP15） | 9000 抄了 W1700K 的 `DEVICE_COMPAT_VERSION := 2.0`，但本仓库布局仍是 1.0，任意两版 sysupgrade 会被拒 | `patches/root/9000-xr1710g-common.patch`：XR1710G compat 2.0→1.0（A1 落地并实证后恢复 2.0） | default | `sysupgrade -T` 同版镜像返回可升级 |
-| A3 | rdinit 修复（IP17） | U-Boot env bootargs 覆盖 DTS chosen，缺 `rdinit=/sbin/init` 导致每次开机 `rdinit=/init failed: -2` 假警告 | `patches/root/9001-xr1710g-dts.patch`：chosen bootargs 末尾加 `rdinit=/sbin/init` | default | 开机日志无 `rdinit=/init failed` |
-| A4 | 风扇双控制器去重（IP25） | `files/etc/init.d/fan` 与 9017 内 fancontrol 的 `/etc/init.d/fan` 双入口抢 PWM | `files/etc/init.d/fan` 合并为单控制器 + 动态探测 + 迟滞/最低稳定档/失效满速兜底；9017 侧仅保留 LuCI 前端 | default | `/etc/init.d/fan start` 后 `pwm1` 仅一个写入者；温度曲线实机复核 |
-| A5 | mt76 0099 tx_failed 记账修复（IP25/IP26） | c5a3bd91 仍把 retries 计入 tx_failed，终端计数失真 | 新增 `patches/packages/mt76-0009-report-only-terminal-tx-failures.patch` | default | 有损链路 `iw dev wlanX station dump` 中 `tx_retries>0` 而 `tx_failed≈0` |
-| A6 | mt76 0103 NPU RX skb->dev（IP25/IP26） | NPU RX 路径不设 `skb->dev`，PPE 未命中回退时 bridge/FDB 上下文缺失 | 新增 `patches/packages/mt76-0010-set-skb-device-for-npu-rx.patch`（需按 `MT_RXQ_NPU0` qid 改写） | experimental | 桥接 6G 客户端 `conntrack -F` 后新建流，br-lan 无丢包、CLIENTS 计数一致 |
-| A7 | flowsense 1.1.8-r5 bump（IP08） | 1.1.8 新增 airtime 离载吞吐估计 + UI 重绘；修复 offload 场景吞吐针恒 0 | 新增 `patches/root/9030-flowsense-bump-1.1.8-r5.patch` | experimental | `npu-monitor` air_eff 生效；B5/C4 下吞吐针非 0；9018-9023 重放不冲突 |
-| A8 | JCPLL TCLVAR recal（IP10） | lan2 10G 不 link 根因：PLL enable 前写 TCLVAR，lane 配置完成后未重写 | 新增 `patches/root/9029-xr1710g-airoha-pcs-jcpll-tclvar-recal.patch` | experimental | 10G 对端直连 lan2，`ethtool` 10G link 且 rx/tx errors=0；毕业转 default |
-| A9 | 6GHz 客户端国家码判据（IP14） | 客户端国家码与 AP 不一致时看不到 6G SSID，会造成“广播了但连不上”误判 | `docs/ACCEPTANCE.md` C2 增客户端国家码判据；`docs/FIXES.md` F02 备注补一行 | default（验收门槛） | C2 双侧判据：AP 侧 US regdb + 客户端 US 可见可连 |
-| A10 | FLASHING 坏版本/救砖（IP19） | 8/8 U-Boot 恢复页上传必 failed；缺 OS 内覆写 chainloader 的救砖路径 | `docs/FLASHING.md`：坏版本清单 + 8/11 `b7710e5cc851` 候选锁版 + kmod-mtd-rw 救砖步骤 | default（文档） | 文档自查；后续升级按 ADR-0002 核对 SHA256 |
-| A11 | 验收方法学补洞（IP20/24/28） | 吞吐测试端点误跑路由器本机；管理面改址回连从未自验；C3 缺外部端点判据 | `docs/ACCEPTANCE.md`：测试方法学节 + B6 管理面改址回连 + C3 外部端点判据；`OC与高功率实现-调研报告.md` §①D 降级为 CPU 基线 | default（验收门槛） | 下一轮验收按新判据执行 |
-| A12 | device-hw-probe 增强（IP04） | 10G PHY 型号判据写死/缺失；EFR32 去除未断言 | `scripts/device-hw-probe.sh`：10G PHY 寄存器判据（VEND1 `0x103/0x104`）+ EFR32 去除断言 | default（脚本） | 实机 probe 全绿 |
-
+（本轮 A1–A12 已全部执行完毕并转正为 F64–F75，清单清空。）
 
 ## 未确认/待实机核实清单
 - 物理口 ↔ 逻辑名（netdev-name 已固化：lan1/lan2=双 10G、wan=1G-1（gsw_port1）、lan3=1G-2（gsw_port2），见 9001）→ 首次实机 `ip -br link` 核对

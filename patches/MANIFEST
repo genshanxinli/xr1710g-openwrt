@@ -29,6 +29,8 @@ patches/packages/mt76-0003-wifi-mt76-mt7996-replace-direct-WTBL-access-with-MCU-
 patches/packages/mt76-0006-wifi-mt76-mt7996-refresh-power-limits-on-txpower-changes.patch       package/kernel/mt76/patches/
 patches/packages/mt76-0007-wifi-mt76-mt7996-enable-firmware-txpower-limit-controls.patch        package/kernel/mt76/patches/
 patches/packages/mt76-0008-wifi-mt76-mt7996-eeprom-power-unlock.patch          package/kernel/mt76/patches/
+# 0009：tx_failed 只记终端失败，retries 不再计入 tx_failed（IP25/IP26，A5，default）
+patches/packages/mt76-0009-report-only-terminal-tx-failures.patch          package/kernel/mt76/patches/
 # 9994：c5a3bd91 新 mac80211 API 兼容（F62）——mt76 master 需 kernel/mac80211 >= 7.2，先适配 6.18 API；main 联动 bump 后删除
 patches/packages/mt76-9994-mac80211-api-compat.patch          package/kernel/mt76/patches/
 # ── packages：mt76 EHT 实验补丁（2026-08-22 再同步 integration e88fbe28；9990-9993 评审 F25/F59）──
@@ -38,6 +40,7 @@ patches/packages/mt76-9994-mac80211-api-compat.patch          package/kernel/mt7
 #   入实验档：需实机 Wi-Fi7 客户端验证 EHT320 行为后毕业，不默认携带。
 # 0005 TXFREE 截断静默（2026-08-22 再同步自 ubi2-oc e7a8143；对 c5a3bd91 可应用；实验档，实机/构建验证后毕业）
 #EXP patches/packages/mt76-0005-wifi-mt76-mt7996-guard-txfree-overrun.patch          package/kernel/mt76/patches/
+#EXP patches/packages/mt76-0010-set-skb-device-for-npu-rx.patch          package/kernel/mt76/patches/
 #EXP patches/packages/mt76-9990-wifi-mt76-mt7996-advertise-eht-to-firmware-rate-control.patch    package/kernel/mt76/patches/
 #EXP patches/packages/mt76-9991-wifi-mt76-mt7996-fill-160mhz-bf-fallback-for-eht-320.patch       package/kernel/mt76/patches/
 #EXP patches/packages/mt76-9993-wifi-mt76-mt7996-pass-operating-mode-to-rate-control.patch       package/kernel/mt76/patches/
@@ -56,6 +59,8 @@ patches/vendor/fanboy/03-cpufreq-pmdomain-22029-e5d23549.patch ROOT
 patches/vendor/fanboy/10-pstore-ramoops-22473-2f7d2d02.patch ROOT
 # 应用包：npu/flowsense/mlo/fancontrol/wifi7 五包（19-core，2026-08-17 从 19 号切片去 fastfetch/netspeedtest，F13）
 patches/root/9017-w1700k-apps-pack-core.patch ROOT
+# 9030：FlowSense 1.1.8-r5 bump（IP08/A7）——必须在 9018-9023 前应用，9018-9023 已在 9030 基线上重放（9022 重建）
+patches/root/9030-flowsense-bump-1.1.8-r5.patch ROOT
 # 9017 的 FlowSense/NPU RPC 后端在无 br_netfilter 的新 offload 架构下修复 VLAN/PPPoE 开关（F29）
 patches/root/9018-flowsense-offload-new-arch.patch ROOT
 # 9017 的 CLIENTS offload 计数修正（F39）：BND eth= 对路由型 Wi-Fi 客户端不含 station MAC，
@@ -105,6 +110,8 @@ patches/root/9016-xr1710g-silence-phy-led-error.patch ROOT
 #EXP patches/root/9024-bridge-flow-offload-deps-table.patch ROOT
 # 9026：bridge 族 nft_flow_offload_init/destroy 复用 inet conntrack 语义（issue #1 E2）
 #EXP patches/root/9026-bridge-flow-offload-init-conntrack.patch ROOT
+# 9029：lan2 10G JCPLL VCO TCLVAR 重写（IP10/A8，experimental；实机 10G 对端验证后毕业 default）
+#EXP patches/root/9029-xr1710g-airoha-pcs-jcpll-tclvar-recal.patch ROOT
 #EXP patches/vendor/fanboy/07-mt76-release-hw-rro-session-5b917d4b.patch ROOT
 #EXP patches/vendor/fanboy/09-hw11-hw21-compat-afc6dc93.patch ROOT
 #EXP patches/vendor/fanboy/17-cmonroe-stability-8c530f05.patch ROOT

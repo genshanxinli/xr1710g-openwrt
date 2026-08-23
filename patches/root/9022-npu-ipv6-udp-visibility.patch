@@ -1,8 +1,8 @@
 diff --git a/package/luci-app-airoha-flowsense/root/usr/libexec/rpcd/luci.airoha_flowsense b/package/luci-app-airoha-flowsense/root/usr/libexec/rpcd/luci.airoha_flowsense
-index 00ef64f..113517f 100755
+index 87a6e9d..c339456 100755
 --- a/package/luci-app-airoha-flowsense/root/usr/libexec/rpcd/luci.airoha_flowsense
 +++ b/package/luci-app-airoha-flowsense/root/usr/libexec/rpcd/luci.airoha_flowsense
-@@ -214,7 +214,9 @@ get_ppe_entries() {
+@@ -219,7 +219,9 @@ get_ppe_entries() {
  
  	local neigh
  	neigh=$(ip neigh show 2>/dev/null | grep ' lladdr ')
@@ -13,7 +13,7 @@ index 00ef64f..113517f 100755
  	ips0=$(printf '%s\n' "$neigh" | awk -v macs="$macs0" '
  		BEGIN{n=split(macs,a,"|");for(i=1;i<=n;i++)if(a[i]!="")m[tolower(a[i])]=1}
  		m[tolower($5)]{printf "%s|",$1}' | sed 's/|$//')
-@@ -224,13 +226,22 @@ get_ppe_entries() {
+@@ -229,13 +231,22 @@ get_ppe_entries() {
  	ips2=$(printf '%s\n' "$neigh" | awk -v macs="$macs2" '
  		BEGIN{n=split(macs,a,"|");for(i=1;i<=n;i++)if(a[i]!="")m[tolower(a[i])]=1}
  		m[tolower($5)]{printf "%s|",$1}' | sed 's/|$//')
@@ -37,7 +37,7 @@ index 00ef64f..113517f 100755
  		function has_mac(macs, eth,    n,arr,i,low) {
  			if (macs == "") return 0
  			low = tolower(eth)
-@@ -244,14 +255,43 @@ get_ppe_entries() {
+@@ -249,14 +260,43 @@ get_ppe_entries() {
  			for (i=1; i<=n; i++) if (arr[i] != "" && index(tuple, arr[i] ":") > 0) return 1
  			return 0
  		}
@@ -84,7 +84,7 @@ index 00ef64f..113517f 100755
  		}
  		END { printf "[%d,%d,%d]", c0+0, c1+0, c2+0 }
  		' "$bind_file" 2>/dev/null || printf "[0,0,0]")
-@@ -261,24 +301,75 @@ get_ppe_entries() {
+@@ -266,24 +306,76 @@ get_ppe_entries() {
  	# Per-band UNB counts: IP-based matching (UNB flows lack eth= MAC info)
  	local band_unb="[0,0,0]"
  	if [ -f "$entries_file" ]; then
@@ -162,10 +162,11 @@ index 00ef64f..113517f 100755
 +					else if (has(i1,src)) c1++
 +					else if (has(i2,src)) c2++
 +				}
++			}
  			}
  		}
  		END { printf "[%d,%d,%d]", c0+0, c1+0, c2+0 }
-@@ -331,6 +422,7 @@ get_ppe_entries() {
+@@ -336,6 +428,7 @@ get_ppe_entries() {
  		client_bnd=$(
  		{
  			printf '%s\n' "$neigh" | sed 's/^/@NEIGH /'
@@ -173,7 +174,7 @@ index 00ef64f..113517f 100755
  			sed 's/^/@LEASE /' /tmp/dhcp.leases 2>/dev/null
  			cat "$bind_file"
  			grep -E '\[HW_OFFLOAD\]|\[OFFLOAD\]' /proc/net/nf_conntrack 2>/dev/null | sed 's/^/@CT /'
-@@ -341,7 +433,31 @@ get_ppe_entries() {
+@@ -346,7 +439,31 @@ get_ppe_entries() {
  			c=split(m1,a,"|"); for(i=1;i<=c;i++) if(a[i]!=""){ mac[++ntot]=tolower(a[i]); bnd_band[ntot]=1; cnt_eth[ntot]=0; cnt_bnd[ntot]=0; cnt_hw[ntot]=0; cnt_sw[ntot]=0 }
  			c=split(m2,a,"|"); for(i=1;i<=c;i++) if(a[i]!=""){ mac[++ntot]=tolower(a[i]); bnd_band[ntot]=2; cnt_eth[ntot]=0; cnt_bnd[ntot]=0; cnt_hw[ntot]=0; cnt_sw[ntot]=0 }
  		}
@@ -205,7 +206,7 @@ index 00ef64f..113517f 100755
  		$1=="@LEASE" { lm=tolower($3); lh=$5; ipx=$4; gsub(/["\\]/,"",lh); if(lm!="" && lh!="" && lh!="*") mac2host[lm]=lh; if(lm!="" && ipx!="" && !(lm in mac2ip)) mac2ip[lm]=ipx; next }
  		$1=="@CT" {
  			is_hw = index($0,"[HW_OFFLOAD]") > 0
-@@ -351,8 +467,9 @@ get_ppe_entries() {
+@@ -356,8 +473,9 @@ get_ppe_entries() {
  			match(line,/dst=[^ ]+/); if(RSTART>0) dst=substr(line,RSTART+4,RLENGTH-4)
  			for(i=1;i<=ntot;i++){
  				ip = (mac[i] in mac2ip) ? mac2ip[mac[i]] : ""
@@ -217,7 +218,7 @@ index 00ef64f..113517f 100755
  			}
  			next
  		}
-@@ -363,20 +480,23 @@ get_ppe_entries() {
+@@ -368,20 +486,23 @@ get_ppe_entries() {
  			tuple = orig " " new_flow
  			for(i=1;i<=ntot;i++){
  				ip = (mac[i] in mac2ip) ? mac2ip[mac[i]] : ""
@@ -242,10 +243,11 @@ index 00ef64f..113517f 100755
  			}
  			printf "]"
  		}
-@@ -384,6 +504,15 @@ get_ppe_entries() {
+@@ -389,6 +510,15 @@ get_ppe_entries() {
  	fi
  	bnd_json=$(printf '%s' "$bnd_json" | sed 's/}$/,"client_bnd":'"$client_bnd"'}/')
  
++
 +	# UDP hardware-offload visibility: PPE entries keep UDP flows as UNB
 +	# (no BND row), so count conntrack [HW_OFFLOAD] UDP flows separately
 +	# and expose it to prevent BND-only monitoring from false-negativing UDP.
@@ -254,7 +256,6 @@ index 00ef64f..113517f 100755
 +		udp_hw=$(grep '\[HW_OFFLOAD\]' /proc/net/nf_conntrack 2>/dev/null | grep -c 'udp' || echo 0)
 +	fi
 +	unb_json=$(printf '%s' "$unb_json" | sed 's/}$/,"udp_hw":'"$udp_hw"'}/')
-+
  	printf '{"bnd":%s,"unb":%s}' "$bnd_json" "$unb_json"
  }
  

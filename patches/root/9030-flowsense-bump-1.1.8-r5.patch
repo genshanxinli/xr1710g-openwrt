@@ -1,0 +1,585 @@
+# Source: Gilly1970/Gemtek-W1700K-6.18 luci-app-airoha-flowsense 1.1.8-r5 (2026-08-23)
+# Upstream: n/a (community app; keep as self-held bump patch)
+# Reason: airtime-derived offload throughput estimate + UI redraw; see FIXES.md A7
+# Note: 9018-9023 are replayed after this patch (applies between 9017 and 9018).
+diff --git a/package/luci-app-airoha-flowsense/Makefile b/package/luci-app-airoha-flowsense/Makefile
+index 6d57be7..f3d789d 100644
+--- a/package/luci-app-airoha-flowsense/Makefile
++++ b/package/luci-app-airoha-flowsense/Makefile
+@@ -5,5 +5,5 @@
+-PKG_VERSION:=1.1.7
+-PKG_RELEASE:=1
++PKG_VERSION:=1.1.8
++PKG_RELEASE:=5
+ PKG_LICENSE:=Apache-2.0
+ 
+ LUCI_TITLE:=LuCI Airoha FlowSense — Offload & PPE Monitor
+diff --git a/package/luci-app-airoha-flowsense/README.md b/package/luci-app-airoha-flowsense/README.md
+index 8e84a58..09c478a 100644
+--- a/package/luci-app-airoha-flowsense/README.md
++++ b/package/luci-app-airoha-flowsense/README.md
+@@ -11,6 +11,7 @@ Provides real-time visibility into NPU offload state, PPE flow table health, WiF
+ - **NPU / PPE flow monitor** — live counts of bound (BND, hardware-offloaded) and unbound (UNB, learning) flows, with per-band and per-port breakdown
+ - **Compass visualisation** — SVG tachometer compass showing NPU path vs. CPU path load, WAN/WiFi integrity, hardware buffer health, and upstream latency
+ - **WiFi band tachometers** — per-band (2.4 / 5 / 6 GHz) retry rate, TX throughput, station count, and signal
++  - *Note:* the throughput needle is measured byte-rate (mac80211 per-station counters), so it reads 0 at idle. When traffic is HW-offloaded the byte counters can read 0 under load too — use the frames/sec tachometer and the BND indicator to gauge offloaded activity in that case.
+ - **Ethernet port gauges** — per-port TX/RX throughput with link speed and BND/UNB flow counts
+ - **Frame engine monitoring** — PSE queue depths, GDM/CDM drop counters via direct hardware register reads
+ - **Latency & jitter** — background daemon continuously pings an upstream target (default: 1.1.1.1), independent of routing mode
+@@ -134,7 +135,7 @@ Kernel / Hardware
+ 
+ ```
+ config jitter 'jitter'
+-    option target '223.5.5.5'
++    option target '1.1.1.1'
+ ```
+ 
+ Change the target to any reachable host for latency monitoring:
+diff --git a/package/luci-app-airoha-flowsense/htdocs/luci-static/resources/view/airoha_flowsense/status.js b/package/luci-app-airoha-flowsense/htdocs/luci-static/resources/view/airoha_flowsense/status.js
+index 311b464..e12d853 100644
+--- a/package/luci-app-airoha-flowsense/htdocs/luci-static/resources/view/airoha_flowsense/status.js
++++ b/package/luci-app-airoha-flowsense/htdocs/luci-static/resources/view/airoha_flowsense/status.js
+@@ -405,16 +405,8 @@ function buildTachoInner(ppe, cs, mode) {
+ 	var pulsing = (_prevPpeBnd !== null && bndTot > _prevPpeBnd);
+ 	_prevPpeBnd = bndTot;
+ 
+-	var TICKS = 90; // 4° per tick
+-	var cx = 150, cy = 150;
+-	// BND inner (anti-CW): 1 flow = 1 tick, max 90
+-	var bndLit = Math.min(TICKS, bndTot);
+-	// UNB outer (CW): sticky power-of-2 scale — grows when new peak is seen, never shrinks
+-	// This prevents the ring going backwards when UNB count drops across a scale boundary
+-	if (unbTot > _maxUnbSeen) _maxUnbSeen = unbTot;
+-	var UNB_SCALE = Math.pow(2, Math.ceil(Math.log2(_maxUnbSeen + 1)));
+-	UNB_SCALE = Math.max(UNB_SCALE, 8);
+-	var unbLit = Math.min(TICKS, Math.round((unbTot / UNB_SCALE) * TICKS));
++	var total  = bndTot + unbTot;
++	var offPct = total > 0 ? Math.round(bndTot / total * 100) : (cs.npuActive ? 100 : 0);
+ 
+ 	var modeText   = mode === 'ap' ? 'AP MODE' : 'ROUTER';
+ 	var statusText = cs.npuActive ? 'HW ACCELERATED' : (cs.hwEnabled ? 'NPU IDLE' : 'CPU PATH');
+@@ -422,62 +414,44 @@ function buildTachoInner(ppe, cs, mode) {
+ 	var bndColor   = bndTot > 0 ? '#00c8ff' : 'var(--soc-muted)';
+ 	var unbColor   = unbTot > 0 ? '#ff9800' : 'var(--soc-muted)';
+ 
++	// CPU-gauge-style lit-fill sweep, scaled to fit inside the compass quadrant arcs (r<=90).
++	// Sweep = offload % (BND / total) — a 0-100 fill that encodes the BND/UNB balance;
++	// big BND count centre-stage; UNB + v4/v6 as sub-lines. No needle (matches CPU gauge).
++	var max = 100;
++	var CX = 150, CY = 150, TH0 = 150, TH1 = 390, SWEEP = 240;
++	function pt(r, deg) { var a = deg * Math.PI / 180; return [CX + r * Math.cos(a), CY + r * Math.sin(a)]; }
++	function theta(v) { return TH0 + (Math.max(0, Math.min(max, v)) / max) * SWEEP; }
++	function arcPoly(r, dA, dB, steps) {
++		var s = '', k, d, q;
++		for (k = 0; k <= steps; k++) { d = dA + (dB - dA) * k / steps; q = pt(r, d); s += (k ? 'L' : '') + q[0].toFixed(2) + ' ' + q[1].toFixed(2) + ' '; }
++		return s;
++	}
+ 	var p = [];
+ 
+-	// Inner fill + dashed boundary ring (replaces old compass inner circles)
+-	p.push('<circle cx="150" cy="150" r="97" style="fill:var(--soc-border)" opacity="0.1"/>');
+-	p.push('<circle cx="150" cy="150" r="98" fill="none" stroke="var(--soc-border)" stroke-width="1" stroke-dasharray="3 5"/>');
+-	// Guide rings at scaled tick boundaries
+-	p.push('<circle cx="150" cy="150" r="56" fill="none" stroke="var(--soc-border)" stroke-width="0.5" opacity="0.35"/>');
+-	p.push('<circle cx="150" cy="150" r="69" fill="none" stroke="var(--soc-border)" stroke-width="0.5" opacity="0.35"/>');
+-	p.push('<circle cx="150" cy="150" r="83" fill="none" stroke="var(--soc-border)" stroke-width="0.5" opacity="0.35"/>');
+-	// Ring labels — at 9 and 3 o'clock inside the BND inner ring (r<56 from centre)
+-	p.push('<text x="107" y="153" text-anchor="middle" fill="#00c8ff" font-size="7" font-family="monospace" opacity="0.75">◄BND</text>');
+-	p.push('<text x="193" y="153" text-anchor="middle" fill="#ff9800" font-size="7" font-family="monospace" opacity="0.75">UNB►</text>');
+-
+-	// Heartbeat pulse on BND ring when new flows arrive
+-	if (pulsing) {
+-		p.push('<circle cx="150" cy="150" r="63" fill="none" stroke="#00c8ff" stroke-width="2" opacity="0.6" style="animation:sqm-pulse 1.2s ease-out forwards"/>');
+-	}
++	// dim track + lit value arc (cyan) — the offload fill
++	p.push('<path d="M ' + arcPoly(72, TH0, TH1, 60) + '" fill="none" stroke="#31363f" stroke-width="3.5" stroke-linecap="round"/>');
++	if (offPct > 0) p.push('<path d="M ' + arcPoly(72, TH0, theta(offPct), 60) + '" fill="none" stroke="#00c8ff" stroke-width="4" stroke-linecap="round" filter="url(#f-tn4)"/>');
+ 
+-	// 90 tick marks scaled to fit inside compass inner fill (r<98):
+-	//   BND inner anti-clockwise: r=57–67
+-	//   UNB outer clockwise:      r=71–81
+-	for (var i = 0; i < TICKS; i++) {
+-		// UNB outer: clockwise (r=71–81)
+-		var degU = (i / TICKS) * 360 - 90;
+-		var radU = degU * Math.PI / 180;
+-		var cU = Math.cos(radU), sU = Math.sin(radU);
+-		var litU = i < unbLit;
+-		var isEdgeU = litU && i === unbLit - 1;
+-		p.push('<line x1="'+(cx+71*cU).toFixed(1)+'" y1="'+(cy+71*sU).toFixed(1)+
+-		       '" x2="'+(cx+81*cU).toFixed(1)+'" y2="'+(cy+81*sU).toFixed(1)+
+-		       '" stroke="'+(litU?'#ff9800':'var(--soc-border)')+'"'+
+-		       ' stroke-width="1.5" stroke-linecap="round" opacity="'+(litU?'0.9':'0.22')+'"'+
+-		       (isEdgeU?' filter="url(#f-tn6)"':'')+' />');
+-
+-		// BND inner: anti-clockwise (r=57–67)
+-		var degB = -90 - (i / TICKS) * 360;
+-		var radB = degB * Math.PI / 180;
+-		var cB = Math.cos(radB), sB = Math.sin(radB);
+-		var litB = i < bndLit;
+-		var isEdgeB = litB && i === bndLit - 1;
+-		p.push('<line x1="'+(cx+57*cB).toFixed(1)+'" y1="'+(cy+57*sB).toFixed(1)+
+-		       '" x2="'+(cx+67*cB).toFixed(1)+'" y2="'+(cy+67*sB).toFixed(1)+
+-		       '" stroke="'+(litB?'#00c8ff':'var(--soc-border)')+'"'+
+-		       ' stroke-width="1.5" stroke-linecap="round" opacity="'+(litB?'0.9':'0.22')+'"'+
+-		       (isEdgeB?' filter="url(#f-tn4)"':'')+' />');
++	// lit-fill ticks (cyan up to offload %), r=76-86
++	var step = 20, minor = step / 5;
++	for (var v = 0; v <= max + 0.5; v += minor) {
++		var major = (Math.round(v) % step === 0), th = theta(v), lit = v <= offPct + 0.001;
++		var o = pt(86, th), inn = pt(major ? 76 : 81, th);
++		p.push('<line x1="' + o[0].toFixed(1) + '" y1="' + o[1].toFixed(1) + '" x2="' + inn[0].toFixed(1) + '" y2="' + inn[1].toFixed(1) + '" stroke="' + (lit ? '#00c8ff' : '#3a3f47') + '" stroke-width="' + (major ? 2.2 : 1.2) + '" stroke-linecap="round" opacity="' + (lit ? 1 : 0.5) + '"/>');
+ 	}
++	p.push('<text x="150" y="205" text-anchor="middle" font-family="monospace" font-size="7" letter-spacing="1" fill="var(--soc-muted)">' + offPct + '% OFFLOAD</text>');
++
++	// heartbeat pulse when new BND flows arrive
++	if (pulsing) p.push('<circle cx="150" cy="150" r="64" fill="none" stroke="#00c8ff" stroke-width="2" opacity="0.6" style="animation:sqm-pulse 1.2s ease-out forwards"/>');
+ 
+-	// Centre readout — mode + status at top, BND count large, IPv4/IPv6 split, UNB below
+-	p.push('<text x="150" y="113" text-anchor="middle" fill="var(--soc-text)" font-size="9" font-weight="700" font-family="monospace" letter-spacing="2">'+modeText+'</text>');
+-	p.push('<text x="150" y="124" text-anchor="middle" fill="'+statusCol+'" font-size="7" font-family="monospace" letter-spacing="1">'+statusText+'</text>');
+-	p.push('<text x="150" y="144" text-anchor="middle" fill="'+bndColor+'" font-size="22" font-weight="700" font-family="monospace">'+bndTot+'</text>');
+-	p.push('<text x="150" y="155" text-anchor="middle" fill="var(--soc-muted)" font-size="7" font-family="monospace" letter-spacing="2">BND FLOWS</text>');
+-	p.push('<text x="117" y="175" text-anchor="middle" fill="#00c8ff"  font-size="8" font-family="monospace">v4: '+n4+'</text>');
+-	p.push('<text x="183" y="175" text-anchor="middle" fill="#9c27b0"  font-size="8" font-family="monospace">v6: '+n6+'</text>');
+-	p.push('<text x="150" y="189" text-anchor="middle" fill="'+unbColor+'" font-size="13" font-weight="700" font-family="monospace">'+unbTot+'</text>');
+-	p.push('<text x="150" y="200" text-anchor="middle" fill="var(--soc-muted)" font-size="7" font-family="monospace" letter-spacing="1.5">UNB FLOWS</text>');
++	// centre readout: mode + status, big BND count centre-stage, UNB + v4/v6 below
++	p.push('<text x="150" y="116" text-anchor="middle" fill="var(--soc-text)" font-size="9" font-weight="700" font-family="monospace" letter-spacing="2">' + modeText + '</text>');
++	p.push('<text x="150" y="127" text-anchor="middle" fill="' + statusCol + '" font-size="7" font-family="monospace" letter-spacing="1">' + statusText + '</text>');
++	p.push('<text x="150" y="159" text-anchor="middle" fill="' + bndColor + '" font-size="30" font-weight="700" font-family="monospace" filter="url(#f-tn4)">' + bndTot + '</text>');
++	p.push('<text x="150" y="171" text-anchor="middle" fill="var(--soc-muted)" font-size="7" font-family="monospace" letter-spacing="2">BND FLOWS</text>');
++	p.push('<text x="150" y="187" text-anchor="middle" fill="' + unbColor + '" font-size="12" font-weight="700" font-family="monospace">' + unbTot + ' <tspan font-size="7" fill="var(--soc-muted)">UNB</tspan></text>');
++	p.push('<text x="120" y="146" text-anchor="middle" fill="#00c8ff" font-size="7.5" font-family="monospace">v4:' + n4 + '</text>');
++	p.push('<text x="180" y="146" text-anchor="middle" fill="#9c27b0" font-size="7.5" font-family="monospace">v6:' + n6 + '</text>');
+ 
+ 	return p.join('');
+ }
+@@ -632,13 +606,12 @@ function arcPath(cx, cy, r, startDeg, endDeg) {
+ }
+ 
+ function needleTip(latencyMs) {
+-	// Full west arc 120°→240° (120° sweep). Log scale so low-latency range is sensitive.
+-	// 0ms = 120° (lower-left, good), 100ms = 240° (upper-left, bad/near north)
++	// Jitter/latency PENDULUM hanging below the centre readout. Pivot (150,216), length 32;
++	// swings left (0ms, good) → right (100ms, bad) on a log scale so low latency is sensitive.
+ 	var clamped = Math.min(Math.max(latencyMs||0, 0), 100);
+ 	var logPct = Math.log(clamped + 1) / Math.log(101); // 0→0, 100ms→1
+-	var deg = 120 + logPct * 120;
+-	var rad = deg * Math.PI / 180;
+-	return [150 + 75 * Math.cos(rad), 150 + 75 * Math.sin(rad)];
++	var d = (-50 + logPct * 100) * Math.PI / 180;        // -50° (left) .. +50° (right) from vertical
++	return [150 + 32 * Math.sin(d), 224 + 32 * Math.cos(d)];
+ }
+ 
+ function latencyColor(ms) {
+@@ -835,8 +808,8 @@ function buildCompassSVG(cs, mode, ppe) {
+ 	'<text font-size="9" font-family="monospace" letter-spacing="1.5" opacity="0.75" id="cp-lbl-east"><textPath href="#tp-east"  startOffset="50%" text-anchor="middle">INTEGRITY</textPath></text>' +
+ 	'<text font-size="9" font-family="monospace" letter-spacing="1.5" opacity="0.75" id="cp-lbl-west"><textPath href="#tp-west"  startOffset="50%" text-anchor="middle">LATENCY</textPath></text>' +
+ 	// Latency needle
+-	'<line id="cp-needle" x1="150" y1="150" x2="'+tip[0].toFixed(1)+'" y2="'+tip[1].toFixed(1)+'" stroke="'+cs.latColor+'" stroke-width="2.5" stroke-linecap="round" opacity="0.9"/>' +
+-	'<circle id="cp-needle-pivot" cx="150" cy="150" r="4" fill="'+cs.latColor+'" opacity="0.9"/>' +
++	'<line id="cp-needle" x1="150" y1="224" x2="'+tip[0].toFixed(1)+'" y2="'+tip[1].toFixed(1)+'" stroke="'+cs.latColor+'" stroke-width="2.5" stroke-linecap="round" opacity="0.9"/>' +
++	'<circle id="cp-needle-pivot" cx="150" cy="224" r="4" fill="'+cs.latColor+'" opacity="0.9"/>' +
+ 	// PPE state ring outside compass disc — cyan=BND present, invisible otherwise
+ 	'<circle id="cp-ppe-glow" cx="150" cy="150" r="150" fill="none" stroke="'+ppeRing.color+'" stroke-width="2.5" style="'+ppeRing.style+'"/>' +
+ 	// Orange outer ring — ties the compass to the WiFi/F-S gauges (no redline here)
+@@ -911,78 +884,74 @@ function buildCpuNpuTacho(cs, ppe, st, ti) {
+ 	var freqMhz  = Math.round(fs.freq / 1000);
+ 	var governor = (st.cpu_governor && st.cpu_governor !== 'unknown') ? st.cpu_governor.toUpperCase() : '';
+ 
+-	// Colours
+-	var npuStatusCol = cs.npuActive ? '#00c8ff' : (cs.hwEnabled ? '#888' : '#ff6b35');
+-	var npuStatus    = cs.npuActive ? 'HW ACCELERATED' : (cs.hwEnabled ? 'NPU IDLE' : 'CPU PATH');
+-	var npuColor     = offloadPct > 60 ? '#00c8ff' : offloadPct > 30 ? '#f5a623' : '#888';
+-
+-	var TICKS = 90;
+-	// Outer ring (CW, r=71-81): CPU frequency, 500–1400 MHz
+-	var FREQ_MIN = 500, FREQ_MAX = 1400;
+-	var freqLit = Math.round(Math.max(0, Math.min(TICKS, (freqMhz - FREQ_MIN) / (FREQ_MAX - FREQ_MIN) * TICKS)));
+-	// Inner ring (anti-CW, r=57-67): CPU load, 0–100% = full scale
+-	var cpuLit = Math.round(Math.min(cpuPct, 100) / 100 * TICKS);
++	// Load-based colour for the needle + big readout (yellow<50, amber 50-79, red>=80);
++	// fixed CPU-accent green for the scale/name (identity); frequency arc in gauge-blue.
++	var loadCol  = cpuPct >= 80 ? '#ff3b30' : cpuPct >= 50 ? '#f5a623' : '#ffd21e';
++	var ACCENT   = '#00cc44';
++	var FREQ_COL = '#4d7cff';
+ 
+-	var cx = 150, cy = 150;
++	// Same automotive speedo geometry as the WiFi band gauges (0 @150° -> max @30°).
++	var max = 100;
++	var CX = 150, CY = 150, TH0 = 150, TH1 = 390, SWEEP = 240;
++	function pt(r, deg) { var a = deg * Math.PI / 180; return [CX + r * Math.cos(a), CY + r * Math.sin(a)]; }
++	function theta(v) { return TH0 + (Math.max(0, Math.min(max, v)) / max) * SWEEP; }
++	function arcPoly(r, dA, dB, steps) {
++		var s = '', k, d, q;
++		for (k = 0; k <= steps; k++) { d = dA + (dB - dA) * k / steps; q = pt(r, d); s += (k ? 'L' : '') + q[0].toFixed(2) + ' ' + q[1].toFixed(2) + ' '; }
++		return s;
++	}
+ 	var p = [];
+ 
+-	// Inner fill + boundary rings
+-	p.push('<circle cx="150" cy="150" r="97" style="fill:var(--soc-border)" opacity="0.1"/>');
+-	p.push('<circle cx="150" cy="150" r="98" fill="none" stroke="var(--soc-border)" stroke-width="1" stroke-dasharray="3 5"/>');
+-	p.push('<circle cx="150" cy="150" r="56" fill="none" stroke="var(--soc-border)" stroke-width="0.5" opacity="0.35"/>');
+-	p.push('<circle cx="150" cy="150" r="69" fill="none" stroke="var(--soc-border)" stroke-width="0.5" opacity="0.35"/>');
+-	p.push('<circle cx="150" cy="150" r="83" fill="none" stroke="var(--soc-border)" stroke-width="0.5" opacity="0.35"/>');
+-
+-	// Ring labels at 9 and 3 o'clock
+-	p.push('<text x="107" y="153" text-anchor="middle" fill="var(--soc-load)" font-size="7" font-family="monospace" opacity="0.75">◄LOAD</text>');
+-	p.push('<text x="193" y="153" text-anchor="middle" fill="#00cc44" font-size="7" font-family="monospace" opacity="0.75">FREQ►</text>');
+-
+-	// Tachometer ticks
+-	for (var i = 0; i < TICKS; i++) {
+-		// Outer ring (CW, r=71-81): CPU frequency
+-		var degU = (i / TICKS) * 360 - 90;
+-		var radU = degU * Math.PI / 180;
+-		var cU = Math.cos(radU), sU = Math.sin(radU);
+-		var litU = i < freqLit, isEdgeU = litU && i === freqLit - 1;
+-		p.push('<line x1="'+(cx+71*cU).toFixed(1)+'" y1="'+(cy+71*sU).toFixed(1)+
+-		       '" x2="'+(cx+81*cU).toFixed(1)+'" y2="'+(cy+81*sU).toFixed(1)+
+-		       '" stroke="'+(litU ? '#00cc44' : 'var(--soc-border)')+'"'+
+-		       ' stroke-width="1.5" stroke-linecap="round" opacity="'+(litU?'0.9':'0.22')+'"'+
+-		       (isEdgeU?' filter="url(#f-cn-cpu)"':'')+' />');
+-
+-		// Inner ring (anti-CW, r=57-67): CPU load
+-		var degB = -90 - (i / TICKS) * 360;
+-		var radB = degB * Math.PI / 180;
+-		var cB = Math.cos(radB), sB = Math.sin(radB);
+-		var litB = i < cpuLit, isEdgeB = litB && i === cpuLit - 1;
+-		p.push('<line x1="'+(cx+57*cB).toFixed(1)+'" y1="'+(cy+57*sB).toFixed(1)+
+-		       '" x2="'+(cx+67*cB).toFixed(1)+'" y2="'+(cy+67*sB).toFixed(1)+
+-		       '" stroke="'+(litB ? 'var(--soc-load)' : 'var(--soc-border)')+'"'+
+-		       ' stroke-width="1.5" stroke-linecap="round" opacity="'+(litB?'0.9':'0.22')+'"'+
+-		       (isEdgeB?' filter="url(#f-cn-npu)"':'')+' />');
++	// outer rev band: orange sweep + red redline top (80-100% = red zone)
++	var revSplit = TH0 + SWEEP * 0.80;
++	p.push('<path d="M ' + arcPoly(106, TH0, revSplit, 44) + '" fill="none" stroke="#ff8c1a" stroke-width="2.5" stroke-linecap="round" opacity="0.7"/>');
++	p.push('<path d="M ' + arcPoly(106, revSplit, TH1, 12) + '" fill="none" stroke="#ff3b30" stroke-width="2.5" stroke-linecap="round" opacity="0.85"/>');
++
++	// LOAD sweep — flows-tacho style: dim full track + lit value arc that follows 0->load
++	// (yellow, red past the 80% redline), and ticks that light up to the reading. No needle.
++	var REDLINE_V = 80;
++	p.push('<path d="M ' + arcPoly(90, TH0, TH1, 60) + '" fill="none" stroke="#31363f" stroke-width="4" stroke-linecap="round"/>');
++	if (cpuPct > 0) {
++		var litArc = cpuPct >= REDLINE_V ? '#ff3b30' : '#ffd21e';
++		p.push('<path d="M ' + arcPoly(90, TH0, theta(cpuPct), 60) + '" fill="none" stroke="' + litArc + '" stroke-width="4.5" stroke-linecap="round" filter="url(#f-cn-glow)"/>');
++	}
++	var step = 20, minor = step / 5;
++	for (var v = 0; v <= max + 0.5; v += minor) {
++		var major = (Math.round(v) % step === 0), th = theta(v), red = v >= REDLINE_V, lit = v <= cpuPct + 0.001;
++		var o = pt(104, th), inn = pt(major ? 92 : 98, th);
++		var tc = lit ? (red ? '#ff3b30' : '#ffd21e') : '#3a3f47';
++		p.push('<line x1="' + o[0].toFixed(1) + '" y1="' + o[1].toFixed(1) + '" x2="' + inn[0].toFixed(1) + '" y2="' + inn[1].toFixed(1) + '" stroke="' + tc + '" stroke-width="' + (major ? 2.4 : 1.4) + '" stroke-linecap="round" opacity="' + (lit ? 1 : 0.55) + '"/>');
++		if (major) { var lp = pt(82, th); p.push('<text x="' + lp[0].toFixed(1) + '" y="' + (lp[1] + 4).toFixed(1) + '" text-anchor="middle" font-family="monospace" font-size="13" font-weight="700" fill="' + (v >= 80 ? '#ff6b60' : '#cfd3d8') + '">' + v + '</text>'); }
+ 	}
+ 
+-	// Centre readout
+-	if (governor) p.push('<text x="150" y="118" text-anchor="middle" fill="var(--soc-text)" font-size="7" font-family="monospace" letter-spacing="1">'+governor+'</text>');
+-	if (freqMhz)  p.push('<text x="150" y="130" text-anchor="middle" fill="#00cc44" font-size="9" font-weight="700" font-family="monospace">'+freqMhz+' MHz</text>');
+-	p.push('<text x="150" y="148" text-anchor="middle" fill="var(--soc-load)" font-size="22" font-weight="700" font-family="monospace">'+cpuPct+'%</text>');
+-	p.push('<text x="150" y="159" text-anchor="middle" fill="var(--soc-load)" font-size="7" font-family="monospace" letter-spacing="2">CPU LOAD</text>');
+-	p.push('<text x="150" y="175" text-anchor="middle" fill="'+npuStatusCol+'" font-size="8" font-family="monospace">'+npuStatus+'</text>');
+-	p.push('<text x="150" y="190" text-anchor="middle" fill="'+npuColor+'" font-size="13" font-weight="700" font-family="monospace">'+offloadPct+'%</text>');
+-	p.push('<text x="150" y="200" text-anchor="middle" fill="var(--soc-muted)" font-size="7" font-family="monospace" letter-spacing="1.5">OFFLOADED</text>');
+-
+-	// PLE pool — curved textPath at r=91, south arc (CCW 160°→20°), outside the freq ring.
+-	// Matches the "UNB/BND FLOWS" curved-text style used on the WiFi band gauges.
+-	var pleFree = (ti && typeof ti.ple_free === 'number') ? ti.ple_free : -1;
+-	var pleH    = pleHealth(pleFree);
+-	var pleStr  = formatPleCount(pleFree);
+-	var plR  = 91;
+-	var plSX = (150 + plR * Math.cos(160 * Math.PI / 180)).toFixed(1);
+-	var plSY = (150 + plR * Math.sin(160 * Math.PI / 180)).toFixed(1);
+-	var plEX = (150 + plR * Math.cos( 20 * Math.PI / 180)).toFixed(1);
+-	var plEY = (150 + plR * Math.sin( 20 * Math.PI / 180)).toFixed(1);
+-	p.push('<defs><path id="cn-ple-arc" d="M '+plSX+' '+plSY+' A '+plR+' '+plR+' 0 0 0 '+plEX+' '+plEY+'" fill="none"/></defs>');
+-	p.push('<text font-size="8" font-family="monospace" fill="'+pleH.color+'" opacity="0.9" letter-spacing="1"><textPath href="#cn-ple-arc" startOffset="50%" text-anchor="middle">PLE '+pleStr+' ● '+pleH.text+'</textPath></text>');
++	// FREQ inner arc (RTY slot): fill RIGHT->LEFT by (freq-500)/(1400-500), gauge-blue
++	var FMIN = 500, FMAX = 1400, R_F = 73, NF = 16;
++	var fLit = Math.round(Math.max(0, Math.min(1, (freqMhz - FMIN) / (FMAX - FMIN))) * NF);
++	for (var i = 0; i < NF; i++) {
++		var a1 = TH0 + (i / NF) * SWEEP + 1.4, a2 = TH0 + ((i + 1) / NF) * SWEEP - 1.4;
++		var on = i >= NF - fLit;   // rightmost segments light first (fill right->left)
++		p.push('<path d="M ' + arcPoly(R_F, a1, a2, 3) + '" fill="none" stroke="' + (on ? FREQ_COL : '#1e2a45') + '" stroke-width="5" stroke-linecap="round" opacity="' + (on ? 0.9 : 0.4) + '"/>');
++	}
++	p.push('<text x="150" y="214" text-anchor="middle" font-family="monospace" font-size="7.5" fill="' + FREQ_COL + '" opacity="0.9">' + (freqMhz || '—') + ' MHz</text>');
++
++	// NPU/offload inner ring — breathes cyan when the HW offload path is active
++	var hwOn = cs.npuActive;
++	p.push('<circle cx="150" cy="150" r="52" fill="none" stroke="#00c8ff" stroke-width="2" opacity="' + (hwOn ? '0.5' : '0.18') + '"' + (hwOn ? ' style="animation:hw-breathe 2.4s ease-in-out infinite"' : '') + '/>');
++
++	// BND: cyan bottom glow bar (matches WiFi/compass) — lights when any band has bound flows
++	var totalBnd = (ppe && ppe.bnd) ? (ppe.bnd.total || 0) : 0;
++	var bndOn = totalBnd > 0, bndOp = bndOn ? (0.55 + Math.min(1, totalBnd / 12) * 0.45).toFixed(2) : '0.16';
++	p.push('<path d="M ' + arcPoly(98, 40, 140, 36) + '" fill="none" stroke="#00c8ff" stroke-width="9" stroke-linecap="round" opacity="' + bndOp + '"' + (bndOn ? ' filter="url(#f-cn-bnd)"' : '') + '/>');
++	p.push('<text x="150" y="238" text-anchor="middle" font-family="monospace" font-size="8" font-weight="600" fill="' + (bndOn ? '#00c8ff' : '#556') + '" opacity="0.95">' + totalBnd + ' BND</text>');
++
++	// name + governor status (governor moved up to the freed LOAD% slot so the hub doesn't cover it)
++	p.push('<text x="150" y="118" text-anchor="middle" font-family="monospace" font-size="10" font-weight="700" letter-spacing="1" fill="' + ACCENT + '">CPU</text>');
++	p.push('<text x="150" y="128" text-anchor="middle" font-family="monospace" font-size="7" letter-spacing="1" fill="var(--soc-muted)">' + (governor || '') + '</text>');
++
++	// big LOAD readout — centre stage (no needle), load-coloured + unit + offloaded sub-line
++	p.push('<text x="150" y="162" text-anchor="middle" font-family="monospace" font-size="34" font-weight="700" fill="' + loadCol + '" filter="url(#f-cn-soft)">' + cpuPct + '</text>');
++	p.push('<text x="150" y="178" text-anchor="middle" font-family="monospace" font-size="8" letter-spacing="3" fill="var(--soc-muted)">LOAD</text>');
++	p.push('<text x="150" y="226" text-anchor="middle" font-family="monospace" font-size="7.5" font-weight="600" fill="var(--soc-muted)">' + offloadPct + '% OFFLOADED</text>');
+ 
+ 	return p.join('');
+ }
+@@ -1008,34 +977,23 @@ function _cnPpeRingStyle(ppe, ti) {
+ }
+ 
+ function buildCpuNpuCompassSVG(cs, ppe, st, ti) {
+-	// viewBox tightly wraps the tachometer (r=102 outer circle + glow headroom + silver ring)
+-	var ring = _cnPpeRingStyle(ppe, ti);
+-	return '<svg viewBox="30 30 240 240" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:213px;display:block;margin:0 auto;'+GAUGE_VARS+'">' +
++	// Speedometer sibling of the WiFi band gauges: dark radial face + silver ring, the
++	// tacho draws its own orange/redline rev-band. Defs mirror the WiFi builder (needle
++	// glow, soft number glow, PLE-bar glow).
++	return '<svg viewBox="30 30 240 240" xmlns="http://www.w3.org/2000/svg" overflow="hidden" style="width:100%;max-width:213px;display:block;margin:0 auto;'+GAUGE_VARS+'">' +
+ 	'<defs>' +
+-	'<filter id="f-cn-cpu" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur in="SourceGraphic" stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>' +
+-	'<filter id="f-cn-npu" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur in="SourceGraphic" stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>' +
++	'<radialGradient id="f-cn-face" cx="50%" cy="42%" r="72%"><stop offset="0%" stop-color="#1b2733"/><stop offset="55%" stop-color="#12161c"/><stop offset="100%" stop-color="#0a0c0f"/></radialGradient>' +
++	'<filter id="f-cn-glow" x="-70%" y="-70%" width="240%" height="240%"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>' +
++	'<filter id="f-cn-soft" x="-70%" y="-70%" width="240%" height="240%"><feGaussianBlur stdDeviation="1.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>' +
++	'<filter id="f-cn-bnd" x="-70%" y="-70%" width="240%" height="240%"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>' +
+ 	'</defs>' +
+-	// Instrument face (dark in both themes) — drawn first so the glow ring reads on top of it
+-	'<circle cx="150" cy="150" r="108" style="fill:var(--soc-card-bg)" stroke="var(--soc-border)" stroke-width="1"/>' +
++	'<circle cx="150" cy="150" r="108" fill="url(#f-cn-face)" stroke="var(--soc-border)" stroke-width="1"/>' +
+ 	'<g id="cn-tacho">'+buildCpuNpuTacho(cs, ppe, st, ti)+'</g>' +
+-	// PPE/PLE-state ring — on top of the dark face so it stays vivid in light mode too
+-	'<circle id="cn-glow" cx="150" cy="150" r="104" fill="none" stroke="'+ring.color+'" stroke-width="3" style="'+ring.style+'"/>' +
+-	// Orange outer ring — ties the CPU gauge to the WiFi/F-S gauges (no redline here)
+-	'<circle cx="150" cy="150" r="106" fill="none" stroke="#ff8c1a" stroke-width="2.5" opacity="0.7"/>' +
+-	// Solid silver outer ring — sits outside the PPE/PLE glow ring
+ 	'<circle cx="150" cy="150" r="109" fill="none" stroke="#222222" stroke-width="2.5"/>' +
+ 	'</svg>';
+ }
+ 
+ function updateCpuNpuCompassSVG(cs, ppe, st, ti) {
+-	// Update PPE/PLE-state ring on the outer border
+-	var glow = document.getElementById('cn-glow');
+-	if (glow) {
+-		var ring = _cnPpeRingStyle(ppe, ti);
+-		glow.setAttribute('stroke', ring.color);
+-		glow.setAttribute('style', ring.style);
+-	}
+-
+ 	var tg = document.getElementById('cn-tacho');
+ 	if (tg) tg.innerHTML = buildCpuNpuTacho(cs, ppe, st, ti);
+ }
+@@ -1050,8 +1008,10 @@ function _wifiBandHealth(ws) {
+ 	return { text: 'GOOD', color: '#4caf50' };
+ }
+ 
+-// WiFi band SPEEDOMETER: orange needle on a fixed 0→band-max MBPS scale (needle = tx+rx byte-rate;
+-// reads 0 for NPU-offloaded traffic — platform limit). Yellow dashed RTY arc inside the numbers
++// WiFi band SPEEDOMETER: orange needle on a fixed 0→band-max MBPS scale. Needle = exact tx+rx
++// byte-rate for host-path traffic; for HW-offloaded bands (byte counters bypassed) it falls back
++// to an airtime-derived estimate (air_mbps ≈ airtime×bitrate×0.8) so it tracks offloaded
++// throughput too. Yellow dashed RTY arc inside the numbers
+ // fills L→R with retry% (red at the top end); one solid cyan BND bar at the bottom (compass
+ // NPU-PATH style) glows when flows are bound; inner cyan HW-ACCELERATED ring breathes when
+ // accelerated and fires a one-shot pulse when this band gains a bound flow.
+@@ -1059,11 +1019,15 @@ function buildWifiBandTacho(bandIdx, ws, qType, bndCount, unbCount) {
+ 	ws = ws || {};
+ 	var info = bandInfo[bandIdx] || { name: 'Band '+bandIdx, gaugeCol: '#888', sMax: 1000, sStep: 200, sDiv: 1, sCap: 'MBPS' };
+ 	var col  = info.gaugeCol || '#888';
+-	// Real measured throughput = tx + rx byte-rate (mac80211 per-sta counters). expected
+-	// throughput reads 0 on MT7996 fw, so fall back to it only if bytes are unavailable.
++	// Throughput needle. Host-path traffic → exact mac80211 tx+rx byte-rate. HW-offloaded
++	// traffic bypasses those counters (needle would read 0), so when the band is offloaded
++	// (BND>0) fall back to the AIRTIME-derived estimate (air_mbps): airtime survives offload
++	// because the MAC spends it on every frame. Use whichever is larger so partial-offload
++	// and pure-host-path both read right. No expected-throughput fallback (that reported link
++	// capability, not throughput, and showed a ghost value at idle on some mt76 builds).
+ 	var mbps = (ws.tx_mbps || 0) + (ws.rx_mbps || 0);
+-	if (mbps === 0 && (ws.avg_exp_throughput || 0) > 0)
+-		mbps = ws.avg_exp_throughput * (100 - (ws.retry_pct || 0)) / 100;
++	var mbpsEst = false;   // true when the reading is the airtime-derived estimate (offloaded)
++	if ((bndCount || 0) > 0 && (ws.air_mbps || 0) > mbps) { mbps = ws.air_mbps; mbpsEst = true; }
+ 	var retry = ws.retry_pct || 0;
+ 	var bnd   = bndCount || 0;
+ 	var sta   = ws.stations || 0;
+@@ -1135,7 +1099,11 @@ function buildWifiBandTacho(bandIdx, ws, qType, bndCount, unbCount) {
+ 	// big MBPS readout (band colour)
+ 	var lbl = mbps > 0 ? Math.round(mbps) : (sta > 0 ? '0' : '—');
+ 	p.push('<text x="150" y="176" text-anchor="middle" font-family="monospace" font-size="20" font-weight="700" fill="' + col + '"' + (mbps > 0 ? ' filter="url(#f-wsoft-' + bandIdx + ')"' : '') + '>' + lbl + '</text>');
+-	p.push('<text x="150" y="187" text-anchor="middle" font-family="monospace" font-size="7" letter-spacing="2" fill="var(--soc-muted)">MBPS</text>');
++	// unit line: "MBPS" for exact byte-rate, "MBPS (est)" when the value is the
++	// airtime-derived offloaded estimate (tighter letter-spacing so it still fits).
++	var unitLbl = (mbpsEst && mbps > 0) ? 'MBPS (est)' : 'MBPS';
++	var unitLs  = (mbpsEst && mbps > 0) ? '1' : '2';
++	p.push('<text x="150" y="187" text-anchor="middle" font-family="monospace" font-size="7" letter-spacing="' + unitLs + '" fill="var(--soc-muted)">' + unitLbl + '</text>');
+ 	p.push('<text x="150" y="226" text-anchor="middle" font-family="monospace" font-size="7.5" font-weight="600" fill="var(--soc-muted)">' + sta + ' STA' + (sta > 0 && sig ? '  ' + sig + ' dBm' : '') + '</text>');
+ 
+ 	return p.join('');
+diff --git a/package/luci-app-airoha-flowsense/root/etc/config/npu-monitor b/package/luci-app-airoha-flowsense/root/etc/config/npu-monitor
+index 728d163..c0c545a 100644
+--- a/package/luci-app-airoha-flowsense/root/etc/config/npu-monitor
++++ b/package/luci-app-airoha-flowsense/root/etc/config/npu-monitor
+@@ -1,2 +1,7 @@
+ config jitter 'jitter'
+-	option target '223.5.5.5'
++	option target '1.1.1.1'
++
++config settings 'settings'
++	# Airtime→goodput efficiency (%) for the offloaded-throughput needle estimate.
++	# throughput ≈ airtime × bitrate × air_eff/100. Calibrated to iperf (~80).
++	option air_eff '80'
+diff --git a/package/luci-app-airoha-flowsense/root/usr/libexec/rpcd/luci.airoha_flowsense b/package/luci-app-airoha-flowsense/root/usr/libexec/rpcd/luci.airoha_flowsense
+index 748f3ea..4c5ea65 100755
+--- a/package/luci-app-airoha-flowsense/root/usr/libexec/rpcd/luci.airoha_flowsense
++++ b/package/luci-app-airoha-flowsense/root/usr/libexec/rpcd/luci.airoha_flowsense
+@@ -839,7 +839,7 @@ ${d}" ;;
+ 	eval "$(awk '
+ 		/Phy band [0-9]/ { b = $NF + 0 }
+ 		/Tx PER:/ { v = $3; gsub(/%/, "", v); if (b >= 0 && b <= 2) printf "band_per_%d=%d;", b, v + 0 }
+-		/Tx success:/ { if (b >= 0 && b <= 2) printf "band_txok_%d=%d;", b, $3 + 0 }
++		/Tx success:/ { if (b >= 0 && b <= 2) printf "band_txok_%d=%.0f;", b, $3 + 0 }
+ 	' /sys/kernel/debug/ieee80211/phy0/mt76/tx_stats 2>/dev/null)"
+ 
+ 	# Per-band total frame rate (frames/s): downlink Tx-success MPDUs (mt76 tx_stats,
+@@ -866,13 +866,89 @@ ${d}" ;;
+ 	frames1=$(echo "$_fps" | awk '{print $2}')
+ 	frames2=$(echo "$_fps" | awk '{print $3}')
+ 
++	# Per-band OFFLOADED throughput estimate from radio AIRTIME. Airtime survives NPU
++	# offload (the MAC spends airtime on every frame regardless of who bridges it),
++	# unlike the byte counters the NPU bypasses. Per band bytes ~= duration*bitrate,
++	# deltaed over the poll interval, * efficiency to approximate goodput (retries +
++	# PHY/MAC overhead). tx/rx duration + bitrate come from the station dumps already
++	# collected above (no extra iw calls). Frontend uses this when a band is offloaded
++	# (BND>0), the exact mac80211 byte-rate otherwise.
++	#
++	# EFFICIENCY IS AUTO-CALIBRATED per band: whenever a band carries real traffic but
++	# is NOT offloaded (BND==0), the exact byte-rate IS the true throughput, so
++	# exact/raw-airtime = the live efficiency for that band's RF/rate/retry conditions.
++	# EMA-learn it and apply it when the band offloads. `npu-monitor.settings.air_eff`
++	# (default 80) is the SEED/fallback until a band has a calibration sample.
++	local AIR_EFF; AIR_EFF=$(uci -q get npu-monitor.settings.air_eff 2>/dev/null)
++	case "$AIR_EFF" in ''|*[!0-9]*) AIR_EFF=80 ;; esac
++	{ [ "$AIR_EFF" -ge 1 ] && [ "$AIR_EFF" -le 200 ]; } 2>/dev/null || AIR_EFF=80
++	local a0 a1 a2
++	_airsum() { printf '%s\n' "$1" | awk '
++		/tx duration:/{td+=$3+0} /rx duration:/{rd+=$3+0}
++		/tx bitrate:/{tr+=$3+0;trn++} /rx bitrate:/{rr+=$3+0;rrn++}
++		END{printf "%.0f %.0f %.1f %.1f", td+0, rd+0, (trn?tr/trn:0), (rrn?rr/rrn:0)}'; }
++	a0=$(_airsum "$dump0"); a1=$(_airsum "$dump1"); a2=$(_airsum "$dump2")
++	# Per-band BND count (gates auto-calibration to non-offloaded bands). Reuse client
++	# MACs from the dumps + the bind table (same match as getPpeEntries).
++	local bn0=0 bn1=0 bn2=0
++	if [ -f /sys/kernel/debug/ppe/bind ]; then
++		local pm0 pm1 pm2 _bn
++		pm0=$(printf '%s\n' "$dump0" | awk '/^Station/{print $2}' | tr '\n' '|' | sed 's/|$//')
++		pm1=$(printf '%s\n' "$dump1" | awk '/^Station/{print $2}' | tr '\n' '|' | sed 's/|$//')
++		pm2=$(printf '%s\n' "$dump2" | awk '/^Station/{print $2}' | tr '\n' '|' | sed 's/|$//')
++		_bn=$(awk -v m0="$pm0" -v m1="$pm1" -v m2="$pm2" '
++			function has(macs, eth,   n,arr,i,low){ if(macs=="")return 0; low=tolower(eth); n=split(macs,arr,"|"); for(i=1;i<=n;i++) if(arr[i]!=""&&index(low,tolower(arr[i]))>0)return 1; return 0 }
++			/^[0-9a-fA-F]+ BND /{ eth=""; match($0,/eth=[^ \t]+/); if(RSTART>0)eth=substr($0,RSTART+4,RLENGTH-4); if(has(m0,eth))c0++; else if(has(m1,eth))c1++; else if(has(m2,eth))c2++ }
++			END{printf "%d %d %d", c0+0,c1+0,c2+0}' /sys/kernel/debug/ppe/bind 2>/dev/null)
++		bn0=$(echo "$_bn"|awk '{print $1}'); bn1=$(echo "$_bn"|awk '{print $2}'); bn2=$(echo "$_bn"|awk '{print $3}')
++	fi
++	local _air
++	_air=$(awk -v now="$now" -v seed="$AIR_EFF" -v a0="$a0" -v a1="$a1" -v a2="$a2" \
++		-v tx0="$tx0_mbps" -v rx0="$rx0_mbps" -v tx1="$tx1_mbps" -v rx1="$rx1_mbps" -v tx2="$tx2_mbps" -v rx2="$rx2_mbps" \
++		-v bn0="$bn0" -v bn1="$bn1" -v bn2="$bn2" '
++		BEGIN {
++			split(a0,x0); split(a1,x1); split(a2,x2)
++			ctd[0]=x0[1]+0; crd[0]=x0[2]+0; btr[0]=x0[3]+0; brr[0]=x0[4]+0
++			ctd[1]=x1[1]+0; crd[1]=x1[2]+0; btr[1]=x1[3]+0; brr[1]=x1[4]+0
++			ctd[2]=x2[1]+0; crd[2]=x2[2]+0; btr[2]=x2[3]+0; brr[2]=x2[4]+0
++			ex[0]=tx0+rx0; ex[1]=tx1+rx1; ex[2]=tx2+rx2
++			bn[0]=bn0+0; bn[1]=bn1+0; bn[2]=bn2+0
++			seedf=seed/100; if(seedf<0.3)seedf=0.3; if(seedf>1)seedf=1
++			FLOOR=15; ALPHA=0.25   # need >15 Mbps raw airtime to sample; EMA weight 0.25
++			for (b=0;b<3;b++) { eff[b]=seedf; air[b]="0.0" }
++			pf="/tmp/npu-wifi-airtime.prev"
++			if ((getline line < pf) > 0) {
++				n=split(line,p); pt=p[1]+0; dt=now-pt
++				for (b=0;b<3;b++) { e=p[9+b]+0; if(e>=0.3 && e<=1.0) eff[b]=e }   # learned eff from state
++				if (pt>0 && now>pt) {
++					for (b=0;b<3;b++) {
++						dtd=ctd[b]-p[2+b]; if(dtd<0)dtd=0
++						drd=crd[b]-p[5+b]; if(drd<0)drd=0
++						raw=(dtd*btr[b] + drd*brr[b])/1000000/dt   # Mbps, no efficiency factor
++						if (raw != raw || raw > 20000) raw=0       # guard NaN / counter-wrap spikes
++						if (bn[b]==0 && raw>FLOOR && ex[b]>FLOOR) {   # calibrate only on non-offloaded traffic
++							s=ex[b]/raw
++							if (s>=0.3 && s<=1.0) eff[b]=eff[b]*(1-ALPHA) + s*ALPHA
++						}
++						air[b]=sprintf("%.1f", raw*eff[b])
++					}
++				}
++			}
++			close(pf)
++			printf "%.0f %.0f %.0f %.0f %.0f %.0f %.0f %.3f %.3f %.3f\n", now, ctd[0],ctd[1],ctd[2],crd[0],crd[1],crd[2], eff[0],eff[1],eff[2] > pf
++			printf "%s %s %s %.0f %.0f %.0f\n", air[0],air[1],air[2], eff[0]*100,eff[1]*100,eff[2]*100
++		}' /dev/null)
++	local air0 air1 air2 aireff0 aireff1 aireff2
++	air0=$(echo "$_air"|awk '{print $1}'); air1=$(echo "$_air"|awk '{print $2}'); air2=$(echo "$_air"|awk '{print $3}')
++	aireff0=$(echo "$_air"|awk '{print $4}'); aireff1=$(echo "$_air"|awk '{print $5}'); aireff2=$(echo "$_air"|awk '{print $6}')
++
+ 	local bands_json=""
+ 	for band_idx in 0 1 2; do
+-		local dump tx_mbps rx_mbps band_per frames_ps
++		local dump tx_mbps rx_mbps band_per frames_ps air_mbps air_eff
+ 		case "$band_idx" in
+-			0) dump="$dump0"; tx_mbps="$tx0_mbps"; rx_mbps="$rx0_mbps"; band_per="$band_per_0"; frames_ps="$frames0" ;;
+-			1) dump="$dump1"; tx_mbps="$tx1_mbps"; rx_mbps="$rx1_mbps"; band_per="$band_per_1"; frames_ps="$frames1" ;;
+-			2) dump="$dump2"; tx_mbps="$tx2_mbps"; rx_mbps="$rx2_mbps"; band_per="$band_per_2"; frames_ps="$frames2" ;;
++			0) dump="$dump0"; tx_mbps="$tx0_mbps"; rx_mbps="$rx0_mbps"; band_per="$band_per_0"; frames_ps="$frames0"; air_mbps="$air0"; air_eff="$aireff0" ;;
++			1) dump="$dump1"; tx_mbps="$tx1_mbps"; rx_mbps="$rx1_mbps"; band_per="$band_per_1"; frames_ps="$frames1"; air_mbps="$air1"; air_eff="$aireff1" ;;
++			2) dump="$dump2"; tx_mbps="$tx2_mbps"; rx_mbps="$rx2_mbps"; band_per="$band_per_2"; frames_ps="$frames2"; air_mbps="$air2"; air_eff="$aireff2" ;;
+ 		esac
+ 		[ -z "$dump" ] && continue
+ 
+@@ -880,7 +956,7 @@ ${d}" ;;
+ 		stats=$(echo "$dump" | awk -v band_per="${band_per:-0}" '
+ 		BEGIN {
+ 			stations=0; tx_pkts=0; tx_retries=0; tx_failed=0
+-			sum_phy=0; sum_exp=0; phy_count=0; exp_count=0
++			sum_phy=0; phy_count=0
+ 			sum_sig=0; sig_count=0; min_sig=0
+ 		}
+ 		/^Station / { stations++ }
+@@ -888,11 +964,6 @@ ${d}" ;;
+ 		/tx retries:/ { tx_retries += $3+0 }
+ 		/tx failed:/ { tx_failed += $3+0 }
+ 		/tx bitrate:/ { sum_phy += $3+0; phy_count++ }
+-		/expected throughput:/ {
+-			v = $3+0
+-			gsub(/[^0-9.]/, "", v)
+-			if (v+0 > 0) { sum_exp += v+0; exp_count++ }
+-		}
+ 		/signal avg:/ {
+ 			for (i = 1; i <= NF; i++) {
+ 				if ($i ~ /^-[0-9]+$/) {
+@@ -905,15 +976,13 @@ ${d}" ;;
+ 		}
+ 		END {
+ 			avg_phy = (phy_count > 0) ? sum_phy/phy_count : 0
+-			avg_exp = (exp_count > 0) ? sum_exp/exp_count : 0
+-			efficiency = (avg_phy > 0) ? int(avg_exp / avg_phy * 100) : 0
+ 			# Real per-MPDU Tx PER from mt76 debugfs (passed in) as retry/error %;
+ 			# raw tx_retries/tx_packets still emitted below but their ratio
+ 			# over-reads on EHT (per-MPDU vs per-MSDU) so it is not used for health.
+ 			retry_pct = band_per + 0
+ 			avg_sig = (sig_count > 0) ? int(sum_sig / sig_count) : 0
+-			printf "%d %d %d %d %.1f %.1f %d %d %d %d", \
+-				stations, tx_pkts, tx_retries, tx_failed, avg_phy, avg_exp, efficiency, retry_pct, avg_sig, min_sig
++			printf "%d %d %d %d %.1f %d %d %d", \
++				stations, tx_pkts, tx_retries, tx_failed, avg_phy, retry_pct, avg_sig, min_sig
+ 		}')
+ 
+ 		set -- $stats
+@@ -924,7 +993,7 @@ ${d}" ;;
+ 			1) sta_tx_raw="$sta_tx1" ;;
+ 			2) sta_tx_raw="$sta_tx2" ;;
+ 		esac
+-		bands_json="${bands_json}{\"band\":${band_idx},\"stations\":${1:-0},\"tx_packets\":${2:-0},\"tx_retries\":${3:-0},\"tx_failed\":${4:-0},\"avg_phy_rate\":${5:-0},\"avg_exp_throughput\":${6:-0},\"airtime_efficiency\":${7:-0},\"retry_pct\":${8:-0},\"avg_signal\":${9:-0},\"min_signal\":${10:-0},\"tx_mbps\":${tx_mbps},\"rx_mbps\":${rx_mbps:-0},\"frames_ps\":${frames_ps:-0},\"tx_bytes_raw\":${sta_tx_raw:-0}}"
++		bands_json="${bands_json}{\"band\":${band_idx},\"stations\":${1:-0},\"tx_packets\":${2:-0},\"tx_retries\":${3:-0},\"tx_failed\":${4:-0},\"avg_phy_rate\":${5:-0},\"retry_pct\":${6:-0},\"avg_signal\":${7:-0},\"min_signal\":${8:-0},\"tx_mbps\":${tx_mbps},\"rx_mbps\":${rx_mbps:-0},\"air_mbps\":${air_mbps:-0},\"air_eff\":${air_eff:-0},\"frames_ps\":${frames_ps:-0},\"tx_bytes_raw\":${sta_tx_raw:-0}}"
+ 	done
+ 
+ 	printf '{"available":true,"mlo":%s,"bands":[%s]}' "$([ "$is_mld" = 1 ] && echo true || echo false)" "$bands_json"

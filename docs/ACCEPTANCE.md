@@ -3,6 +3,12 @@
 **用途**：known-good 冻结门槛。一个版本只有**全项通过**才打 known-good tag；任何一项失败 → 修复（不改清单、不降级），修复后重测。
 **实机环境**：设备已固化 HTTP U-Boot（docs/FLASHING.md 主路径）；测试机通过 10G 电口/千兆口接入。
 
+## 测试方法学（IP20/IP24/IP28）
+- 吞吐类指标（B2 对打、C3 无线速率等）必须使用**外部对端**（PC / 另一台设备）作为 iperf3 端点；**禁止使用路由器本机 iperf3 作为转发面吞吐判据**。
+- 路由器本机 iperf3 只可作为 CPU 基线，并在结果中明确标注“CPU 基线，非转发面”。
+- 无线速率项需同时记录客户端能力（国家码 / HE/EHT 频宽 / MIMO / 距离 / 是否同频段干扰）。
+- 管理面改址类测试必须用“改后从新地址回连成功”作为通过判据，不能只验证 UCI 写入成功。
+
 ## 启动与引导
 - [ ] A1 冷启动：HTTP U-Boot 引导 → OpenWrt 完整启动（无 kernel panic / 无 fit0 等待）
 - [ ] A2 sysupgrade 往返：由旧版 sysupgrade 升到本版本；再由本版本 sysupgrade 回退旧版（均成功、配置保留/提示）
@@ -14,11 +20,12 @@
 - [ ] B3 剩余 1G 口：接入正常（speed 1000）
 - [ ] B4 LAN 网关 192.168.123.1：DHCP 分发、LAN 互访、NAT 上网正常
 - [ ] B5 硬件 flow offload / NPU 卸载生效（luci-app-airoha-npu 显示 NPU 已加载；卸载计数增长；IPv6 TCP 多源并发达 `[HW_OFFLOAD]`+PPE BND v6、IPv6 UDP 长流达 `[HW_OFFLOAD]`）
+- [ ] B6 管理面改址回连：LuCI 将 LAN IP 改为 192.168.50.1/24（或静态 CIDR）后仍可从新地址回连；改回后恢复（IP20）
 
 ## Wi-Fi
 - [ ] C1 三频全部起来且可连接：2.4G / 5G / 6G，统一 SSID「K2P」、WPA2/WPA3 混合
-- [ ] C2 6GHz 正常工作（US regdb、EHT320 or 160MHz fallback 注明当前实际）
-- [ ] C3 速率冒烟：5G ≥ 1200Mbps（160MHz 客户端）；6G ≥ 2400Mbps（320MHz 客户端）
+- [ ] C2 6GHz 正常工作（US regdb、EHT320 or 160MHz fallback 注明当前实际）；**客户端国家码须为 US**——非 US 客户端看不到 6G SSID 是预期行为，不作为失败，但必须记录客户端国家码与“可见可连”双侧判据（IP14）
+- [ ] C3 速率冒烟（外部对端 iperf3，禁止路由器本机 iperf3 作为吞吐判据）：5G ≥ 1200Mbps（160MHz 客户端）；6G ≥ 2400Mbps（320MHz 客户端）；记录客户端国家码/频宽/MIMO/距离（IP24/IP28）
 - [ ] C4 MLO 可配置且生效（luci-app-mlo：多频绑定成功）
 
 ## 温控与稳定

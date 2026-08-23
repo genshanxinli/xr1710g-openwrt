@@ -12,20 +12,20 @@
 
 ## P0.5 已评估待吸收（IP-EVAL 2026-08-23，下一轮全部执行）
 
-> 来源：`docs/IP-EVAL-2026-08-23.md`。执行顺序 A1→A12；完成后转正入 `docs/FIXES.md` F63+，并从本清单移除。
+> 来源：`docs/IP-EVAL-2026-08-23.md`。执行顺序 A1→A12；**已完成**：转正为 `docs/FIXES.md` F64–F75，并从本清单移除。
 
-- [ ] A1 reserved_bmt 66MiB 布局对齐（IP02/05/06/07/15）：先实机抓 stock bootlog 核 XR1710G BMT 池；落地 `9001/9002` + `docs/FLASHING.md`
-- [ ] A2 sysupgrade compat 一致性（IP15）：`9000` 的 XR1710G `DEVICE_COMPAT_VERSION` 2.0→1.0（A1 实证后恢复 2.0）
-- [ ] A3 rdinit 修复（IP17）：`9001` chosen bootargs 加 `rdinit=/sbin/init`
-- [ ] A4 风扇双控制器去重（IP25）：`files/etc/init.d/fan` 单控制器 + 动态探测 + 迟滞/兜底；9017 仅留 LuCI 前端
-- [ ] A5 mt76 0099 tx_failed 记账修复（IP25/IP26）：新增 `mt76-0009`，default
-- [ ] A6 mt76 0103 NPU RX skb->dev（IP25/IP26）：新增 `mt76-0010`，experimental
-- [ ] A7 flowsense 1.1.8-r5 bump（IP08）：新增 `root/9030`，experimental
-- [ ] A8 JCPLL TCLVAR recal（IP10）：新增 `root/9029`，experimental
-- [ ] A9 6GHz 客户端国家码判据（IP14）：`docs/ACCEPTANCE.md` C2 双侧判据 + F02 备注
-- [ ] A10 FLASHING 坏版本/救砖（IP19）：`docs/FLASHING.md` 补 8/8 坏版本、8/11 候选锁版、kmod-mtd-rw 救砖
-- [ ] A11 验收方法学补洞（IP20/24/28）：`docs/ACCEPTANCE.md` 测试方法学节 + B6 + C3 外部端点判据；OC 报告 §①D 降级
-- [ ] A12 device-hw-probe 增强（IP04）：10G PHY 寄存器判据 + EFR32 去除断言
+- [x] A1 reserved_bmt 66MiB 布局对齐（IP02/05/06/07/15）：先实机抓 stock bootlog 核 XR1710G BMT 池；落地 `9001/9002` + `docs/FLASHING.md`
+- [x] A2 sysupgrade compat 一致性（IP15）：`9000` 的 XR1710G `DEVICE_COMPAT_VERSION` 2.0→1.0（A1 实证后恢复 2.0）
+- [x] A3 rdinit 修复（IP17）：`9001` chosen bootargs 加 `rdinit=/sbin/init`
+- [x] A4 风扇双控制器去重（IP25）：`files/etc/init.d/fan` 单控制器 + 动态探测 + 迟滞/兜底；9017 仅留 LuCI 前端
+- [x] A5 mt76 0099 tx_failed 记账修复（IP25/IP26）：新增 `mt76-0009`，default
+- [x] A6 mt76 0103 NPU RX skb->dev（IP25/IP26）：新增 `mt76-0010`，experimental
+- [x] A7 flowsense 1.1.8-r5 bump（IP08）：新增 `root/9030`，experimental
+- [x] A8 JCPLL TCLVAR recal（IP10）：新增 `root/9029`，experimental
+- [x] A9 6GHz 客户端国家码判据（IP14）：`docs/ACCEPTANCE.md` C2 双侧判据 + F02 备注
+- [x] A10 FLASHING 坏版本/救砖（IP19）：`docs/FLASHING.md` 补 8/8 坏版本、8/11 候选锁版、kmod-mtd-rw 救砖
+- [x] A11 验收方法学补洞（IP20/24/28）：`docs/ACCEPTANCE.md` 测试方法学节 + B6 + C3 外部端点判据；OC 报告 §①D 降级
+- [x] A12 device-hw-probe 增强（IP04）：10G PHY 寄存器判据 + EFR32 去除断言
 
 
 ## P1 资产评审与供给（2026-08-17：应用供给已闭环；08 切片 + 19 精简已收口）

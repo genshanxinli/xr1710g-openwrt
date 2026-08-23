@@ -33,7 +33,7 @@ new file mode 100644
 +
 +	chosen {
 +		rootdisk = <&ubi_rootfs>;
-+		bootargs = "console=ttyS0,115200 earlycon ubi.block=0,fit root=/dev/fit0 rootwait";
++		bootargs = "console=ttyS0,115200 earlycon ubi.block=0,fit root=/dev/fit0 rootwait rdinit=/sbin/init";
 +		stdout-path = "serial0:115200n8";
 +	};
 +
@@ -164,7 +164,7 @@ new file mode 100644
 +
 +		partition@700000 {
 +			label = "ubi";
-+			reg = <0x00700000 0x1f700000>;
++			reg = <0x00700000 0x1b700000>;
 +			compatible = "linux,ubi";
 +
 +			volumes {
@@ -195,7 +195,7 @@ new file mode 100644
 +		/* reserved for bad block table */
 +		reserved_bmt@1fe00000 {
 +			label = "reserved_bmt";
-+			reg = <0x1fe00000 0x00200000>;
++			reg = <0x1be00000 0x04200000>;
 +			read-only;
 +		};
 +	};

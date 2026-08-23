@@ -111,6 +111,16 @@ for p in 05 08 09 0a; do
     [ -f "$f" ] && printf "    %-16s %s\n" "$(basename "$f")" "$(cat "$f" 2>/dev/null)"
   done
 done
+echo "--- B2.1 10G PHY VEND1 0x103/0x104 (RTL8261BE vs RTL8261N) ---"
+if command -v phytool >/dev/null 2>&1; then
+  for phy in lan1 lan2; do
+    echo "== $phy =="
+    phytool read "$phy/0" 0x103 2>/dev/null || phytool read "$phy" 0x103 2>/dev/null || echo "phytool read 0x103 failed"
+    phytool read "$phy/0" 0x104 2>/dev/null || phytool read "$phy" 0x104 2>/dev/null || echo "phytool read 0x104 failed"
+  done
+else
+  echo "phytool not installed; opkg install phytool 后重跑以获取 VEND1 0x103/0x104 判据"
+fi
 echo "--- B3 baseline counters ---"
 for i in eth0 lan1 lan2 wan lan3; do
   echo "$i rx_bytes=$(cat "/sys/class/net/$i/statistics/rx_bytes") tx_bytes=$(cat "/sys/class/net/$i/statistics/tx_bytes") rx_errors=$(cat "/sys/class/net/$i/statistics/rx_errors") tx_errors=$(cat "/sys/class/net/$i/statistics/tx_errors") rx_dropped=$(cat "/sys/class/net/$i/statistics/rx_dropped") tx_dropped=$(cat "/sys/class/net/$i/statistics/tx_dropped")"
@@ -137,6 +147,14 @@ echo "--- B6 MDIO bus statistics/errors ---"
 d=/sys/devices/platform/soc/1fb58000.switch/mdio_bus/mt7530_dsa-0/statistics
 for f in "$d"/errors "$d"/errors_*; do
   [ -f "$f" ] && printf "%s=%s\n" "$(basename "$f")" "$(cat "$f" 2>/dev/null)"
+done
+echo "--- B7 board identity: EFR32 absence (XR1710G vs W1700K) ---"
+for n in uart2 hsuart3; do
+  if find /proc/device-tree -maxdepth 4 -name "$n" 2>/dev/null | grep -q .; then
+    echo "FAIL: $n device-tree node present (W1700K EFR32 asset leaked?)"
+  else
+    echo "OK: $n absent"
+  fi
 done
 '
 }
