@@ -93,13 +93,32 @@ mt76 包补丁默认档：`mt76-0001/0003/0006/0007/0008`。
 
 ## 7. 遗留/下一步
 
-1. **查 build**：`32588516036`（all）、`32588517827`（experimental）。都绿后刷机验证：
-   - #4：`cat /sys/kernel/debug/ieee80211/phy0/mt76/token_info`；`strings mt7996e.ko | grep mt7996_mac_sta_poll` 应消失。
-   - #14：`/etc/init.d/led start` 退出码 0，无 `write error`。
-   - #15：`TOGGLE_10G=1 ./scripts/device-hw-probe.sh` 复验增量归零。
-   - #1 E2：实验档 `nft add rule bridge ... flow offload @br_offload` 返回 0。
-   - 9992：实验档 mt76 PS-sync 事件解析回归（重点观察 mt7996 MCU 事件日志无异常/无死循环）。
-2. **#10**：当前固件 3 轮 down/up 未复现；新固件刷入后再跑 5 轮 + 串口。
+### 7.0 下一轮吸收任务（IP-EVAL 2026-08-23 可立即吸收项，全部执行）
+
+> 评估清单：`docs/IP-EVAL-2026-08-23.md`；待吸收台账：`docs/FIXES.md` 末段 A1–A12；ROADMAP P0.5 已登记。
+> 执行顺序 A1→A12，每完成一项转正为 `docs/FIXES.md` F63+ 台账行（问题→根因→载体→上游状态），并从 A 表与 ROADMAP P0.5 移除。
+
+- **A1 reserved_bmt 66MiB 布局对齐（IP02/05/06/07/15，default）**：先实机抓 stock bootlog 核 XR1710G BMT 池（`bmt pool size: N` 与 vendor `system` 分区终点）；落地 `9001/9002`：ubi `0x1b700000`、`reserved_bmt@1be00000 0x04200000`；同步 `docs/FLASHING.md`。
+- **A2 sysupgrade compat 一致性（IP15，default）**：`9000` 的 XR1710G `DEVICE_COMPAT_VERSION` 2.0→1.0（与当前布局一致）；A1 实证后恢复 2.0。
+- **A3 rdinit 修复（IP17，default）**：`9001` chosen bootargs 末尾加 `rdinit=/sbin/init`。
+- **A4 风扇双控制器去重（IP25，default）**：`files/etc/init.d/fan` 与 9017 内 fancontrol 的 `/etc/init.d/fan` 双入口抢 PWM——合并为单控制器 + 动态探测 + 迟滞/最低稳定档/失效满速兜底；9017 侧仅留 LuCI 前端。
+- **A5 mt76 0099 tx_failed 记账修复（IP25/IP26，default）**：新增 `patches/packages/mt76-0009-report-only-terminal-tx-failures.patch`。
+- **A6 mt76 0103 NPU RX skb->dev（IP25/IP26，experimental）**：新增 `patches/packages/mt76-0010-set-skb-device-for-npu-rx.patch`，按 `MT_RXQ_NPU0` qid 改写。
+- **A7 flowsense 1.1.8-r5 bump（IP08，experimental）**：新增 `patches/root/9030-flowsense-bump-1.1.8-r5.patch`；9018-9023 需重放。
+- **A8 JCPLL TCLVAR recal（IP10，experimental）**：新增 `patches/root/9029-xr1710g-airoha-pcs-jcpll-tclvar-recal.patch`。
+- **A9 6GHz 客户端国家码判据（IP14，default 验收）**：`docs/ACCEPTANCE.md` C2 双侧判据；`docs/FIXES.md` F02 备注。
+- **A10 FLASHING 坏版本/救砖（IP19，default 文档）**：`docs/FLASHING.md` 补 8/8 坏版本、8/11 `b7710e5cc851` 候选锁版、kmod-mtd-rw 救砖步骤。
+- **A11 验收方法学补洞（IP20/24/28，default 验收）**：`docs/ACCEPTANCE.md` 测试方法学节 + B6 + C3 外部端点判据；`OC与高功率实现-调研报告.md` §①D 本机 iperf3 数据降级为 CPU 基线。
+- **A12 device-hw-probe 增强（IP04，default 脚本）**：10G PHY 寄存器判据（VEND1 `0x103/0x104`）+ EFR32 去除断言。
+
+1. **查 build**：`32588516036`（all）、`32588517827`（experimental）。已刷 #66（experimental，commit bde3f69）复查：
+   - #4 ✅：`token_info` 存在；`strings mt7996e.ko` 无 `mt7996_mac_sta_poll`；getTokenInfo 返回正常。issue #4 已关闭。
+   - #14 ⚠️：link/rx/tx 写入均 rc=0；但 `interval` 写入 4 个 PHY LED 均 EINVAL，`/etc/init.d/led start` 仍 rc=1（issue #14 保持 open）。
+   - #15 ✅：lan1/lan2 down/up 各一次，rx_errors delta=0。issue #15 已关闭。
+   - #1 E2 ✅：`nft add rule bridge npu_probe forward meta l4proto { tcp, udp } flow offload @ft` 返回 0；但 E1 `bridge-flow-offload` 包仍未安装（issue #1 保持 open）。
+   - 9992：PS-sync 未做专项事件注入；`dmesg` 无 mt7996 MCU 异常。
+   - 新增 issue #22：`getStatus` RPC 因 9020 的 `$((16#...))` 在 BusyBox ash 上不工作而整体 `Invalid argument`（F63）。
+2. **#10**：#66 已复测 5 轮 `wifi down/up`，三频 AP 均恢复、logread 无 `Could not set STA`/`handle_assoc_cb`；仍未抓串口，issue 保持 open。
 3. **#5/#6/#13/#16**：维持 issue 跟踪；#6 需实机 xfrm/ESP 评估；#13 等 #24034；#16 可在新主线基础上重测 Gen3 x1。
 4. **#7**：用户明确“护栏暂时不做”，保持 F34/F49 跟踪，等串口复现。
 5. **吸收 mt76 最新内容（下一步重点，F62 后更新）**：
