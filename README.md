@@ -59,7 +59,7 @@ git clone https://github.com/openwrt/openwrt.git openwrt
 | #22397 XR1710G 板级支持 | 携带（对 master 重建三件套 `patches/root/9000-9002`，含 dts/uboot/envtools/02_network/mk；合入即删） |
 | US regdb 功率（510/520/521） | 内置（world 5GHz 去 NO-IR 已上游自带 500-world-regd-5GHz.patch，F20 删重复 0500）；521（UNII-3/4 160MHz 30dBm）= 默认档；555（仅 6GHz 30dBm）= OC 档；530 实验室 SP 停用 |
 | mt76 txpower（0006/0007/0008） | 内置（YYH2913 家族；0006/0007 功率执行链 + 0008 eeprom 功率解锁 2G/5G，默认档；fanboy 0010/0011 备选对比） |
-| mt76 上游追踪 | 已自 bump `9028`：pin `59676919` → `c5a3bd91`（08-22，147 commits 领先）；0003 已对 c5a3bd91 重建；9992 随 bump 删除。待 CI all/experimental 绿后实机回归（见 `HANDOFF.md` §3/§7） |
+| mt76 上游追踪 | 自 bump `c5a3bd91` 已试并回滚（F62：需新版 mac80211 API）；当前仍 pin `59676919` + 9992 携带。下一步等 openwrt main 联动 bump mt76+mac80211，或做锁步自 bump（见 `HANDOFF.md` §3/§7） |
 | 天线优化（07 报告） | 默认无线：5G ch149/HE160（UNII-3/4 160MHz）、6G ch37/EHT320、2.4G MU-MIMO 关；eeprom 解锁见 mt76 0008 |
 | cpufreq / PM domain（#22029） | 已自持（`vendor/fanboy/03`，含 direct-PLL fallback，OC 前置） |
 | CPU 超频 | `scripts/prepare-oc.sh`（1.3/1.4 两档）+ OC 变体默认限频 1300（`files/etc/init.d/oc-limit`） |

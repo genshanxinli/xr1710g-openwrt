@@ -45,16 +45,13 @@ Gemtek XR1710G（Airoha AN7581 + MT7996 三频 Wi-Fi7、2×10G + 2×1G）的**�
    - all = `32578257466`（commit 3c4ee17）
    - experimental = `32578259118`（commit 3c4ee17）
 
-## 3. 构建与验证状态（2026-08-22 第三会话进行中）
+## 3. 构建与验证状态（2026-08-22 第三会话）
 
-- 四档 CI 全红：F60（`UNI_PER_STA_INFO_TAG` redeclaration，已修 d52fdfa）后，d52fdfa 构建仍全红——F61：`mt7996/mcu.c` `wlan_idx`/`res`/`i`/`wcid`/`ac` undeclared。根因：0003 重建时把 `UNI_ALL_STA_TXRX_AIR_TIME` case 同时插入到 `mt7996_mcu_rx_all_sta_info_event` 与 `mt7996_mcu_ie_countdown`；后者作用域无这些变量。
-- 已修复（commit `4805814`）：删除 `mt7996_mcu_ie_countdown` 中的重复 hunk，仅保留正确位置 case；F61 已登记。
-- 同时完成 mt76 自 bump（commit `7ab2633`）：`9028` 将 `package/kernel/mt76` pin `59676919` → `c5a3bd91`（`PKG_SOURCE_DATE=2026-08-22`，hash `a1bc7450...` 按 OpenWrt dl_github_archive 语义实算）；0003 已对 c5a3bd91 重建（GENMASK 31:14→31:24）；9992 随 bump 删除（F59）。
-- 本地复验（commit `4805814`）：`audit-patches.sh` ✅（default 31 / experimental 46）；`apply-patches.sh --dry-run --experimental` ✅（ROOT 全绿；拷贝补丁真实应用 regdb 4、mt76 9、uboot 41）；mt76 c5a3bd91 全序真实应用 9 个补丁 ✅，airtime case 仅 1 处、`UNI_PER_STA_INFO_TAG` 与 `mt7996_mcu_get_per_sta_info` 各仅 1 处、`mt7996_mac_sta_poll` 已删净。
-- 已推送并 dispatched（commit `4805814`）：
-  - all = `32592330583`
-  - experimental = `32592333937`
-  - push 触发的 sync-upstream = `32592320160` ✅
+- F60 后 d52fdfa 构建仍全红——F61：`mt7996/mcu.c` `wlan_idx`/`res`/`i`/`wcid`/`ac` undeclared（0003 把 `UNI_ALL_STA_TXRX_AIR_TIME` case 重复插入到 `mt7996_mcu_ie_countdown`）。已修（commit `4805814`）。
+- 尝试 mt76 自 bump c5a3bd91（commit `7ab2633`），四档 CI 仍全红——F62：c5a3bd91 期望新版 mac80211 API（`ieee80211_get_{fils_discovery,unsol_bcast_probe_resp}_tmpl(hw,vif,link_id)`、`IEEE80211_MIN_ACTION_SIZE(action_code)` 等），openwrt main 当前 mac80211/kernel 头文件不匹配。
+- 已回滚自 bump（commit `cdfe85d`）：恢复 pin 59676919 + 9992 携带，保留 F61 修复。本地复验：`audit-patches.sh` ✅（default 30 / experimental 46）；`apply-patches.sh --dry-run --experimental` ✅（regdb 4、mt76 11、uboot 41 真实应用通过）。
+- 坏 run：`32592330583`（all）❌、`32592333937`（experimental）❌；push 触发 sync-upstream `32592320160` ✅。
+- 下一步重新 dispatch（commit `cdfe85d` 之后）all + experimental，并观察 pin 59676919 构建是否恢复。
 
 ## 4. 实机可用命令
 
@@ -104,15 +101,11 @@ mt76 包补丁默认档：`mt76-0001/0003/0006/0007/0008`。
 2. **#10**：当前固件 3 轮 down/up 未复现；新固件刷入后再跑 5 轮 + 串口。
 3. **#5/#6/#13/#16**：维持 issue 跟踪；#6 需实机 xfrm/ESP 评估；#13 等 #24034；#16 可在新主线基础上重测 Gen3 x1。
 4. **#7**：用户明确“护栏暂时不做”，保持 F34/F49 跟踪，等串口复现。
-5. **吸收 mt76 最新内容（下一步重点）**：
-   - 目标：从当前 pin `59676919` 吸收 `openwrt/mt76` master `c5a3bd91` 中与 MT7996 相关的修复（清单见第 6 节）。
-   - 首选路径：等待/推动 OpenWrt main bump `package/kernel/mt76`；若 main 已 bump，`sync-upstream.sh` 后重新验证本仓库 mt76 补丁。
-   - 自 bump 路径（main 未 bump 时）：新增 `patches/root/9028-mt76-bump-<sha>.patch`，修改 `package/kernel/mt76/Makefile` 的 `PKG_SOURCE_DATE/PKG_SOURCE_VERSION/PKG_MIRROR_HASH`（hash 从官方 tarball 实算，禁 `skip`）；随后用 `verify-copy-patches.sh` 对 mt76 全套补丁真实应用验证。
-   - 升级后清理/复核：
-     1) 删除 `mt76-9992`（上游 `06b6976` 已合入同款 PS-sync 修复，携带理由消失）；
-     2) 逐条复核 `0001/0003/0006/0007/0008` 与 `0005/9990/9991/9993` 是否仍可应用、是否仍必要（`git apply --check` + 源码语义比对）；
-     3) `scripts/audit-patches.sh --experimental` + `scripts/apply-patches.sh <tree> --dry-run --experimental` 全绿；
-     4) CI `all` + `experimental` 构建绿后实机回归：token_info、PS-sync 事件日志、三频功率、EHT320。
+5. **吸收 mt76 最新内容（下一步重点，F62 后更新）**：
+   - c5a3bd91 自 bump 已试过（7ab2633），构建四档全红：mt76 master 依赖新版 mac80211 API，openwrt main 当前 mac80211/kernel 头文件不匹配。单纯 bump `package/kernel/mt76` 不可行。
+   - 首选路径不变：等待/推动 OpenWrt main **联动 bump** `package/kernel/mt76` 与 `package/kernel/mac80211`（或 kernel）；合入后 `sync-upstream.sh` 再验。
+   - 若 main 长期不 bump：自 bump 必须做成 **mt76+mac80211 锁步 bump**（两个包的 pin/hash 同时实算），并先本地核对 mac80211 API（`ieee80211_get_fils_discovery_tmpl`/`ieee80211_get_unsol_bcast_probe_resp_tmpl` 签名、`IEEE80211_MIN_ACTION_SIZE` 宏）后再上 CI。
+   - 升级后清理/复核：同前——删 9992、逐条复核 mt76 补丁、audit + apply-patches 全绿、CI all+experimental 绿后实机回归。
 6. **注意**：`lav_select` 后端仍 402 余额不足，调用前先 `lav_ping`；不可用时按工程判断并记录。
 
 ## 8. 宿主环境备忘
