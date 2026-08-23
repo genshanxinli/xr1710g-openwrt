@@ -1,18 +1,19 @@
-# HANDOFF — 交接文档（2026-08-22 第二会话收口）
+# HANDOFF — 交接文档（2026-08-23 会话收口）
 
-> 接任维护者请先读：`README.md`、`CONTEXT.md`、`docs/FIXES.md`（F01–F59）、`docs/adr/0001`、`docs/adr/0002`、`docs/ROADMAP.md`。
+> 接任维护者请先读：`README.md`、`CONTEXT.md`、`docs/FIXES.md`（F01–F75）、`docs/adr/0001`、`docs/adr/0002`、`docs/ROADMAP.md`。
 
 ## 0. 工作区与远程
 
 - 本地仓库：`/root/workspace/xr1710g-openwrt`
 - 当前分支：`feat/antenna-eeprom-power-unlock`
+- 当前 commit：`46600b2`（已推送）
 - 远程：`https://github.com/genshanxinli/xr1710g-openwrt`（默认分支 `main`）
 - 推送到当前分支：
   ```bash
   export GH_TOKEN=$(cat .gh-token)
   git push "https://x-access-token:${GH_TOKEN}@github.com/genshanxinli/xr1710g-openwrt.git" feat/antenna-eeprom-power-unlock
   ```
-  > 注意：本宿主 `git push origin` 常无输出/超时，直接用 token URL 最稳；`gh api`/`curl` 偶发 EOF/429，重试 1–2 次即可。
+  > 本宿主 `git push origin` 常无输出/超时，直接用 token URL 最稳；`gh api`/`curl` 偶发 EOF/429，重试 1–2 次即可。
 
 ## 1. 仓库是什么
 
@@ -25,113 +26,113 @@ Gemtek XR1710G（Airoha AN7581 + MT7996 三频 Wi-Fi7、2×10G + 2×1G）的**�
 
 ## 2. 本会话完成的事（别重复做）
 
-1. **查 build**：上一会话收口时 dispatched 的 `32576097284`（all）与 `32576100468`（experimental）在第二会话开始时仍在进行中。
-2. **fanboy 再同步**：
-   - 重取 `OpenWRT-fanboy/OpenW1700k` `ubi2-oc` `ba58ba46`；`649ef957...ba58ba46` compare 为 diverged 25/6。
-   - 提取当前等价 commit：06=`c0ed8295`、07=`5b917d4b`、mt76-0005=`e7a8143`。
-   - 对比结果：06/07 实际 diff 与旧快照**逐字节一致**（仅 `From` commit hash 与文件名变更）；mt76-0005 对 pin mt76 59676919 的 diff 也无变化（fanboy 当前 hunk 行号 1382，pin 上仍落在 1317）。
-   - 已更新文件名、`From` hash、MANIFEST/ORDER/README 注释。
-3. **YYH2913 再同步**：
-   - 重取 `YYH2913/openwrt` `xr1710g-6.18-integration` `e88fbe28`。
-   - 对比结果：mt76 `0006/0007/9990/9991/9993` 与 `mac80211-411` 的实际 diff 与仓库内版本一致（411 仅 Signed-off/Assisted-by 顺序不同），无需重建；regdb `510/520/530` 语义一致（530 上下文差异系 0521 前置所致）。
-   - 已更新上述补丁 Source 注释为 fetched 2026-08-22。
-4. **9992 复核（F59）**：F25 曾以“mt76 master 2026-08-01 已合入、pin 升级自然获得”否决 9992。本次复核：openwrt main 仍 pin mt76 `59676919`（2026-07-01），**并不包含**该加固，漏洞仍存在 → 按“修复而不是降级”改为**携带 9992 入实验档**（`patches/packages/mt76-9992-…`，对 pin `git apply --check` 零失败）。pin 升级后删除。
-5. **本地验证全绿**：
-   - `scripts/audit-patches.sh --experimental` ✅（46 个补丁全部一致）
-   - `scripts/audit-patches.sh` ✅（30 个补丁全部一致）
-   - `scripts/apply-patches.sh /tmp/openwrt-src --dry-run --experimental` ✅：ROOT 全部应用；拷贝补丁真实应用 regdb（4）✅、mt76（11）✅、uboot（41）✅；mac80211 未登记映射仍跳过。
-6. **修了个脚本 mode**：`scripts/verify-copy-patches.sh` 之前为 0644，`apply-patches.sh --dry-run` 调用会 Permission denied；已 `chmod +x`。
-7. **推送并 dispatch 新构建**：当前分支已推送到 GitHub；新增 dispatched：
-   - all = `32578257466`（commit 3c4ee17）
-   - experimental = `32578259118`（commit 3c4ee17）
+1. **执行 IP-EVAL A1–A12 吸收批次**（commit `46600b2`，已推送）：
+   - A1/F64 reserved_bmt 66MiB 布局对齐：`9001/9002` ubi `0x1b700000` + reserved_bmt `@1be00000 0x04200000`；`docs/FLASHING.md` 布局表。
+   - A2/F65 compat 一致性：A1 已把布局升到 2.0，`9000` 保持 `DEVICE_COMPAT_VERSION := 2.0`。
+   - A3/F66 rdinit：`9001` chosen bootargs 加 `rdinit=/sbin/init`。
+   - A4/F67 风扇单控制器：重写 `files/etc/init.d/fan`（动态探测 + 迟滞/最低稳定档/满速兜底）；`9017` 移除 fancontrol 的 `/etc/init.d/fan`，仅留 LuCI 前端/RPC。
+   - A5/F68：新增 `patches/packages/mt76-0009-report-only-terminal-tx-failures.patch`（default）。
+   - A6/F69：新增 `patches/packages/mt76-0010-set-skb-device-for-npu-rx.patch`（experimental；用 `mt76_queue_is_npu_rx(q)` 覆盖 NPU RX 队列）。
+   - A7/F70：新增 `patches/root/9030-flowsense-bump-1.1.8-r5.patch`；MANIFEST 顺序 9017→9030→9018…9023；`9022` 在 9030 基线上重建。
+   - A8/F71：新增 `patches/root/9029-xr1710g-airoha-pcs-jcpll-tclvar-recal.patch`（生成内核补丁 `9992-net-pcs-airoha-jcpll-tclvar-recal.patch`）。
+   - A9/F72：`docs/ACCEPTANCE.md` C2 客户端国家码双侧判据；`docs/FIXES.md` F02 备注。
+   - A10/F73：`docs/FLASHING.md` 坏版本清单、8/11 候选锁版、kmod-mtd-rw 救砖。
+   - A11/F74：`docs/ACCEPTANCE.md` 测试方法学节 + B6 + C3 外部端点判据；OC 报告 §①D 本机 iperf3 降级为 CPU 基线。
+   - A12/F75：`scripts/device-hw-probe.sh` 新增 B2.1 10G PHY VEND1 `0x103/0x104`（phytool）+ B7 EFR32 去除断言。
+2. **本地验证全绿**：
+   - `scripts/audit-patches.sh` ✅（default 35 / experimental 52）
+   - `scripts/apply-patches.sh tmp/openwrt-src --dry-run` ✅：regdb 4、mt76 7、uboot 41 真实应用通过
+   - `scripts/apply-patches.sh tmp/openwrt-src --dry-run --experimental` ✅：regdb 4、mt76 13、uboot 41 真实应用通过
+3. **推送并 dispatch 新 CI**（commit `46600b2`）：
+   - all = `32621215717`（stock/oc-1.3/oc-1.4）
+   - experimental = `32621217391`
+   - 旧的 e0e84e0 构建 `32619703715` / `32619704962` 已取消。
 
-## 3. 构建与验证状态（2026-08-22 第三会话）
+## 3. 构建与验证状态（2026-08-23）
 
-- F60 后 d52fdfa 构建仍全红——F61：`mt7996/mcu.c` `wlan_idx`/`res`/`i`/`wcid`/`ac` undeclared（0003 把 `UNI_ALL_STA_TXRX_AIR_TIME` case 重复插入到 `mt7996_mcu_ie_countdown`）。已修（commit `4805814`）。
-- 尝试 mt76 自 bump c5a3bd91（commit `7ab2633`），四档 CI 仍全红——F62：c5a3bd91 期望新版 mac80211 API，openwrt main 当前 mac80211/kernel 头文件不匹配。
-- 已解决：保留 bump，新增 `mt76-9994-mac80211-api-compat.patch` 把上述调用适配回 6.18 API（两参 tmpl、`IEEE80211_MIN_ACTION_SIZE+1`、`u.action.u.addba_req.*`）；commit `438a4f8`。
-- 本地复验：`audit-patches.sh` ✅（default 32 / experimental 47）；`apply-patches.sh --dry-run --experimental` ✅（regdb 4、mt76 11、uboot 41 真实应用通过）。
-- 坏 run：`32592330583`（all）❌、`32592333937`（experimental）❌；`32608174821`/`32608178233`（rollback 后 dispatch，已取消/待取消）。
-- 下一步：重新 dispatch（commit `438a4f8` 之后）all + experimental，验证 mt76 c5a3bd91 + 9994 兼容层。
+- 当前等待 `46600b2` 的 CI all + experimental 结果。
+- `sync-upstream`（push 触发）对 `46600b2` 已绿：run `32621204454`。
+- 历史参考：
+  - F60–F62 已解决：mt76 c5a3bd91 bump（`9028`）+ `9994` mac80211 6.18 API 兼容层；`0001/0003` 已对 c5a3bd91 重建。
+  - #14 LED interval 与 #22 getStatus 算术的修复（`9031`/`9020`）已含在本批构建中。
 
 ## 4. 实机可用命令
 
 ```bash
 cd /root/workspace/xr1710g-openwrt
 # 登录
-ssh -i .ssh/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=.ssh/known_hosts root@192.168.123.1
-# 或
 ./.ssh/ssh-device
+# 或
+ssh -i .ssh/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=.ssh/known_hosts root@192.168.123.1
 
 # LED 失败点追踪
 ssh root@192.168.123.1 'sh -x /etc/rc.common /etc/init.d/led start' > /tmp/ledx.log 2>&1
 
-# wifi down/up 复现（已跑 3 轮未复现，见 issue #10）
+# wifi down/up 复现（见 issue #10）
 DEVICE_HOST=root@192.168.123.1 ./scripts/device-wifi-downup-probe.sh
+
+# 硬件深度探针（A12 增强后）
+DEVICE_HOST=root@192.168.123.1 ./scripts/device-hw-probe.sh
 ```
 
 ## 5. 当前 patch 层速览（默认档 ROOT）
 
-`9000/9001/9002` 板级 → `vendor/03` cpufreq → `vendor/10` pstore → `9017` apps-pack → `9018` VLAN/PPPoE → `9019` CLIENTS 计数 → `9020` memory_regions DT → `9021` sysfs stats → `9022` IPv6/UDP 判读 → `9023` 优雅降级 → `9025` no-carrier rx stats → `9010` txpower ucode → `vendor/11` LRO → `9011–9016` 08 切片 → `9027` ledtrig-netdev link mode。
-实验档另有：`vendor/02/04/05/06/07/09/17/18`、`9024`、`9026`、`mt76-0005/9990/9991/9992/9993`、`mac80211-411`。
-mt76 包补丁默认档：`mt76-0001/0003/0006/0007/0008`。
+`9000/9001/9002` 板级（66MiB reserved_bmt + rdinit） → `vendor/03` cpufreq → `vendor/10` pstore → `9017` apps-pack（fancontrol 去 init.d） → `9030` FlowSense 1.1.8-r5 → `9018` VLAN/PPPoE → `9019` CLIENTS 计数 → `9020` memory_regions DT → `9021` sysfs stats → `9022` IPv6/UDP 判读 → `9023` 优雅降级 → `9025` no-carrier rx stats → `9010` txpower ucode → `vendor/11` LRO → `9011–9016` 08 切片 → `9027` ledtrig-netdev link mode → `9031` LED interval skip → `9028` mt76 bump。
+实验档另有：`vendor/02/04/05/06/07/09/17/18`、`9024`、`9026`、`9029`、`mt76-0005/0010/9990/9991/9993`、`mac80211-411`。
+mt76 包补丁默认档：`mt76-0001/0003/0006/0007/0008/0009/9994`。
 
-## 6. 上游状态快照（2026-08-22 第二会话查询）
+## 6. 上游状态快照（2026-08-23 会话未重新查询，沿用 08-22 快照）
 
 - `openwrt/openwrt` master：`3d1645ee`（08-21）。本地 dry-run 绿。
-- `OpenWRT-fanboy/OpenW1700k` `ubi2-oc`：`ba58ba46`（08-21）。**已再同步**：06=`c0ed8295`、07=`5b917d4b`、mt76-0005=`e7a8143`；实际 diff 均与仓库内一致，仅 hash/文件名更新。
-- `YYH2913/openwrt` `xr1710g-6.18-integration`：`e88fbe28`（08-19）。**已再核对**：mt76 0006/0007/9990/9991/9993、mac80211-411、regdb 510/520/530 均无需重建；新增携带 9992（F59）。
-- `openwrt/mt76` master：`c5a3bd91`（08-22）。**本仓库 mt76 追踪对象**：每次会话 / 2h sync 后查询 `openwrt/mt76` 最新 master，并与 OpenWrt main 当前 pin 对比；有更新及时评估吸收，不得只看不跟。
-- `59676919...c5a3bd91` compare（GitHub compare API / `git diff`）：**147 commits、76 files、+3038/-482**。
-  关键已上游更新（MT7996 相关）：PS-sync 死循环修复（=`mt76-9992`，pin 升级后可删）；EEPROM 长度/地址边界校验；`mt7996_mcu_get_chip_config` TLV 遍历边界；RX `band_idx` 校验；mmio copy 越界修复；SER/full reset 稳定性一批；MLD/MLO 修复；EHT-MCS15/HE DCM/VHT STBC 能力修复；WED/NPU/RRO offload 修复。
-  我们仍独有的补丁：`mt76-0001/0003`（token_info/NPU debugfs、MCU 站点统计替代 WTBL 轮询，master 仍无 `token_info` 且仍调用 `mt7996_mac_sta_poll`）、`0006/0007/0008`（txpower/eeprom 功率解锁）、`0005/9990/9991/9993`（TXFREE 静默/EHT 广告/320M BF fallback/op_mode 传递）。
-- `openwrt/openwrt` main 仍 pin mt76 `59676919`（`package/kernel/mt76/Makefile`，2026-07-01）。**追踪原则**：OpenWrt main bump 则优先跟 bump；若 main 迟迟不 bump 且 master 含有影响 MT7996 的重要修复/安全更新，在遵守锁源铁律（`PKG_SOURCE_VERSION` + `PKG_MIRROR_HASH` 实算，禁止 fork/hash=skip）的前提下，以本仓库补丁自行 bump `package/kernel/mt76` 到指定 commit。
-- 跟踪 PR：
-  - 仍 open：#22397、#22029、#22473、#22532、#22533、#24034、#24619、#23990。
-  - 已 merged：#21777/#23078/#23383/#21978/#22391/#24593/#22289/#23427。
-  - 注意：F56 已更新——#21978 已 merged，openwrt main patches-6.18 已含 `609-04` PCIe x2 与 `913` PCIe HB reset；pcie2 x1 硬件限制仍成立，Gen3 x1 仍未验证。
+- `OpenWRT-fanboy/OpenW1700k` `ubi2-oc`：`ba58ba46`（08-21）；06=`c0ed8295`、07=`5b917d4b`、mt76-0005=`e7a8143`。
+- `YYH2913/openwrt` `xr1710g-6.18-integration`：`e88fbe28`（08-19）；mt76 0006/0007/9990/9991/9993、mac80211-411、regdb 510/520/530 已核对。
+- `openwrt/mt76` master：`c5a3bd91`（08-22）。本仓库已自 bump（`9028`）+ `9994` 兼容层。
+- 跟踪 PR：仍 open #22397、#22029、#22473、#22532、#22533、#24034、#24619、#23990；已 merged #21777/#23078/#23383/#21978/#22391/#24593/#22289/#23427。
 
-## 7. 遗留/下一步
+## 7. 下一步（重点）：新 CI 固件刷入设备后的测试
 
-### 7.0 下一轮吸收任务（IP-EVAL 2026-08-23 可立即吸收项，全部执行）
+> 等 `46600b2` 的 CI all + experimental 绿并下载产物后执行。产物在对应 run 的 Artifacts（`firmware-<profile>`）或 workflow_dispatch 成功后的 pre-release `ci-<run_number>`（`firmware-<profile>.tar.gz`）。
 
-> 评估清单：`docs/IP-EVAL-2026-08-23.md`；待吸收台账：`docs/FIXES.md` 末段 A1–A12；ROADMAP P0.5 已登记。
-> 执行顺序 A1→A12，每完成一项转正为 `docs/FIXES.md` F63+ 台账行（问题→根因→载体→上游状态），并从 A 表与 ROADMAP P0.5 移除。
+### 7.1 先刷 stock（all run 的 stock 产物）
 
-- **A1 reserved_bmt 66MiB 布局对齐（IP02/05/06/07/15，default）**：先实机抓 stock bootlog 核 XR1710G BMT 池（`bmt pool size: N` 与 vendor `system` 分区终点）；落地 `9001/9002`：ubi `0x1b700000`、`reserved_bmt@1be00000 0x04200000`；同步 `docs/FLASHING.md`。
-- **A2 sysupgrade compat 一致性（IP15，default）**：`9000` 的 XR1710G `DEVICE_COMPAT_VERSION` 2.0→1.0（与当前布局一致）；A1 实证后恢复 2.0。
-- **A3 rdinit 修复（IP17，default）**：`9001` chosen bootargs 末尾加 `rdinit=/sbin/init`。
-- **A4 风扇双控制器去重（IP25，default）**：`files/etc/init.d/fan` 与 9017 内 fancontrol 的 `/etc/init.d/fan` 双入口抢 PWM——合并为单控制器 + 动态探测 + 迟滞/最低稳定档/失效满速兜底；9017 侧仅留 LuCI 前端。
-- **A5 mt76 0099 tx_failed 记账修复（IP25/IP26，default）**：新增 `patches/packages/mt76-0009-report-only-terminal-tx-failures.patch`。
-- **A6 mt76 0103 NPU RX skb->dev（IP25/IP26，experimental）**：新增 `patches/packages/mt76-0010-set-skb-device-for-npu-rx.patch`，按 `MT_RXQ_NPU0` qid 改写。
-- **A7 flowsense 1.1.8-r5 bump（IP08，experimental）**：新增 `patches/root/9030-flowsense-bump-1.1.8-r5.patch`；9018-9023 需重放。
-- **A8 JCPLL TCLVAR recal（IP10，experimental）**：新增 `patches/root/9029-xr1710g-airoha-pcs-jcpll-tclvar-recal.patch`。
-- **A9 6GHz 客户端国家码判据（IP14，default 验收）**：`docs/ACCEPTANCE.md` C2 双侧判据；`docs/FIXES.md` F02 备注。
-- **A10 FLASHING 坏版本/救砖（IP19，default 文档）**：`docs/FLASHING.md` 补 8/8 坏版本、8/11 `b7710e5cc851` 候选锁版、kmod-mtd-rw 救砖步骤。
-- **A11 验收方法学补洞（IP20/24/28，default 验收）**：`docs/ACCEPTANCE.md` 测试方法学节 + B6 + C3 外部端点判据；`OC与高功率实现-调研报告.md` §①D 本机 iperf3 数据降级为 CPU 基线。
-- **A12 device-hw-probe 增强（IP04，default 脚本）**：10G PHY 寄存器判据（VEND1 `0x103/0x104`）+ EFR32 去除断言。
+**重要**：A1 已改布局，当前设备还是旧 2MiB 布局。**禁止在旧布局设备上 sysupgrade**（compat 2.0 会拒；不得 -F 强刷）。必须走 HTTP U-Boot 恢复页：
+1. PC 接 10GbE 口，DHCP；开机按 reset 进 `http://192.168.255.1`；
+2. 布局选择器选 **UBI 2.0**（与 `9001/9002` 新布局匹配）；
+3. 上传 `*-sysupgrade.itb` 刷入 stock。
 
-1. **查 build**：`32588516036`（all）、`32588517827`（experimental）。已刷 #66（experimental，commit bde3f69）复查：
-   - #4 ✅：`token_info` 存在；`strings mt7996e.ko` 无 `mt7996_mac_sta_poll`；getTokenInfo 返回正常。issue #4 已关闭。
-   - #14 ⚠️：link/rx/tx 写入均 rc=0；但 `interval` 写入 4 个 PHY LED 均 EINVAL，`/etc/init.d/led start` 仍 rc=1。已提交 `9031`（hw-offloaded LED 跳过 interval 写入），待构建验证。
-   - #15 ✅：lan1/lan2 down/up 各一次，rx_errors delta=0。issue #15 已关闭。
-   - #1 E2 ✅：`nft add rule bridge npu_probe forward meta l4proto { tcp, udp } flow offload @ft` 返回 0；但 E1 `bridge-flow-offload` 包仍未安装（issue #1 保持 open）。
-   - 9992：PS-sync 未做专项事件注入；`dmesg` 无 mt7996 MCU 异常。
-   - 新增 issue #22：`getStatus` RPC 因 9020 的 `$((16#...))` 在 BusyBox ash 上不工作而整体 `Invalid argument`（F63）；已修复 9020 为 `$((0x...))`，待构建验证。
-2. **#10**：#66 已复测 5 轮 `wifi down/up`，三频 AP 均恢复、logread 无 `Could not set STA`/`handle_assoc_cb`；仍未抓串口，issue 保持 open。
-3. **#5/#6/#13/#16**：维持 issue 跟踪；#6 需实机 xfrm/ESP 评估；#13 等 #24034；#16 可在新主线基础上重测 Gen3 x1。
-4. **#7**：用户明确“护栏暂时不做”，保持 F34/F49 跟踪，等串口复现。
-5. **吸收 mt76 最新内容（下一步重点，F62 后更新）**：
-   - 当前已携带 c5a3bd91 bump（9028）+ `mt76-9994` 兼容层（适配 openwrt main 6.18 mac80211 API）。待 CI all+experimental 验证编译。
-   - 首选路径不变：等待/推动 OpenWrt main **联动 bump** `package/kernel/mt76` 与 `package/kernel/mac80211`；合入后删 `9028` 与 `9994`，`sync-upstream.sh` 再验。
-   - 若 CI 仍暴露其它 API 不匹配：继续扩充 `9994`（先本地用 `apply-patches.sh` + `patch -f -p1` 验证，再上 CI）。
-   - 升级后清理/复核：删 9992（已删）、逐条复核 mt76 补丁、audit + apply-patches 全绿、CI all+experimental 绿后实机回归（token_info、PS-sync 事件日志、三频功率、EHT320）。
-6. **注意**：`lav_select` 后端仍 402 余额不足，调用前先 `lav_ping`；不可用时按工程判断并记录。
+刷入后按序验证（判据见 FIXES F64–F75 / ACCEPTANCE）：
+- [ ] 冷启动无 `rdinit=/init failed`（F66）
+- [ ] `/proc/mtd` 或 `cat /proc/partitions`：`ubi` size=`0x1b700000`、`reserved_bmt` size=`0x04200000`（F64）
+- [ ] `ubinfo -a` 无坏块；多轮重启不新增坏块（F64）
+- [ ] `/etc/init.d/fan start` 后 `pwm1` 仅一个写入者；风扇曲线随温度切换；fancontrol 页面可读可设（F67/A4）
+- [ ] `led start` 退出码 0；hw-offloaded PHY LED 无 EINVAL（#14/9031）
+- [ ] `getStatus` RPC 返回 5 个 NPU memory regions（#22/F63，`ubus` 侧复测）
+- [ ] 有损链路 `iw dev wlanX station dump`：`tx_retries>0` 时 `tx_failed≈0`（F68/A5）
+- [ ] 三频 AP 正常；6GHz C2 双侧国家码判据（AP US + 客户端 US 可见可连；非 US 不可见属预期）（F72/A9）
+- [ ] C3 无线速率用外部对端 iperf3（禁止本机 iperf3 当吞吐判据）（F74/A11）
+- [ ] 管理面改址回连 B6（F74/A11）
+- [ ] `DEVICE_HOST=root@192.168.123.1 ./scripts/device-hw-probe.sh` 全绿（F75/A12）
+
+### 7.2 再刷 experimental（experimental run 产物）
+
+stock 基本项通过后，同法刷 experimental（或同布局 sysupgrade），重点验证实验档新增：
+- [ ] A6/F69 mt76-0010 NPU RX skb->dev：桥接 6G 客户端 `conntrack -F` 后新建流，br-lan 无丢包、CLIENTS 计数一致
+- [ ] A7/F70 FlowSense 1.1.8-r5：`npu-monitor.settings.air_eff` 生效；B5/C4 下吞吐针非 0；9018-9023 功能不回归
+- [ ] A8/F71 JCPLL TCLVAR recal：10G 对端直连 lan2，`ethtool` 10G link 且 rx/tx errors=0；毕业转 default
+- [ ] 实验档既有项：EHT320/9990/9991/9993、TXFREE 0005、bridge-flow-offload 9024/9026（issue #1 E1/E2）
+- [ ] `wifi down/up` 5 轮不复发（issue #10）
+
+### 7.3 通过后收口
+
+- 可毕业项转 default（尤其 F69/F71 视实机结果）；更新 FIXES/README/ROADMAP。
+- 继续跟踪 mt76/mac80211 上游联动 bump；合入后删 `9028`/`9994`，再验。
+- 跑 `docs/ACCEPTANCE.md` 全项，冻结 known-good tag。
 
 ## 8. 宿主环境备忘
 
 - 容器缺 `make/gawk/mkhash` 等完整 OpenWrt 构建工具；本地只做 patch 生成、审计、ssh 实机验证。真正构建以 GitHub Actions 为准。
-- `gh api`/`curl` 偶发 429/EOF；遇到空输出先重试，再检查 token：`export GH_TOKEN=$(cat .gh-token)`。
+- `gh api`/`curl` 偶发 429/EOF；空输出先重试；`export GH_TOKEN=$(cat .gh-token)`。
 - 推送优先用 token URL（见第 0 节）。
-- 本地浅克隆 openwrt master：`/tmp/openwrt-src`（partial clone）；源码缓存：`/tmp/copy-patch-verify`（wireless-regdb/mt76/u-boot tarball）。
-- fanboy 提取临时仓库：`/tmp/fanboy-extract`；mt76 pin 源码：`/tmp/mt76-59676919`；YYH 资产：`/tmp/yyh-assets`。
+- 本地浅克隆 openwrt master：`/root/workspace/xr1710g-openwrt/tmp/openwrt-src`（partial clone）；源码缓存：`tmp/copy-patch-verify`。
+- 社区源码临时仓库：`/tmp/orangeyoo-xr1710g`、`/tmp/gilly-w1700k`、`/tmp/naoki66-xr1710g`、`/tmp/lvcdy-xr1710g`。
+- mt76 bump 调试树：`tmp/mt76-bump/`；fanboy/YYH 资产若已清理则按 `fetch-sources.sh` 重取。
