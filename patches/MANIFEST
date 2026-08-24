@@ -74,6 +74,8 @@ patches/root/9021-flowsense-sysfs-stats.patch ROOT
 patches/root/9022-npu-ipv6-udp-visibility.patch ROOT
 # 9023：NPU RPC 诊断工具缺失或 devmem 读失败时优雅降级（getFrameEngine available:false / pll_freq_mhz:null / 前端不可用）（#2）
 patches/root/9023-npu-rpc-graceful-tools.patch ROOT
+# 9032：PPE debugfs packets/bytes 恒 0（#5）的判读补强——新增 getPpeFlowStats，用 conntrack 双向 tuple 关联每流 packets/bytes
+patches/root/9032-npu-ppe-per-flow-conntrack-stats.patch ROOT
 # 9025：lan1 无链路 down/up 时 rx_errors/rx_dropped 虚增（F38/#15）：无 carrier 时只清 MIB 不并入统计
 patches/root/9025-xr1710g-airoha-no-carrier-rx-stats.patch ROOT
 # 9027：ledtrig-netdev 在 hw-control get 预置 link+link_speed 时写 link 返回 EINVAL（F37③/#14）

@@ -20,6 +20,7 @@ default root/9020-npu-memory-regions-dt.patch   # F35/#3/#8：getStatus.memory_r
 default root/9021-flowsense-sysfs-stats.patch   # F36/#9：getWanHealth/getBridgeStats 改读 /sys/class/net/*/statistics
 default root/9022-npu-ipv6-udp-visibility.patch   # F40/#19/#20：IPv6 地址规范化 + UDP HW_OFFLOAD conntrack 判读
 default root/9023-npu-rpc-graceful-tools.patch   # #2：缺 devmem/devmem 读失败时 getFrameEngine/pll_freq_mhz/前端优雅降级
+default root/9032-npu-ppe-per-flow-conntrack-stats.patch   # #5：PPE debugfs packets/bytes 恒 0；getPpeFlowStats 用 conntrack 双向 tuple 补每流 packets/bytes
 default root/9025-xr1710g-airoha-no-carrier-rx-stats.patch   # F38/#15：无 carrier 只清 MIB，rx_errors/rx_dropped 不虚增
 default root/9027-ledtrig-netdev-link-mode-mutex.patch   # F37③/#14：ledtrig-netdev 写 link 时清除冲突的 link_speed 模式
 default root/9031-base-files-led-skip-interval-hw-offload.patch   # #14：hw-offloaded netdev LED 跳过 interval 写入，led start 退出码归 0

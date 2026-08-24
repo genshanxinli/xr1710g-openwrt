@@ -76,6 +76,8 @@ echo "bind_BND=$(grep -cE "^[0-9a-fA-F]+ BND" /sys/kernel/debug/ppe/bind 2>/dev/
 echo "entries_total=$(grep -cE "^[0-9a-fA-F]+" /sys/kernel/debug/ppe/entries 2>/dev/null) entries_UNB=$(grep -cE "^[0-9a-fA-F]+ UNB" /sys/kernel/debug/ppe/entries 2>/dev/null) entries_BND=$(grep -cE "^[0-9a-fA-F]+ BND" /sys/kernel/debug/ppe/entries 2>/dev/null)"
 echo "===== B4 PPE BND sample (packets/bytes always-zero audit) ====="
 grep -E "^[0-9a-fA-F]+ BND" /sys/kernel/debug/ppe/bind 2>/dev/null | head -12
+echo "===== B4.1 getPpeFlowStats summary (issue #5 conntrack per-flow counters) ====="
+ubus call luci.airoha_flowsense getPpeFlowStats 2>/dev/null | jsonfilter -e '@.available' -e '@.summary.bnd_total' -e '@.summary.bnd_ct_matched' -e '@.summary.bnd_hw' -e '@.summary.bnd_hw_packets' -e '@.summary.bnd_hw_bytes' -e '@.summary.unb_total' -e '@.summary.unb_ct_matched' 2>/dev/null || true
 echo "===== B5 conntrack offload counts ====="
 echo "conntrack_total=$(wc -l < /proc/net/nf_conntrack 2>/dev/null)"
 echo "conntrack_HW_OFFLOAD=$(grep -c HW_OFFLOAD /proc/net/nf_conntrack 2>/dev/null)"
