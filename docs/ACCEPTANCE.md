@@ -20,6 +20,7 @@
 - [ ] B3 剩余 1G 口：接入正常（speed 1000）
 - [ ] B4 LAN 网关 192.168.123.1：DHCP 分发、LAN 互访、NAT 上网正常
 - [ ] B5 硬件 flow offload / NPU 卸载生效（luci-app-airoha-npu 显示 NPU 已加载；卸载计数增长；IPv6 TCP 多源并发达 `[HW_OFFLOAD]`+PPE BND v6、IPv6 UDP 长流达 `[HW_OFFLOAD]`）
+- [ ] B5.1 纯 IPv6 无线客户端（该站无 IPv4 地址/租约）产生 IPv6 TCP 流：`getPpeEntries.client_bnd` 中该站 `bnd>0` 且 `ip6` 非空（issue #19 终验）
 - [ ] B6 管理面改址回连：LuCI 将 LAN IP 改为 192.168.50.1/24（或静态 CIDR）后仍可从新地址回连；改回后恢复（IP20）
 
 ## Wi-Fi
