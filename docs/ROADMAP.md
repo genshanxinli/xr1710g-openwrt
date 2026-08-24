@@ -36,7 +36,7 @@
 ## P2 上游跟追（PR / 包源 pin，合入或升级即删/复核本层补丁）
 - [ ] #22397（板级）——合入后删 `patches/root/9000-xr1710g-common.patch` 等三件套
 - [ ] #22029（cpufreq/PM domain）——**已自持 fanboy 03（含 direct-PLL fallback）**；上游合入即删
-- [ ] #24034（RTL826x LED）/ #24619（mt7530 LED）——取决于实机 LED 行为反馈
+- [ ] #24034（RTL826x LED）/ #24619（mt7530 LED）——取决于实机 LED 行为反馈；#24034 PR 快照已存 `patches/specs/openwrt-24034-rtl826x-led.patch`（2026-08-24）
 - [ ] #22473（uboot pstore）——kernel 侧已自持，剩 uboot 侧
 - [ ] #22532（DSA）/ #22533（L2 offload）——实验档毕业候选（原料桶 04/05/06 已入库）：实验构建跑通 + 实机验证后并入默认档
 - [ ] **mt76 上游追踪 / 吸收**（2026-08-22）：跟踪 `openwrt/mt76` master；当前 pin `59676919`，最新 `c5a3bd91`（147 commits / 76 files / +3038/-482）。优先等 openwrt main bump；若 main 不 bump，按锁源铁律自 bump `package/kernel/mt76`（实算 `PKG_MIRROR_HASH`，禁 fork/hash=skip）。升级后删除 `9992`（上游 `06b6976` 已合入同款 PS-sync 修复），逐条复核 `0001/0003/0006/0007/0008` 与 `0005/9990/9991/9993`，CI `all`+`experimental` 构建绿后实机回归（token_info、PS-sync 事件、三频功率、EHT320）

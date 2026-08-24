@@ -66,7 +66,7 @@
 ### HD-4：10G 口 LED 无 sysfs/DTS 节点 —— 跟进上游 #24034
 - 问题：RTL8261BE（lan1/lan2）无 LED class 设备，DTS `ethernet-phy@5/@8` 无 `leds` 子节点。
 - 方案：跟进 OpenWrt 上游 #24034（RTL826x LED）；若短期需要，参考 fanboy 09 号实验档 RTL8261CE LED 支持代码（`rtk_rtl8261ce_phy.c` 内集成 LED）评估移植到 RTL8261BE 的可行性。
-- 状态：不阻塞当前固件；需现场目视确认 10G 口 LED 默认行为。Issue #13。
+- 状态：不阻塞当前固件；需现场目视确认 10G 口 LED 默认行为。Issue #13（已关闭：docs/comment only，上游 #24034 跟踪；PR 快照存 `patches/specs/openwrt-24034-rtl826x-led.patch`）。
 
 ## 遗留/现场补测
 - [ ] 10G 口 10Gbps 链路与吞吐（B2，需 10G 对端）
