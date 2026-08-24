@@ -29,6 +29,8 @@
 - [ ] C3 速率冒烟（外部对端 iperf3，禁止路由器本机 iperf3 作为吞吐判据）：5G ≥ 1200Mbps（160MHz 客户端）；6G ≥ 2400Mbps（320MHz 客户端）；记录客户端国家码/频宽/MIMO/距离（IP24/IP28）
 - [ ] C4 MLO 可配置且生效（luci-app-mlo：多频绑定成功）
 
+> C3/C4 速率与 MLO 吞吐验收以主 `mt7996e`（14c3:7990，`pcie0` x2/Gen3）数据面为准；`mt7996e-hif`（14c3:7991，`pcie2` x1/Gen2，EN7581 共享 USB3 PHY 单 lane 板级限制）不作为瓶颈假设（issue #16）。
+
 ## 温控与稳定
 - [ ] D1 风扇曲线接管（`/etc/init.d/fan` 运行，温度点切换 PWM 正确）
 - [ ] D2 温度读数正常（CPU / 10G PHY / switch / Wi-Fi；fancontrol 页面无 N/A）

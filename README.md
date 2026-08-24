@@ -2,6 +2,8 @@
 
 Airoha AN7581GT + MT7996（BE19000，2×10G + 2×1G）路由器 Gemtek **XR1710G** 的自用固件仓库。
 
+> PCIe 拓扑：主 Wi-Fi 数据面为 `mt7996e`（14c3:7990）经 `pcie0` x2/Gen3；`mt7996e-hif`（14c3:7991）经 `pcie2` x1/Gen2（EN7581 共享 USB3 PHY 单 lane 板级限制，不作为高速数据面假设，issue #16）。
+
 **定位**：以 openwrt master（kernel 6.18）为基座，自维护补丁层携带全部"最前沿"内容（NPU offload、HW-GRO/LRO、
 in-band phylink、PCIe x2、MLO/EHT320、US regdb 功率体系、CPU 超频）。**遇到问题修复而不是降级**——冲突、
 失效、失败都按根因修复，不通过删能力/回退规避（政策见 `CONTEXT.md` 与 `docs/FIXES.md`）。
