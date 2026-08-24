@@ -72,7 +72,7 @@ patches/root/9020-npu-memory-regions-dt.patch ROOT
 patches/root/9021-flowsense-sysfs-stats.patch ROOT
 # 9022：9019 的 IPv6 客户端 offload 计数规范化 + UDP HW_OFFLOAD 以 conntrack 判读（F40/#19/#20）
 patches/root/9022-npu-ipv6-udp-visibility.patch ROOT
-# 9023：NPU RPC 诊断工具缺失时优雅降级（getFrameEngine available:false / pll_freq_mhz:null）（#2）
+# 9023：NPU RPC 诊断工具缺失或 devmem 读失败时优雅降级（getFrameEngine available:false / pll_freq_mhz:null / 前端不可用）（#2）
 patches/root/9023-npu-rpc-graceful-tools.patch ROOT
 # 9025：lan1 无链路 down/up 时 rx_errors/rx_dropped 虚增（F38/#15）：无 carrier 时只清 MIB 不并入统计
 patches/root/9025-xr1710g-airoha-no-carrier-rx-stats.patch ROOT
