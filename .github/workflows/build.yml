@@ -91,9 +91,20 @@ jobs:
           cd "$TREE"
           make defconfig
           cat "$GITHUB_WORKSPACE/overlay/config/seed-config.diff" >> .config
+          # 实验档增量 seed：MANIFEST #EXP 补丁提供的包不在共享 seed 中（否则 stock 会引用不存在的包）。
+          # 必须在第二次 defconfig 前追加，且共享 seed 末尾保持换行（否则两段 seed 会粘成一行）。
+          if [[ "$PROFILE" == "experimental" ]]; then
+            cat "$GITHUB_WORKSPACE/overlay/config/seed-config.experimental.diff" >> .config
+          fi
           make defconfig
           grep -q "CONFIG_TARGET_airoha_an7581_DEVICE_gemtek_xr1710g-ubi=y" .config || { echo "XR1710G 目标未选中——检查 #22397 补丁与 seed"; exit 1; }
+          if [[ "$PROFILE" == "experimental" ]]; then
+            grep -q '^CONFIG_PACKAGE_bridge-flow-offload=y$' .config || { echo "实验档 bridge-flow-offload 未选入 .config（issue #1 E1）"; exit 1; }
+          fi
           "${GITHUB_WORKSPACE}/overlay/scripts/audit-config.sh" "${GITHUB_WORKSPACE}/overlay/config/seed-config.diff" .config
+          if [[ "$PROFILE" == "experimental" ]]; then
+            "${GITHUB_WORKSPACE}/overlay/scripts/audit-config.sh" "${GITHUB_WORKSPACE}/overlay/config/seed-config.experimental.diff" .config
+          fi
 
       - name: 构建
         # F19：显式 pipefail——make 失败必须红（默认 bash 无 pipefail，`make | tee` 会把失败吞成假绿；

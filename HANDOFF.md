@@ -119,7 +119,7 @@ stock 基本项通过后，同法刷 experimental（或同布局 sysupgrade）�
 - [ ] A6/F69 mt76-0010 NPU RX skb->dev：桥接 6G 客户端 `conntrack -F` 后新建流，br-lan 无丢包、CLIENTS 计数一致
 - [ ] A7/F70 FlowSense 1.1.8-r5：`npu-monitor.settings.air_eff` 生效；B5/C4 下吞吐针非 0；9018-9023 功能不回归
 - [ ] A8/F71 JCPLL TCLVAR recal：10G 对端直连 lan2，`ethtool` 10G link 且 rx/tx errors=0；毕业转 default
-- [ ] 实验档既有项：EHT320/9990/9991/9993、TXFREE 0005、bridge-flow-offload 9024/9026（issue #1 E1/E2）
+- [ ] 实验档既有项：EHT320/9990/9991/9993、TXFREE 0005、bridge-flow-offload 9024/9026 + `config/seed-config.experimental.diff`（issue #1 E1/E2）
 - [ ] `wifi down/up` 5 轮不复发（issue #10）
 
 ### 7.3 通过后收口
