@@ -50,7 +50,7 @@
 - [x] mt76 实验补丁（integration 树 9990-9993：EHT 广告/320M BF fallback/PS-sync/rate control）——**F25 评审（2026-08-18）+ F59 复核（2026-08-22）**：9990/9991/9993 重建入实验档（对 pin 59676919 实测可应用、master 无此改动）；**9992 复核后改为携带**（上游 mt76 master 2026-08-01 已合，但 pin 59676919 尚未包含；pin 升级后删除）；实机 EHT320 验证后毕业
 - [ ] **IPsec/站点间 VPN 硬件卸载探索（EIP93，issue #6/F52）**：驱动已在实验档编译、/proc/crypto 注册正常；先实机验证 xfrm 连通性与 EIP93 refcnt，再按档位预装 strongswan/kmod-ipsec/ip-full；注意 EIP93 未注册 GCM-AEAD，rfc4106(gcm(aes)) 可能落软加密
 - [ ] 530 实验室 6GHz SP 补丁——默认停用；如需高功率实验，手动启用并在验收注明非合规
-- [ ] **全 PCIe Gen3 计划（issue #16 深化）**：按 `docs/PCIe-GEN3-PLAN.md` 执行——pcie0 x2 Gen3 回归保护；pcie2 先做 PHY 能力判定（D0），再决定是否上实验档 Gen3 x1 重训补丁；x2 明确不可行。
+- [x] **全 PCIe Gen3 计划（issue #16 深化）**：D0 已执行（2026-08-24）——pcie0 x2 Gen3 基线达标；pcie2 根端口 `0002:00:00.0` LnkCap2 仅报 2.5/5GT/s、不声明 Gen3，**D0-stop：pcie2 Gen2 x1 固化为板级正确拓扑**，Gen3 x1 降级为上游/厂商长期跟踪（证据：`docs/acceptance-results/2026-08-24-pcie-gen3-baseline.md`）。
 
 ## P4 工程化
 - [x] 构建产出后自动打 pre-release（含 FIXES 变更摘要；2026-08-17 实现——但 F19 假绿修复前 release 是空壳，真绿后才有意义）

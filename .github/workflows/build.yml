@@ -112,7 +112,8 @@ jobs:
         run: |
           set -euo pipefail
           cd "$TREE"
-          make -j"$(nproc)" V=s 2>&1 | tee "$GITHUB_WORKSPACE/build-$PROFILE.log"
+          # E2：DISTRIB_DESCRIPTION 注入档位标识（CONFIG_VERSION_DIST 经 include/version.mk 进入 /etc/openwrt_release）
+          make -j"$(nproc)" V=s CONFIG_VERSION_DIST="OpenWrt $PROFILE" 2>&1 | tee "$GITHUB_WORKSPACE/build-$PROFILE.log"
 
       - name: 上传构建日志
         if: always()

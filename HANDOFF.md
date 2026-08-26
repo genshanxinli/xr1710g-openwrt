@@ -38,7 +38,7 @@ Gemtek XR1710G（Airoha AN7581 + MT7996 三频 Wi-Fi7、2×10G + 2×1G）的**�
    - A9/F72：`docs/ACCEPTANCE.md` C2 客户端国家码双侧判据；`docs/FIXES.md` F02 备注。
    - A10/F73：`docs/FLASHING.md` 坏版本清单、8/11 候选锁版、kmod-mtd-rw 救砖。
    - A11/F74：`docs/ACCEPTANCE.md` 测试方法学节 + B6 + C3 外部端点判据；OC 报告 §①D 本机 iperf3 降级为 CPU 基线。
-   - A12/F75：`scripts/device-hw-probe.sh` 新增 B2.1 10G PHY VEND1 `0x103/0x104`（phytool）+ B7 EFR32 去除断言。
+   - A12/F75：`scripts/device-hw-probe.sh` 新增 B2.1 10G PHY VEND1 `0x103/0x104`（phytool）+ B7 EFR32 去除断言；B2.1 已修正为 C45 MMD30 路径（借道 wan/lan3）并实机验证。
 2. **本地验证全绿**：
    - `scripts/audit-patches.sh` ✅（default 35 / experimental 52）
    - `scripts/apply-patches.sh tmp/openwrt-src --dry-run` ✅：regdb 4、mt76 7、uboot 41 真实应用通过
@@ -101,17 +101,19 @@ mt76 包补丁默认档：`mt76-0001/0003/0006/0007/0008/0009/9994`。
 3. 上传 `*-sysupgrade.itb` 刷入 stock。
 
 刷入后按序验证（判据见 FIXES F64–F75 / ACCEPTANCE）：
+
+> 方法论：experimental = 默认档 + 实验档增量（`patches/MANIFEST` 的 `#EXP` 条目），下列功能项可先在 experimental 固件上预验；标 `〔E✓ 见 7.4〕` 的项已在 CI#70 experimental 实机预验通过。最终 stock 档放行仍需刷 stock 产物复核（尤其 stock 镜像的 `sysupgrade -T`、E2 档位元数据与 stock 包集合），不能把 experimental 预验直接记为 stock 验收。
 - [ ] 冷启动无 `rdinit=/init failed`（F66）
-- [ ] `/proc/mtd` 或 `cat /proc/partitions`：`ubi` size=`0x1b700000`、`reserved_bmt` size=`0x04200000`（F64）
-- [ ] `ubinfo -a` 无坏块；多轮重启不新增坏块（F64）
-- [ ] `/etc/init.d/fan start` 后 `pwm1` 仅一个写入者；风扇曲线随温度切换；fancontrol 页面可读可设（F67/A4）
-- [ ] `led start` 退出码 0；hw-offloaded PHY LED 无 EINVAL（#14/9031）
+- [ ] `/proc/mtd` 或 `cat /proc/partitions`：`ubi` size=`0x1b700000`、`reserved_bmt` size=`0x04200000`（F64）〔E✓ 见 7.4〕
+- [ ] `ubinfo -a` 无坏块；多轮重启不新增坏块（F64）〔E✓ 见 7.4〕
+- [ ] `/etc/init.d/fan start` 后 `pwm1` 仅一个写入者；风扇曲线随温度切换；fancontrol 页面可读可设（F67/A4）〔E✓ 见 7.4〕
+- [ ] `led start` 退出码 0；hw-offloaded PHY LED 无 EINVAL（#14/9031）〔E✓ 见 7.4〕
 - [ ] `getStatus` RPC 返回 5 个 NPU memory regions（#22/F63，`ubus` 侧复测）
-- [ ] 有损链路 `iw dev wlanX station dump`：`tx_retries>0` 时 `tx_failed≈0`（F68/A5）
+- [ ] 有损链路 `iw dev wlanX station dump`：`tx_retries>0` 时 `tx_failed≈0`（F68/A5）〔E✓ 见 7.4〕
 - [ ] 三频 AP 正常；6GHz C2 双侧国家码判据（AP US + 客户端 US 可见可连；非 US 不可见属预期）（F72/A9）
 - [ ] C3 无线速率用外部对端 iperf3（禁止本机 iperf3 当吞吐判据）（F74/A11）
 - [ ] 管理面改址回连 B6（F74/A11）
-- [ ] `DEVICE_HOST=root@192.168.123.1 ./scripts/device-hw-probe.sh` 全绿（F75/A12）
+- [ ] `DEVICE_HOST=root@192.168.123.1 ./scripts/device-hw-probe.sh` 全绿（F75/A12；已在 experimental 实机验证通过，见 7.4）
 
 ### 7.2 再刷 experimental（experimental run 产物）
 
@@ -132,12 +134,14 @@ stock 基本项通过后，同法刷 experimental（或同布局 sysupgrade）�
 
 > 用户已把 CI#70（run `32621217391`，experimental，commit `46600b2`）刷入设备。详细记录：`docs/acceptance-results/2026-08-23-experimental-ci70.md`。
 
-- 已通过：F64 新布局（bad PEBs=0）、F65 `sysupgrade -T`、F67 风扇单控制器、F68 tx_failed（2.4G/5G 站点）、LED 修复后 `led start` rc=0、wifi down/up 5 轮不复发、B1 WAN、B5 NPU 活动。
+- 已通过：F64 新布局（bad PEBs=0）、F65 `sysupgrade -T`、F67 风扇单控制器、F68 tx_failed（2.4G/5G 站点）、LED 修复后 `led start` rc=0、wifi down/up 5 轮不复发、B1 WAN、B5 NPU 活动（含 IPv6 专项：conntrack `[HW_OFFLOAD]` 与 PPE BND v6 均出现，`scripts/device-npu-ipv6-probe.sh` rc=0）、device-hw-probe B2.1 10G PHY VEND1 判据（借道 wan/lan3 + C45 MMD30 读 `IFACE/<phy>:30/0x103`；实机 `0x103=0x8261`、`0x104=0x1141`，driver=RTL8261BE 10Gbps PHY）。
 - 未通过/待办：
   - F66 仍见 `rdinit=/init failed`——9001 chosen bootargs 被 HTTP U-Boot 默认 env `bootargs` 覆盖；已写 UBI env 验证 U-Boot 不读取。需 U-Boot 侧补 rdinit 或换用 9002 U-Boot 后重验。
   - F69/F71/C2/C3/C4/B2 需物理对端/客户端，未测。
-  - `device-hw-probe.sh` B2.1 VEND1 0x103/0x104 仍读不到（phytool 返回 -95），需换 MDIO 访问路径。
-- 本会话已修：LED sysfs 回归 `mt7530_dsa-0` → `mt7530-0`（`files/etc/config/system`、`scripts/device-hw-probe.sh`）；设备 UCI 已同步并验证。B6 按用户要求取消。
+  - D3 72h 长稳未测：当前仅连续运行约 18h 且 dmesg 无内核报错；72h + 2×10G + 三频负载条件仍不满足，下一轮收口前补验。
+  - E2 档位元数据：当前 CI#70 固件仍无档位标识；构建层已修（见下），待下一轮构建后实机验证 `DISTRIB_DESCRIPTION` 含档位。
+- 本会话已修：LED sysfs 回归 `mt7530_dsa-0` → `mt7530-0`（`files/etc/config/system`、`scripts/device-hw-probe.sh`）；设备 UCI 已同步并验证。B2.1 MDIO 访问路径修复：10G PHY 挂在 mt7530-0 总线（PHYAD 5=lan2、8=lan1），lan1/lan2 的 Airoha GDM ioctl 返回 -95，改为借道 DSA 用户口（wan/lan3）以 C45 MMD30 读 `IFACE/<phy>:30/0x103`（`scripts/device-hw-probe.sh`）。E2 构建层注入 `CONFIG_VERSION_DIST="OpenWrt <profile>"`（`scripts/build.sh`、`.github/workflows/build.yml`），下一轮构建生效。`scripts/device-npu-ipv6-probe.sh` 末尾 sampler 日志路径修正，跑通 rc=0。B6 按用户要求取消。
+- issue #5 判读补强：新增 `patches/root/9032`（`luci.airoha_flowsense` 新 RPC `getPpeFlowStats`），用 conntrack 双向 tuple 补每流 `ct_packets`/`ct_bytes`/`hw_offload`；已在设备 `ubus call luci.airoha_flowsense getPpeFlowStats` 验证可用。PPE debugfs 计数本身仍待上游。
 
 ## 8. 宿主环境备忘
 

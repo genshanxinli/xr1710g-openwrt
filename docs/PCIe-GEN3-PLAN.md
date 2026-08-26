@@ -1,7 +1,7 @@
 # EN7581/XR1710G 全 PCIe Gen3 深度调研与实施验证方案
 
 > 目标：把所有可用的 PCIe 链路提升到 Gen3（8.0 GT/s）并形成可验证的结论。
-> 状态：计划方案（调研已完成；实施待决策门）。
+> 状态：**D0-stop（2026-08-24）**——pcie2 根端口 LnkCap2 仅报 2.5/5GT/s，不声明 Gen3；不实施 pcie2 Gen3 实验补丁，Gen2 x1 固化为板级正确拓扑。详见 `docs/acceptance-results/2026-08-24-pcie-gen3-baseline.md`。
 > 关联 issue：#16（pcie2 Gen2 x1）；上游 PR：#21978、#20149；本仓库补丁：`patches/root/9001-xr1710g-dts.patch`。
 
 ---
@@ -297,4 +297,5 @@ done'
 - 不在 pcie0/1 的 reset bits 上做 pcie2 实验，避免主链路回归。
 - 先判定 PHY 能力，再写补丁；不通过就不上实验档。
 - Gen3 x1 即使成功，也只代表链路速率提升，不代表 Wi-Fi 吞吐线性提升；最终以外部对端 iperf3 与 hif 中断/卸载计数为准。
+- **D0 判定（2026-08-24）**：实机 `lspci -vv` + sysfs 配置空间解析确认 `0002:00:00.0` 根端口 `LnkCap2` 仅 2.5/5GT/s（`LnkCtl2 Target=5GT/s`、`max_link_speed=5.0 GT/s`），而端点 `0002:01:00.0` 为 2.5-8GT/s。根端口不声明 Gen3 → 按终止判据 **D0-stop**：pcie2 Gen2 x1 固化为板级正确拓扑，pcie2 Gen3 降级为上游/厂商跟踪，不进入 Phase 2/3。
 

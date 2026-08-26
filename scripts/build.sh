@@ -80,7 +80,8 @@ if [[ "$TIER" == "experimental" ]]; then
 fi
 
 echo "== [5/6] 构建（-j$JOBS, 日志 build.log）=="
-make -j"$JOBS" V=s 2>&1 | tee "$ROOT/build-$TIER.log"
+# E2：DISTRIB_DESCRIPTION 注入档位标识（CONFIG_VERSION_DIST 经 include/version.mk 进入 /etc/openwrt_release）
+make -j"$JOBS" V=s CONFIG_VERSION_DIST="OpenWrt $TIER" 2>&1 | tee "$ROOT/build-$TIER.log"
 if ! ls bin/targets/airoha/an7581/*.itb >/dev/null 2>&1; then
   echo "错误：构建完成但未找到 .itb 产物（目标未生成/打包异常？）" >&2
   exit 1

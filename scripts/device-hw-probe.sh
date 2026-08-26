@@ -98,6 +98,7 @@ for p in 05 08 09 0a; do
   for f in phy_id phy_interface phy_dev_flags phy_has_fixups; do
     [ -f "$d/$f" ] && printf "  %-16s %s\n" "$f" "$(cat "$d/$f" 2>/dev/null)"
   done
+  printf "  %-16s %s\n" "driver" "$(basename "$(readlink "$d/driver" 2>/dev/null)" 2>/dev/null)"
   echo "  c45:"
   for f in "$d"/c45_phy_ids/*; do
     [ -f "$f" ] && printf "    %-16s %s\n" "$(basename "$f")" "$(cat "$f" 2>/dev/null)"
@@ -113,12 +114,29 @@ for p in 05 08 09 0a; do
 done
 echo "--- B2.1 10G PHY VEND1 0x103/0x104 (RTL8261BE vs RTL8261N) ---"
 if command -v phytool >/dev/null 2>&1; then
-  for phy in lan1 lan2; do
-    echo "== $phy =="
-    # phytool 2.x syntax is `phytool read IFACE/ADDR/REG`; keep the old
-    # two-argument form as fallback for phytool 1.x.
-    phytool read "$phy/0x00/0x103" 2>/dev/null || phytool read "$phy/0" 0x103 2>/dev/null || echo "phytool read $phy VEND1 0x103 failed"
-    phytool read "$phy/0x00/0x104" 2>/dev/null || phytool read "$phy/0" 0x104 2>/dev/null || echo "phytool read $phy VEND1 0x104 failed"
+  # 10G PHY 挂在 mt7530-0 MDIO 总线上（PHYAD 5=lan2、8=lan1）。
+  # 经 lan1/lan2 的 Airoha GDM ioctl 会返回 -95，必须借道 DSA 用户口
+  # （wan/lan3）用 C45 MMD30(VEND1) 读：IFACE/<phy>:30/<reg>。
+  for pair in "0x08 lan1" "0x05 lan2"; do
+    set -- $pair
+    phy=$1; port=$2
+    echo "== $port (phy $phy) =="
+    for reg in 0x103 0x104; do
+      val=$(phytool read "wan/$phy:30/$reg" 2>/dev/null || true)
+      [ -z "$val" ] && val=$(phytool read "lan3/$phy:30/$reg" 2>/dev/null || true)
+      [ -z "$val" ] && val="read failed"
+      printf "  VEND1 %-6s %s\n" "$reg" "$val"
+    done
+  done
+  echo "  PHY ID (C22 reg 2/3, wan as MDIO path):"
+  for pair in "0x08 lan1" "0x05 lan2"; do
+    set -- $pair
+    phy=$1; port=$2
+    id2=$(phytool read "wan/$phy/0x02" 2>/dev/null || true)
+    id3=$(phytool read "wan/$phy/0x03" 2>/dev/null || true)
+    [ -z "$id2" ] && id2=$(phytool read "lan3/$phy/0x02" 2>/dev/null || true)
+    [ -z "$id3" ] && id3=$(phytool read "lan3/$phy/0x03" 2>/dev/null || true)
+    printf "  %-6s 0x%s 0x%s\n" "$port" "${id2#0x}" "${id3#0x}"
   done
 else
   echo "phytool not installed; apk add phytool 后重跑以获取 VEND1 0x103/0x104 判据"

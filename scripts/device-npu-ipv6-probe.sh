@@ -97,6 +97,8 @@ echo "conntrack_v6_hw=$(grep "^ipv6" /proc/net/nf_conntrack 2>/dev/null | grep -
 echo "conntrack_v6_off=$(grep "^ipv6" /proc/net/nf_conntrack 2>/dev/null | grep -cE "\[OFFLOAD\]")"
 echo "===== A6 RPC getPpeEntries summary ====="
 ubus call luci.airoha_flowsense getPpeEntries 2>/dev/null | jsonfilter -e "@.bnd.total" -e "@.bnd.ipv4" -e "@.bnd.ipv6" -e "@.bnd.band_bnd" -e "@.bnd.port_bnd" -e "@.bnd.client_bnd"
+echo "===== A6.1 RPC getPpeFlowStats summary (issue #5 conntrack per-flow counters) ====="
+ubus call luci.airoha_flowsense getPpeFlowStats 2>/dev/null | jsonfilter -e '@.available' -e '@.summary.bnd_total' -e '@.summary.bnd_ct_matched' -e '@.summary.bnd_hw' -e '@.summary.bnd_hw_packets' -e '@.summary.bnd_hw_bytes' -e '@.summary.unb_total' -e '@.summary.unb_ct_matched' 2>/dev/null || true
 '
 }
 
@@ -200,7 +202,9 @@ wait $pid_b; echo "route_tcp done (rc=$?)"
 wait $pid_c; echo "route_udp done (rc=$?)"
 wait $pid_d; echo "route_d done (rc=$?)"
 
-for r in a b c d sampler; do
+for r in a b c d; do
     echo "===== $OUT_PREFIX.route_$r.log tail ====="
     tail -12 "$OUT_PREFIX.route_$r.log" 2>/dev/null
 done
+echo "===== $OUT_PREFIX.sampler.log tail ====="
+tail -12 "$OUT_PREFIX.sampler.log" 2>/dev/null
