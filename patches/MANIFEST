@@ -114,6 +114,8 @@ patches/root/9016-xr1710g-silence-phy-led-error.patch ROOT
 #EXP patches/root/9024-bridge-flow-offload-deps-table.patch ROOT
 # 9026：bridge 族 nft_flow_offload_init/destroy 复用 inet conntrack 语义（issue #1 E2）
 #EXP patches/root/9026-bridge-flow-offload-init-conntrack.patch ROOT
+# 9034：pcie2 Gen3 x1 serdes retrain 实验（D0 后内核补丁方向；EXP，实机验证后毕业或删除）
+#EXP patches/root/9034-xr1710g-pcie2-gen3-retrain.patch ROOT
 # 9029：lan2 10G JCPLL VCO TCLVAR 重写（IP10/A8，experimental；实机 10G 对端验证后毕业 default）
 #EXP patches/root/9029-xr1710g-airoha-pcs-jcpll-tclvar-recal.patch ROOT
 #EXP patches/vendor/fanboy/07-mt76-release-hw-rro-session-5b917d4b.patch ROOT
