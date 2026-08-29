@@ -27,8 +27,8 @@ config wifi-device 'radio1'
 	option phy 'phy0'
 	option radio '1'
 	option band '5g'
-	option channel '149'                   # 默认 UNII-3/4 160MHz（报告附A.2；regdb 0521 已默认支持）
-	option htmode 'HE160'                  # 5G 160MHz；30dBm 需 mt76-0008（已默认）+ regdb 0521
+	option channel '149'                   # 默认 UNII-3 80MHz：中国 5.8G 合法/国行终端兼容（issue #21 实机定位）
+	option htmode 'HE80'                   # 5G 80MHz；30dBm 需 mt76-0008（已默认）+ regdb 0521
 	option noscan '1'                       # 固定信道 149 非 DFS，关闭无谓邻区扫描（F33）
 	option country 'US'
 	option cell_density '0'
@@ -57,24 +57,49 @@ config wifi-iface 'default_radio1_5g'
 	option disassoc_low_ack '0'
 	option key '123456789'                 # TODO 建议改强
 
-# 5G HE80 兼容档（F41/issue #21，注释化不激活）：
-# 国行 5.8G 仅 80MHz 终端若被 HE160 BSS 过滤，可取消注释以下配置并 reload。
-# config wifi-device 'radio1_he80'
+# 5G HE160 可选档（issue #21 实机：国行 iQOO Neo9 在 ch149/HE160 下直接拒绝关联，
+# HE80 下 psk2 与 sae-mixed 均可连；160MHz 仅对支持 5.8G 160MHz 的非国行终端开放，
+# 且覆盖 UNII-4 前段 5850–5895MHz，合规风险自担。取消注释以下配置并 reload 启用。）
+# config wifi-device 'radio1_he160'
 # 	option type 'mac80211'
 # 	option phy 'phy0'
 # 	option radio '1'
 # 	option band '5g'
 # 	option channel '149'
-# 	option htmode 'HE80'
+# 	option htmode 'HE160'
 # 	option noscan '1'
 # 	option country 'US'
 # 	option cell_density '0'
 # 	option disabled '0'
-# config wifi-iface 'default_radio1_he80'
-# 	option device 'radio1_he80'
+# config wifi-iface 'default_radio1_he160'
+# 	option device 'radio1_he160'
 # 	option network 'lan'
 # 	option mode 'ap'
-# 	option ssid 'K2P-5G'
+# 	option ssid 'K2P'
+# 	option encryption 'sae-mixed'
+# 	option key '123456789'
+
+# 5G HE160 DFS 档（国行终端想跑 160MHz 时使用；issue #21 备注）：
+# ch36/HE160 覆盖 5170–5330MHz（U-NII-1 + U-NII-2A），国行终端支持较好，但 regdb 下
+# 宽信道功率受 5250–5350 DFS 段限制为 24dBm（5150–5250 段为 29dBm，160MHz 取交集），
+# 且需要 DFS。追求 30dBm 请留在默认 HE80@149 或切换到上面的 HE160@149 高功率档。
+# 取消注释以下配置并 reload 启用。
+# config wifi-device 'radio1_he160_dfs'
+# 	option type 'mac80211'
+# 	option phy 'phy0'
+# 	option radio '1'
+# 	option band '5g'
+# 	option channel '36'
+# 	option htmode 'HE160'
+# 	option noscan '1'
+# 	option country 'US'
+# 	option cell_density '0'
+# 	option disabled '0'
+# config wifi-iface 'default_radio1_he160_dfs'
+# 	option device 'radio1_he160_dfs'
+# 	option network 'lan'
+# 	option mode 'ap'
+# 	option ssid 'K2P'
 # 	option encryption 'sae-mixed'
 # 	option key '123456789'
 

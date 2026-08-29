@@ -42,9 +42,9 @@
 - [ ] **mt76 上游追踪 / 吸收**（2026-08-22）：跟踪 `openwrt/mt76` master；当前 pin `59676919`，最新 `c5a3bd91`（147 commits / 76 files / +3038/-482）。优先等 openwrt main bump；若 main 不 bump，按锁源铁律自 bump `package/kernel/mt76`（实算 `PKG_MIRROR_HASH`，禁 fork/hash=skip）。升级后删除 `9992`（上游 `06b6976` 已合入同款 PS-sync 修复），逐条复核 `0001/0003/0006/0007/0008` 与 `0005/9990/9991/9993`，CI `all`+`experimental` 构建绿后实机回归（token_info、PS-sync 事件、三频功率、EHT320）
 
 ## P3 能力增强（决策标注的后续计划）
-- [x] **07 天线改善固件侧落地（2026-08-20）**：regdb-0521 默认档（UNII-3/4 160MHz 30dBm）+ mt76-0008 默认档（eeprom 2G/5G 解锁）+ 默认无线 5G ch149/HE160、6G ch37、2.4G MU-MIMO 关；CI all/experimental 构建全绿（ci-36/ci-37）
+- [x] **07 天线改善固件侧落地（2026-08-20）**：regdb-0521 默认档（UNII-3/4 160MHz 30dBm）+ mt76-0008 默认档（eeprom 2G/5G 解锁）+ 默认无线 5G ch149/HE160、6G ch37、2.4G MU-MIMO 关；CI all/experimental 构建全绿（ci-36/ci-37）。（2026-08-26 修订：5G 默认改 HE80，见下条 issue #21 闭环）
 - [ ] **漫游优化**（决策：暂不设置，固件稳定后实施）：802.11s/EHT320 回程、usteer/802.11k/v/r、（如多设备）mesh 配置
-- [ ] **iQOO 5G 兼容性实机复核（F41，2026-08-22）**：新增 5G-only SSID `K2P-5G` + HE80@ch149 做二分定位；若 HE80 可连而 HE160 不可连，则增加 5G HE80 兼容档（国行机 5.8G 仅 80MHz）；若需 160MHz，评估 ch36-64（DFS）。实测 `ieee80211k/v + bss_transition` 可在 wifi-iface 上生成配置，作为漫游优化备选
+- [x] **iQOO 5G 兼容性实机复核（F41/issue #21，2026-08-26）**：二分矩阵闭环——HE160（psk2/sae-mixed 均拒，AP 零 auth）→ HE80（psk2/sae-mixed 均可连，PHY 1200.9Mbps）。默认 5G 改 HE80，HE160 转注释化可选档（非国行终端）；K2P-5G 保留 sae-mixed。测试记录：`docs/acceptance-results/2026-08-26-iqoo-5g-he80-fix.md`
 - [ ] OC 实机验证报告：oc-1.3 与 oc-1.4 在实机的稳定性/温度，归档到 FIXES F08
 - [ ] 科学上网（OpenClash/PassWall）+ Docker——暂缓项，稳定后再决策 feed 与体积预算
 - [x] mt76 实验补丁（integration 树 9990-9993：EHT 广告/320M BF fallback/PS-sync/rate control）——**F25 评审（2026-08-18）+ F59 复核（2026-08-22）**：9990/9991/9993 重建入实验档（对 pin 59676919 实测可应用、master 无此改动）；**9992 复核后改为携带**（上游 mt76 master 2026-08-01 已合，但 pin 59676919 尚未包含；pin 升级后删除）；实机 EHT320 验证后毕业
