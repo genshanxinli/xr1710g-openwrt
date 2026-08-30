@@ -81,18 +81,19 @@ DEVICE_HOST=root@192.168.123.1 ./scripts/device-hw-probe.sh
 实验档另有：`vendor/02/04/05/06/07/09/17/18`、`9024`、`9026`、`9029`、`mt76-0005/0010/9990/9991/9993`、`mac80211-411`。
 mt76 包补丁默认档：`mt76-0001/0003/0006/0007/0008/0009/9994`。
 
-## 6. 上游状态快照（2026-08-26 会话重新查询）
+## 6. 上游状态快照（2026-08-30 会话重新查询）
 
-- `openwrt/openwrt` master：`eb7a45bc`（08-26 11:23）。相对上次快照 `3d1645ee`（08-21）累计 +34 commits；其中 08-23 `da5a057 airoha: npu: update firmware loading patch to the upstream version` 与 NPU 线相邻，dry-run 需重点观察。08-26 再查的 15 个新增（mediatek/siflower/qualcommax/qualcommbe/wifi-scripts 等）无 airoha 专项。
+- `openwrt/openwrt` master：`93cf01b0`（08-29 23:43）。相对上次快照 `eb7a45bc`（08-26）+39 commits（自 `3d1645ee` 08-21 累计 +73）；新增为 realtek DSA/ETH 重构系列（~20 commits）、qualcommax 修复、kernel 6.12 bump（6.12.104/105/107）、openssl 3.5.8、RTL8221B PHY LED backport、mediatek filogic LED 等，**无 airoha/mt76/regdb/wifi-scripts 专项**，下轮 sync dry-run 风险低。
 - `openwrt/mt76` master：`c5a3bd91`（08-22），无变化；openwrt main 的 mt76 pin 仍 `59676919`，本仓库 `9028` 仍领先 main，无需再 bump。
-- `OpenWRT-fanboy/OpenW1700k` `ubi2-oc`：`bc33b93e`（08-25 13:18，整枝 rebase；上次快照 `ba58ba46` 已被重写）。`ubi2-oc-auto` 滚动至 `a52fa9e9`（08-26）。`main`=`eb7a45bc`（已同步 openwrt main）。**fanboy 20 个定制 commit 与本仓库 `vendor/fanboy/01-20` 做 `git patch-id` 对比：18 个内容完全一致（仅 SHA 变化）；2 个内容变化**：① 08 Reliability（`36da8e02`→`3604463e`）新增 `wireless-regdb/patches/555-w1700k-fix.patch`（18 行），需与已有 `regdb-0555` 核对是否重叠；② 18 smartrg（`b45d5117`→`711aaa68`）中 `992-21-net-airoha-npu-init-stability.patch` 由 74 行变 83 行，实验档 `vendor/18` 需更新。06/07/mt76-0005 内容仍与 `c0ed8295`/`5b917d4b`/`e7a8143` 一致（仅新 SHA）。
+- `OpenWRT-fanboy/OpenW1700k` `ubi2-oc`：`765535cf`（08-30 00:27，再次整枝 rebase 到 openwrt master `93cf01b0`；08-25 快照 `bc33b93e` 已被重写）。`ubi2`= `f9ecdaf`（stock 去顶）；`ubi2-oc-auto` 与 `ubi2-oc` 同为 `765535cf`；`main`=`93cf01b0`（已同步 openwrt main）。**对当前栈逐 commit 提取内层 patch 与本地 vendor 复核**：06（`7828198`：650 修改 + 675-01/02/03 三新文件）、07（`4f19f7b`：0014）、mt76-0005（`171bc4b`，仅 hunk 偏移漂移）语义完全一致；08（`2bdb0df`）仍带 `wireless-regdb/patches/555-w1700k-fix.patch`——**与本仓库 `regdb-0521`+`regdb-0555` 语义完全重合，重叠已确认、无需吸收（F76）**；18 smartrg（`d623341`）`992-21` 仍为 83 行版、无进一步变化，**吸收仍未完成（F77）**。
 - `YYH2913/openwrt` `xr1710g-6.18-integration`：`e88fbe28`（08-19），无变化；mt76 0006/0007/9990/9991/9993、mac80211-411、regdb 510/520/530 已核对。
-- `naoki66/ImmortalWrt-for-Gemtek-XR1710G` master：`604bf882`（08-25）。相对 pin `dd9ecfeef` 有大量新提交，但 `package/luci-app-airoha-recovery/` 路径 0 差异，`packages-xr1710g/` 无需升锁。
+- `naoki66/ImmortalWrt-for-Gemtek-XR1710G` master：`2c99fd68f`（08-30 16:26 UTC；08-25 快照 `604bf882`）。相对 pin `dd9ecfeef` +347 commits；`package/luci-app-airoha-recovery/` 仍 0 差异，`packages-xr1710g/` 无需升锁。**新 XR1710G 专项信息（F78）**：① "Merge XR1710G USXGMII fix"——LAN2 PHY dts 增 `reset-before-id-read` + `realtek,sds-mode = <0x88c6>`，新增 108 行内核补丁 `622-net-phy-realtek-allow-board-specific-RTL826x-SDS-mode.patch`（厂商 U-Boot 写 RTL826x SDS page6 reg3=0x88c6，Linux 公共初始化缺该板级设置）；② `055e2c903` LAN2 PHY 先复位再读 ID；③ `53d5cccb0` MT7996 WED offload；④ `a8ed1a381` mt76 "set skb device for mt7996 NPU RX" 与本仓库实验档 `mt76-0010` 语义逐行一致（印证，无需改动）；⑤ 其 "drop upstreamed cpufreq PM-domain fix" 系其自家基线判断——openwrt master `patches-6.18/` 仍无 939/940（#22029 未合入），`vendor/fanboy/03` 继续携带。
 - `YYH2913/luci-app-mlo` `911912b`、`rchen14b/luci-app-w1700k-fancontrol` `2c6cc7a`：均无变化。
-- `YYH2913/http-uboot(-xr1710g)`：master `53b73174`；最新 release 仍 `xg2010g_260821`（08-21），tag `xg2010g_260822` 未发布为 release。锁版仍按 FLASHING A1 的 v2026.07/`59060dde`，升级前继续核对 release 页 SHA256。
-- openwrt feeds 最新：`packages`=`a353d906`（08-26）、`luci`=`7a6ff759`（08-26）、`video`=`644a6626`（08-25）、`routing`=`4b9891b9`、`telephony`=`5d68d53c`。
-- 跟踪 PR：仍 open #22397（08-23 更新但 head 仍 `e1fe2733a1`，无新代码提交）、#22029、#22473、#22532、#22533、#24034、#24619、#23990、#24025；已 merged #21777/#23078/#23383/#21978/#22391/#24593/#22289/#23427/#22564/#23566/#23828；closed 未合并 #22536；issue #21177 仍 open（01-02 后无活动）。
-- 失效源：`Arthur97172/Gemtek-XR1710G-wrt-builder`（08-24 仍存在，本次 404）、`hx801217/iStoreOS-for-Gemtek-XR1710G`、`luoyizhi1987/XR1710G-YYH-OC` 均 404；文档引用待标注/替换。
+- `YYH2913/http-uboot(-xr1710g)`：master `53b73174`；最新 release 仍 `xg2010g_260821`（08-21），tag `xg2010g_260822` 未发布为 release，本轮无新 release。锁版仍按 FLASHING A1 的 v2026.07/`59060dde`，升级前继续核对 release 页 SHA256。
+- wireless-regdb 上游（cdn.kernel.org）最新仍 `2026.05.30`，与 openwrt 包版本一致，无更新。
+- openwrt feeds 最新：`packages`=`d5c4e00d`、`luci`=`6e1eb21f`（均 08-30）；`video`=`644a6626`、`routing`=`4b9891b9`、`telephony`=`5d68d53c`（与 08-26 快照一致）。
+- 跟踪 PR：仍 open #22397（08-30 14:02 有新活动，head 仍 `e1fe2733a1`、最后代码提交 04-11，评论仍停在 03 月——review/CI 类活动，无新代码）、#22029、#22473、#22532、#22533、#24034、#24619、#23990、#24025（08-29 有活动）；已 merged #21777/#23078/#23383/#21978/#22391/#24593/#22289/#23427/#22564/#23566/#23828；closed 未合并 #22536；issue #21177 仍 open（01-02 后无活动）。
+- 失效源：`Arthur97172/Gemtek-XR1710G-wrt-builder`、`hx801217/iStoreOS-for-Gemtek-XR1710G`、`luoyizhi1987/XR1710G-YYH-OC` 均 404（`Arthur97172/Airoha-wrt-builder` 仍存在）；文档引用待标注/替换。
 
 ## 7. 下一步（重点）：新 CI 固件刷入设备后的测试
 

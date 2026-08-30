@@ -40,6 +40,8 @@
 - [ ] #22473（uboot pstore）——kernel 侧已自持，剩 uboot 侧
 - [ ] #22532（DSA）/ #22533（L2 offload）——实验档毕业候选（原料桶 04/05/06 已入库）：实验构建跑通 + 实机验证后并入默认档
 - [ ] **mt76 上游追踪 / 吸收**（2026-08-22）：跟踪 `openwrt/mt76` master；当前 pin `59676919`，最新 `c5a3bd91`（147 commits / 76 files / +3038/-482）。优先等 openwrt main bump；若 main 不 bump，按锁源铁律自 bump `package/kernel/mt76`（实算 `PKG_MIRROR_HASH`，禁 fork/hash=skip）。升级后删除 `9992`（上游 `06b6976` 已合入同款 PS-sync 修复），逐条复核 `0001/0003/0006/0007/0008` 与 `0005/9990/9991/9993`，CI `all`+`experimental` 构建绿后实机回归（token_info、PS-sync 事件、三频功率、EHT320）
+- [ ] **fanboy 18 smartrg 吸收**（F77，2026-08-30 复核）：上游 `ubi2-oc` `765535cf`（08-30 rebase）中 `992-21` 83 行版无进一步变化；`vendor/fanboy/18` 待更新为 83 行版并对 openwrt master 重建 + verify，实验档 CI 复验
+- [ ] **naoki66 LAN2 SDS-mode 方案评估**（F78，2026-08-30）：`622-net-phy-realtek-allow-board-specific-RTL826x-SDS-mode.patch` + dts `realtek,sds-mode`/`reset-before-id-read` 与实验档 `9029` JCPLL 对照（互补候选）；若吸收需对 openwrt master 重建并核对 `9001` LAN2 PHY 节点
 
 ## P3 能力增强（决策标注的后续计划）
 - [x] **07 天线改善固件侧落地（2026-08-20）**：regdb-0521 默认档（UNII-3/4 160MHz 30dBm）+ mt76-0008 默认档（eeprom 2G/5G 解锁）+ 默认无线 5G ch149/HE160、6G ch37、2.4G MU-MIMO 关；CI all/experimental 构建全绿（ci-36/ci-37）。（2026-08-26 修订：5G 默认改 HE80，见下条 issue #21 闭环）
