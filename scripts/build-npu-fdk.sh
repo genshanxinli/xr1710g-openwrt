@@ -16,8 +16,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PIN="$ROOT/config/npu-fdk.pin"
 PATCH_DIR="$ROOT/patches/vendor/hurryman/npu-fdk"
-OUT_DIR="$(readlink -f "${NPU_FDK_OUTPUT_DIR:-$ROOT/tmp/npu-fdk-dist}")"
-CACHE_DIR="$(readlink -f "${NPU_FDK_CACHE_DIR:-$ROOT/tmp/npu-fdk-cache}")"
+OUT_DIR="${NPU_FDK_OUTPUT_DIR:-$ROOT/tmp/npu-fdk-dist}"
+CACHE_DIR="${NPU_FDK_CACHE_DIR:-$ROOT/tmp/npu-fdk-cache}"
+mkdir -p "$OUT_DIR" "$CACHE_DIR"
+OUT_DIR="$(readlink -f "$OUT_DIR")"
+CACHE_DIR="$(readlink -f "$CACHE_DIR")"
 
 [[ -f "$PIN" ]] || { echo "错误：找不到 $PIN" >&2; exit 1; }
 # shellcheck disable=SC1090
