@@ -1,4 +1,4 @@
-# Source: YYH2913/openwrt xr1710g-6.18-integration package/firmware/wireless-regdb/patches（fetched 2026-08-17）
+# Source: YYH2913/openwrt xr1710g-6.18-integration package/firmware/wireless-regdb/patches（fetched 2026-08-22；diff 与 e88fbe28 一致）
 # Upstream: n/a（carried-only，不打算上游）
 # Reason: US 6GHz 去 NO-IR（6GHz 可用性前提）
 

@@ -38,12 +38,14 @@ values for all three radios, including a DFS channel on 5 GHz.
 Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
 ---
  package/network/config/wifi-scripts/Makefile  |   2 +-
- .../lib/netifd/wireless/mac80211.sh           | 160 +++++++++++++++++-
- 2 files changed, 159 insertions(+), 3 deletions(-)
+ .../lib/netifd/wireless/mac80211.sh           | 162 ++++++++++++++++++
+ 2 files changed, 161 insertions(+), 3 deletions(-)
 
 
 （2026-08-17 对当前 master 重建：仅 hunk #3 上下文漂移，手工合入后重新 diff；
  源码 41b9e3ac = YYH2913 wifi-scripts txpower per-radio（pr-23990），重建记录见 FIXES F13）
+（2026-08-21 实机验收修复：ucode 中 set_txpower 需定义在 setup_phy 之前，否则单 radio 设备
+ 会在 setup_phy 内触发 undeclared variable。）
 ---
 diff --git a/package/network/config/wifi-scripts/Makefile b/package/network/config/wifi-scripts/Makefile
 index e398bd5..f9d36ce 100644
@@ -59,7 +61,7 @@ index e398bd5..f9d36ce 100644
    PKGARCH:=all
  endef
 diff --git a/package/network/config/wifi-scripts/files-ucode/lib/netifd/wireless/mac80211.sh b/package/network/config/wifi-scripts/files-ucode/lib/netifd/wireless/mac80211.sh
-index a0aeed4..78ae382 100755
+index a0aeed4..93ba0df 100755
 --- a/package/network/config/wifi-scripts/files-ucode/lib/netifd/wireless/mac80211.sh
 +++ b/package/network/config/wifi-scripts/files-ucode/lib/netifd/wireless/mac80211.sh
 @@ -11,9 +11,13 @@ import * as iface from 'wifi.iface';
@@ -97,7 +99,22 @@ index a0aeed4..78ae382 100755
  	let name = phy + phy_suffix(radio, ".");
  	let prev_config = `/var/run/hostapd-${name}.conf`;
  
-@@ -106,7 +123,8 @@ function setup_phy(phy, config, data) {
+@@ -64,6 +81,14 @@ function get_channel_frequency(band, channel) {
+ 	}
+ }
+ 
++
++function set_txpower(cmd, txpower) {
++	for (let arg in split(txpower, ' '))
++		push(cmd, arg);
++
++	return system(cmd);
++}
++
+ function setup_phy(phy, config, data) {
+ 	if (config.channel == "auto")
+ 		config.channel = 0;
+@@ -106,7 +131,8 @@ function setup_phy(phy, config, data) {
  		system(`iw phy ${phy} set antenna ${config.txantenna} ${config.rxantenna}`);
  	}
  	system(`iw phy ${phy} set distance ${config.distance}`);
@@ -107,16 +124,10 @@ index a0aeed4..78ae382 100755
  
  	if (config.frag)
  		system(`iw phy ${phy} set frag ${config.frag}`);
-@@ -114,6 +132,139 @@ function setup_phy(phy, config, data) {
+@@ -114,6 +140,133 @@ function setup_phy(phy, config, data) {
  		system(`iw phy ${phy} set rts ${config.rts}`);
  }
  
-+function set_txpower(cmd, txpower) {
-+	for (let arg in split(txpower, ' '))
-+		push(cmd, arg);
-+
-+	return system(cmd);
-+}
 +
 +function get_interface_info(ifname) {
 +	return nl80211.request(nl80211.const.NL80211_CMD_GET_INTERFACE, 0, { dev: ifname });
@@ -247,7 +258,7 @@ index a0aeed4..78ae382 100755
  function iw_htmode(config) {
  	let suffix = substr(config.htmode, 3);
  	if (suffix == "40+" || suffix == "40-")
-@@ -224,7 +375,7 @@ function setup() {
+@@ -224,7 +377,7 @@ function setup() {
  		if (v.config.encryption == 'owe' && v.config.owe_transition) {
  			mode_idx = idx[mode]++;
  			v.config.owe_transition_ifname = data.ifname_prefix + mode + mode_idx;
@@ -256,7 +267,7 @@ index a0aeed4..78ae382 100755
  		}
  
  		switch (mode) {
-@@ -313,8 +464,13 @@ function setup() {
+@@ -313,8 +466,13 @@ function setup() {
  	if (length(supplicant_data) > 0)
  		supplicant.start(data);
  

@@ -7,7 +7,7 @@ diff --git a/target/linux/airoha/dts/an7581-xr1710g-ubi.dts b/target/linux/airoh
 new file mode 100644
 --- /dev/null
 +++ b/target/linux/airoha/dts/an7581-xr1710g-ubi.dts
-@@ -0,0 +1,427 @@
+@@ -0,0 +1,447 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 +
 +/dts-v1/;
@@ -33,7 +33,7 @@ new file mode 100644
 +
 +	chosen {
 +		rootdisk = <&ubi_rootfs>;
-+		bootargs = "console=ttyS0,115200 earlycon ubi.block=0,fit root=/dev/fit0 rootwait";
++		bootargs = "console=ttyS0,115200 earlycon ubi.block=0,fit root=/dev/fit0 rootwait rdinit=/sbin/init";
 +		stdout-path = "serial0:115200n8";
 +	};
 +
@@ -193,7 +193,7 @@ new file mode 100644
 +		};
 +
 +		/* reserved for bad block table */
-+		reserved_bmt@1be00000 {
++		reserved_bmt@1fe00000 {
 +			label = "reserved_bmt";
 +			reg = <0x1be00000 0x04200000>;
 +			read-only;
@@ -366,6 +366,17 @@ new file mode 100644
 +			// interrupts = <22 IRQ_TYPE_LEVEL_LOW>;
 +			tx-polarity = <PHY_POL_INVERT>;
 +			rx-polarity = <PHY_POL_INVERT>;
++
++			leds {
++				#address-cells = <1>;
++				#size-cells = <0>;
++
++				led@0 {
++					reg = <0>;
++					color = <LED_COLOR_ID_GREEN>;
++					function = LED_FUNCTION_LAN;
++				};
++			};
 +		};
 +
 +		phy8: ethernet-phy@8 {
@@ -378,6 +389,17 @@ new file mode 100644
 +			// interrupts = <23 IRQ_TYPE_LEVEL_LOW>;
 +			tx-polarity = <PHY_POL_INVERT>;
 +			rx-polarity = <PHY_POL_INVERT>;
++
++			leds {
++				#address-cells = <1>;
++				#size-cells = <0>;
++
++				led@0 {
++					reg = <0>;
++					color = <LED_COLOR_ID_GREEN>;
++					function = LED_FUNCTION_LAN;
++				};
++			};
 +		};
 +	};
 +};
@@ -386,8 +408,7 @@ new file mode 100644
 +	status = "okay";
 +	interrupts = <1>;
 +	pinctrl-names = "gbe-led";
-+	pinctrl-0 = <&gswp1_led0_pins>;
-+	pinctrl-1 = <&gswp1_led1_pins>;
++	pinctrl-0 = <&gswp1_led0_pins>, <&gswp1_led1_pins>;
 +};
 +
 +&gsw_port1 {
@@ -413,8 +434,7 @@ new file mode 100644
 +	status = "okay";
 +	interrupts = <2>;
 +	pinctrl-names = "gbe-led";
-+	pinctrl-0 = <&gswp2_led0_pins>;
-+	pinctrl-1 = <&gswp2_led1_pins>;
++	pinctrl-0 = <&gswp2_led0_pins>, <&gswp2_led1_pins>;
 +};
 +
 +&gsw_port2 {

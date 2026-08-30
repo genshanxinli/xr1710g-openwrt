@@ -18,3 +18,13 @@ audit-ubi2oc/
 *.swp
 *~
 .DS_Store
+# 本地 gh CLI 登录态（临时，勿提交）
+.gh-token
+.gh-config/
+.gh-home/
+.gh_device_login.py
+.gh-device-flow.log
+.gh-device-flow.json
+.gh-device-flow.stdout
+# 本地 SSH 密钥/known_hosts/快捷脚本（勿提交）
+.ssh/

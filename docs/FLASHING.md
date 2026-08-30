@@ -6,7 +6,7 @@
 ## 背景（为什么必须换引导）
 
 厂商签名 U-Boot（2014.04-rc1 AXON）+ BMT/BBT 坏块管理**不支持 UBI**，而 OpenWrt 需要 UBI 布局
-（`vendor 6MiB → chainloader 槽 1MiB@0x600000 → ubi → reserved_bmt 2MiB`，卷 `ubootenv/ubootenv2/fit/factory`，`root=/dev/fit0`）。
+（`vendor 6MiB → chainloader 槽 1MiB@0x600000 → ubi 0x1b700000 → reserved_bmt@1be00000 0x04200000`，卷 `ubootenv/ubootenv2/fit/factory`，`root=/dev/fit0`）。
 必须先写 chainloader 槽才能跑 OpenWrt。
 
 ## 路径 A（主）：固化 HTTP U-Boot
@@ -26,6 +26,19 @@
    再 `flash_erase /dev/mtd5 0 8; nandwrite -p /dev/mtd5 /tmp/xr1710g-chainloader-slot.bin`
    ——**只写前 1MiB**；严禁用 sysupgrade 写 U-Boot；
 3. 从 w1700k-ubi-installer 迁移：先 `printenv bootcmd` 核对兼容形式再写槽。
+
+### A2.1 锁版纪律与坏版本清单（IP19）
+- **坏版本**：2026-08-08 的 HTTP U-Boot 恢复页（社区流传 `g93da8f980ef0`）上传固件必 failed——恢复页逻辑缺陷，非单纯 NAND 擦除问题。**不要锁定/刷入该版本**。
+- **候选锁版**：2026-08-11 修复版 `b7710e5cc851`（社区验证修复上传失败；锁版前仍需在 YYH2913/http-uboot release 页核对 SHA256 与发布时间）。
+- 升级后必须把新 SHA256 与验证结果记入 FIXES/README；未核对前不盲升级。
+
+### A2.2 OS 内救砖（kmod-mtd-rw 覆写 chainloader 槽）
+> 仅当 HTTP U-Boot 恢复页不可用（如坏版本 `g93da8f980ef0` 已刷入）且仍能进 OpenWrt 时使用；有 UART 优先走路径 B。
+1. 备份当前槽：`dd if=/dev/mtd1ro of=/tmp/chainloader-slot.bin` 备份 1MiB chainloader 槽（或 `mtd read`）；
+2. 安装可写 MTD 模块：`opkg update && opkg install kmod-mtd-rw`；然后 `insmod mtd-rw i_want_a_brick=1`；
+3. 覆写前再次核对新 flash-slot.bin 的 SHA256；
+4. 写槽：`mtd -e chainloader write /tmp/xr1710g-uboot-<版本>-flash-slot.bin chainloader`（只写前 1MiB 槽，严禁整片擦写）；
+5. 重启进恢复页验证；本步骤是救砖底牌，不是日常升级路径。
 
 ### A3 日常升级 / 恢复（免串口）
 1. PC 接 **10GbE 口**、DHCP；开机待 10G 口 LED 开始闪时**按住 reset**；

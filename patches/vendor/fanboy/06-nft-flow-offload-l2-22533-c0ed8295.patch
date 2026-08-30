@@ -1,35 +1,49 @@
-From bdfd1ae20785a3b23eb61b0a7f24e57ce2d41ad3 Mon Sep 17 00:00:00 2001
+From c0ed82957c26234cd77ed3883211cf9be5a78a32 Mon Sep 17 00:00:00 2001
 From: fanboy <fanboy@openwrt.org>
 Date: Sat, 18 Jul 2026 02:25:20 -1000
 Subject: [PATCH] generic: standalone nft_flow_offload L2 bridge offload
 
 Ship the nft_flow_offload bridge-offload series for pending-6.18 as
-five patches (675-01 through 675-05), plus a DEV_PATH_BR_VLAN_KEEP_HW
-case addition in hack-6.18/650:
+three consolidated patches (675-01 through 675-03), plus a
+DEV_PATH_BR_VLAN_KEEP_HW case addition in hack-6.18/650.  Uses native
+NFPROTO_BRIDGE chain path (nft_do_chain_bridge) directly, eliminating
+the kmod-br-netfilter dependency.  Bridged IP traffic traverses the
+NFPROTO_BRIDGE NF_BR_FORWARD hook in __br_forward without any
+netfilter involvement on the bridge family.
 
-675-01: Exports __dev_fill_forward_path() accepting a caller-supplied
-net_device_path_ctx, refactoring dev_fill_forward_path() to wrap it.
+675-01: Kernel forward-path and bridge-VLAN infrastructure
+----------------------------------------------------------
+Exports __dev_fill_forward_path() accepting a caller-supplied
+net_device_path_ctx, allowing callers to pre-populate context (e.g.
+VLAN state) before the forward path walk.  The existing
+dev_fill_forward_path() is refactored to wrap it.
 
-675-02: Adds an exported bridge helper to br_vlan.c, declared via
-if_bridge.h:
-  - br_vlan_get_offload_info_rcu(): VLAN id + protocol for flow offload.
-    The port is resolved via br_port_get_rcu(); the VLAN id is taken
-    from the skb VLAN tag when present, falling back to the port PVID
-    via br_vlan_get_pvid_rcu().
+Adds an exported bridge helper to br_vlan.c, declared via if_bridge.h:
+  br_vlan_get_offload_info_rcu(): resolves the VLAN id for flow offload
+  (skb VLAN tag id if present, PVID otherwise) and writes the bridge
+  VLAN protocol to *proto.  Returns 0 when VLAN filtering is off or the
+  device is not a bridge port.  Single br_port_get_rcu() lookup; must
+  be called under RCU read lock.
 
-Adds DEV_PATH_BR_VLAN_KEEP_HW path type for switchdev-backed bridge
-ports where tagged VLANs are kept in hardware without software
-stripping. br_vlan_fill_forward_path_pvid() promotes switchdev-added
+Introduces DEV_PATH_BR_VLAN_KEEP_HW path type for switchdev-backed
+bridge ports where tagged VLANs are kept in hardware without software
+stripping.  br_vlan_fill_forward_path_pvid() promotes switchdev-added
 VLANs to KEEP_HW on the tagged path and to UNTAG_HW on the untagged
 path; br_device.c treats KEEP_HW as a no-op like KEEP.
 
-675-03: Core bridge offload in nft_flow_offload.c / nf_flow_table_path.c:
+675-02: nft_flow_offload bridge offload + NFPROTO_BRIDGE flowtable type
+------------------------------------------------------------------------
+Core bridge offload in nft_flow_offload.c / nf_flow_table_path.c:
+
   - nft_flow_route() renamed to nft_flow_route_routing() with a null-dst
     guard to prevent kernel panics when no L3 route exists for a bridged
     interface.
+
   - nft_flow_route_bridging() allocates minimal dst entries anchored to
     the bridge master device, avoiding nf_route() which fails for
-    bridged-only prefixes.
+    bridged-only prefixes.  Both directions share one dst via
+    dst_hold(); dsts are released on error paths to prevent memory leaks.
+
   - nft_dev_forward_path() copies MAC addresses from the packet header
     for bridged flows, with conntrack-direction-aware source/dest swap.
     Bridge-port ingress devices try the L2 bridge path first via
@@ -37,77 +51,71 @@ path; br_device.c treats KEEP_HW as a no-op like KEEP.
     master, dst alloc failure) the route is zeroed and L3 routing is
     retried via nft_flow_route_routing(), eliminating the TOCTOU race
     of a speculative FDB probe.
+
   - nft_dev_forward_path() pre-fills VLAN context for hardware offload
     entries: br_vlan_get_offload_info_rcu() resolves the port via
     br_port_get_rcu() and the VLAN id/proto from the skb VLAN tag (or
     the port PVID via br_vlan_get_pvid_rcu() when the packet is
     untagged), populating ctx.vlan[] and info.encap[] (guarded by
-    NF_FLOW_TABLE_ENCAP_MAX); when VLAN filtering is off,
-    the skb VLAN tag is recorded as passthrough encap.
+    NF_FLOW_TABLE_ENCAP_MAX); when VLAN filtering is off, the skb VLAN
+    tag is recorded as passthrough encap.
+
   - info->indev hoisted outside the path-type switch so bridge ingress
     device is tracked for all path types.
+
   - DEV_PATH_BR_VLAN_UNTAG underflow fixed: check num_encaps == 0
-    before decrementing, avoiding u8 wraparound to 255. The old
-    post-decrement pattern also nulled info->indev as an error signal;
-    the new code relies on the WARN_ON_ONCE for diagnostics.
+    before decrementing, avoiding u8 wraparound to 255.
+
   - info->xmit_type = FLOW_OFFLOAD_XMIT_DIRECT scoped to DEV_PATH_BRIDGE
     and DEV_PATH_MTK_WDMA only; ETHERNET/VLAN/PPPOE paths retain
     FLOW_OFFLOAD_XMIT_NEIGH for software flow offload.
+
   - DEV_PATH_MTK_WDMA handled in nft_dev_path_info() to populate the
     correct source device for the MediaTek PPE offload path.
+
   - nft_flow_validate() accepts NFPROTO_BRIDGE for bridge-family chains.
+
   - L3 protocol derived from ct->tuplehash[dir].tuple.src.l3num instead
     of nft_pf(pkt) which returns NFPROTO_BRIDGE in bridge-family tables.
-  - dst refcount fix: rt_dst_alloc/ip6_dst_alloc allocate ephemeral dsts
-    with refcount=1; both flow directions share one dst via dst_hold(),
-    and dsts are released on error paths to prevent memory leaks.
 
-675-04: Register an NFPROTO_BRIDGE flowtable type in nf_flow_table_inet.
-ko, reusing the inet flowtable hook (nf_flow_offload_inet_hook, which
-strips VLAN/PPPoE encapsulation and dispatches to the IPv4 or IPv6
-offload hooks, with routing selected by the flow tuple's L3 protocol
-via nf_flow_rule_route_inet) and a MODULE_ALIAS_NF_FLOWTABLE(AF_BRIDGE)
-so nft can autoload the module. This allows nftables flowtable
+Registers an NFPROTO_BRIDGE flowtable type in nf_flow_table_inet.ko,
+reusing the inet flowtable hook (nf_flow_offload_inet_hook, which strips
+VLAN/PPPoE encapsulation and dispatches to the IPv4 or IPv6 offload
+hooks, with routing selected by the flow tuple L3 protocol via
+nf_flow_rule_route_inet) and a MODULE_ALIAS_NF_FLOWTABLE(AF_BRIDGE) so
+nft can autoload the module.  This allows nftables flowtable
 declarations in bridge-family tables, replacing the kmod-br-netfilter
 (CONFIG_BRIDGE_NETFILTER) approach of lifting bridged IP traffic into
-the inet forward chain. No separate kmod is produced; kmod-nft-offload
+the inet forward chain.  No separate kmod is produced; kmod-nft-offload
 carries the bridge flowtable support via nf_flow_table_inet.ko.
 
-675-05: nf_conntrack_bridge VLAN/PPPoE support - adds
-nf_ct_bridge_inner() for parsing a single outer VLAN tag or PPPoE
+675-03: nf_conntrack_bridge VLAN/PPPoE support
+------------------------------------------------
+Adds nf_ct_bridge_inner() for parsing a single outer VLAN tag or PPPoE
 encapsulation (optionally with one inner VLAN tag inside the PPPoE
 frame), extends nf_bridge_frag_data with VLAN/PPPoE state, and adds
 defrag/refrag/frag_restore handling for bridged packets with these
-encapsulations. PPP protocol ids are translated to ethertypes for the
+encapsulations.  PPP protocol ids are translated to ethertypes for the
 inner IP/IPv6 switch, and frag state is saved before the MAC headers
 are pulled.
-
-Uses native NFPROTO_BRIDGE chain path (nft_do_chain_bridge) directly,
-eliminating the kmod-br-netfilter dependency. Bridged IP traffic
-traverses the NFPROTO_BRIDGE NF_BR_FORWARD hook in __br_forward without
-any netfilter involvement on the bridge family.
 
 Co-Authored-By: Ryan Chen <rchen14b@gmail.com>
 Co-Authored-By: Daniel Pawlik <pawlik.dan@gmail.com>
 Co-Authored-By: Bohdan Chubuk <chbgdn@gmail.com>
 Co-Authored-By: Tao Gong <gongtao0607@gmail.com>
-Assisted-By: Claude <noreply@anthropic.com>
-Assisted-By: OpenCode <assist@opencode.ai>
+Assisted-By: Claude
+Assisted-By: OpenCode
 Assisted-by: Codex:gpt-5.5
 Signed-off-by: Jihong Min <hurryman2212@gmail.com>
 ---
  ...-netfilter-add-xt_FLOWOFFLOAD-target.patch |   5 +-
- ...rward-path-exports-and-bridge-helper.patch |  90 ++++
- ...-forward-path-helpers-and-vlan-modes.patch | 112 +++++
- ...ft_flow_offload-add-bridging-support.patch | 404 ++++++++++++++++++
- ...flow_table-add-bridge-flowtable-type.patch |  86 ++++
- ...idge-Add-conntrack-double-vlan-pppoe.patch | 317 ++++++++++++++
- 6 files changed, 1012 insertions(+), 2 deletions(-)
- create mode 100644 target/linux/generic/pending-6.18/675-01-net-forward-path-exports-and-bridge-helper.patch
- create mode 100644 target/linux/generic/pending-6.18/675-02-net-bridge-forward-path-helpers-and-vlan-modes.patch
- create mode 100644 target/linux/generic/pending-6.18/675-03-nft_flow_offload-add-bridging-support.patch
- create mode 100644 target/linux/generic/pending-6.18/675-04-netfilter-nf_flow_table-add-bridge-flowtable-type.patch
- create mode 100644 target/linux/generic/pending-6.18/675-05-netfilter-bridge-Add-conntrack-double-vlan-pppoe.patch
+ ...exports-bridge-helper-and-vlan-modes.patch | 174 ++++++++
+ ...ad-bridge-offload-and-flowtable-type.patch | 406 ++++++++++++++++++
+ ...e-conntrack-vlan-pppoe-encapsulation.patch | 296 +++++++++++++
+ 4 files changed, 879 insertions(+), 2 deletions(-)
+ create mode 100644 target/linux/generic/pending-6.18/675-01-net-forward-path-exports-bridge-helper-and-vlan-modes.patch
+ create mode 100644 target/linux/generic/pending-6.18/675-02-nft_flow_offload-bridge-offload-and-flowtable-type.patch
+ create mode 100644 target/linux/generic/pending-6.18/675-03-netfilter-bridge-conntrack-vlan-pppoe-encapsulation.patch
 
 diff --git a/target/linux/generic/hack-6.18/650-netfilter-add-xt_FLOWOFFLOAD-target.patch b/target/linux/generic/hack-6.18/650-netfilter-add-xt_FLOWOFFLOAD-target.patch
 index 2217b0829bba1d..e05fa6ae10a084 100644
@@ -139,26 +147,46 @@ index 2217b0829bba1d..e05fa6ae10a084 100644
   
   void flow_offload_teardown(struct flow_offload *flow);
   
-diff --git a/target/linux/generic/pending-6.18/675-01-net-forward-path-exports-and-bridge-helper.patch b/target/linux/generic/pending-6.18/675-01-net-forward-path-exports-and-bridge-helper.patch
+diff --git a/target/linux/generic/pending-6.18/675-01-net-forward-path-exports-bridge-helper-and-vlan-modes.patch b/target/linux/generic/pending-6.18/675-01-net-forward-path-exports-bridge-helper-and-vlan-modes.patch
 new file mode 100644
-index 00000000000000..02030343b493cb
+index 00000000000000..244716388ae8a2
 --- /dev/null
-+++ b/target/linux/generic/pending-6.18/675-01-net-forward-path-exports-and-bridge-helper.patch
-@@ -0,0 +1,90 @@
-+From: Ryan Chen <rchen14b@gmail.com>
-+Date: Sun, 16 Mar 2026 12:00:00 -0500
-+Subject: [PATCH 1/5] net: export __dev_fill_forward_path
-+
-+Export __dev_fill_forward_path() which accepts a caller-supplied
-+net_device_path_ctx, allowing callers to pre-populate context (e.g.
-+VLAN state) before the forward path walk. The existing
-+dev_fill_forward_path() is refactored to call it.
-+
-+Signed-off-by: Ryan Chen <rchen14b@gmail.com>
-+Signed-off-by: Daniel Pawlik <pawlik.dan@gmail.com>
-+---
++++ b/target/linux/generic/pending-6.18/675-01-net-forward-path-exports-bridge-helper-and-vlan-modes.patch
+@@ -0,0 +1,174 @@
++--- a/include/linux/if_bridge.h
+++++ b/include/linux/if_bridge.h
++@@ -119,6 +119,8 @@ int br_vlan_get_info(const struct net_de
++ 		     struct bridge_vlan_info *p_vinfo);
++ int br_vlan_get_info_rcu(const struct net_device *dev, u16 vid,
++ 			 struct bridge_vlan_info *p_vinfo);
+++u16 br_vlan_get_offload_info_rcu(const struct net_device *dev,
+++				 const struct sk_buff *skb, __be16 *proto);
++ bool br_mst_enabled(const struct net_device *dev);
++ int br_mst_get_info(const struct net_device *dev, u16 msti, unsigned long *vids);
++ int br_mst_get_state(const struct net_device *dev, u16 msti, u8 *state);
++@@ -155,6 +157,12 @@ static inline int br_vlan_get_info_rcu(c
++ 	return -EINVAL;
++ }
++ 
+++static inline u16 br_vlan_get_offload_info_rcu(const struct net_device *dev,
+++						const struct sk_buff *skb,
+++						__be16 *proto)
+++{
+++	return 0;
+++}
++ static inline bool br_mst_enabled(const struct net_device *dev)
++ {
++ 	return false;
 +--- a/include/linux/netdevice.h
 ++++ b/include/linux/netdevice.h
++@@ -893,6 +893,7 @@ struct net_device_path {
++ 				DEV_PATH_BR_VLAN_TAG,
++ 				DEV_PATH_BR_VLAN_UNTAG,
++ 				DEV_PATH_BR_VLAN_UNTAG_HW,
+++				DEV_PATH_BR_VLAN_KEEP_HW,
++ 			}		vlan_mode;
++ 			u16		vlan_id;
++ 			__be16		vlan_proto;
 +@@ -3361,6 +3361,8 @@ int dev_get_iflink(const struct net_devi
 + int dev_fill_metadata_dst(struct net_device *dev, struct sk_buff *skb);
 + int dev_fill_forward_path(const struct net_device *dev, const u8 *daddr,
@@ -168,6 +196,70 @@ index 00000000000000..02030343b493cb
 + struct net_device *dev_get_by_name(struct net *net, const char *name);
 + struct net_device *dev_get_by_name_rcu(struct net *net, const char *name);
 + struct net_device *__dev_get_by_name(struct net *net, const char *name);
++--- a/net/bridge/br_device.c
+++++ b/net/bridge/br_device.c
++@@ -423,6 +423,7 @@ static int br_fill_forward_path(struct n
++ 	case DEV_PATH_BR_VLAN_UNTAG:
++ 		ctx->num_vlans--;
++ 		break;
+++	case DEV_PATH_BR_VLAN_KEEP_HW:
++ 	case DEV_PATH_BR_VLAN_KEEP:
++ 		break;
++ 	}
++--- a/net/bridge/br_vlan.c
+++++ b/net/bridge/br_vlan.c
++@@ -1489,9 +1489,12 @@ int br_vlan_fill_forward_path_mode(struc
++ 	if (!(v->flags & BRIDGE_VLAN_INFO_UNTAGGING))
++ 		return 0;
++ 
++-	if (path->bridge.vlan_mode == DEV_PATH_BR_VLAN_TAG)
++-		path->bridge.vlan_mode = DEV_PATH_BR_VLAN_KEEP;
++-	else if (v->priv_flags & BR_VLFLAG_ADDED_BY_SWITCHDEV)
+++	if (path->bridge.vlan_mode == DEV_PATH_BR_VLAN_TAG) {
+++		if (v->priv_flags & BR_VLFLAG_ADDED_BY_SWITCHDEV)
+++			path->bridge.vlan_mode = DEV_PATH_BR_VLAN_KEEP_HW;
+++		else
+++			path->bridge.vlan_mode = DEV_PATH_BR_VLAN_KEEP;
+++	} else if (v->priv_flags & BR_VLFLAG_ADDED_BY_SWITCHDEV)
++ 		path->bridge.vlan_mode = DEV_PATH_BR_VLAN_UNTAG_HW;
++ 	else
++ 		path->bridge.vlan_mode = DEV_PATH_BR_VLAN_UNTAG;
++@@ -1554,6 +1557,35 @@ int br_vlan_get_info_rcu(const struct ne
++ }
++ EXPORT_SYMBOL_GPL(br_vlan_get_info_rcu);
++ 
+++/**
+++ * br_vlan_get_offload_info_rcu - get VLAN id and protocol for bridge flow offload
+++ * @dev: bridge port network device
+++ * @skb: packet buffer
+++ * @proto: output for the bridge VLAN protocol (set only when return value != 0)
+++ *
+++ * When VLAN filtering is enabled, resolves the VLAN id for flow offload (skb
+++ * VLAN tag id if present, PVID otherwise) and writes the bridge VLAN protocol
+++ * to @proto. Returns 0 when filtering is off or @dev is not a bridge port.
+++ * Single br_port_get_rcu() lookup. Must be called under RCU read lock.
+++ */
+++u16 br_vlan_get_offload_info_rcu(const struct net_device *dev,
+++				 const struct sk_buff *skb, __be16 *proto)
+++{
+++	struct net_bridge_port *port = br_port_get_rcu(dev);
+++	u16 vid = 0;
+++
+++	if (!port || !br_opt_get(port->br, BROPT_VLAN_ENABLED))
+++		return 0;
+++	if (skb_vlan_tag_present(skb))
+++		vid = skb_vlan_tag_get_id(skb);
+++	else
+++		br_vlan_get_pvid_rcu(dev, &vid);
+++	if (vid)
+++		*proto = port->br->vlan_proto;
+++	return vid;
+++}
+++EXPORT_SYMBOL_GPL(br_vlan_get_offload_info_rcu);
+++
++ static int br_vlan_is_bind_vlan_dev(const struct net_device *dev)
++ {
++ 	return is_vlan_dev(dev) &&
 +--- a/net/core/dev.c
 ++++ b/net/core/dev.c
 +@@ -744,44 +744,52 @@ static struct net_device_path *dev_fwd_p
@@ -235,182 +327,12 @@ index 00000000000000..02030343b493cb
 + EXPORT_SYMBOL_GPL(dev_fill_forward_path);
 + 
 + /* must be called under rcu_read_lock(), as we dont take a reference */
-diff --git a/target/linux/generic/pending-6.18/675-02-net-bridge-forward-path-helpers-and-vlan-modes.patch b/target/linux/generic/pending-6.18/675-02-net-bridge-forward-path-helpers-and-vlan-modes.patch
+diff --git a/target/linux/generic/pending-6.18/675-02-nft_flow_offload-bridge-offload-and-flowtable-type.patch b/target/linux/generic/pending-6.18/675-02-nft_flow_offload-bridge-offload-and-flowtable-type.patch
 new file mode 100644
-index 00000000000000..3c40926c697f54
+index 00000000000000..ec6324c9adf095
 --- /dev/null
-+++ b/target/linux/generic/pending-6.18/675-02-net-bridge-forward-path-helpers-and-vlan-modes.patch
-@@ -0,0 +1,112 @@
-+From: Daniel Pawlik <pawlik.dan@gmail.com>
-+Date: Sun, 16 Mar 2026 12:00:00 -0500
-+Subject: [PATCH 2/5] net: bridge: forward path helpers and VLAN modes
-+
-+Add a bridge flow offload helper that exposes the bridge state needed by
-+nft_flow_offload without requiring callers to include br_private.h:
-+ - br_vlan_get_offload_info_rcu(): get VLAN id and protocol
-+
-+Add DEV_PATH_BR_VLAN_KEEP_HW path type for switchdev-backed bridge
-+ports where tagged VLANs are kept in hardware without software
-+stripping.
-+
-+Signed-off-by: Daniel Pawlik <pawlik.dan@gmail.com>
-+---
-+--- a/include/linux/if_bridge.h
-++++ b/include/linux/if_bridge.h
-+@@ -119,6 +119,8 @@ int br_vlan_get_info(const struct net_de
-+ 		     struct bridge_vlan_info *p_vinfo);
-+ int br_vlan_get_info_rcu(const struct net_device *dev, u16 vid,
-+ 			 struct bridge_vlan_info *p_vinfo);
-++u16 br_vlan_get_offload_info_rcu(const struct net_device *dev,
-++				 const struct sk_buff *skb, __be16 *proto);
-+ bool br_mst_enabled(const struct net_device *dev);
-+ int br_mst_get_info(const struct net_device *dev, u16 msti, unsigned long *vids);
-+ int br_mst_get_state(const struct net_device *dev, u16 msti, u8 *state);
-+@@ -155,6 +157,12 @@ static inline int br_vlan_get_info_rcu(c
-+ 	return -EINVAL;
-+ }
-+ 
-++static inline u16 br_vlan_get_offload_info_rcu(const struct net_device *dev,
-++						const struct sk_buff *skb,
-++						__be16 *proto)
-++{
-++	return 0;
-++}
-+ static inline bool br_mst_enabled(const struct net_device *dev)
-+ {
-+ 	return false;
-+--- a/include/linux/netdevice.h
-++++ b/include/linux/netdevice.h
-+@@ -893,6 +893,7 @@ struct net_device_path {
-+ 				DEV_PATH_BR_VLAN_TAG,
-+ 				DEV_PATH_BR_VLAN_UNTAG,
-+ 				DEV_PATH_BR_VLAN_UNTAG_HW,
-++				DEV_PATH_BR_VLAN_KEEP_HW,
-+ 			}		vlan_mode;
-+ 			u16		vlan_id;
-+ 			__be16		vlan_proto;
-+--- a/net/bridge/br_device.c
-++++ b/net/bridge/br_device.c
-+@@ -423,6 +423,7 @@ static int br_fill_forward_path(struct n
-+ 	case DEV_PATH_BR_VLAN_UNTAG:
-+ 		ctx->num_vlans--;
-+ 		break;
-++	case DEV_PATH_BR_VLAN_KEEP_HW:
-+ 	case DEV_PATH_BR_VLAN_KEEP:
-+ 		break;
-+ 	}
-+--- a/net/bridge/br_vlan.c
-++++ b/net/bridge/br_vlan.c
-+@@ -1489,9 +1489,12 @@ int br_vlan_fill_forward_path_mode(struc
-+ 	if (!(v->flags & BRIDGE_VLAN_INFO_UNTAGGED))
-+ 		return 0;
-+ 
-+-	if (path->bridge.vlan_mode == DEV_PATH_BR_VLAN_TAG)
-+-		path->bridge.vlan_mode = DEV_PATH_BR_VLAN_KEEP;
-+-	else if (v->priv_flags & BR_VLFLAG_ADDED_BY_SWITCHDEV)
-++	if (path->bridge.vlan_mode == DEV_PATH_BR_VLAN_TAG) {
-++		if (v->priv_flags & BR_VLFLAG_ADDED_BY_SWITCHDEV)
-++			path->bridge.vlan_mode = DEV_PATH_BR_VLAN_KEEP_HW;
-++		else
-++			path->bridge.vlan_mode = DEV_PATH_BR_VLAN_KEEP;
-++	} else if (v->priv_flags & BR_VLFLAG_ADDED_BY_SWITCHDEV)
-+ 		path->bridge.vlan_mode = DEV_PATH_BR_VLAN_UNTAG_HW;
-+ 	else
-+ 		path->bridge.vlan_mode = DEV_PATH_BR_VLAN_UNTAG;
-+@@ -1554,6 +1557,35 @@ int br_vlan_get_info_rcu(const struct ne
-+ }
-+ EXPORT_SYMBOL_GPL(br_vlan_get_info_rcu);
-+ 
-++/**
-++ * br_vlan_get_offload_info_rcu - get VLAN id and protocol for bridge flow offload
-++ * @dev: bridge port network device
-++ * @skb: packet buffer
-++ * @proto: output for the bridge VLAN protocol (set only when return value != 0)
-++ *
-++ * When VLAN filtering is enabled, resolves the VLAN id for flow offload (skb
-++ * VLAN tag id if present, PVID otherwise) and writes the bridge VLAN protocol
-++ * to @proto. Returns 0 when filtering is off or @dev is not a bridge port.
-++ * Single br_port_get_rcu() lookup. Must be called under RCU read lock.
-++ */
-++u16 br_vlan_get_offload_info_rcu(const struct net_device *dev,
-++				 const struct sk_buff *skb, __be16 *proto)
-++{
-++	struct net_bridge_port *port = br_port_get_rcu(dev);
-++	u16 vid = 0;
-++
-++	if (!port || !br_opt_get(port->br, BROPT_VLAN_ENABLED))
-++		return 0;
-++	if (skb_vlan_tag_present(skb))
-++		vid = skb_vlan_tag_get_id(skb);
-++	else
-++		br_vlan_get_pvid_rcu(dev, &vid);
-++	if (vid)
-++		*proto = port->br->vlan_proto;
-++	return vid;
-++}
-++EXPORT_SYMBOL_GPL(br_vlan_get_offload_info_rcu);
-++
-+ static int br_vlan_is_bind_vlan_dev(const struct net_device *dev)
-+ {
-+ 	return is_vlan_dev(dev) &&
-diff --git a/target/linux/generic/pending-6.18/675-03-nft_flow_offload-add-bridging-support.patch b/target/linux/generic/pending-6.18/675-03-nft_flow_offload-add-bridging-support.patch
-new file mode 100644
-index 00000000000000..ea2949c20c192e
---- /dev/null
-+++ b/target/linux/generic/pending-6.18/675-03-nft_flow_offload-add-bridging-support.patch
-@@ -0,0 +1,404 @@
-+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-+From: Hauke Mehrtens <hauke@hauke-m.de>
-+Date: Thu, 14 Nov 2024 00:18:04 +0100
-+Subject: [PATCH 3/5] netfilter: nft_flow_offload: add L2 bridge offload
-+ support
-+
-+Add L2 bridge offload support to the nftables flow offload infrastructure.
-+When a packet traverses a bridge, the flow table now resolves the full
-+forward path through the bridge's FDB, enabling hardware offload of
-+bridged traffic via switchdev or WDMA data paths.
-+
-+The nft_flow_route_bridging() function handles bridge path resolution by:
-+  - Looking up destination MAC in the bridge's FDB
-+  - Determining the egress VLAN configuration
-+  - Populating the bridge path segment for the forward path
-+
-+The eval dispatcher short-circuits bridge-family tables via
-+nft_pf(pkt) == NFPROTO_BRIDGE.  For routed-family tables
-+(NFPROTO_IPV4/6/INET), bridge-port ingress devices try the L2 bridge
-+path first; if it fails (no FDB entry, no bridge master, dst alloc
-+failure), it falls back to L3 routing.  This eliminates the speculative
-+FDB lookup (and TOCTOU race) that a separate probe step would have
-+required.
-+
-+nft_flow_route_routing() is the renamed nft_flow_route() with an added
-+null-dst guard to prevent kernel panics when no L3 route exists for a
-+bridged interface.
-+
-+The eval function is extended to accept NFPROTO_BRIDGE in addition to
-+NFPROTO_IPV4/6, and to use the bridge path for forwarded packets.
-+
-+MTK_WDMA support: When the forward path traverses an MTK WDMA segment,
-+the source MAC address from the bridge port's dev_addr is copied into
-+the flow info structure, enabling the WDMA hardware to construct
-+correct L2 headers for hardware-accelerated forwarding.
-+
-+Double-VLAN handling: For packets with an inner VLAN tag (double-tagged
-+frames), the bridge path resolution now preserves the outer VLAN tag
-+using skb->vlan_tci when populating the egress VLAN configuration,
-+ensuring the flow table can correctly reconstruct the frame on egress.
-+
-+VLAN encap pre-fill: When br_vlan_get_offload_info_rcu() resolves a
-+bridge port VLAN, info.encap[0] is pre-filled with the vlan_id and
-+vlan_proto and info.num_encaps is incremented.  Without this, a
-+subsequent DEV_PATH_BR_VLAN_UNTAG egress would underflow num_encaps
-+(triggering WARN_ON_ONCE) since it was never incremented for the VLAN
-+that the forward path walk tracked in ctx.vlan[0].
-+
-+Co-developed-by: Daniel Pawlik <pawlik.dan@gmail.com>
-+Signed-off-by: Hauke Mehrtens <hauke@hauke-m.de>
-+Signed-off-by: Tao <gongtao0607@gmail.com>
-+---
++++ b/target/linux/generic/pending-6.18/675-02-nft_flow_offload-bridge-offload-and-flowtable-type.patch
+@@ -0,0 +1,406 @@
 +--- a/include/net/netfilter/nf_flow_table.h
 ++++ b/include/net/netfilter/nf_flow_table.h
 +@@ -224,9 +224,12 @@ void flow_offload_free(struct flow_offlo
@@ -429,6 +351,87 @@ index 00000000000000..ea2949c20c192e
 + 
 + static inline int
 + nf_flow_table_offload_add_cb(struct nf_flowtable *flow_table,
++--- a/net/netfilter/nft_flow_offload.c
+++++ b/net/netfilter/nft_flow_offload.c
++@@ -105,8 +105,25 @@ static void nft_flow_offload_eval(const
++ 		goto out;
++ 
++ 	dir = CTINFO2DIR(ctinfo);
++-	if (nft_flow_route(pkt, ct, &route, dir, priv->flowtable) < 0)
++-		goto err_flow_route;
+++	if (nft_pf(pkt) == NFPROTO_BRIDGE) {
+++		if (nft_flow_route_bridging(pkt, ct, &route, dir, priv->flowtable) < 0)
+++			goto err_flow_route;
+++	} else if (netif_is_bridge_port(pkt->skb->dev)) {
+++		/* Try the L2 bridge path first; if it fails (no FDB entry, no
+++		 * bridge master, dst alloc failure, etc.) fall back to L3
+++		 * routing.  nft_flow_route_bridging() releases any dsts it
+++		 * allocated on its error paths; re-zero the route so the L3
+++		 * lookup starts from a clean slate.
+++		 */
+++		if (nft_flow_route_bridging(pkt, ct, &route, dir, priv->flowtable) < 0) {
+++			memset(&route, 0, sizeof(route));
+++			if (nft_flow_route_routing(pkt, ct, &route, dir, priv->flowtable) < 0)
+++				goto err_flow_route;
+++		}
+++	} else {
+++		if (nft_flow_route_routing(pkt, ct, &route, dir, priv->flowtable) < 0)
+++			goto err_flow_route;
+++	}
++ 
++ 	flow = flow_offload_alloc(ct);
++ 	if (!flow)
++@@ -141,7 +158,8 @@ static int nft_flow_offload_validate(con
++ 
++ 	if (ctx->family != NFPROTO_IPV4 &&
++ 	    ctx->family != NFPROTO_IPV6 &&
++-	    ctx->family != NFPROTO_INET)
+++	    ctx->family != NFPROTO_INET &&
+++	    ctx->family != NFPROTO_BRIDGE)
++ 		return -EOPNOTSUPP;
++ 
++ 	return nft_chain_validate_hooks(ctx->chain, hook_mask);
++--- a/net/netfilter/nf_flow_table_inet.c
+++++ b/net/netfilter/nf_flow_table_inet.c
++@@ -75,6 +75,16 @@ static struct nf_flowtable_type flowtabl
++ 	.owner		= THIS_MODULE,
++ };
++ 
+++static struct nf_flowtable_type flowtable_bridge = {
+++	.family		= NFPROTO_BRIDGE,
+++	.init		= nf_flow_table_init,
+++	.setup		= nf_flow_table_offload_setup,
+++	.action		= nf_flow_rule_route_inet,
+++	.free		= nf_flow_table_free,
+++	.hook		= nf_flow_offload_inet_hook,
+++	.owner		= THIS_MODULE,
+++};
+++
++ static struct nf_flowtable_type flowtable_ipv4 = {
++ 	.family		= NFPROTO_IPV4,
++ 	.init		= nf_flow_table_init,
++@@ -100,6 +110,7 @@ static int __init nf_flow_inet_module_in
++ 	nft_register_flowtable_type(&flowtable_ipv4);
++ 	nft_register_flowtable_type(&flowtable_ipv6);
++ 	nft_register_flowtable_type(&flowtable_inet);
+++	nft_register_flowtable_type(&flowtable_bridge);
++ 
++ 	return 0;
++ }
++@@ -109,6 +120,7 @@ static void __exit nf_flow_inet_module_e
++ 	nft_unregister_flowtable_type(&flowtable_inet);
++ 	nft_unregister_flowtable_type(&flowtable_ipv6);
++ 	nft_unregister_flowtable_type(&flowtable_ipv4);
+++	nft_unregister_flowtable_type(&flowtable_bridge);
++ }
++ 
++ module_init(nf_flow_inet_module_init);
++@@ -119,4 +131,5 @@ MODULE_AUTHOR("Pablo Neira Ayuso <pablo@
++ MODULE_ALIAS_NF_FLOWTABLE(AF_INET);
++ MODULE_ALIAS_NF_FLOWTABLE(AF_INET6);
++ MODULE_ALIAS_NF_FLOWTABLE(1); /* NFPROTO_INET */
+++MODULE_ALIAS_NF_FLOWTABLE(AF_BRIDGE);
++ MODULE_DESCRIPTION("Netfilter flow table mixed IPv4/IPv6 module");
 +--- a/net/netfilter/nf_flow_table_path.c
 ++++ b/net/netfilter/nf_flow_table_path.c
 +@@ -14,6 +14,10 @@
@@ -442,7 +445,7 @@ index 00000000000000..ea2949c20c192e
 + 
 + static enum flow_offload_xmit_type nft_xmit_type(struct dst_entry *dst)
 + {
-+@@ -41,7 +45,7 @@ static bool nft_is_valid_ether_device(co
++@@ -41,7 +45,7 @@ static bool nft_is_valid_ether_device(const struct net_device *dev)
 + 	return true;
 + }
 + 
@@ -451,7 +454,7 @@ index 00000000000000..ea2949c20c192e
 + 				     const struct dst_entry *dst_cache,
 + 				     const struct nf_conn *ct,
 + 				     enum ip_conntrack_dir dir, u8 *ha,
-+@@ -57,6 +61,12 @@ static int nft_dev_fill_forward_path(con
++@@ -57,6 +61,12 @@ static int nft_dev_fill_forward_path(const struct nf_flow_route *route,
 + 		goto out;
 + 	}
 + 
@@ -464,7 +467,7 @@ index 00000000000000..ea2949c20c192e
 + 	n = dst_neigh_lookup(dst_cache, daddr);
 + 	if (!n)
 + 		return -1;
-+@@ -71,7 +81,7 @@ static int nft_dev_fill_forward_path(con
++@@ -71,7 +81,7 @@ static int nft_dev_fill_forward_path(const struct nf_flow_route *route,
 + 		return -1;
 + 
 + out:
@@ -473,7 +476,7 @@ index 00000000000000..ea2949c20c192e
 + }
 + 
 + struct nft_forward_info {
-+@@ -100,12 +110,12 @@ static void nft_dev_path_info(const stru
++@@ -100,12 +110,12 @@ static void nft_dev_path_info(const struct net_device_path_stack *stack,
 + 
 + 	for (i = 0; i < stack->num_paths; i++) {
 + 		path = &stack->path[i];
@@ -487,7 +490,7 @@ index 00000000000000..ea2949c20c192e
 + 			if (is_zero_ether_addr(info->h_source))
 + 				memcpy(info->h_source, path->dev->dev_addr, ETH_ALEN);
 + 
-+@@ -147,18 +157,22 @@ static void nft_dev_path_info(const stru
++@@ -147,18 +157,22 @@ static void nft_dev_path_info(const struct net_device_path_stack *stack,
 + 				info->num_encaps++;
 + 				break;
 + 			case DEV_PATH_BR_VLAN_UNTAG:
@@ -514,7 +517,7 @@ index 00000000000000..ea2949c20c192e
 + 			break;
 + 		}
 + 	}
-+@@ -189,22 +203,82 @@ static bool nft_flowtable_find_dev(const
++@@ -189,22 +203,95 @@ static bool nft_flowtable_find_dev(const struct net_device *dev,
 + 	return found;
 + }
 + 
@@ -562,11 +565,24 @@ index 00000000000000..ea2949c20c192e
 ++		/* RCU lookup: br_vlan_get_offload_info_rcu() resolves the
 ++		 * port via br_port_get_rcu() and the VLAN id/protocol (skb
 ++		 * tag id, or PVID via br_vlan_get_pvid_rcu() when untagged).
-++		 * When filtering is OFF, record the skb VLAN tag passthrough
+++		 * When filtering is OFF, record the skb VLAN tag passthrough.
+++		 *
+++		 * For the reply direction the ingress is the forward direction's
+++		 * egress, whose port and VLAN encapsulation were already
+++		 * resolved by the forward pass into route->tuple[dir].in.
+++		 * Reuse it instead of the current packet, whose ingress VLAN
+++		 * belongs to the forward direction and may differ under
+++		 * asymmetric per-port VLAN configurations.
 ++		 */
 ++		rcu_read_lock();
-++		vlan_id = br_vlan_get_offload_info_rcu(pkt->skb->dev,
-++							pkt->skb, &vlan_proto);
+++		if (skb_dir != dir) {
+++			vlan_id = route->tuple[dir].in.num_encaps ?
+++				  route->tuple[dir].in.encap[0].id : 0;
+++			vlan_proto = route->tuple[dir].in.encap[0].proto;
+++		} else {
+++			vlan_id = br_vlan_get_offload_info_rcu(pkt->skb->dev,
+++								pkt->skb, &vlan_proto);
+++		}
 ++		if (vlan_id) {
 ++			ctx.num_vlans = 1;
 ++			ctx.vlan[0].id = vlan_id;
@@ -576,7 +592,7 @@ index 00000000000000..ea2949c20c192e
 ++				info.encap[info.num_encaps].proto = vlan_proto;
 ++				info.num_encaps++;
 ++			}
-++		} else if (skb_vlan_tag_present(pkt->skb)) {
+++		} else if (skb_dir == dir && skb_vlan_tag_present(pkt->skb)) {
 ++			if (info.num_encaps < NF_FLOW_TABLE_ENCAP_MAX) {
 ++				info.encap[info.num_encaps].id =
 ++					skb_vlan_tag_get_id(pkt->skb);
@@ -604,7 +620,7 @@ index 00000000000000..ea2949c20c192e
 + 
 + 	route->tuple[!dir].in.ifindex = info.indev->ifindex;
 + 	for (i = 0; i < info.num_encaps; i++) {
-+@@ -221,16 +295,23 @@ static void nft_dev_forward_path(struct
++@@ -221,16 +308,23 @@ static void nft_dev_forward_path(struct nf_flow_route *route,
 + 		route->tuple[dir].out.hw_ifindex = info.hw_outdev->ifindex;
 + 		route->tuple[dir].xmit_type = info.xmit_type;
 + 	}
@@ -631,13 +647,15 @@ index 00000000000000..ea2949c20c192e
 + 	memset(&fl, 0, sizeof(fl));
 + 	switch (nft_pf(pkt)) {
 + 	case NFPROTO_IPV4:
-+@@ -265,12 +346,87 @@ int nft_flow_route(const struct nft_pkti
++@@ -265,12 +359,87 @@ int nft_flow_route(const struct nft_pktinfo *pkt, const struct nf_conn *ct,
 + 	nft_default_forward_path(route, this_dst, dir);
 + 	nft_default_forward_path(route, other_dst, !dir);
 + 
 +-	if (route->tuple[dir].xmit_type	== FLOW_OFFLOAD_XMIT_NEIGH &&
 ++	if (route->tuple[dir].xmit_type == FLOW_OFFLOAD_XMIT_NEIGH &&
-++	    route->tuple[!dir].xmit_type == FLOW_OFFLOAD_XMIT_NEIGH) {
++ 	    route->tuple[!dir].xmit_type == FLOW_OFFLOAD_XMIT_NEIGH) {
++-		nft_dev_forward_path(route, ct, dir, ft);
++-		nft_dev_forward_path(route, ct, !dir, ft);
 ++		nft_dev_forward_path(pkt, false, route, ct, dir, ft);
 ++		nft_dev_forward_path(pkt, false, route, ct, !dir, ft);
 ++	}
@@ -707,9 +725,7 @@ index 00000000000000..ea2949c20c192e
 ++	nft_default_forward_path(route, dsts[dir], dir);
 ++	nft_default_forward_path(route, dsts[!dir], !dir);
 ++	if (route->tuple[dir].xmit_type == FLOW_OFFLOAD_XMIT_NEIGH &&
-+ 	    route->tuple[!dir].xmit_type == FLOW_OFFLOAD_XMIT_NEIGH) {
-+-		nft_dev_forward_path(route, ct, dir, ft);
-+-		nft_dev_forward_path(route, ct, !dir, ft);
+++	    route->tuple[!dir].xmit_type == FLOW_OFFLOAD_XMIT_NEIGH) {
 ++		if (nft_dev_forward_path(pkt, true, route, ct, dir, ft) ||
 ++		    nft_dev_forward_path(pkt, true, route, ct, !dir, ft)) {
 ++			dst_release(route->tuple[dir].dst);
@@ -723,186 +739,15 @@ index 00000000000000..ea2949c20c192e
 +-EXPORT_SYMBOL_GPL(nft_flow_route);
 ++EXPORT_SYMBOL_GPL(nft_flow_route_routing);
 ++EXPORT_SYMBOL_GPL(nft_flow_route_bridging);
-+--- a/net/netfilter/nft_flow_offload.c
-++++ b/net/netfilter/nft_flow_offload.c
-+@@ -105,8 +105,25 @@ static void nft_flow_offload_eval(const
-+ 		goto out;
-+ 
-+ 	dir = CTINFO2DIR(ctinfo);
-+-	if (nft_flow_route(pkt, ct, &route, dir, priv->flowtable) < 0)
-+-		goto err_flow_route;
-++	if (nft_pf(pkt) == NFPROTO_BRIDGE) {
-++		if (nft_flow_route_bridging(pkt, ct, &route, dir, priv->flowtable) < 0)
-++			goto err_flow_route;
-++	} else if (netif_is_bridge_port(pkt->skb->dev)) {
-++		/* Try the L2 bridge path first; if it fails (no FDB entry, no
-++		 * bridge master, dst alloc failure, etc.) fall back to L3
-++		 * routing.  nft_flow_route_bridging() releases any dsts it
-++		 * allocated on its error paths; re-zero the route so the L3
-++		 * lookup starts from a clean slate.
-++		 */
-++		if (nft_flow_route_bridging(pkt, ct, &route, dir, priv->flowtable) < 0) {
-++			memset(&route, 0, sizeof(route));
-++			if (nft_flow_route_routing(pkt, ct, &route, dir, priv->flowtable) < 0)
-++				goto err_flow_route;
-++		}
-++	} else {
-++		if (nft_flow_route_routing(pkt, ct, &route, dir, priv->flowtable) < 0)
-++			goto err_flow_route;
-++	}
-+ 
-+ 	flow = flow_offload_alloc(ct);
-+ 	if (!flow)
-+@@ -141,7 +158,8 @@ static int nft_flow_offload_validate(con
-+ 
-+ 	if (ctx->family != NFPROTO_IPV4 &&
-+ 	    ctx->family != NFPROTO_IPV6 &&
-+-	    ctx->family != NFPROTO_INET)
-++	    ctx->family != NFPROTO_INET &&
-++	    ctx->family != NFPROTO_BRIDGE)
-+ 		return -EOPNOTSUPP;
-+ 
-+ 	return nft_chain_validate_hooks(ctx->chain, hook_mask);
-diff --git a/target/linux/generic/pending-6.18/675-04-netfilter-nf_flow_table-add-bridge-flowtable-type.patch b/target/linux/generic/pending-6.18/675-04-netfilter-nf_flow_table-add-bridge-flowtable-type.patch
+diff --git a/target/linux/generic/pending-6.18/675-03-netfilter-bridge-conntrack-vlan-pppoe-encapsulation.patch b/target/linux/generic/pending-6.18/675-03-netfilter-bridge-conntrack-vlan-pppoe-encapsulation.patch
 new file mode 100644
-index 00000000000000..4a3e56bf829ff1
+index 00000000000000..55ed522f57166b
 --- /dev/null
-+++ b/target/linux/generic/pending-6.18/675-04-netfilter-nf_flow_table-add-bridge-flowtable-type.patch
-@@ -0,0 +1,86 @@
-+From: Ryan Chen <rchen14b@gmail.com>
-+Date: Sun, 16 Mar 2026 12:00:00 -0500
-+Subject: [PATCH 4/5] netfilter: nf_flow_table: add bridge flowtable type
-+
-+Add an NFPROTO_BRIDGE nf_flowtable_type built directly on the existing
-+inet flowtable hook and routing action, so that nftables flowtable
-+declarations can be placed in bridge-family tables:
-+
-+    table bridge fw4 {
-+        flowtable fb {
-+            hook forward priority filter; policy accept;
-+            flags offload;
-+            devices = { "br-lan", "eth1" };
-+        }
-+        chain forward {
-+            type filter hook forward priority filter; policy accept;
-+            meta l4proto { tcp, udp } flow offload @fb
-+        }
-+    }
-+
-+This replaces the previous approach of requiring kmod-br-netfilter
-+(CONFIG_BRIDGE_NETFILTER) to lift bridged IP traffic into the inet
-+forward chain for nft_flow_offload evaluation.
-+
-+The bridge flowtable type reuses nf_flow_offload_inet_hook() (which
-+already strips VLAN/PPPoE encapsulation and dispatches to the IPv4 or
-+IPv6 offload hooks) and nf_flow_rule_route_inet() (which selects IPv4 or
-+IPv6 routing by the flow tuple's L3 protocol). The two functions are
-+identical to what a standalone bridge flowtable module would need, so
-+registering a second type in nf_flow_table_inet.ko avoids duplicating
-+them in a separate .c file. The new MODULE_ALIAS_NF_FLOWTABLE(AF_BRIDGE)
-+allows nft to autoload the module when a bridge-family flowtable is
-+declared.
-+
-+No new Kconfig symbol or Makefile object is introduced; building
-+CONFIG_NF_FLOW_TABLE_INET=m produces nf_flow_table_inet.ko, which now
-+also registers the NFPROTO_BRIDGE flowtable type. No CONFIG_NF_TABLES_BRIDGE
-+dependency is required to register the type -- it is only needed at
-+ruleset time, when the user declares `table bridge ...`.
-+
-+Signed-off-by: Ryan Chen <rchen14b@gmail.com>
-+---
-+ net/netfilter/nf_flow_table_inet.c | 13 +++++++++++++
-+ 1 file changed, 13 insertions(+)
-+
-+--- a/net/netfilter/nf_flow_table_inet.c
-++++ b/net/netfilter/nf_flow_table_inet.c
-+@@ -75,6 +75,16 @@ static struct nf_flowtable_type flowtabl
-+ 	.owner		= THIS_MODULE,
-+ };
-+ 
-++static struct nf_flowtable_type flowtable_bridge = {
-++	.family		= NFPROTO_BRIDGE,
-++	.init		= nf_flow_table_init,
-++	.setup		= nf_flow_table_offload_setup,
-++	.action		= nf_flow_rule_route_inet,
-++	.free		= nf_flow_table_free,
-++	.hook		= nf_flow_offload_inet_hook,
-++	.owner		= THIS_MODULE,
-++};
-++
-+ static struct nf_flowtable_type flowtable_ipv4 = {
-+ 	.family		= NFPROTO_IPV4,
-+ 	.init		= nf_flow_table_init,
-+@@ -100,6 +110,7 @@ static int __init nf_flow_inet_module_in
-+ 	nft_register_flowtable_type(&flowtable_ipv4);
-+ 	nft_register_flowtable_type(&flowtable_ipv6);
-+ 	nft_register_flowtable_type(&flowtable_inet);
-++	nft_register_flowtable_type(&flowtable_bridge);
-+ 
-+ 	return 0;
-+ }
-+@@ -109,6 +120,7 @@ static void __exit nf_flow_inet_module_e
-+ 	nft_unregister_flowtable_type(&flowtable_inet);
-+ 	nft_unregister_flowtable_type(&flowtable_ipv6);
-+ 	nft_unregister_flowtable_type(&flowtable_ipv4);
-++	nft_unregister_flowtable_type(&flowtable_bridge);
-+ }
-+ 
-+ module_init(nf_flow_inet_module_init);
-+@@ -119,4 +131,5 @@ MODULE_AUTHOR("Pablo Neira Ayuso <pablo@
-+ MODULE_ALIAS_NF_FLOWTABLE(AF_INET);
-+ MODULE_ALIAS_NF_FLOWTABLE(AF_INET6);
-+ MODULE_ALIAS_NF_FLOWTABLE(1); /* NFPROTO_INET */
-++MODULE_ALIAS_NF_FLOWTABLE(AF_BRIDGE);
-+ MODULE_DESCRIPTION("Netfilter flow table mixed IPv4/IPv6 module");
-diff --git a/target/linux/generic/pending-6.18/675-05-netfilter-bridge-Add-conntrack-double-vlan-pppoe.patch b/target/linux/generic/pending-6.18/675-05-netfilter-bridge-Add-conntrack-double-vlan-pppoe.patch
-new file mode 100644
-index 00000000000000..46572ae4a06dde
---- /dev/null
-+++ b/target/linux/generic/pending-6.18/675-05-netfilter-bridge-Add-conntrack-double-vlan-pppoe.patch
-@@ -0,0 +1,317 @@
-+From: OpenWrt <noreply@openwrt.org>
-+Subject: [PATCH 5/5] netfilter: bridge: Add conntrack support for VLAN
-+ and PPPoE encapsulation
-+
-+Extend bridge conntrack to handle packets carrying a single outer
-+VLAN tag or PPPoE encapsulation, optionally with one inner VLAN tag
-+inside the PPPoE frame.
-+
-+Add nf_ct_bridge_inner() to parse PPPoE and inner VLAN headers from
-+the skb. The function returns the byte offset to pull past these
-+headers so callers can reach the inner IP/IPv6 payload.
-+
-+Key changes:
-+
-+- Use sizeof(struct pppoe_hdr) = 6 to locate the PPP protocol id
-+  (PPPOE_SES_HLEN = 8 includes the proto bytes; the proto itself
-+  sits at phdr + 6).
-+
-+- Use struct vlan_hdr (4 bytes) for inner VLAN inside PPPoE frames,
-+  not struct vlan_ethhdr (18 bytes) which would read past the skb
-+  when the inner tag has no embedded MAC addresses.
-+
-+- After __skb_pull(skb, offset) in the IP/IPv6 cases of
-+  nf_ct_bridge_pre and nf_ct_bridge_refrag, call
-+  skb_reset_network_header(skb) so network_header tracks the inner
-+  IP header for ip_hdr/ipv6_hdr/skb_ip_totlen.
-+
-+- Restore L2 headers on error paths via a do_not_track_push label
-+  before marking the packet untracked.
-+
-+- Balance __skb_pull with __skb_push on the success path of
-+  nf_ct_bridge_pre before calling nf_conntrack_in().
-+
-+Signed-off-by: OpenWrt Build <build@openwrt.org>
-+---
-+ include/linux/netfilter_bridge.h             |  6 +
-+ net/bridge/netfilter/nf_conntrack_bridge.c | 179 +++++++++++++++++++++++++++++++++++++++--
-+ 2 files changed, 175 insertions(+), 10 deletions(-)
-+
++++ b/target/linux/generic/pending-6.18/675-03-netfilter-bridge-conntrack-vlan-pppoe-encapsulation.patch
+@@ -0,0 +1,296 @@
 +--- a/include/linux/netfilter_bridge.h
 ++++ b/include/linux/netfilter_bridge.h
-+@@ -10,6 +10,12 @@ struct nf_bridge_frag_data {
++@@ -10,6 +10,12 @@
 + 	bool    vlan_present;
 + 	u16     vlan_tci;
 + 	__be16  vlan_proto;
@@ -928,14 +773,13 @@ index 00000000000000..46572ae4a06dde
 + #include <linux/netfilter/nf_tables.h>
 + #include <net/netfilter/nf_tables.h>
 + 
-+@@ -237,45 +241,134 @@ static int nf_ct_br_ipv6_check(const str
++@@ -237,45 +241,148 @@
 + 	return 0;
 + }
 + 
 ++static int nf_ct_bridge_inner(struct sk_buff *skb,
 ++			      struct nf_bridge_frag_data *data)
 ++{
-++	struct vlan_ethhdr *veth;
 ++	struct vlan_hdr *vhdr;
 ++	int offset = 0;
 ++	__be16 proto;
@@ -946,14 +790,22 @@ index 00000000000000..46572ae4a06dde
 ++	proto = skb->protocol;
 ++
 ++	if (proto == htons(ETH_P_8021Q)) {
-++		if (!pskb_may_pull(skb,
-++				   skb_mac_offset(skb) + ETH_HLEN + VLAN_HLEN))
+++		/* A single outer tag is normally stripped into skb->vlan_tci by
+++		 * skb_vlan_untag() before this hook runs, so an in-frame 802.1Q
+++		 * header here is the remaining tag of a Q-in-Q frame.  It sits
+++		 * at skb->data (skb_mac_header() points at the outer header),
+++		 * so read the 4-byte struct vlan_hdr there -- not a full
+++		 * vlan_ethhdr from skb_mac_header(), which would yield the
+++		 * outer tag's TCI and the inner tag's TPID instead of the
+++		 * payload ethertype.
+++		 */
+++		if (!pskb_may_pull(skb, VLAN_HLEN))
 ++			return -1;
 ++
-++		veth = (struct vlan_ethhdr *)skb_mac_header(skb);
+++		vhdr = (struct vlan_hdr *)skb->data;
 ++		data->inner_vlan_present = true;
-++		data->inner_vlan_tci = ntohs(veth->h_vlan_TCI);
-++		data->inner_vlan_proto = veth->h_vlan_encapsulated_proto;
+++		data->inner_vlan_tci = ntohs(vhdr->h_vlan_TCI);
+++		data->inner_vlan_proto = vhdr->h_vlan_encapsulated_proto;
 ++		offset = VLAN_HLEN;
 ++	} else if (proto == htons(ETH_P_PPP_SES)) {
 ++		struct pppoe_hdr *phdr;
@@ -997,6 +849,23 @@ index 00000000000000..46572ae4a06dde
 ++	return offset;
 ++}
 ++
+++static __be16 nf_ct_bridge_resolve_proto(const struct nf_bridge_frag_data *data,
+++					__be16 fallback)
+++{
+++	if (data->pppoe_present) {
+++		if (data->inner_vlan_present)
+++			return data->inner_vlan_proto;
+++		if (data->pppoe_proto == htons(PPP_IP))
+++			return htons(ETH_P_IP);
+++		if (data->pppoe_proto == htons(PPP_IPV6))
+++			return htons(ETH_P_IPV6);
+++		return fallback;
+++	}
+++	if (data->inner_vlan_present)
+++		return data->inner_vlan_proto;
+++	return fallback;
+++}
+++
 + static unsigned int nf_ct_bridge_pre(void *priv, struct sk_buff *skb,
 + 				     const struct nf_hook_state *state)
 + {
@@ -1021,17 +890,7 @@ index 00000000000000..46572ae4a06dde
 ++		goto do_not_track_push;
 ++	}
 ++
-++	proto = skb->protocol;
-++	if (data.pppoe_present) {
-++		if (data.inner_vlan_present)
-++			proto = data.inner_vlan_proto;
-++		else if (data.pppoe_proto == htons(PPP_IP))
-++			proto = htons(ETH_P_IP);
-++		else if (data.pppoe_proto == htons(PPP_IPV6))
-++			proto = htons(ETH_P_IPV6);
-++	} else if (data.inner_vlan_present) {
-++		proto = data.inner_vlan_proto;
-++	}
+++	proto = nf_ct_bridge_resolve_proto(&data, skb->protocol);
 ++
 ++	switch (proto) {
 + 	case htons(ETH_P_IP):
@@ -1071,7 +930,7 @@ index 00000000000000..46572ae4a06dde
 + 
 + 		bridge_state.pf = NFPROTO_IPV6;
 + 		ret = nf_ct_br_defrag6(skb, &bridge_state);
-+@@ -283,11 +376,16 @@ static unsigned int nf_ct_bridge_pre(voi
++@@ -283,11 +390,16 @@
 + 	default:
 + 		nf_ct_set(skb, NULL, IP_CT_UNTRACKED);
 + 		return NF_ACCEPT;
@@ -1088,7 +947,7 @@ index 00000000000000..46572ae4a06dde
 + 	return nf_conntrack_in(skb, &bridge_state);
 + }
 + 
-+@@ -341,12 +439,36 @@ nf_ct_bridge_refrag(struct sk_buff *skb,
++@@ -341,37 +453,85 @@
 + 				  struct sk_buff *))
 + {
 + 	struct nf_bridge_frag_data data;
@@ -1110,23 +969,28 @@ index 00000000000000..46572ae4a06dde
 ++		skb_reset_network_header(skb);
 ++	}
 ++
-++	proto = skb->protocol;
-++	if (data.pppoe_present) {
-++		if (data.inner_vlan_present)
-++			proto = data.inner_vlan_proto;
-++		else if (data.pppoe_proto == htons(PPP_IP))
-++			proto = htons(ETH_P_IP);
-++		else if (data.pppoe_proto == htons(PPP_IPV6))
-++			proto = htons(ETH_P_IPV6);
-++	} else if (data.inner_vlan_present) {
-++		proto = data.inner_vlan_proto;
-++	}
+++	proto = nf_ct_bridge_resolve_proto(&data, skb->protocol);
 ++
 ++	switch (proto) {
 + 	case htons(ETH_P_IP):
 + 		nf_br_ip_fragment(state->net, state->sk, skb, &data, output);
-+ 		break;
-+@@ -365,13 +487,50 @@ nf_ct_bridge_refrag(struct sk_buff *skb,
++-		break;
+++		return NF_STOLEN;
++ 	case htons(ETH_P_IPV6):
++ 		nf_br_ip6_fragment(state->net, state->sk, skb, &data, output);
++-		break;
+++		return NF_STOLEN;
++ 	default:
++-		WARN_ON_ONCE(1);
++-		return NF_DROP;
+++		__skb_push(skb, offset);
+++		return NF_ACCEPT;
++ 	}
++-
++-	return NF_STOLEN;
++ }
++ 
++ /* Actually only slow path refragmentation needs this. */
 + static int nf_ct_bridge_frag_restore(struct sk_buff *skb,
 + 				     const struct nf_bridge_frag_data *data)
 + {
@@ -1167,8 +1031,7 @@ index 00000000000000..46572ae4a06dde
 ++		phdr->ver = 1;
 ++		phdr->type = 1;
 ++		phdr->sid = data->pppoe_sid;
-++		phdr->length = htons(skb->len - (PPPOE_SES_HLEN -
-++						sizeof(__be16)));
+++		phdr->length = htons(skb->len - sizeof(struct pppoe_hdr));
 ++		/* PPP protocol id follows the 6-byte PPPoE header */
 ++		ppp_proto = (__be16 *)((void *)phdr + sizeof(struct pppoe_hdr));
 ++		*ppp_proto = data->pppoe_proto;

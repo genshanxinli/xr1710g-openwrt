@@ -1,4 +1,4 @@
-# Source: YYH2913/openwrt xr1710g-6.18-integration package/kernel/mt76/patches（fetched 2026-08-17）
+# Source: YYH2913/openwrt xr1710g-6.18-integration package/kernel/mt76/patches（fetched 2026-08-22；diff 与 e88fbe28 一致）
 # Upstream: n/a（integration 树携带）
 # Reason: 启用固件 txpower 限制控制（regdb 功率真正生效）
 

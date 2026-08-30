@@ -8,7 +8,7 @@
 - **XR1710G** — Gemtek 制造的 Wi-Fi 7 路由器（FCC ID MXF-XR1710G），本仓库的目标设备。Airoha AN7581GT SoC + MediaTek MT7996 三频 Wi-Fi 7，2×10G（RTL8261BE）+ 2×1G 网口，2GB RAM / 512MB SPI-NAND。
 - **W1700K** — 与 XR1710G 同源的 Quantum Fiber 定制设备（Gemtek 17xx 家族）。差异：W1700K 带 Silabs EFR32（蓝牙/Zigbee）与 Airoha GPS、LED 由 GPIO 驱动；XR1710G 去掉两者、LED 由 MT7530 交换芯片驱动。风扇/温控传感器存在版本差异：社区实测（naoki66/skyboooox/lvcdy）以 **NCT7802** 为主，PR #22397 描述含 **NCT7511Y**——**温控方案必须动态探测 hwmon 传感器而非硬编码型号**。上游驱动/脚本常以 W1700K 为对象，移植到 XR1710G 时必须核对这些差异。
 - **AN7581（EN7581 系）** — Airoha SoC：1.3GHz 4 核 CPU + 8 核 NPU。OpenWrt 目标为 `airoha/an7581`。
-- **MT7996** — MediaTek Wi-Fi 7 芯片组（2.4G MT7976GN 4×4 / 5G MT7977BN 4×4 / 6G MT7977AN 4×5，BE19000），经 PCIe x2 挂载于 AN7581。
+- **MT7996** — MediaTek Wi-Fi 7 芯片组（2.4G MT7976GN 4×4 / 5G MT7977BN 4×4 / 6G MT7977AN 4×5，BE19000）。主 `mt7996e`（14c3:7990）经 `pcie0` x2/Gen3 挂载于 AN7581；`mt7996e-hif`（14c3:7991）经 `pcie2` x1/Gen2 挂载——EN7581 `pcie2` 与 USB3 共享 PHY、物理单 lane 板级限制，且 2026-08-24 实机 D0 判定根端口 `0002:00:00.0` LnkCap2 仅报 2.5/5GT/s（不声明 Gen3），**Gen2 x1 为板级正确拓扑**，Gen3 x1 降级为上游/厂商跟踪，不作为高速数据面主通路（issue #16）。
 - **RTL8261BE / RTL8261N** — Realtek 5G/10G 以太网 PHY（XR1710G 用 BE，W1700K 用 N）。驱动与固件 blob 尚未进内核主线，OpenWrt 以 pending 补丁 + `rtl826x-firmware` 包携带。
 - **MT7530** — MediaTek 交换芯片，承载 2×1G 口。
 
@@ -30,7 +30,8 @@
 - **EHT320 回程 / 802.11s mesh** — 6GHz 320MHz 无线回程的 mesh 组网形态。
 - **MLO** — 多链路操作（Multi-Link Operation），Wi-Fi 7 核心能力，由 hostapd EHT 选项与 luci-app-mlo 管理。
 - **regdb** — 无线监管域数据库，决定信道与功率；6GHz 可用性取决于所选 regdb。
-- **US regdb 补丁体系** — YYH2913 wireless-regdb patches：520 = UNII-1 23→29dBm + 6GHz LPI 12→29dBm（默认携带）；555 = 6GHz 12→30dBm + UNII-3 扩展至 5895MHz（功率激进档携带）。社区无 UNII-1=30dBm 补丁（30dBm 为 FCC 授权值，固件取整 29dBm）。
+- **US regdb 补丁体系** — 默认档：510（6GHz 去 NO-IR）+ 520（UNII-1 23→29dBm + 6GHz LPI 12→29dBm）+ 521（UNII-3/4 5730-5895 @160 30dBm）；OC 档：555（仅 6GHz 29→30dBm）。社区无 UNII-1=30dBm 补丁（30dBm 为 FCC 授权值，固件取整 29dBm）。
+- **eeprom 功率解锁（mt76-0008）** — 默认档驱动层补丁：2G 0x1300 0x2c→0x30（28→30dBm，较 FCC 29.5 高 0.5dB）、5G UNII-3/4 0x1305 0x27→0x2a（28→30dBm，FCC 非BF 授权 30）。NAND 直改会被 U-Boot 还原，只能在驱动层做（07 天线报告 附A.1/附A.2）。
 
 ## 补丁层与档位
 
@@ -40,6 +41,7 @@
 - **毕业（graduation）** — 实验档 → 默认档的转正动作：known-good 周期内跑通 `docs/ACCEPTANCE.md` 全项（实机）→ 取消 `#EXP` 前缀并入默认 MANIFEST，FIXES 对应条目改状态。
 - **integration 树** — YYH2913/openwrt `xr1710g-6.18-integration` 分支：mt76 实验补丁（9990 EHT 广告 / 9991 320M BF fallback / 9992 PS-sync 校验 / 9993 op_mode 传递）与 txpower 家族（0006/0007）的**来源树**；其 mt76 pin 与本仓库一致（59676919）。
 - **锁源（pin）** — 包源码 commit 锁定（如 mt76 `59676919`），保证可复现构建；供应商 fork + `PKG_MIRROR_HASH=skip` 违反锁源铁律（F13 否决 13 号的判据）；升级 feed/补丁后在 FIXES 登记。
+- **mt76 上游追踪** — 以 `openwrt/mt76` master 为追踪对象，每次会话 / 2h sync 后与 openwrt main 当前 mt76 pin 对比；有更新及时评估吸收。当前 pin `59676919`（2026-07-01），最新 master `c5a3bd91`（2026-08-22，147 commits 领先）。吸收原则：openwrt main bump 优先跟；main 不 bump 时，在遵守锁源铁律（`PKG_SOURCE_VERSION` + 实算 `PKG_MIRROR_HASH`）的前提下自行 bump `package/kernel/mt76`，并重验全套 mt76 补丁（下一步见 `HANDOFF.md` §7）。
 
 ## 超频与功率
 

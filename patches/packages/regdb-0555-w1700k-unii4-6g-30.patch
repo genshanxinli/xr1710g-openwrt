@@ -1,25 +1,17 @@
-# Source: 重建（2026-08-17 F20）：原 0555 基于旧 db.txt；wireless-regdb 2026.05.30 后
-#   US 6g 行被 0520 先改为 (29), NO-OUTDOOR，原 hunk 上下文失效（OC 档构建必挂）。
-#   语义不变（UNII-4 扩展至 5895MHz + 6GHz 30dBm），上下文按「0510→0520 应用后」状态重建，
-#   应用顺序由 MANIFEST 固化（OC 档 = 默认档 + 0555）。
+# Source: 重建（2026-08-20）：原 0555 含 5G UNII-3/4@160 与 6G 29->30 两处；
+#   5G 部分已切为默认档 0521，本文件按「0510→0520→0521 应用后」状态重建为仅 6G 30dBm。
 # Upstream: n/a（carried-only，不打算上游）
-# Reason: OC 档高功率：UNII-4 扩展 + 6GHz 30dBm（激进档，F08 双 release 的 oc 变体承载）
+# Reason: OC 档高功率：6GHz 29 -> 30dBm EIRP（激进档，F08 双 release 的 oc 变体承载）
 
-OC variant high-power regdb: extend US UNII-4 to 5895 MHz and raise
-6 GHz from 29 (0520 value) to 30 dBm EIRP.  Only applied on the OC
-flavour (default stock flavour keeps the conservative 29 dBm).
+OC variant high-power regdb: raise 6 GHz from 29 (0520 value) to 30 dBm
+EIRP.  The 5 GHz UNII-3/4 160 MHz extension now lives in the default-tier
+0521 patch.  Only applied on the OC flavour.
+
 ---
 --- a/db.txt
 +++ b/db.txt
-@@ -2088,13 +2088,12 @@ country US: DFS-FCC
- 	# requirements, we can extend the range by 5 MHz to make the kernel
- 	# happy and be able to use channel 144.
- 	(5470 - 5730 @ 160), (24), DFS
--	(5730 - 5850 @ 80), (30), AUTO-BW
-+	(5730 - 5895 @ 160), (30), AUTO-BW
- 	# https://www.federalregister.gov/documents/2021/05/03/2021-08802/use-of-the-5850-5925-ghz-band
- 	# max. 33 dBm AP @ 20MHz, 36 dBm AP @ 40Mhz+, 6 dB less for clients
--	(5850 - 5895 @ 40), (27), NO-OUTDOOR, AUTO-BW, NO-IR
+@@ -2091,7 +2091,7 @@ country US: DFS-FCC
+ 	(5730 - 5895 @ 160), (30), AUTO-BW
  	# 6g band
  	# https://www.federalregister.gov/documents/2020/05/26/2020-11236/unlicensed-use-of-the-6ghz-band
 -	(5925 - 7125 @ 320), (29), NO-OUTDOOR

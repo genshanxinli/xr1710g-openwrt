@@ -91,9 +91,20 @@ jobs:
           cd "$TREE"
           make defconfig
           cat "$GITHUB_WORKSPACE/overlay/config/seed-config.diff" >> .config
+          # 实验档增量 seed：MANIFEST #EXP 补丁提供的包不在共享 seed 中（否则 stock 会引用不存在的包）。
+          # 必须在第二次 defconfig 前追加，且共享 seed 末尾保持换行（否则两段 seed 会粘成一行）。
+          if [[ "$PROFILE" == "experimental" ]]; then
+            cat "$GITHUB_WORKSPACE/overlay/config/seed-config.experimental.diff" >> .config
+          fi
           make defconfig
           grep -q "CONFIG_TARGET_airoha_an7581_DEVICE_gemtek_xr1710g-ubi=y" .config || { echo "XR1710G 目标未选中——检查 #22397 补丁与 seed"; exit 1; }
+          if [[ "$PROFILE" == "experimental" ]]; then
+            grep -q '^CONFIG_PACKAGE_bridge-flow-offload=y$' .config || { echo "实验档 bridge-flow-offload 未选入 .config（issue #1 E1）"; exit 1; }
+          fi
           "${GITHUB_WORKSPACE}/overlay/scripts/audit-config.sh" "${GITHUB_WORKSPACE}/overlay/config/seed-config.diff" .config
+          if [[ "$PROFILE" == "experimental" ]]; then
+            "${GITHUB_WORKSPACE}/overlay/scripts/audit-config.sh" "${GITHUB_WORKSPACE}/overlay/config/seed-config.experimental.diff" .config
+          fi
 
       - name: 构建
         # F19：显式 pipefail——make 失败必须红（默认 bash 无 pipefail，`make | tee` 会把失败吞成假绿；
@@ -101,7 +112,8 @@ jobs:
         run: |
           set -euo pipefail
           cd "$TREE"
-          make -j"$(nproc)" V=s 2>&1 | tee "$GITHUB_WORKSPACE/build-$PROFILE.log"
+          # E2：DISTRIB_DESCRIPTION 注入档位标识（CONFIG_VERSION_DIST 经 include/version.mk 进入 /etc/openwrt_release）
+          make -j"$(nproc)" V=s CONFIG_VERSION_DIST="OpenWrt $PROFILE" 2>&1 | tee "$GITHUB_WORKSPACE/build-$PROFILE.log"
 
       - name: 上传构建日志
         if: always()
@@ -161,9 +173,18 @@ jobs:
             echo "请核对 docs/FLASHING.md（HTTP U-Boot 主路径，锁版 SHA256 以 YYH2913 release 页为准）。"
             echo
             echo "### 产物说明"
-            echo "firmware-<profile>/ 各档子目录内含 sysupgrade + initramfs + chainload-uboot + manifest（同名文件按档位目录区分）；本次档位：${{ github.event.inputs.profile }}。"
+            echo "firmware-<profile>.tar.gz 各档打包产物（sysupgrade + initramfs + chainload-uboot + manifest）；本次档位：${{ github.event.inputs.profile }}。"
           } > relnotes.md
           echo "prev=$prev" >> "$GITHUB_OUTPUT"
+
+      - name: 打包各档产物（同名 itb 会被 softprops 按 basename 去重覆盖——先打包避免资产冲突）
+        run: |
+          cd _rel
+          for d in firmware-*/; do
+            [ -d "$d" ] || continue
+            profile="${d%/}"
+            tar -czf "${profile}.tar.gz" "$d"
+          done
 
       - name: 创建 pre-release
         uses: softprops/action-gh-release@v2
@@ -171,5 +192,5 @@ jobs:
           tag_name: ci-${{ github.run_number }}
           name: "CI 构建 #${{ github.run_number }}（${{ github.ref_name }} @ ${{ steps.notes.outputs.prev }} 起）"
           body_path: relnotes.md
-          files: _rel/**
+          files: _rel/*.tar.gz
           prerelease: true

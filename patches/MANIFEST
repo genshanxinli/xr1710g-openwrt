@@ -12,30 +12,40 @@
 # ── packages：regdb（决策=默认 510/520；500 world 去 NO-IR 已上游自带 500-world-regd-5GHz.patch；
 #     555=OC 档（0520 后应用，顺序固化）；530 停用）──
 # F20：regdb-0500 与 OpenWrt 自带 500-world-regd-5GHz.patch 内容完全一致（重复补丁，2026-08-17 删除）；
-#     0555 于 2026-08-17 按 0510/0520 应用后状态重建（wireless-regdb 2026.05.30 上下文漂移）
+#     0521 为 5G UNII-3/4@160/30 默认档；0555 按 0510→0520→0521 应用后状态重建（仅 6G 30）。
 patches/packages/regdb-0510-us-6ghz-no-no-ir.patch                     package/firmware/wireless-regdb/patches/
 patches/packages/regdb-0520-us-power-limits-uni1-29-6g-29.patch        package/firmware/wireless-regdb/patches/
+patches/packages/regdb-0521-us-unii3-4-160mhz-30.patch           package/firmware/wireless-regdb/patches/
 #OC patches/packages/regdb-0555-w1700k-unii4-6g-30.patch               package/firmware/wireless-regdb/patches/
 #DISABLED patches/packages/regdb-0530-us-6ghz-lab-indoor-sp-override-DISABLED.patch package/firmware/wireless-regdb/patches/
 # 0530 已于 2026-08-17 按 wireless-regdb 2026.05.30「500→0510→0520 后」状态重建（fuzz 2 → 0，
 #   语义不变：US 6g 29→36dBm 实验室 SP）；启用时按 verify 流程再实证即可。
 
-# ── packages：mt76 txpower（YYH2913 integration 家族，默认档核心）──
+# ── packages：mt76 txpower / NPU debugfs（默认档核心）──
 # 注：package/kernel/mt76/patches/ 在 master 不存在，由脚本 mkdir 创建，OpenWrt 构建时自动应用
+# fanboy14 0001/0003 已对 openwrt/mt76 c5a3bd91 重建（0003 删除 hunk 随上游 GENMASK 31:14→31:24 调整，2026-08-22）
+patches/packages/mt76-0001-wifi-mt76-mt7996-add-token-and-NPU-debugfs-counters.patch       package/kernel/mt76/patches/
+patches/packages/mt76-0003-wifi-mt76-mt7996-replace-direct-WTBL-access-with-MCU-for-station-statistics.patch       package/kernel/mt76/patches/
 patches/packages/mt76-0006-wifi-mt76-mt7996-refresh-power-limits-on-txpower-changes.patch       package/kernel/mt76/patches/
 patches/packages/mt76-0007-wifi-mt76-mt7996-enable-firmware-txpower-limit-controls.patch        package/kernel/mt76/patches/
-# ── packages：mt76 EHT 实验补丁（F25 评审 2026-08-18，integration 树 9990-9993）──
-#   评审结论：9990/9991/9993 携带（对 pin mt76 59676919 原生态可应用；mt76 master b2704cf5 均无
-#   此改动——真补丁非冗余）；9992（PS-sync TLV 校验）**否决**——mt76 master 2026-08-01 已上游
-#   合入同款加固（pin 升级时自然获得，携带即 F22 式冗余）。位域核对：nrow/ncol_gt_bw80 高半字节
-#   =320MHz、低半字节=160MHz，与既有 160 case 的整字节写法一致。入实验档：需实机 Wi-Fi7 客户端
-#   验证 EHT320 行为后毕业，不默认携带。
-#EXP patches/packages/mt76-9990-wifi-mt76-mt7996-advertise-eht-to-firmware-rate-control.patch    package/kernel/mt76/patches/
-#EXP patches/packages/mt76-9991-wifi-mt76-mt7996-fill-160mhz-bf-fallback-for-eht-320.patch       package/kernel/mt76/patches/
-#EXP patches/packages/mt76-9993-wifi-mt76-mt7996-pass-operating-mode-to-rate-control.patch       package/kernel/mt76/patches/
+patches/packages/mt76-0008-wifi-mt76-mt7996-eeprom-power-unlock.patch          package/kernel/mt76/patches/
+# 0009：tx_failed 只记终端失败，retries 不再计入 tx_failed（IP25/IP26，A5，default）
+patches/packages/mt76-0009-report-only-terminal-tx-failures.patch          package/kernel/mt76/patches/
+# 9994：c5a3bd91 新 mac80211 API 兼容（F62）——mt76 master 需 kernel/mac80211 >= 7.2，先适配 6.18 API；main 联动 bump 后删除
+patches/packages/mt76-9994-mac80211-api-compat.patch          package/kernel/mt76/patches/
+# ── packages：mt76 EHT 补丁（2026-08-31 毕业，ci-74 实机；9990-9993 评审 F25/F59）──
+#   毕业证据：ci-74 experimental 实机 6G AP 侧 EHT320 生效、5 轮 wifi down/up 无复发；
+#   6G 客户端侧行为按用户口径延后补验（无 6G 客户端），发现问题再修。
+#   9992（PS-sync TLV 校验）已随 9028 bump c5a3bd91 删除：上游 mt76 master 已合入同款修复（F59）。
+# 0005 TXFREE 截断静默（2026-08-31 毕业；再同步自 ubi2-oc e7a8143，构建绿 + wifi down/up 通过）
+patches/packages/mt76-0005-wifi-mt76-mt7996-guard-txfree-overrun.patch          package/kernel/mt76/patches/
+#EXP patches/packages/mt76-0010-set-skb-device-for-npu-rx.patch          package/kernel/mt76/patches/
+patches/packages/mt76-9990-wifi-mt76-mt7996-advertise-eht-to-firmware-rate-control.patch    package/kernel/mt76/patches/
+patches/packages/mt76-9991-wifi-mt76-mt7996-fill-160mhz-bf-fallback-for-eht-320.patch       package/kernel/mt76/patches/
+patches/packages/mt76-9993-wifi-mt76-mt7996-pass-operating-mode-to-rate-control.patch       package/kernel/mt76/patches/
 # 9993 的编译依赖（F25 二次构建暴露）：mac80211 backport 未导出 cap_bw/cap_nss helper，
-#   integration 树以 mac80211 包 subsys 补丁补充——随实验档携带（9020，ROOT 生成该包补丁）。
-#EXP patches/packages/mac80211-411-export-link-sta-capability-limits.patch package/kernel/mac80211/patches/subsys/
+#   integration 树以 mac80211 包 subsys 补丁补充——随 9993 毕业为默认。
+patches/packages/mac80211-411-export-link-sta-capability-limits.patch package/kernel/mac80211/patches/subsys/
 
 # ── root：跨目录 git apply（默认档）──
 # XR1710G 板级支持（2026-08-17 对 master 重建三件套，替代 PR 原 diff——PR 对 master 5 文件冲突，见 FIXES F01）
@@ -48,6 +58,33 @@ patches/vendor/fanboy/03-cpufreq-pmdomain-22029-e5d23549.patch ROOT
 patches/vendor/fanboy/10-pstore-ramoops-22473-2f7d2d02.patch ROOT
 # 应用包：npu/flowsense/mlo/fancontrol/wifi7 五包（19-core，2026-08-17 从 19 号切片去 fastfetch/netspeedtest，F13）
 patches/root/9017-w1700k-apps-pack-core.patch ROOT
+# 9030：FlowSense 1.1.8-r5 bump（IP08/A7）——必须在 9018-9023 前应用，9018-9023 已在 9030 基线上重放（9022 重建）
+patches/root/9030-flowsense-bump-1.1.8-r5.patch ROOT
+# 9017 的 FlowSense/NPU RPC 后端在无 br_netfilter 的新 offload 架构下修复 VLAN/PPPoE 开关（F29）
+patches/root/9018-flowsense-offload-new-arch.patch ROOT
+# 9017 的 CLIENTS offload 计数修正（F39）：BND eth= 对路由型 Wi-Fi 客户端不含 station MAC，
+# 增补 BND orig/new IP 匹配 + conntrack [HW_OFFLOAD] 兜底；band_bnd 同步修复
+patches/root/9019-npu-client-offload-accounting.patch ROOT
+# 9020：9017 的 getStatus memory_regions 从易失 dmesg 改为 /proc/device-tree/reserved-memory/npu-*（F35/#3/#8）
+patches/root/9020-npu-memory-regions-dt.patch ROOT
+# 9021：9017 的 getWanHealth/getBridgeStats 不再使用 BusyBox 不支持的 ip -s，改读 sysfs（F36/#9）
+patches/root/9021-flowsense-sysfs-stats.patch ROOT
+# 9022：9019 的 IPv6 客户端 offload 计数规范化 + UDP HW_OFFLOAD 以 conntrack 判读（F40/#19/#20）
+patches/root/9022-npu-ipv6-udp-visibility.patch ROOT
+# 9023：NPU RPC 诊断工具缺失或 devmem 读失败时优雅降级（getFrameEngine available:false / pll_freq_mhz:null / 前端不可用）（#2）
+patches/root/9023-npu-rpc-graceful-tools.patch ROOT
+# 9032：PPE debugfs packets/bytes 恒 0（#5）的判读补强——新增 getPpeFlowStats，用 conntrack 双向 tuple 关联每流 packets/bytes
+patches/root/9032-npu-ppe-per-flow-conntrack-stats.patch ROOT
+# 9025：lan1 无链路 down/up 时 rx_errors/rx_dropped 虚增（F38/#15）：无 carrier 时只清 MIB 不并入统计
+patches/root/9025-xr1710g-airoha-no-carrier-rx-stats.patch ROOT
+# 9027：ledtrig-netdev 在 hw-control get 预置 link+link_speed 时写 link 返回 EINVAL（F37③/#14）
+patches/root/9027-ledtrig-netdev-link-mode-mutex.patch ROOT
+# 9031：hw-offloaded netdev LED 的 interval 属性不可写（内核故意拒绝），led 脚本跳过写入避免 led start 退出 1（#14）
+patches/root/9031-base-files-led-skip-interval-hw-offload.patch ROOT
+# 9033：RTL826x 10G PHY LED class 支持（carry openwrt/openwrt #24034；RTL8261BE lan1/lan2，issue #13）
+patches/root/9033-openwrt-24034-rtl826x-led.patch ROOT
+# 9028：mt76 pin 59676919 → c5a3bd91（2026-08-22，master 147 commits 领先；吸收 MT7996 修复；锁源实算 hash，禁 skip）
+patches/root/9028-mt76-bump-c5a3bd91.patch ROOT
 # wifi-scripts 按 radio 独立 txpower（pr-23990/YYH2913；2026-08-17 对 master 重建，源于 fanboy 16 号 41b9e3ac，F13）
 patches/root/9010-wifi-scripts-txpower-ucode.patch ROOT
 # HW GRO/LRO 默认开启（11 号定档 default——README 声明的 HW-GRO/LRO 能力载体；kernel 6.18 编译期验证中）
@@ -56,7 +93,7 @@ patches/vendor/fanboy/11-airoha-lro-default-0e90a420.patch ROOT
 #   相对 pin 版 mt76 59676919 已完全上游化——0001 与 debugfs.c:908 逐字一致、0003 的功能性改动
 #   （MCU 采集调用）mac.c:2895-2896 已存在，剩余 diff 只是删除上游已无调用者的死代码 mt7996_mac_sta_poll。
 #   能力保留（上游自带），本层补丁冗余且应用失败——#DISABLED，非降级，见 FIXES F22）
-#DISABLED patches/vendor/fanboy/14-mt76-patches-80f79586.patch ROOT
+# fanboy/14 已重建为上方 mt76-0001/0003 并启用；原料桶保留 14 供对照（F22 复核/issue #4）
 # 08 号切片（2026-08-17 F13 收尾：从 vendor/fanboy/08-reliability-compat 切出的六项 default；9014 依赖 9010 先行——
 # 同文件（mac80211.sh）尾部上下文按 9010 后状态重建，应用顺序已在 MANIFEST 固化）
 patches/root/9011-xr1710g-spi33mhz.patch ROOT
@@ -66,15 +103,24 @@ patches/root/9014-xr1710g-wifi-antenna-memo.patch ROOT
 patches/root/9015-xr1710g-snd-soc-off.patch ROOT
 patches/root/9016-xr1710g-silence-phy-led-error.patch ROOT
 
-# ── 实验档（--experimental；毕业并入默认档后取消 #EXP）──
+# ── 原实验档毕业段 / 剩余实验档（--experimental；毕业并入默认档后取消 #EXP）──
+# 以下 05/06/9024/9026/07/09/17/18 已于 2026-08-31 毕业为默认（ci-74 实机 E1/E2/E3、wifi down/up、NPU 探针通过）。
+# 05 的 target.mk 在文件末尾追加 DEFAULT_PACKAGES，与 02 顺序无关。
+patches/vendor/fanboy/05-bridge-offload-22533-33ac9c66.patch ROOT
+# 06/07 已再同步 ubi2-oc ba58ba46（2026-08-22；diff 无变化，仅 commit hash/文件名更新：06 c0ed8295，07 5b917d4b）
+patches/vendor/fanboy/06-nft-flow-offload-l2-22533-c0ed8295.patch ROOT
+# 9024：bridge-flow-offload 依赖改为 kmod-nft-offload，规则表名避开用户 fw4 桥表（issue #1 E1/E3）
+patches/root/9024-bridge-flow-offload-deps-table.patch ROOT
+# 9026：bridge 族 nft_flow_offload_init/destroy 复用 inet conntrack 语义（issue #1 E2）
+patches/root/9026-bridge-flow-offload-init-conntrack.patch ROOT
 #EXP patches/vendor/fanboy/02-eip93-f80d0507.patch ROOT
 #EXP patches/vendor/fanboy/04-dsa-kmod-netlink-22532-aa531917.patch ROOT
-#EXP patches/vendor/fanboy/05-bridge-offload-22533-33ac9c66.patch ROOT
-#EXP patches/vendor/fanboy/06-nft-flow-offload-l2-22533-bdfd1ae2.patch ROOT
-#EXP patches/vendor/fanboy/07-mt76-bypass-hw-rro-e880d0db.patch ROOT
-#EXP patches/vendor/fanboy/09-hw11-hw21-compat-afc6dc93.patch ROOT
-#EXP patches/vendor/fanboy/17-cmonroe-stability-8c530f05.patch ROOT
-#EXP patches/vendor/fanboy/18-smartrg-stability-b45d5117.patch ROOT
+# 9029：lan2 10G JCPLL VCO TCLVAR 重写（IP10/A8，experimental；实机 10G 对端验证后毕业 default）
+#EXP patches/root/9029-xr1710g-airoha-pcs-jcpll-tclvar-recal.patch ROOT
+patches/vendor/fanboy/07-mt76-release-hw-rro-session-5b917d4b.patch ROOT
+patches/vendor/fanboy/09-hw11-hw21-compat-afc6dc93.patch ROOT
+patches/vendor/fanboy/17-cmonroe-stability-8c530f05.patch ROOT
+patches/vendor/fanboy/18-smartrg-stability-b45d5117.patch ROOT
 
 # ── 待拆分/评审后解锁（原料桶已有，见 FIXES F13/F14）──
 # 08-reliability-compat：2026-08-17 切片完成——六项（SPI33MHz/banner/dropbear/antenna-memo/snd-off/LED-silence）

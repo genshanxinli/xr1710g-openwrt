@@ -91,6 +91,11 @@ done < "$MANIFEST"
 echo "----"
 echo "处理：$applied  实验档跳过：$skipped  缺失文件：$missing"
 if (( DRY )); then
+  if (( missing > 0 )); then
+    echo "✗ 存在缺失补丁文件（$missing 个）——先运行 scripts/fetch-sources.sh 或按 patches/specs 取源。" >&2
+    (cd "$TREE" && git reset --hard -q)
+    exit 1
+  fi
   # F20/F21 制度化：拷贝类/派生包补丁真实应用校验（失败即红；下载失败=⚠ 未校验不红，构建兜底）。
   # 必须在 git reset 之前调用：派生目标（如 9002 → uboot patches/9990-…）由 ROOT 补丁生成，
   # 回滚后文件即消失。始终回滚工作区，以 verify 的退出码为准。

@@ -66,7 +66,7 @@ diff 原文：https://github.com/OpenWRT-fanboy/OpenW1700k/commit/80096373b5a519
 - 1.4GHz：多台稳定（glassdoor 2×HW1.1；c01 烤机 4 小时 77°C 稳定；"经过2天的测试非常的稳定，甚至可以说是完美"；"默认自动频率是很保守的，所以一下子 performance 1.4 感觉就很明显"）。
 - 1.35GHz：一台"两分钟后重置"（不稳）。
 - 1.5GHz：无一成功（"Mine is running at 650 and couldn't take 1.5"；"voltage … will open another door to hit something over than 1.6GHz"——没人做到）。
-- 性能：coremark 16xx→19xx（约 +20%）；iperf3 回环 463→515 Mbit/s（OC + 关 debug 选项，fanboy 自测）。
+- 性能：coremark 16xx→19xx（约 +20%）；iperf3 回环 463→515 Mbit/s（OC + 关 debug 选项，fanboy 自测）。**注意：该 iperf3 回环数字是本机 CPU 基线，不能作为转发面吞吐判据（IP28）**。
 
 ---
 

@@ -59,15 +59,33 @@ if [[ ! -f .config ]]; then
 fi
 # 应用 seed diff（见 config/seed-config.diff 内注释：依赖外部 feed 的包先 TODO）
 cat "$ROOT/config/seed-config.diff" >> .config
+# 实验档增量 seed：MANIFEST #EXP 补丁提供的包不在共享 seed 中（否则 stock 会引用不存在的包）。
+# 必须在第二次 defconfig 前追加，且共享 seed 末尾保持换行（否则两段 seed 会粘成一行）。
+if [[ "$TIER" == "experimental" ]]; then
+  cat "$ROOT/config/seed-config.experimental.diff" >> .config
+fi
 make defconfig
 grep -q "CONFIG_TARGET_airoha_an7581_DEVICE_gemtek_xr1710g-ubi=y" .config \
   && echo "✓ XR1710G 目标已选中" \
   || { echo "⚠ .config 中未选中 gemtek_xr1710g-ubi——检查 seed-config.diff 与 #22397 补丁" >&2; }
+if [[ "$TIER" == "experimental" ]]; then
+  grep -q '^CONFIG_PACKAGE_bridge-flow-offload=y$' .config \
+    && echo "✓ 实验档 bridge-flow-offload 已选入 .config（issue #1 E1）" \
+    || { echo "✗ 实验档 bridge-flow-offload 未选入 .config（issue #1 E1）" >&2; exit 1; }
+fi
 # seed 符号审计（F15 教训：kconfig 静默忽略未知符号——所有 seed 符号必须逐一进 .config）
 "$ROOT/scripts/audit-config.sh" "$ROOT/config/seed-config.diff" .config
+if [[ "$TIER" == "experimental" ]]; then
+  "$ROOT/scripts/audit-config.sh" "$ROOT/config/seed-config.experimental.diff" .config
+fi
 
 echo "== [5/6] 构建（-j$JOBS, 日志 build.log）=="
-make -j"$JOBS" V=s 2>&1 | tee "$ROOT/build-$TIER.log"
+# E2：DISTRIB_DESCRIPTION 注入档位标识（CONFIG_VERSION_DIST 经 include/version.mk 进入 /etc/openwrt_release）
+make -j"$JOBS" V=s CONFIG_VERSION_DIST="OpenWrt $TIER" 2>&1 | tee "$ROOT/build-$TIER.log"
+if ! ls bin/targets/airoha/an7581/*.itb >/dev/null 2>&1; then
+  echo "错误：构建完成但未找到 .itb 产物（目标未生成/打包异常？）" >&2
+  exit 1
+fi
 echo "产物："
 ls -la bin/targets/airoha/an7581/*.itb 2>/dev/null || find bin/targets -name '*.itb' -exec ls -la {} \;
 echo "完成：$TIER"

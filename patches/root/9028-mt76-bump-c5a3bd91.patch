@@ -1,0 +1,15 @@
+--- a/package/kernel/mt76/Makefile
++++ b/package/kernel/mt76/Makefile
+@@ -8,9 +8,9 @@
+ 
+ PKG_SOURCE_URL:=https://github.com/openwrt/mt76
+ PKG_SOURCE_PROTO:=git
+-PKG_SOURCE_DATE:=2026-07-01
+-PKG_SOURCE_VERSION:=59676919ea408b0b13a9d23f2e2e1a1ab407fba1
+-PKG_MIRROR_HASH:=8a6dc6dac37ed56fcbfd874359f5c25acb65bcfaa795d50494cba17c98405dd5
++PKG_SOURCE_DATE:=2026-08-22
++PKG_SOURCE_VERSION:=c5a3bd91aa735b669618610d5f0ebfa5786845a6
++PKG_MIRROR_HASH:=a1bc74501d95390b3e5be8296528b77c4d2b11092f822eda7e66cf8512365d6c
+ 
+ PKG_MAINTAINER:=Felix Fietkau <nbd@nbd.name>
+ PKG_USE_NINJA:=0

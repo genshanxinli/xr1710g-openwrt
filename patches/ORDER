@@ -13,9 +13,23 @@ default root/9002-xr1710g-uboot.patch
 default vendor/fanboy/03-cpufreq-pmdomain-22029-e5d23549.patch
 default vendor/fanboy/10-pstore-ramoops-22473-2f7d2d02.patch
 default root/9017-w1700k-apps-pack-core.patch   # 19 号精简（npu/flowsense/mlo/fancontrol/wifi7；去 fastfetch/netspeedtest）
+default root/9030-flowsense-bump-1.1.8-r5.patch   # A7/IP08：FlowSense 1.1.8-r5（9018-9023 已重放至 9030 基线）
+default root/9018-flowsense-offload-new-arch.patch   # F29：无 br_netfilter 时 VLAN/PPPoE offload 开关改走 nft flowtable/HW Flow Offload
+default root/9019-npu-client-offload-accounting.patch   # F39：CLIENTS offload 计数修正（BND orig/new IP + conntrack HW_OFFLOAD 兜底；band_bnd 同步）
+default root/9020-npu-memory-regions-dt.patch   # F35/#3/#8：getStatus.memory_regions 改设备树数据源，补 npu-ba 第 5 区
+default root/9021-flowsense-sysfs-stats.patch   # F36/#9：getWanHealth/getBridgeStats 改读 /sys/class/net/*/statistics
+default root/9022-npu-ipv6-udp-visibility.patch   # F40/#19/#20：IPv6 地址规范化 + UDP HW_OFFLOAD conntrack 判读
+default root/9023-npu-rpc-graceful-tools.patch   # #2：缺 devmem/devmem 读失败时 getFrameEngine/pll_freq_mhz/前端优雅降级
+default root/9032-npu-ppe-per-flow-conntrack-stats.patch   # #5：PPE debugfs packets/bytes 恒 0；getPpeFlowStats 用 conntrack 双向 tuple 补每流 packets/bytes
+default root/9025-xr1710g-airoha-no-carrier-rx-stats.patch   # F38/#15：无 carrier 只清 MIB，rx_errors/rx_dropped 不虚增
+default root/9027-ledtrig-netdev-link-mode-mutex.patch   # F37③/#14：ledtrig-netdev 写 link 时清除冲突的 link_speed 模式
+default root/9031-base-files-led-skip-interval-hw-offload.patch   # #14：hw-offloaded netdev LED 跳过 interval 写入，led start 退出码归 0
+default root/9033-openwrt-24034-rtl826x-led.patch   # issue #13：RTL826x 10G PHY LED class 支持（carry openwrt/openwrt #24034）
+default root/9028-mt76-bump-c5a3bd91.patch   # mt76 pin 59676919→c5a3bd91；MT7996 修复吸收；0001/0003 已对 c5a3bd91 重建；9992 随 bump 删除（F59）
 default root/9010-wifi-scripts-txpower-ucode.patch   # 16 号重建（pr-23990 按 radio 独立 txpower）
 default vendor/fanboy/11-airoha-lro-default-0e90a420.patch   # HW GRO/LRO 默认
-disabled vendor/fanboy/14-mt76-patches-80f79586.patch   # F22（2026-08-17）：相对 pin mt76 59676919 完全冗余（token/NPU debugfs + MCU 采集已上游），撤下非降级
+default mt76/0001-wifi-mt76-mt7996-add-token-and-NPU-debugfs-counters.patch   # fanboy14 0001 重建（issue #4）：c5a3bd91 无 token_info，非冗余
+default mt76/0003-wifi-mt76-mt7996-replace-direct-WTBL-access-with-MCU-for-station-statistics.patch   # fanboy14 0003 重建（issue #4）：c5a3bd91 mac.c 仍直接 WTBL 轮询
 default root/9011-xr1710g-spi33mhz.patch   # 08 切片：SPI 33MHz（sysupgrade 可靠性）
 default root/9012-xr1710g-banner-colored.patch   # 08 切片：彩色 banner
 default root/9013-xr1710g-dropbear-quiet-logs.patch   # 08 切片：dropbear 静默会话日志
@@ -24,27 +38,36 @@ default root/9015-xr1710g-snd-soc-off.patch   # 08 切片：显式关闭板载�
 default root/9016-xr1710g-silence-phy-led-error.patch   # 08 切片：静默 PHY LED pinctrl 报错
 default regdb/0510-us-6ghz-no-no-ir.patch   # 500 world 去 NO-IR 已上游自带（500-world-regd-5GHz.patch，F20）
 default regdb/0520-us-power-limits-uni1-29-6g-29.patch
+default regdb/0521-us-unii3-4-160mhz-30.patch
 default mt76/0006-wifi-mt76-mt7996-refresh-power-limits-on-txpower-changes.patch
 default mt76/0007-wifi-mt76-mt7996-enable-firmware-txpower-limit-controls.patch
+default mt76/0008-wifi-mt76-mt7996-eeprom-power-unlock.patch   # 07 天线报告附A.1/附A.2：eeprom 功率解锁（2G 28->30、5G UNII-3 28->30）；默认档全开
+default mt76/0009-report-only-terminal-tx-failures.patch   # A5/IP25/IP26：tx_failed 只记终端失败
+default mt76/9994-mac80211-api-compat.patch   # F62：c5a3bd91 新 mac80211 API 适配 6.18；main 联动 bump 后删除
 
 # ── oc（--oc 才应用）──
-oc regdb/0555-w1700k-unii4-6g-30.patch
+oc regdb/0555-w1700k-unii4-6g-30.patch   # 仅 6G 29->30；5G UNII-3/4@160 已由默认档 0521 承载
 # OC 本体（OPP/PLL/governor）由 scripts/prepare-oc.sh 树编辑实现（不占 MANIFEST）
 
-# ── experimental（--experimental 才应用）──
+# ── 原实验档：已毕业项转 default（2026-08-31 ci-74 实机）；剩余 experimental 见下 ──
+default vendor/fanboy/05-bridge-offload-22533-33ac9c66.patch
+default vendor/fanboy/06-nft-flow-offload-l2-22533-c0ed8295.patch   # 2026-08-22 再同步 ubi2-oc ba58ba46：五补丁合并为三补丁，去 kmod-br-netfilter 依赖
+default root/9024-bridge-flow-offload-deps-table.patch   # issue #1 E1/E3：DEPENDS 改 kmod-nft-offload + 独立表名 flow_offload
+default root/9026-bridge-flow-offload-init-conntrack.patch   # issue #1 E2：bridge 族 flow 表达式 init/destroy 复用 inet conntrack
 experimental vendor/fanboy/02-eip93-f80d0507.patch
 experimental vendor/fanboy/04-dsa-kmod-netlink-22532-aa531917.patch
-experimental vendor/fanboy/05-bridge-offload-22533-33ac9c66.patch
-experimental vendor/fanboy/06-nft-flow-offload-l2-22533-bdfd1ae2.patch
-experimental vendor/fanboy/07-mt76-bypass-hw-rro-e880d0db.patch
-experimental vendor/fanboy/09-hw11-hw21-compat-afc6dc93.patch
-experimental vendor/fanboy/17-cmonroe-stability-8c530f05.patch
-experimental vendor/fanboy/18-smartrg-stability-b45d5117.patch
-experimental mt76/9990-wifi-mt76-mt7996-advertise-eht-to-firmware-rate-control.patch   # F25 评审（2026-08-18）：EHT 广告（9990）/320 BF fallback（9991）/op_mode 传递（9993）；9992 PS-sync 校验上游已合否决
-experimental mt76/9991-wifi-mt76-mt7996-fill-160mhz-bf-fallback-for-eht-320.patch
-experimental mt76/9993-wifi-mt76-mt7996-pass-operating-mode-to-rate-control.patch
-experimental packages/mac80211-411-export-link-sta-capability-limits.patch   # 9993 编译依赖：mac80211 backport 导出 cap_bw/cap_nss（integration subsys 411）
-experimental regdb/0530-us-6ghz-lab-indoor-sp-override-DISABLED.patch
+experimental root/9029-xr1710g-airoha-pcs-jcpll-tclvar-recal.patch   # A8/IP10：lan2 10G JCPLL VCO TCLVAR 重写（毕业转 default）
+default vendor/fanboy/07-mt76-release-hw-rro-session-5b917d4b.patch   # 2026-08-22 再同步 ubi2-oc ba58ba46：改为 teardown 时释放 HW_RRO session
+default vendor/fanboy/09-hw11-hw21-compat-afc6dc93.patch
+default vendor/fanboy/17-cmonroe-stability-8c530f05.patch
+default vendor/fanboy/18-smartrg-stability-b45d5117.patch
+default mt76/0005-wifi-mt76-mt7996-guard-txfree-overrun.patch   # 2026-08-22 再同步 ubi2-oc e7a8143（TXFREE 截断静默；对 c5a3bd91 可应用）
+experimental mt76/0010-set-skb-device-for-npu-rx.patch   # A6/IP25/IP26：NPU RX 设 skb->dev，PPE miss 回退 bridge/FDB 上下文
+default mt76/9990-wifi-mt76-mt7996-advertise-eht-to-firmware-rate-control.patch   # 2026-08-22 再同步 integration e88fbe28：EHT 广告（9990）/320 BF fallback（9991）/op_mode 传递（9993）；9992 已随 9028 bump 删除（F59）
+default mt76/9991-wifi-mt76-mt7996-fill-160mhz-bf-fallback-for-eht-320.patch
+default mt76/9993-wifi-mt76-mt7996-pass-operating-mode-to-rate-control.patch
+default packages/mac80211-411-export-link-sta-capability-limits.patch   # 9993 编译依赖：mac80211 backport 导出 cap_bw/cap_nss（integration subsys 411）
+disabled regdb/0530-us-6ghz-lab-indoor-sp-override-DISABLED.patch   # MANIFEST #DISABLED；启用前按 0510→0520→0521 后状态过 verify
 
 # ── pending（原料已入库，待评审定档/拆分后解锁，对应 FIXES F13/F14）──
 pending vendor/fanboy/01-vermagic-inject-85005e10.patch   # F14 评估后接 CI
