@@ -56,7 +56,6 @@ experimental vendor/fanboy/05-bridge-offload-22533-33ac9c66.patch
 experimental vendor/fanboy/06-nft-flow-offload-l2-22533-c0ed8295.patch   # 2026-08-22 再同步 ubi2-oc ba58ba46：五补丁合并为三补丁，去 kmod-br-netfilter 依赖
 experimental root/9024-bridge-flow-offload-deps-table.patch   # issue #1 E1/E3：DEPENDS 改 kmod-nft-offload + 独立表名 flow_offload
 experimental root/9026-bridge-flow-offload-init-conntrack.patch   # issue #1 E2：bridge 族 flow 表达式 init/destroy 复用 inet conntrack
-experimental root/9034-xr1710g-pcie2-gen3-retrain.patch   # pcie2 Gen3 x1 serdes retrain 实验（D0 后内核补丁方向）
 experimental root/9029-xr1710g-airoha-pcs-jcpll-tclvar-recal.patch   # A8/IP10：lan2 10G JCPLL VCO TCLVAR 重写（毕业转 default）
 experimental vendor/fanboy/07-mt76-release-hw-rro-session-5b917d4b.patch   # 2026-08-22 再同步 ubi2-oc ba58ba46：改为 teardown 时释放 HW_RRO session
 experimental vendor/fanboy/09-hw11-hw21-compat-afc6dc93.patch
