@@ -14,7 +14,7 @@ diff --git a/target/linux/airoha/patches-6.18/9996-PCI-mediatek-gen3-EN7581-pcie
 new file mode 100644
 --- /dev/null
 +++ b/target/linux/airoha/patches-6.18/9996-PCI-mediatek-gen3-EN7581-pcie2-Gen3-retrain.patch
-@@ -0,0 +1,131 @@
+@@ -0,0 +1,141 @@
 +--- a/drivers/pci/controller/pcie-mediatek-gen3.c
 ++++ b/drivers/pci/controller/pcie-mediatek-gen3.c
 +@@ -35,6 +35,9 @@
@@ -37,7 +37,7 @@ new file mode 100644
 + 	int irq;
 + 	u32 saved_irq_state;
 + 	raw_spinlock_t irq_lock;
-+@@ -411,6 +417,83 @@
++@@ -411,6 +417,93 @@
 + 	writel_relaxed(val, pcie->base + PCIE_INT_ENABLE_REG);
 + }
 + 
@@ -69,14 +69,15 @@ new file mode 100644
 ++{
 ++	struct device *dev = pcie->dev;
 ++	struct reset_control *perst = pcie->perstout_resets[0].rstc;
+++	struct reset_control *phy_lane = pcie->phy_resets[2].rstc;
 ++	int speed;
 ++	u32 val;
 ++
 ++	if (!pcie->serdes_retrain || !pcie->np_scu)
 ++		return;
 ++
-++	if (!perst) {
-++		dev_warn(dev, "pcie2: PERSTOUT2 reset not available, skip serdes retrain\n");
+++	if (!perst || !phy_lane) {
+++		dev_warn(dev, "pcie2: PERSTOUT2 or phy-lane2 reset not available, skip serdes retrain\n");
 ++		return;
 ++	}
 ++
@@ -92,6 +93,11 @@ new file mode 100644
 ++		dev_warn(dev, "pcie2: failed to assert PERSTOUT2\n");
 ++		return;
 ++	}
+++	if (reset_control_assert(phy_lane)) {
+++		dev_warn(dev, "pcie2: failed to assert phy-lane2 reset\n");
+++		reset_control_deassert(perst);
+++		return;
+++	}
 ++
 ++	regmap_update_bits(pcie->np_scu, NP_SCU_LANE_CFG0,
 ++			   NP_SCU_LANE_CFG0_PCIE2_SERDES_RST,
@@ -99,8 +105,12 @@ new file mode 100644
 ++	msleep(100);
 ++	regmap_update_bits(pcie->np_scu, NP_SCU_LANE_CFG0,
 ++			   NP_SCU_LANE_CFG0_PCIE2_SERDES_RST, 0);
-++	msleep(100);
 ++
+++	if (reset_control_deassert(phy_lane)) {
+++		dev_warn(dev, "pcie2: failed to deassert phy-lane2 reset\n");
+++		return;
+++	}
+++	msleep(100);
 ++	if (reset_control_deassert(perst)) {
 ++		dev_warn(dev, "pcie2: failed to deassert PERSTOUT2\n");
 ++		return;
@@ -121,7 +131,7 @@ new file mode 100644
 + static int mtk_pcie_startup_port(struct mtk_gen3_pcie *pcie)
 + {
 + 	struct resource_entry *entry;
-+@@ -518,6 +601,9 @@
++@@ -518,6 +611,9 @@
 + 		return err;
 + 	}
 + 
@@ -131,7 +141,7 @@ new file mode 100644
 + 	mtk_pcie_enable_msi(pcie);
 + 
 + 	/* Set PCIe translation windows */
-+@@ -952,6 +1038,14 @@
++@@ -952,6 +1048,14 @@
 + 			return dev_err_probe(dev, PTR_ERR(pcie->sec_base), "failed to map secondary register base\n");
 + 	}
 + 
