@@ -92,8 +92,11 @@ for i in eth0 lan1 lan2 wan lan3 br-lan; do
   echo "  phys_switch_id=$(cat "/sys/class/net/$i/phys_switch_id" 2>/dev/null)"
 done
 echo "--- B2 PHY device inventory ---"
+MDIO_DIR="/sys/devices/platform/soc/1fb58000.switch/mdio_bus"
+MDIO_BUS="mt7530_dsa-0"
+[ -d "$MDIO_DIR/$MDIO_BUS" ] || MDIO_BUS="mt7530-0"
 for p in 05 08 09 0a; do
-  d="/sys/devices/platform/soc/1fb58000.switch/mdio_bus/mt7530_dsa-0/mt7530_dsa-0:$p"
+  d="$MDIO_DIR/$MDIO_BUS/$MDIO_BUS:$p"
   echo "== phy $p =="
   for f in phy_id phy_interface phy_dev_flags phy_has_fixups; do
     [ -f "$d/$f" ] && printf "  %-16s %s\n" "$f" "$(cat "$d/$f" 2>/dev/null)"
@@ -164,7 +167,7 @@ for p in /proc/device-tree/soc/switch@1fb58000/ports/port@3 /proc/device-tree/so
   echo "$p status=$(cat "$p/status" 2>/dev/null)"
 done
 echo "--- B6 MDIO bus statistics/errors ---"
-d=/sys/devices/platform/soc/1fb58000.switch/mdio_bus/mt7530_dsa-0/statistics
+d="$MDIO_DIR/$MDIO_BUS/statistics"
 for f in "$d"/errors "$d"/errors_*; do
   [ -f "$f" ] && printf "%s=%s\n" "$(basename "$f")" "$(cat "$f" 2>/dev/null)"
 done
@@ -182,13 +185,19 @@ done
 route_c() {
     $SSH_CMD '
 echo "===== ROUTE C: ETHERNET PORT LED SUBSYSTEM DEEP TEST ====="
+for pfx in mt7530_dsa-0 mt7530-0; do
+  if [ -e "/sys/class/leds/${pfx}:09:green:lan" ]; then
+    LED_PFX="$pfx"
+    break
+  fi
+done
 echo "--- C1 port LED inventory ---"
-for l in /sys/class/leds/mt7530_dsa-0:*; do
+for l in /sys/class/leds/${LED_PFX}:*; do
   n=$(basename "$l")
   printf "%-32s brightness=%s max=%s trigger=%s\n" "$n" "$(cat "$l/brightness")" "$(cat "$l/max_brightness")" "$(sed -n "s/^.*\[\(.*\)\].*$/\1/p" "$l/trigger")"
 done
 echo "--- C2 brightness write/readback/restore ---"
-for l in /sys/class/leds/mt7530_dsa-0:*; do
+for l in /sys/class/leds/${LED_PFX}:*; do
   n=$(basename "$l"); orig=$(cat "$l/brightness")
   echo 1 > "$l/brightness"; one=$(cat "$l/brightness")
   echo 0 > "$l/brightness"; zero=$(cat "$l/brightness")
@@ -196,8 +205,8 @@ for l in /sys/class/leds/mt7530_dsa-0:*; do
   printf "%-32s orig=%s one=%s zero=%s restored=%s\n" "$n" "$orig" "$one" "$zero" "$(cat "$l/brightness")"
 done
 echo "--- C3 netdev offload probe (wan then lan3) ---"
-w=/sys/class/leds/mt7530_dsa-0:09:green:lan
-l=/sys/class/leds/mt7530_dsa-0:0a:green:lan
+w=/sys/class/leds/${LED_PFX}:09:green:lan
+l=/sys/class/leds/${LED_PFX}:0a:green:lan
 echo none > "$w/trigger"; echo 0 > "$w/brightness"; echo none > "$l/trigger"; echo 0 > "$l/brightness"
 echo netdev > "$w/trigger"; echo wan > "$w/device_name"
 echo 1 > "$w/link" 2>/dev/null; echo 1 > "$w/rx" 2>/dev/null; echo 1 > "$w/tx" 2>/dev/null
@@ -206,17 +215,17 @@ echo netdev > "$l/trigger"; echo lan3 > "$l/device_name"
 echo 1 > "$l/link" 2>/dev/null; echo 1 > "$l/rx" 2>/dev/null; echo 1 > "$l/tx" 2>/dev/null
 echo "lan3 after mode: link=$(cat "$l/link") rx=$(cat "$l/rx") tx=$(cat "$l/tx") offloaded=$(cat "$l/offloaded" 2>/dev/null)"
 echo "--- C4 10G port LED gap audit ---"
-echo "sysfs 10G-port LED count: $(ls /sys/class/leds | grep -c "mt7530_dsa-0:0[58]:" || true)"
+echo "sysfs 10G-port LED count: $(ls /sys/class/leds | grep -c "${LED_PFX}:0[58]:" || true)"
 for p in 5 8 9 a; do
   d="/proc/device-tree/soc/switch@1fb58000/mdio/ethernet-phy@$p"
   echo "ethernet-phy@$p leds-dir-count: $(ls "$d" 2>/dev/null | grep -c leds || true)"
 done
 echo "--- C5 restore and final inventory ---"
-for l in /sys/class/leds/mt7530_dsa-0:*; do
+for l in /sys/class/leds/${LED_PFX}:*; do
   echo none > "$l/trigger" 2>/dev/null || true
   echo 0 > "$l/brightness" 2>/dev/null || true
 done
-for l in /sys/class/leds/mt7530_dsa-0:*; do
+for l in /sys/class/leds/${LED_PFX}:*; do
   n=$(basename "$l")
   printf "%-32s brightness=%s trigger=%s\n" "$n" "$(cat "$l/brightness")" "$(sed -n "s/^.*\[\(.*\)\].*$/\1/p" "$l/trigger")"
 done

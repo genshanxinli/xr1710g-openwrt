@@ -81,13 +81,18 @@ DEVICE_HOST=root@192.168.123.1 ./scripts/device-hw-probe.sh
 实验档另有：`vendor/02/04/05/06/07/09/17/18`、`9024`、`9026`、`9029`、`mt76-0005/0010/9990/9991/9993`、`mac80211-411`。
 mt76 包补丁默认档：`mt76-0001/0003/0006/0007/0008/0009/9994`。
 
-## 6. 上游状态快照（2026-08-23 会话未重新查询，沿用 08-22 快照）
+## 6. 上游状态快照（2026-08-26 会话重新查询）
 
-- `openwrt/openwrt` master：`3d1645ee`（08-21）。本地 dry-run 绿。
-- `OpenWRT-fanboy/OpenW1700k` `ubi2-oc`：`ba58ba46`（08-21）；06=`c0ed8295`、07=`5b917d4b`、mt76-0005=`e7a8143`。
-- `YYH2913/openwrt` `xr1710g-6.18-integration`：`e88fbe28`（08-19）；mt76 0006/0007/9990/9991/9993、mac80211-411、regdb 510/520/530 已核对。
-- `openwrt/mt76` master：`c5a3bd91`（08-22）。本仓库已自 bump（`9028`）+ `9994` 兼容层。
-- 跟踪 PR：仍 open #22397、#22029、#22473、#22532、#22533、#24034、#24619、#23990；已 merged #21777/#23078/#23383/#21978/#22391/#24593/#22289/#23427。
+- `openwrt/openwrt` master：`eb7a45bc`（08-26 11:23）。相对上次快照 `3d1645ee`（08-21）累计 +34 commits；其中 08-23 `da5a057 airoha: npu: update firmware loading patch to the upstream version` 与 NPU 线相邻，dry-run 需重点观察。08-26 再查的 15 个新增（mediatek/siflower/qualcommax/qualcommbe/wifi-scripts 等）无 airoha 专项。
+- `openwrt/mt76` master：`c5a3bd91`（08-22），无变化；openwrt main 的 mt76 pin 仍 `59676919`，本仓库 `9028` 仍领先 main，无需再 bump。
+- `OpenWRT-fanboy/OpenW1700k` `ubi2-oc`：`bc33b93e`（08-25 13:18，整枝 rebase；上次快照 `ba58ba46` 已被重写）。`ubi2-oc-auto` 滚动至 `a52fa9e9`（08-26）。`main`=`eb7a45bc`（已同步 openwrt main）。**fanboy 20 个定制 commit 与本仓库 `vendor/fanboy/01-20` 做 `git patch-id` 对比：18 个内容完全一致（仅 SHA 变化）；2 个内容变化**：① 08 Reliability（`36da8e02`→`3604463e`）新增 `wireless-regdb/patches/555-w1700k-fix.patch`（18 行），需与已有 `regdb-0555` 核对是否重叠；② 18 smartrg（`b45d5117`→`711aaa68`）中 `992-21-net-airoha-npu-init-stability.patch` 由 74 行变 83 行，实验档 `vendor/18` 需更新。06/07/mt76-0005 内容仍与 `c0ed8295`/`5b917d4b`/`e7a8143` 一致（仅新 SHA）。
+- `YYH2913/openwrt` `xr1710g-6.18-integration`：`e88fbe28`（08-19），无变化；mt76 0006/0007/9990/9991/9993、mac80211-411、regdb 510/520/530 已核对。
+- `naoki66/ImmortalWrt-for-Gemtek-XR1710G` master：`604bf882`（08-25）。相对 pin `dd9ecfeef` 有大量新提交，但 `package/luci-app-airoha-recovery/` 路径 0 差异，`packages-xr1710g/` 无需升锁。
+- `YYH2913/luci-app-mlo` `911912b`、`rchen14b/luci-app-w1700k-fancontrol` `2c6cc7a`：均无变化。
+- `YYH2913/http-uboot(-xr1710g)`：master `53b73174`；最新 release 仍 `xg2010g_260821`（08-21），tag `xg2010g_260822` 未发布为 release。锁版仍按 FLASHING A1 的 v2026.07/`59060dde`，升级前继续核对 release 页 SHA256。
+- openwrt feeds 最新：`packages`=`a353d906`（08-26）、`luci`=`7a6ff759`（08-26）、`video`=`644a6626`（08-25）、`routing`=`4b9891b9`、`telephony`=`5d68d53c`。
+- 跟踪 PR：仍 open #22397（08-23 更新但 head 仍 `e1fe2733a1`，无新代码提交）、#22029、#22473、#22532、#22533、#24034、#24619、#23990、#24025；已 merged #21777/#23078/#23383/#21978/#22391/#24593/#22289/#23427/#22564/#23566/#23828；closed 未合并 #22536；issue #21177 仍 open（01-02 后无活动）。
+- 失效源：`Arthur97172/Gemtek-XR1710G-wrt-builder`（08-24 仍存在，本次 404）、`hx801217/iStoreOS-for-Gemtek-XR1710G`、`luoyizhi1987/XR1710G-YYH-OC` 均 404；文档引用待标注/替换。
 
 ## 7. 下一步（重点）：新 CI 固件刷入设备后的测试
 
@@ -95,25 +100,28 @@ mt76 包补丁默认档：`mt76-0001/0003/0006/0007/0008/0009/9994`。
 
 ### 7.1 先刷 stock（all run 的 stock 产物）
 
-**重要**：A1 已改布局，当前设备还是旧 2MiB 布局。**禁止在旧布局设备上 sysupgrade**（compat 2.0 会拒；不得 -F 强刷）。必须走 HTTP U-Boot 恢复页：
+**重要（历史）**：A1 已改布局；刷机必须走 HTTP U-Boot 恢复页并选 **UBI 2.0**（旧布局设备上 `sysupgrade` 会被 compat 2.0 拒；不得 -F 强刷）：
 1. PC 接 10GbE 口，DHCP；开机按 reset 进 `http://192.168.255.1`；
 2. 布局选择器选 **UBI 2.0**（与 `9001/9002` 新布局匹配）；
 3. 上传 `*-sysupgrade.itb` 刷入 stock。
+> 设备已于 2026-08-30 刷入 stock `ci-69` 并完成 7.1 复核（见 7.5）；后续同布局可用 sysupgrade。
 
 刷入后按序验证（判据见 FIXES F64–F75 / ACCEPTANCE）：
 
 > 方法论：experimental = 默认档 + 实验档增量（`patches/MANIFEST` 的 `#EXP` 条目），下列功能项可先在 experimental 固件上预验；标 `〔E✓ 见 7.4〕` 的项已在 CI#70 experimental 实机预验通过。最终 stock 档放行仍需刷 stock 产物复核（尤其 stock 镜像的 `sysupgrade -T`、E2 档位元数据与 stock 包集合），不能把 experimental 预验直接记为 stock 验收。
-- [ ] 冷启动无 `rdinit=/init failed`（F66）
-- [ ] `/proc/mtd` 或 `cat /proc/partitions`：`ubi` size=`0x1b700000`、`reserved_bmt` size=`0x04200000`（F64）〔E✓ 见 7.4〕
-- [ ] `ubinfo -a` 无坏块；多轮重启不新增坏块（F64）〔E✓ 见 7.4〕
-- [ ] `/etc/init.d/fan start` 后 `pwm1` 仅一个写入者；风扇曲线随温度切换；fancontrol 页面可读可设（F67/A4）〔E✓ 见 7.4〕
-- [ ] `led start` 退出码 0；hw-offloaded PHY LED 无 EINVAL（#14/9031）〔E✓ 见 7.4〕
-- [ ] `getStatus` RPC 返回 5 个 NPU memory regions（#22/F63，`ubus` 侧复测）
-- [ ] 有损链路 `iw dev wlanX station dump`：`tx_retries>0` 时 `tx_failed≈0`（F68/A5）〔E✓ 见 7.4〕
-- [ ] 三频 AP 正常；6GHz C2 双侧国家码判据（AP US + 客户端 US 可见可连；非 US 不可见属预期）（F72/A9）
-- [ ] C3 无线速率用外部对端 iperf3（禁止本机 iperf3 当吞吐判据）（F74/A11）
-- [ ] 管理面改址回连 B6（F74/A11）
-- [ ] `DEVICE_HOST=root@192.168.123.1 ./scripts/device-hw-probe.sh` 全绿（F75/A12；已在 experimental 实机验证通过，见 7.4）
+> **stock 实机结果（2026-08-30，pre-release `ci-69` = `firmware-stock.tar.gz`，commit `46600b2`）详见 7.5 与 `docs/acceptance-results/2026-08-30-stock-ci69.md`。**
+
+- [ ] 冷启动无 `rdinit=/init failed`（F66）— **仍失败（已知良性）**：HTTP U-Boot 默认 env 覆盖 DTS chosen，dmesg 仍见 `rdinit=/init failed: -2, ignoring`。需 U-Boot 侧补 `rdinit=/sbin/init` 或换 9002 U-Boot。
+- [x] `/proc/mtd` 或 `cat /proc/partitions`：`ubi` size=`0x1b700000`、`reserved_bmt` size=`0x04200000`（F64）〔E✓ 见 7.4〕
+- [x] `ubinfo -a` 无坏块；多轮重启不新增坏块（F64）— ci-69 stock：bad PEBs=0，2 轮 reboot 后仍 0、max erase counter=2。〔E✓ 见 7.4〕
+- [x] `/etc/init.d/fan start` 后 `pwm1` 仅一个写入者；风扇曲线随温度切换；fancontrol 页面可读可设（F67/A4）— rc=0；单 `S99fan`；`luci.fan getStatus` 可读。〔E✓ 见 7.4〕
+- [x] `led start` 退出码 0；hw-offloaded PHY LED 无 EINVAL（#14/9031）— **ci-69 stock 默认 sysfs 为 `mt7530_dsa-0:*`（新内核名），本 stock 内核实为 `mt7530-0:*`，已在设备 UCI 修正 4 个 1G LED 并删除 10G LED；`led start` rc=0、offloaded=1、无 EINVAL。**〔E✓ 见 7.4〕
+- [x] `getStatus` RPC 返回 5 个 NPU memory regions（#22/F63，`ubus` 侧复测）
+- [x] 有损链路 `iw dev wlanX station dump`：`tx_retries>0` 时 `tx_failed≈0`（F68/A5）— 5G 站点 tx_retries=74027/12937/1693，tx_failed=56/1/2；2.4G tx_retries=397/106，tx_failed=0。〔E✓ 见 7.4〕
+- [x] 三频 AP 正常；6GHz C2 双侧国家码判据（AP US + 客户端 US 可见可连；非 US 不可见属预期）（F72/A9）— **仅 AP 侧**：6G EHT320/29dBm up；无 6G 客户端，客户端侧待物理终端。
+- [ ] C3 无线速率用外部对端 iperf3（禁止本机 iperf3 当吞吐判据）（F74/A11）— 未测（需外部对端 + 160/320MHz 客户端）。
+- [ ] 管理面改址回连 B6（F74/A11）— **按用户要求取消**（见 7.4）。
+- [x] `DEVICE_HOST=root@192.168.123.1 ./scripts/device-hw-probe.sh` 全绿（F75/A12）— 脚本已加 DSA 前缀自动探测；B2.1 VEND1 `0x103=0x8261`/`0x104=0x1141` → RTL8261BE。
 
 ### 7.2 再刷 experimental（experimental run 产物）
 
@@ -142,6 +150,17 @@ stock 基本项通过后，同法刷 experimental（或同布局 sysupgrade）�
   - E2 档位元数据：当前 CI#70 固件仍无档位标识；构建层已修（见下），待下一轮构建后实机验证 `DISTRIB_DESCRIPTION` 含档位。
 - 本会话已修：LED sysfs 回归 `mt7530_dsa-0` → `mt7530-0`（`files/etc/config/system`、`scripts/device-hw-probe.sh`）；设备 UCI 已同步并验证。B2.1 MDIO 访问路径修复：10G PHY 挂在 mt7530-0 总线（PHYAD 5=lan2、8=lan1），lan1/lan2 的 Airoha GDM ioctl 返回 -95，改为借道 DSA 用户口（wan/lan3）以 C45 MMD30 读 `IFACE/<phy>:30/0x103`（`scripts/device-hw-probe.sh`）。E2 构建层注入 `CONFIG_VERSION_DIST="OpenWrt <profile>"`（`scripts/build.sh`、`.github/workflows/build.yml`），下一轮构建生效。`scripts/device-npu-ipv6-probe.sh` 末尾 sampler 日志路径修正，跑通 rc=0。B6 按用户要求取消。
 - issue #5 判读补强：新增 `patches/root/9032`（`luci.airoha_flowsense` 新 RPC `getPpeFlowStats`），用 conntrack 双向 tuple 补每流 `ct_packets`/`ct_bytes`/`hw_offload`；已在设备 `ubus call luci.airoha_flowsense getPpeFlowStats` 验证可用。PPE debugfs 计数本身仍待上游。
+
+### 7.5 stock ci-69 实机复核（2026-08-30）
+
+> 用户已把 stock 产物（pre-release `ci-69` = all run `32621215717`，commit `46600b2`）刷入设备。详细记录：`docs/acceptance-results/2026-08-30-stock-ci69.md`。
+
+- 已通过：F64 布局（ubi=0x1b700000/reserved_bmt=0x04200000、bad PEBs=0、2 轮 reboot 不新增）、F65 `sysupgrade -T`（ci-69 `firmware-stock.tar.gz` 中 sysupgrade.itb，sha256 `79ed39c0…`）、F67 风扇单控制器、`led start` rc=0（**设备 UCI 已按旧内核实际 sysfs `mt7530-0:*` 修正；ci-69 镜像默认 `mt7530_dsa-0:*` 是适配新内核的名称**）、F68 tx_failed≈0、F75/A12 `device-hw-probe.sh` 全绿（B2.1 `0x103=0x8261`/`0x104=0x1141` → RTL8261BE；已 `apk add phytool`）、B1/B3/B4/B5（NPU loaded、offload_bound>0；IPv6 探针 rc=0 并出现 `[HW_OFFLOAD]` 与 PPE BND v6）、C1 三频 up、stock 包集合与 ci-69 manifest 一致（设备 207 包 = manifest 206 + phytool）。
+- 未通过/待办：
+  - F66 仍见 `rdinit=/init failed: -2, ignoring`（已知良性；HTTP U-Boot 默认 env 覆盖 DTS chosen）。
+  - E2 档位元数据：ci-69 旧构建仍无 `CONFIG_VERSION_DIST` 档位标识；构建层已修，待下一轮构建实机复核。
+  - C2 客户端侧 / C3 外部对端 iperf3 / B2 双 10G 对打 / A3 恢复页 / D3 72h：需物理对端或客户端，未测。
+- 本会话已修：`scripts/device-hw-probe.sh` 增加 DSA 前缀自动探测（`mt7530_dsa-0`/`mt7530-0`），使探针在两代内核上均可全绿；设备 UCI LED sysfs 修正并验证；设备安装 phytool 补齐 B2.1。
 
 ## 8. 宿主环境备忘
 
