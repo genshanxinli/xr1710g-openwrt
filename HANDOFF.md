@@ -1,19 +1,21 @@
-# HANDOFF — 交接文档（2026-08-23 会话收口）
+# HANDOFF — 交接文档（2026-08-31 更新：feat 分支已合并 main）
 
-> 接任维护者请先读：`README.md`、`CONTEXT.md`、`docs/FIXES.md`（F01–F75）、`docs/adr/0001`、`docs/adr/0002`、`docs/ROADMAP.md`。
+> 接任维护者请先读：`README.md`、`CONTEXT.md`、`docs/FIXES.md`（F01–F78）、`docs/adr/0001`、`docs/adr/0002`、`docs/ROADMAP.md`。
 
 ## 0. 工作区与远程
 
 - 本地仓库：`/root/workspace/xr1710g-openwrt`
-- 当前分支：`feat/antenna-eeprom-power-unlock`
-- 当前 commit：以 `git log --oneline -1` 为准；本批 CI 构建 commit 为 `46600b2`（之后的提交均为 HANDOFF 文档更新）
+- 当前分支：**`main`**（`feat/antenna-eeprom-power-unlock` 已于 2026-08-30 19:44 UTC 合入 main，merge commit `3a7257c`；远程同名分支已删除，本地残留 tracking 引用已 `git fetch --prune` 清理）
+- 当前 commit：以 `git log --oneline -1` 为准（合并时点 = `3a7257c`）。关键节点：`e0cbe4a` = 实验档毕业批次（ci-74 实机验证后 12 项 `#EXP` 转 default）；`46600b2` 及更早为历史构建 commit
 - 远程：`https://github.com/genshanxinli/xr1710g-openwrt`（默认分支 `main`）
-- 推送到当前分支：
+- 推送到 main（**push 会自动触发 build.yml——push 事件默认 stock 档**——与 sync-upstream）：
   ```bash
   export GH_TOKEN=$(cat .gh-token)
-  git push "https://x-access-token:${GH_TOKEN}@github.com/genshanxinli/xr1710g-openwrt.git" feat/antenna-eeprom-power-unlock
+  git push "https://x-access-token:${GH_TOKEN}@github.com/genshanxinli/xr1710g-openwrt.git" main
   ```
   > 本宿主 `git push origin` 常无输出/超时，直接用 token URL 最稳；`gh api`/`curl` 偶发 EOF/429，重试 1–2 次即可。
+- 进行中的平行分支（截至 2026-08-31，均未并入 main）：`feat/absorb-npu-fdk-offload-oc`（`6410bf3`，领先 main 2 commits：NPU FDK 构建脚本/补丁 + 专用 CI workflow；ci-79/ci-81 产物已出）、`feat/npu-fdk-build-workflow`（`b731d3a`）。接手前先确认这两条分支的去留。
+- 上述两条分支以 **git worktree** 挂在本仓库下：`tmp/wt-absorb-npu-fdk`、`tmp/wt-npu-fdk-main`（主工作区在 `main`，勿在主工作区直接切到这两条分支）。
 
 ## 1. 仓库是什么
 
@@ -48,10 +50,14 @@ Gemtek XR1710G（Airoha AN7581 + MT7996 三频 Wi-Fi7、2×10G + 2×1G）的**�
    - experimental = `32621217391`
    - 旧的 e0e84e0 构建 `32619703715` / `32619704962` 已取消。
 
-## 3. 构建与验证状态（2026-08-23）
+## 3. 构建与验证状态（2026-08-23；08-31 增量见下）
 
 - `46600b2` 的 CI 已绿：all = `32621215717`（success）、experimental = `32621217391`（success）。
 - `sync-upstream`（push 触发）对 `46600b2` 已绿：run `32621204454`。
+- 2026-08-30/31 增量（当前状态）：
+  - **ci-74**（experimental，dispatch 于 main@`790f57e`，openwrt base `r0-93cf01b`）实机复核全通过 → 毕业批次 `e0cbe4a`（详见 7.6）。
+  - ci-79/ci-81（`feat/absorb-npu-fdk-offload-oc`）与 ci-80/ci-82（feat 分支 `3265af0`/`56466bd`）dispatch 构建全绿（产物见对应 pre-release）。
+  - **合并 `3a7257c`（push main）自动触发**：build run **#83**（stock 档，合并后首个默认档固件——绿后产物即毕业批次的 stock 验证载体，见 7.3/7.7）+ sync-upstream **#182**（已绿）。
 - 历史参考：
   - F60–F62 已解决：mt76 c5a3bd91 bump（`9028`）+ `9994` mac80211 6.18 API 兼容层；`0001/0003` 已对 c5a3bd91 重建。
   - #14 LED interval 与 #22 getStatus 算术的修复（`9031`/`9020`）已含在本批构建中。
@@ -75,11 +81,13 @@ DEVICE_HOST=root@192.168.123.1 ./scripts/device-wifi-downup-probe.sh
 DEVICE_HOST=root@192.168.123.1 ./scripts/device-hw-probe.sh
 ```
 
-## 5. 当前 patch 层速览（默认档 ROOT）
+## 5. 当前 patch 层速览（2026-08-31 毕业批次后，与 MANIFEST 逐行核对）
 
-`9000/9001/9002` 板级（66MiB reserved_bmt + rdinit） → `vendor/03` cpufreq → `vendor/10` pstore → `9017` apps-pack（fancontrol 去 init.d） → `9030` FlowSense 1.1.8-r5 → `9018` VLAN/PPPoE → `9019` CLIENTS 计数 → `9020` memory_regions DT → `9021` sysfs stats → `9022` IPv6/UDP 判读 → `9023` 优雅降级 → `9025` no-carrier rx stats → `9010` txpower ucode → `vendor/11` LRO → `9011–9016` 08 切片 → `9027` ledtrig-netdev link mode → `9031` LED interval skip → `9028` mt76 bump。
-实验档另有：`vendor/02/04/05/06/07/09/17/18`、`9024`、`9026`、`9029`、`mt76-0005/0010/9990/9991/9993`、`mac80211-411`。
-mt76 包补丁默认档：`mt76-0001/0003/0006/0007/0008/0009/9994`。
+**默认档 ROOT 链**（按应用顺序）：`9000/9001/9002` 板级（66MiB reserved_bmt + rdinit） → `vendor/03` cpufreq → `vendor/10` pstore → `9017` apps-pack（fancontrol 去 init.d） → `9030` FlowSense 1.1.8-r5 → `9018` VLAN/PPPoE → `9019` CLIENTS 计数 → `9020` memory_regions DT → `9021` sysfs stats → `9022` IPv6/UDP 判读 → `9023` 优雅降级 → `9032` PPE 每流 conntrack 统计 → `9025` no-carrier rx stats → `9027` ledtrig-netdev link mode → `9031` LED interval skip → `9033` RTL826x LED（#24034 carry） → `9028` mt76 bump → `9010` txpower ucode → `vendor/11` LRO → `9011–9016` 08 切片 → **ci-74 毕业并入**：`vendor/05` bridge offload → `vendor/06` nft L2 → `9024` deps/table → `9026` init/conntrack → `vendor/07` HW_RRO teardown → `vendor/09` HW1.1/2.1 compat → `vendor/17` cmonroe 稳定 → `vendor/18` smartrg 稳定。
+
+**实验档仅剩 4 条**：`vendor/02`（EIP93）、`vendor/04`（DSA）、`9029`（JCPLL，待 10G 对端）、`mt76-0010`（NPU RX skb->dev，待 6G 客户端）。
+
+**mt76 包补丁默认档**：`mt76-0001/0003/0005/0006/0007/0008/0009/9990/9991/9993/9994`；另 mac80211 subsys `411`（9993 编译依赖，已随毕业转 default）。
 
 ## 6. 上游状态快照（2026-08-30 会话重新查询）
 
@@ -95,9 +103,9 @@ mt76 包补丁默认档：`mt76-0001/0003/0006/0007/0008/0009/9994`。
 - 跟踪 PR：仍 open #22397（08-30 14:02 有新活动，head 仍 `e1fe2733a1`、最后代码提交 04-11，评论仍停在 03 月——review/CI 类活动，无新代码）、#22029、#22473、#22532、#22533、#24034、#24619、#23990、#24025（08-29 有活动）；已 merged #21777/#23078/#23383/#21978/#22391/#24593/#22289/#23427/#22564/#23566/#23828；closed 未合并 #22536；issue #21177 仍 open（01-02 后无活动）。
 - 失效源：`Arthur97172/Gemtek-XR1710G-wrt-builder`、`hx801217/iStoreOS-for-Gemtek-XR1710G`、`luoyizhi1987/XR1710G-YYH-OC` 均 404（`Arthur97172/Airoha-wrt-builder` 仍存在）；文档引用待标注/替换。
 
-## 7. 下一步（重点）：新 CI 固件刷入设备后的测试
+## 7. 下一步（重点）：合并后首个 stock 固件的实机复核
 
-> 等 `46600b2` 的 CI all + experimental 绿并下载产物后执行。产物在对应 run 的 Artifacts（`firmware-<profile>`）或 workflow_dispatch 成功后的 pre-release `ci-<run_number>`（`firmware-<profile>.tar.gz`）。
+> **当前待办（2026-08-31）**：合并 `3a7257c` 已自动触发 build run #83（stock 档，main HEAD）——绿后下载产物（run 的 Artifacts `firmware-stock`；dispatch 才会有 pre-release `ci-<run_number>`），刷入设备做**毕业批次的 default 档实机回归**（ci-74 只验证了 experimental 档）。后续历史流程（7.1–7.6）保留作记录。
 
 ### 7.1 先刷 stock（all run 的 stock 产物）
 
@@ -135,9 +143,11 @@ stock 基本项通过后，同法刷 experimental（或同布局 sysupgrade）�
 
 ### 7.3 通过后收口
 
-- 可毕业项转 default（尤其 F69/F71 视实机结果）；更新 FIXES/README/ROADMAP。
-- 继续跟踪 mt76/mac80211 上游联动 bump；合入后删 `9028`/`9994`，再验。
-- 跑 `docs/ACCEPTANCE.md` 全项，冻结 known-good tag。
+- ~~可毕业项转 default~~ **已完成**（`e0cbe4a`，ci-74 实机后毕业 12 项；剩余 `#EXP`：`vendor/02/04`、`9029`、`mt76-0010`，分别待 EIP93 实机/DSA 实机/10G 对端/6G 客户端）。
+- **新增（合并后）**：run #83（stock@`3a7257c`）绿后刷机，复核毕业批次在 default 档的实机表现（bridge/nft L2 offload E1–E3、EHT320 9990/9991/9993、TXFREE 0005、HW_RRO 07、稳定性 09/17/18、fw4 flow_offload uci-defaults 生效、`compat_version 2.0`）——ci-74 结论只覆盖 experimental 档，default/stock 放行需本轮复核。
+- 继续跟踪 mt76/mac80211 上游联动 bump；合入后删 `9028`/`9994`，再验（08-30 复核：mt76 master 仍 `c5a3bd91`、main 仍 pin `59676919`，暂无动作）。
+- 跟进 F77（fanboy `vendor/18` 83 行版吸收）与 F78（naoki66 LAN2 SDS-mode 评估，与 `9029` 对照）。
+- 跑 `docs/ACCEPTANCE.md` 全项（含 D3 72h 长稳、C2/C3/B2 物理对端项），冻结 known-good tag。
 
 ### 7.4 CI#70 experimental 实机结果（2026-08-23）
 
