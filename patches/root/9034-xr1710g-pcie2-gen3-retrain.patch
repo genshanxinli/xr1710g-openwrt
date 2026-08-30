@@ -1,10 +1,11 @@
 diff --git a/target/linux/airoha/dts/an7581-xr1710g-ubi.dts b/target/linux/airoha/dts/an7581-xr1710g-ubi.dts
 --- a/target/linux/airoha/dts/an7581-xr1710g-ubi.dts
 +++ b/target/linux/airoha/dts/an7581-xr1710g-ubi.dts
-@@ -288,6 +288,7 @@
+@@ -288,6 +288,8 @@
  &pcie2 {
  	status = "okay";
  
++	airoha,scu = <&scuclk>;
 +	airoha,serdes-retrain;
  	pinctrl-names = "default";
  	pinctrl-0 = <&pcie2_rst_pins>;
