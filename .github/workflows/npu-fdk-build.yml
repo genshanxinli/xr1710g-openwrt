@@ -34,8 +34,8 @@ jobs:
       - name: 校验两次构建 sha256 一致
         run: |
           set -euo pipefail
-          sha256sum tmp/npu-fdk-dist-a/en7581_MT7996_npu_*.bin | sort > /tmp/npu-fdk-a.sha256
-          sha256sum tmp/npu-fdk-dist-b/en7581_MT7996_npu_*.bin | sort > /tmp/npu-fdk-b.sha256
+          (cd tmp/npu-fdk-dist-a && sha256sum en7581_MT7996_npu_*.bin | sort) > /tmp/npu-fdk-a.sha256
+          (cd tmp/npu-fdk-dist-b && sha256sum en7581_MT7996_npu_*.bin | sort) > /tmp/npu-fdk-b.sha256
           diff -u /tmp/npu-fdk-a.sha256 /tmp/npu-fdk-b.sha256
           cat /tmp/npu-fdk-a.sha256
 
