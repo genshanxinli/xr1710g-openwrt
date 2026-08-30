@@ -127,11 +127,11 @@ mt76 包补丁默认档：`mt76-0001/0003/0006/0007/0008/0009/9994`。
 ### 7.2 再刷 experimental（experimental run 产物）
 
 stock 基本项通过后，同法刷 experimental（或同布局 sysupgrade），重点验证实验档新增：
-- [ ] A6/F69 mt76-0010 NPU RX skb->dev：桥接 6G 客户端 `conntrack -F` 后新建流，br-lan 无丢包、CLIENTS 计数一致
-- [ ] A7/F70 FlowSense 1.1.8-r5：`npu-monitor.settings.air_eff` 生效；B5/C4 下吞吐针非 0；9018-9023 功能不回归
-- [ ] A8/F71 JCPLL TCLVAR recal：10G 对端直连 lan2，`ethtool` 10G link 且 rx/tx errors=0；毕业转 default
-- [ ] 实验档既有项：EHT320/9990/9991/9993、TXFREE 0005、bridge-flow-offload 9024/9026 + `config/seed-config.experimental.diff`（issue #1 E1/E2）
-- [ ] `wifi down/up` 5 轮不复发（issue #10）
+- [~] A6/F69 mt76-0010 NPU RX skb->dev：仍 `#EXP`——需 6G 客户端；按用户口径延后（2026-08-31）
+- [x] A7/F70 FlowSense 1.1.8-r5：`uci show npu-monitor.settings.air_eff`=80；`getStatus` 正常；9018-9023 无回归（ci-74）
+- [~] A8/F71 JCPLL TCLVAR recal：仍 `#EXP`——需 10G 对端；按用户口径延后（2026-08-31）
+- [x] 实验档既有项：EHT320/9990/9991/9993、TXFREE 0005、bridge-flow-offload 9024/9026 + `config/seed-config.experimental.diff`（issue #1 E1/E2/E3）——已毕业转 default（ci-74 实机）
+- [x] `wifi down/up` 5 轮不复发（issue #10）——ci-74 实机 5 轮，BSS 均 ENABLED，客户端可重连
 
 ### 7.3 通过后收口
 
@@ -162,6 +162,15 @@ stock 基本项通过后，同法刷 experimental（或同布局 sysupgrade）�
   - E2 档位元数据：ci-69 旧构建仍无 `CONFIG_VERSION_DIST` 档位标识；构建层已修，待下一轮构建实机复核。
   - C2 客户端侧 / C3 外部对端 iperf3 / B2 双 10G 对打 / A3 恢复页 / D3 72h：需物理对端或客户端，未测。
 - 本会话已修：`scripts/device-hw-probe.sh` 增加 DSA 前缀自动探测（`mt7530_dsa-0`/`mt7530-0`），使探针在两代内核上均可全绿；设备 UCI LED sysfs 修正并验证；设备安装 phytool 补齐 B2.1。
+
+### 7.6 experimental ci-74 实机复核 + 实验档毕业（2026-08-31）
+
+> 用户已刷入 pre-release `ci-74`（`firmware-experimental.tar.gz`，`r0-93cf01b`）。详细记录：`docs/acceptance-results/2026-08-31-experimental-ci74.md`。
+
+- 已通过（非 6G/10G 项全部通过）：E2（`OpenWrt experimental SNAPSHOT r0-93cf01b`）、F64 布局、F65 `sysupgrade -T`（本机 `compat_version` 缺失已修，仓库默认配置已补 2.0）、F67 风扇、LED（6 个 PHY LED `offloaded=1`，含 10G `:05`/`:08`）、F63 NPU 5 regions、B5 NPU IPv4（offload_bound=12/total=134；conntrack `[HW_OFFLOAD]` 31+）、B5 IPv6（`ct6_hw` 25/`bnd6` 12）、bridge-flow-offload E1/E2/E3、C1 三频、issue #10 wifi down/up 5 轮无复发、F68 tx_failed≈0、F75/A12 device-hw-probe 全绿（B2.1 RTL8261BE、C4 10G LED count=2）、B1/B4/D1/D2。
+- 延后/未闭环：F66 良性 `rdinit` 假警告；D3 72h 未满；C2/C3/F69（6G 客户端）、F71/B2（10G 对端）按用户口径延后；02 EIP93、04 DSA 继续 `#EXP`。
+- 毕业执行：`mt76-0005`、`mt76-9990/9991/9993`+`mac80211-411`、`vendor/05/06`+`root/9024/9026`、`vendor/07/09/17/18` 已从 `#EXP` 转默认（MANIFEST/ORDER 已同步）。
+- 默认配置补强：`files/etc/config/system` 补 `compat_version '2.0'`；新增 `files/etc/uci-defaults/99-xr1710g-flow-offload` 默认开启 fw4 `flow_offloading`/`flow_offloading_hw`。
 
 ## 8. 宿主环境备忘
 

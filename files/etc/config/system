@@ -6,6 +6,7 @@ config system
 	option urandom_seed '0'
 	option zonename 'Asia/Shanghai'
 	option timezone 'CST-8'
+	option compat_version '2.0'
 
 config timeserver 'ntp'
 	list server '0.openwrt.pool.ntp.org'

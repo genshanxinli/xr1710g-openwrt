@@ -162,13 +162,8 @@ diff --git a/target/linux/airoha/an7581/target.mk b/target/linux/airoha/an7581/t
 index bc101fb4e10a7c..a3d6ab8fef20ad 100644
 --- a/target/linux/airoha/an7581/target.mk
 +++ b/target/linux/airoha/an7581/target.mk
-@@ -6,7 +6,8 @@ KERNELNAME:=Image dtbs
- FEATURES+=pwm
- 
- DEFAULT_PACKAGES += \
--	airoha-en7581-npu-firmware uboot-envtools kmod-crypto-hw-eip93
-+	airoha-en7581-npu-firmware uboot-envtools kmod-crypto-hw-eip93 \
-+	bridge-flow-offload
- 
- define Target/Description
+@@ -13,3 +13,4 @@ define Target/Description
  	Build firmware images for Airoha an7581 ARM based boards.
+ endef
+ 
++DEFAULT_PACKAGES += bridge-flow-offload

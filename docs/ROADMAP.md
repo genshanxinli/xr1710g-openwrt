@@ -5,7 +5,7 @@
 ## P0 首次实机（刷机后第一轮）
 - [x] **真绿门禁**（2026-08-17 F19 修复后）：重建 stock + oc-1.3 + oc-1.4，以 **firmware artifact 存在** 为成功判据。历程：F20（regdb）→ F21（uboot 9002，glob 序/+++/hunk 截断）→ F22（fanboy14 mt76 冗余撤下）→ **F23（9001 内核 DTS hunk 行数 330→427，git apply 静默截断丢 97 行）** 均已修复；**2026-08-17 第五次重建（commit 83f07db）全绿**（push stock=32053502298 + dispatch all=32053692044，firmware artifact 各 ~33.5MB）；同步验证：sync-upstream 32053502231 绿（audit+verify 全通过）。release 自动化闭环由 F25 的 ci-32 验证（2026-08-18，F24）
 - [ ] 物理口 ↔ 逻辑名实机核对（netdev-name 已固化：lan1/lan2=双 10G、wan=1G-1（gsw_port1）、lan3=1G-2（gsw_port2），见 9001；`ip -br link` 验证后定稿 files/etc/config/network）
-- [ ] 核对 6GHz EHT320 实际生效（`iw phy` / hostapd 日志），不生效则修 mt76/hostapd 至生效
+- [x] 核对 6GHz EHT320 实际生效（`iw phy` / hostapd 日志）——ci-74 实机 6G EHT320 up；6G 客户端侧延后（2026-08-31）
 - [ ] NPU 加载与卸载验证（luci-app-airoha-npu 已由 19-pack 内置）
 - [ ] 风扇曲线实测（温度点/转速），按 NCT7802 实测修正曲线参数
 - [ ] 跑 `docs/ACCEPTANCE.md` 全项 → 首个 known-good tag
@@ -38,7 +38,7 @@
 - [ ] #22029（cpufreq/PM domain）——**已自持 fanboy 03（含 direct-PLL fallback）**；上游合入即删
 - [ ] #24034（RTL826x LED）/ #24619（mt7530 LED）——#24034 已 carry 为 `patches/root/9033-openwrt-24034-rtl826x-led.patch`（合入后删）；#24619 仍取决于实机 LED 行为反馈
 - [ ] #22473（uboot pstore）——kernel 侧已自持，剩 uboot 侧
-- [ ] #22532（DSA）/ #22533（L2 offload）——实验档毕业候选（原料桶 04/05/06 已入库）：实验构建跑通 + 实机验证后并入默认档
+- [x] #22533（L2 offload）——已毕业（2026-08-31）：`vendor/05/06`+`root/9024/9026` 转默认，ci-74 实机 E1/E2/E3 通过；#22532（DSA）仍实验档（`vendor/04`）
 - [ ] **mt76 上游追踪 / 吸收**（2026-08-22）：跟踪 `openwrt/mt76` master；当前 pin `59676919`，最新 `c5a3bd91`（147 commits / 76 files / +3038/-482）。优先等 openwrt main bump；若 main 不 bump，按锁源铁律自 bump `package/kernel/mt76`（实算 `PKG_MIRROR_HASH`，禁 fork/hash=skip）。升级后删除 `9992`（上游 `06b6976` 已合入同款 PS-sync 修复），逐条复核 `0001/0003/0006/0007/0008` 与 `0005/9990/9991/9993`，CI `all`+`experimental` 构建绿后实机回归（token_info、PS-sync 事件、三频功率、EHT320）
 - [ ] **fanboy 18 smartrg 吸收**（F77，2026-08-30 复核）：上游 `ubi2-oc` `765535cf`（08-30 rebase）中 `992-21` 83 行版无进一步变化；`vendor/fanboy/18` 待更新为 83 行版并对 openwrt master 重建 + verify，实验档 CI 复验
 - [ ] **naoki66 LAN2 SDS-mode 方案评估**（F78，2026-08-30）：`622-net-phy-realtek-allow-board-specific-RTL826x-SDS-mode.patch` + dts `realtek,sds-mode`/`reset-before-id-read` 与实验档 `9029` JCPLL 对照（互补候选）；若吸收需对 openwrt master 重建并核对 `9001` LAN2 PHY 节点
@@ -49,7 +49,7 @@
 - [x] **iQOO 5G 兼容性实机复核（F41/issue #21，2026-08-26）**：二分矩阵闭环——HE160（psk2/sae-mixed 均拒，AP 零 auth）→ HE80（psk2/sae-mixed 均可连，PHY 1200.9Mbps）。默认 5G 改 HE80，HE160 转注释化可选档（非国行终端）；K2P-5G 保留 sae-mixed。测试记录：`docs/acceptance-results/2026-08-26-iqoo-5g-he80-fix.md`
 - [ ] OC 实机验证报告：oc-1.3 与 oc-1.4 在实机的稳定性/温度，归档到 FIXES F08
 - [ ] 科学上网（OpenClash/PassWall）+ Docker——暂缓项，稳定后再决策 feed 与体积预算
-- [x] mt76 实验补丁（integration 树 9990-9993：EHT 广告/320M BF fallback/PS-sync/rate control）——**F25 评审（2026-08-18）+ F59 复核（2026-08-22）**：9990/9991/9993 重建入实验档（对 pin 59676919 实测可应用、master 无此改动）；**9992 复核后改为携带**（上游 mt76 master 2026-08-01 已合，但 pin 59676919 尚未包含；pin 升级后删除）；实机 EHT320 验证后毕业
+- [x] mt76 实验补丁（integration 树 9990-9993：EHT 广告/320M BF fallback/PS-sync/rate control）——**F25 评审（2026-08-18）+ F59 复核（2026-08-22）**：9990/9991/9993 重建入实验档；**2026-08-31 毕业转默认**（ci-74 实机 AP 侧 EHT320 + wifi down/up 5 轮通过；6G 客户端侧延后）；9992 已随 9028 bump 删除
 - [ ] **IPsec/站点间 VPN 硬件卸载探索（EIP93，issue #6/F52）**：驱动已在实验档编译、/proc/crypto 注册正常；先实机验证 xfrm 连通性与 EIP93 refcnt，再按档位预装 strongswan/kmod-ipsec/ip-full；注意 EIP93 未注册 GCM-AEAD，rfc4106(gcm(aes)) 可能落软加密
 - [ ] 530 实验室 6GHz SP 补丁——默认停用；如需高功率实验，手动启用并在验收注明非合规
 - [x] **全 PCIe Gen3 计划（issue #16 深化）**：D0 已执行（2026-08-24）——pcie0 x2 Gen3 基线达标；pcie2 根端口 `0002:00:00.0` LnkCap2 仅报 2.5/5GT/s、不声明 Gen3，**D0-stop：pcie2 Gen2 x1 固化为板级正确拓扑**，Gen3 x1 降级为上游/厂商长期跟踪（证据：`docs/acceptance-results/2026-08-24-pcie-gen3-baseline.md`）。
@@ -59,6 +59,6 @@
 - [x] 构建退出码硬化（F19：pipefail + no-files-found=error，2026-08-17）
 - [x] 拷贝类补丁 dry-run 真实应用校验（F20 制度化，2026-08-17：新增 `scripts/verify-copy-patches.sh` 接入 `apply-patches.sh --dry-run`——按构建语义解包包源码 + glob 排序真实 `patch -p1`，regdb 附 dbparse 校验；2h sync cron 尽早暴露而非等构建）
 - [x] 实验档可构建化（F25，2026-08-18）：build.sh 加 `experimental` 档 + build.yml dispatch 支持 + sync-upstream cron 的 dry-run 加 `--experimental`（实验档享受 2h 漂移检测）；audit-patches/verify-copy-patches 感知 `#EXP` 行（apply-patches.sh 透传）；apply-patches.sh dry-run 的 set -e 缺陷修复（verify 失败不再跳过 git reset）
-- [ ] 实验档毕业的自动化：experimental 构建通过 + ACCEPTANCE 子集 → PR 式合并到默认 MANIFEST（地基已就绪：实验档已可构建/校验，待实机验收流程落地）
+- [ ] 实验档毕业的自动化：experimental 构建通过 + ACCEPTANCE 子集 → PR 式合并到默认 MANIFEST（2026-08-31 已手工毕业一批：`mt76-0005`、`9990/9991/9993`+`411`、`05/06/9024/9026`、`07/09/17/18`；自动化仍未实现）
 - [ ] vermagic 注入接入 CI（F14，让自建 kmod 兼容官方 opkg）
 - [ ] 2h 同步工作流稳定后，把"冲突出现 → 修复 → 回归"流程沉淀为 CI 注释/文档（sync-upstream.yml 已就位）
