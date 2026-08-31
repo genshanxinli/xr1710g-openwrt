@@ -117,6 +117,8 @@ patches/root/9026-bridge-flow-offload-init-conntrack.patch ROOT
 #EXP patches/vendor/fanboy/04-dsa-kmod-netlink-22532-aa531917.patch ROOT
 # 9029：lan2 10G JCPLL VCO TCLVAR 重写（IP10/A8，experimental；实机 10G 对端验证后毕业 default）
 #EXP patches/root/9029-xr1710g-airoha-pcs-jcpll-tclvar-recal.patch ROOT
+# 9035：FLOW_STATS=y 与 NPU offload 共存（内核 patch 9995 生成 wrapper）——#EXP；须在 04 后应用（04 会把 NET_AIROHA y->m）
+#EXP patches/root/9035-airoha-ppe-flow-stats-coexist.patch ROOT
 patches/vendor/fanboy/07-mt76-release-hw-rro-session-5b917d4b.patch ROOT
 patches/vendor/fanboy/09-hw11-hw21-compat-afc6dc93.patch ROOT
 patches/vendor/fanboy/17-cmonroe-stability-8c530f05.patch ROOT

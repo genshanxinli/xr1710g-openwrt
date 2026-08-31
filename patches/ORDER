@@ -57,6 +57,7 @@ default root/9026-bridge-flow-offload-init-conntrack.patch   # issue #1 E2：bri
 experimental vendor/fanboy/02-eip93-f80d0507.patch
 experimental vendor/fanboy/04-dsa-kmod-netlink-22532-aa531917.patch
 experimental root/9029-xr1710g-airoha-pcs-jcpll-tclvar-recal.patch   # A8/IP10：lan2 10G JCPLL VCO TCLVAR 重写（毕业转 default）
+experimental root/9035-airoha-ppe-flow-stats-coexist.patch   # FLOW_STATS=y 与 NPU offload 共存（9995 wrapper；须在 04 后应用）
 default vendor/fanboy/07-mt76-release-hw-rro-session-5b917d4b.patch   # 2026-08-22 再同步 ubi2-oc ba58ba46：改为 teardown 时释放 HW_RRO session
 default vendor/fanboy/09-hw11-hw21-compat-afc6dc93.patch
 default vendor/fanboy/17-cmonroe-stability-8c530f05.patch
