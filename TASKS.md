@@ -13,4 +13,5 @@
 - [x] 12. 发现 P2 stock 档缺 bridge-flow-offload（DEFAULT_PACKAGES 未生效），将 CONFIG_PACKAGE_bridge-flow-offload=y 移入共享 seed
 - [x] 13. 合并 feat/absorb-npu-fdk-offload-oc 到 main（含 LED 探测 uci-defaults、9035 #EXP 入库、NPU FDK 构建管线）
 - [x] 14. 推送 main（602d9d0）并等待新 stock build #87 绿后 fresh flash 复验：LED 首启探测 rc=0、bridge-flow-offload 已安装、nft bridge flow_offload flags offload 通过
-- [x] 15. 合入 LED 探测 uci-defaults 与 9035 #EXP；dispatch #88 all（oc-1.3/oc-1.4/stock）与 #89 experimental，均 success
+- [x] 15. 合入 LED 探测 uci-defaults 与 9035 #EXP；dispatch #88 experimental 与 #89 all（oc-1.3/oc-1.4/stock），均 success
+- [x] 16. fresh flash #88 experimental：9035 FLOW_STATS=y 共存验证通过（dmesg `NPU flow stats unavailable (-22)`、NPU offload 存活）；LED 探测在 `mt7530_dsa-0` 内核路径同样 rc=0；bridge-flow-offload 安装

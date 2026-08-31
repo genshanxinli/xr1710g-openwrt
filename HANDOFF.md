@@ -145,7 +145,7 @@ stock 基本项通过后，同法刷 experimental（或同布局 sysupgrade）�
 ### 7.3 通过后收口
 
 - ~~可毕业项转 default~~ **已完成**（`e0cbe4a`，ci-74 实机后毕业 12 项；剩余 `#EXP`：`vendor/02/04`、`9029`、`mt76-0010`，分别待 EIP93 实机/DSA 实机/10G 对端/6G 客户端）。
-- **run #83 已复核**（`docs/acceptance-results/2026-08-31-stock-ci83-main.md`）；**run #87 修复后 fresh flash 复验通过**（`docs/acceptance-results/2026-08-31-stock-ci87-fixes.md`）：P1 LED 首启探测 rc=0、P2 stock 档 `bridge-flow-offload` 已安装并生成 `bridge flow_offload` flowtable。下一步：下载 #88（oc-1.3/oc-1.4）与 #89（experimental）产物复验；9035 #EXP 实机表现待 #89 固件刷入后验证。
+- **run #83 已复核**（`docs/acceptance-results/2026-08-31-stock-ci83-main.md`）；**run #87 修复后 fresh flash 复验通过**（`docs/acceptance-results/2026-08-31-stock-ci87-fixes.md`）：P1 LED 首启探测 rc=0、P2 stock 档 `bridge-flow-offload` 已安装并生成 `bridge flow_offload` flowtable。**run #88 experimental 也已 fresh flash 复验**（`docs/acceptance-results/2026-08-31-experimental-ci88-9035.md`）：9035 FLOW_STATS=y 共存验证通过（dmesg `NPU flow stats unavailable (-22)`、NPU offload 存活）；LED 探测在 `mt7530_dsa-0` 路径同样 rc=0。**注意：run 编号与档位**：#88=experimental，#89=all（oc-1.3/oc-1.4/stock，均 success，产物待下载）。
 - 继续跟踪 mt76/mac80211 上游联动 bump；合入后删 `9028`/`9994`，再验（08-30 复核：mt76 master 仍 `c5a3bd91`、main 仍 pin `59676919`，暂无动作）。
 - 跟进 F77（fanboy `vendor/18` 83 行版吸收）与 F78（naoki66 LAN2 SDS-mode 评估，与 `9029` 对照）。
 - 跑 `docs/ACCEPTANCE.md` 全项（含 D3 72h 长稳、C2/C3/B2 物理对端项），冻结 known-good tag。
