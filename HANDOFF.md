@@ -5,8 +5,8 @@
 ## 0. 工作区与远程
 
 - 本地仓库：`/root/workspace/xr1710g-openwrt`
-- 当前分支：**`main`**（`feat/antenna-eeprom-power-unlock` 已于 2026-08-30 19:44 UTC 合入 main，merge commit `3a7257c`；远程同名分支已删除，本地残留 tracking 引用已 `git fetch --prune` 清理）
-- 当前 commit：以 `git log --oneline -1` 为准（合并时点 = `3a7257c`）。关键节点：`e0cbe4a` = 实验档毕业批次（ci-74 实机验证后 12 项 `#EXP` 转 default）；`46600b2` 及更早为历史构建 commit
+- 当前分支：**`main`**（`feat/antenna-eeprom-power-unlock` 已于 2026-08-30 19:44 UTC 合入 main，merge commit `3a7257c`；`feat/absorb-npu-fdk-offload-oc` 已于 2026-08-31 合入 main，merge commit `ecb1191`）
+- 当前 commit：以 `git log --oneline -1` 为准（当前会话合并后为 `54ba1ac`）。关键节点：`3a7257c` = antenna 合并点；`e0cbe4a` = 实验档毕业批次；`ecb1191` = NPU FDK 分支合并点
 - 远程：`https://github.com/genshanxinli/xr1710g-openwrt`（默认分支 `main`）
 - 推送到 main（**push 会自动触发 build.yml——push 事件默认 stock 档**——与 sync-upstream）：
   ```bash
@@ -14,8 +14,8 @@
   git push "https://x-access-token:${GH_TOKEN}@github.com/genshanxinli/xr1710g-openwrt.git" main
   ```
   > 本宿主 `git push origin` 常无输出/超时，直接用 token URL 最稳；`gh api`/`curl` 偶发 EOF/429，重试 1–2 次即可。
-- 进行中的平行分支（截至 2026-08-31，均未并入 main）：`feat/absorb-npu-fdk-offload-oc`（`6410bf3`，领先 main 2 commits：NPU FDK 构建脚本/补丁 + 专用 CI workflow；ci-79/ci-81 产物已出）、`feat/npu-fdk-build-workflow`（`b731d3a`）。接手前先确认这两条分支的去留。
-- 上述两条分支以 **git worktree** 挂在本仓库下：`tmp/wt-absorb-npu-fdk`、`tmp/wt-npu-fdk-main`（主工作区在 `main`，勿在主工作区直接切到这两条分支）。
+- `feat/absorb-npu-fdk-offload-oc`（`001f98b`）已于 2026-08-31 合入 main（merge `ecb1191`）：NPU FDK 构建脚本/补丁 + 专用 CI workflow + LED 探测 uci-defaults + 9035 #EXP 入库；ci-79/ci-81/ci-84(stock)/ci-86(experimental)/npu-fdk#5#7 均已绿。
+- 旧分支 `feat/npu-fdk-build-workflow` 的 FDK 三文件与上述分支逐字节一致（已被吸收），可删。本地 worktree `tmp/wt-absorb-npu-fdk` 已随合并归档。
 
 ## 1. 仓库是什么
 
@@ -105,7 +105,7 @@ DEVICE_HOST=root@192.168.123.1 ./scripts/device-hw-probe.sh
 
 ## 7. 下一步（重点）：合并后首个 stock 固件的实机复核
 
-> **当前待办（2026-08-31）**：合并 `3a7257c` 已自动触发 build run #83（stock 档，main HEAD）——绿后下载产物（run 的 Artifacts `firmware-stock`；dispatch 才会有 pre-release `ci-<run_number>`），刷入设备做**毕业批次的 default 档实机回归**（ci-74 只验证了 experimental 档）。后续历史流程（7.1–7.6）保留作记录。
+> **run #83 实机复核已完成（2026-08-31）**：详细记录见 `docs/acceptance-results/2026-08-31-stock-ci83-main.md`。fresh flash 结论：毕业批次 default 档基本通过（compat 2.0、fw4 flow_offload uci-defaults、NPU v4/v6、EHT320、F68、wifi down/up、hw-probe 全绿）；发现 P1 LED 默认 sysfs 不匹配（已实机修 UCI，代码已合入 LED 探测 uci-defaults）、P2 stock 缺 bridge-flow-offload（已移入共享 seed）。后续历史流程（7.1–7.6）保留作记录。
 
 ### 7.1 先刷 stock（all run 的 stock 产物）
 
@@ -144,7 +144,7 @@ stock 基本项通过后，同法刷 experimental（或同布局 sysupgrade）�
 ### 7.3 通过后收口
 
 - ~~可毕业项转 default~~ **已完成**（`e0cbe4a`，ci-74 实机后毕业 12 项；剩余 `#EXP`：`vendor/02/04`、`9029`、`mt76-0010`，分别待 EIP93 实机/DSA 实机/10G 对端/6G 客户端）。
-- **新增（合并后）**：run #83（stock@`3a7257c`）绿后刷机，复核毕业批次在 default 档的实机表现（bridge/nft L2 offload E1–E3、EHT320 9990/9991/9993、TXFREE 0005、HW_RRO 07、稳定性 09/17/18、fw4 flow_offload uci-defaults 生效、`compat_version 2.0`）——ci-74 结论只覆盖 experimental 档，default/stock 放行需本轮复核。
+- **run #83 已复核**（`docs/acceptance-results/2026-08-31-stock-ci83-main.md`）。P1/P2 已修，下一步：推送 main 等新 stock build 绿后 fresh flash，复验 LED 探测 uci-defaults 与 stock 档 `bridge-flow-offload` 安装；并 dispatch experimental 复验 9035 入库。
 - 继续跟踪 mt76/mac80211 上游联动 bump；合入后删 `9028`/`9994`，再验（08-30 复核：mt76 master 仍 `c5a3bd91`、main 仍 pin `59676919`，暂无动作）。
 - 跟进 F77（fanboy `vendor/18` 83 行版吸收）与 F78（naoki66 LAN2 SDS-mode 评估，与 `9029` 对照）。
 - 跑 `docs/ACCEPTANCE.md` 全项（含 D3 72h 长稳、C2/C3/B2 物理对端项），冻结 known-good tag。
