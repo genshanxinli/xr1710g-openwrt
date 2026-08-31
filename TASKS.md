@@ -1,0 +1,15 @@
+# Tasks
+- [x] 1. 阅读 feat/absorb-npu-fdk-offload-oc 全部 diff（441 行）并逐文件 review
+- [x] 2. 弄清 NPU FDK/offload 现状：官方固件包 airoha-en7581-mt7996-npu-firmware-20260810-r1 提供 NPU 固件；分支仅加独立 FDK 构建管线（阶段 A0），不进固件
+- [x] 3. 查 GitHub CI：npu-fdk run #5 success（双构建 sha256 一致）；build #81 success = release ci-81 = 用户刷入固件
+- [x] 4. 静态测试：bash -n ✓、tarball sha256 ✓、FDK 补丁真实应用 ✓、9035 内层补丁对 linux master 全 hunk 套用 ✓
+- [x] 5. 实机验证：固件 stock r0-93cf01b、206 包、NPU 0.1111、offload v4/v6、三频、风扇、hw-probe、wifi down/up 5 轮 ✓
+- [x] 6. 排查：P1 LED sysfs 不匹配（已实机修复 + 根因定位）；P2 分支基座落后 main；P2 9035 未入库；P3 airoha_fan 空操作/rdinit/.deb 遗留
+- [x] 7. 报告落盘：docs/acceptance-results/2026-08-31-stock-ci81-branch-review.md
+- [x] 8. 下载 run #83 stock 产物（main@3a7257c）并核对 sha256
+- [x] 9. 实机 fresh flash（sysupgrade -n）run #83 stock，复核毕业批次 default 档
+- [x] 10. 验证 fw4 flow_offload uci-defaults 生效、compat_version 2.0、NPU v4/v6、三频、F68、wifi down/up 5 轮、hw-probe 全绿
+- [x] 11. 发现 P1 LED 默认 sysfs 不匹配（fresh flash rc=1）并实机修复
+- [x] 12. 发现 P2 stock 档缺 bridge-flow-offload（DEFAULT_PACKAGES 未生效），将 CONFIG_PACKAGE_bridge-flow-offload=y 移入共享 seed
+- [x] 13. 合并 feat/absorb-npu-fdk-offload-oc 到 main（含 LED 探测 uci-defaults、9035 #EXP 入库、NPU FDK 构建管线）
+- [ ] 14. 推送 main 并等待新 stock build 绿后 fresh flash 复验 LED 探测与 bridge-flow-offload 安装
