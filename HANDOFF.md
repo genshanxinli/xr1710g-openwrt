@@ -6,7 +6,7 @@
 
 - 本地仓库：`/root/workspace/xr1710g-openwrt`
 - 当前分支：**`main`**（`feat/antenna-eeprom-power-unlock` 已于 2026-08-30 19:44 UTC 合入 main，merge commit `3a7257c`；`feat/absorb-npu-fdk-offload-oc` 已于 2026-08-31 合入 main，merge commit `ecb1191`）
-- 当前 commit：以 `git log --oneline -1` 为准（最新为 ci-87 修复批复核后的文档提交）。关键节点：`3a7257c` = antenna 合并点；`e0cbe4a` = 实验档毕业批次；`ecb1191` = NPU FDK 分支合并点；`602d9d0` = P1/P2 修复后主推送（build #87/#88/#89 全绿）
+- 当前 commit：以 `git log --oneline -1` 为准（`aba19bf` 起：9035 转 default + 04 config 上下文重建；`#94` all / `#96` experimental 构建中）。关键节点：`3a7257c` = antenna 合并点；`e0cbe4a` = 实验档毕业批次；`ecb1191` = NPU FDK 分支合并点；`602d9d0` = P1/P2 修复后主推送（build #87/#88/#89 全绿）
 - 远程：`https://github.com/genshanxinli/xr1710g-openwrt`（默认分支 `main`）
 - 推送到 main（**push 会自动触发 build.yml——push 事件默认 stock 档**——与 sync-upstream）：
   ```bash
@@ -84,9 +84,9 @@ DEVICE_HOST=root@192.168.123.1 ./scripts/device-hw-probe.sh
 
 ## 5. 当前 patch 层速览（2026-08-31 毕业批次后，与 MANIFEST 逐行核对）
 
-**默认档 ROOT 链**（按应用顺序）：`9000/9001/9002` 板级（66MiB reserved_bmt + rdinit） → `vendor/03` cpufreq → `vendor/10` pstore → `9017` apps-pack（fancontrol 去 init.d） → `9030` FlowSense 1.1.8-r5 → `9018` VLAN/PPPoE → `9019` CLIENTS 计数 → `9020` memory_regions DT → `9021` sysfs stats → `9022` IPv6/UDP 判读 → `9023` 优雅降级 → `9032` PPE 每流 conntrack 统计 → `9025` no-carrier rx stats → `9027` ledtrig-netdev link mode → `9031` LED interval skip → `9033` RTL826x LED（#24034 carry） → `9028` mt76 bump → `9010` txpower ucode → `vendor/11` LRO → `9011–9016` 08 切片 → **ci-74 毕业并入**：`vendor/05` bridge offload → `vendor/06` nft L2 → `9024` deps/table → `9026` init/conntrack → `vendor/07` HW_RRO teardown → `vendor/09` HW1.1/2.1 compat → `vendor/17` cmonroe 稳定 → `vendor/18` smartrg 稳定。
+**默认档 ROOT 链**（按应用顺序）：`9000/9001/9002` 板级（66MiB reserved_bmt + rdinit） → `vendor/03` cpufreq → `vendor/10` pstore → `9017` apps-pack（fancontrol 去 init.d） → `9030` FlowSense 1.1.8-r5 → `9018` VLAN/PPPoE → `9019` CLIENTS 计数 → `9020` memory_regions DT → `9021` sysfs stats → `9022` IPv6/UDP 判读 → `9023` 优雅降级 → `9032` PPE 每流 conntrack 统计 → `9025` no-carrier rx stats → `9027` ledtrig-netdev link mode → `9031` LED interval skip → `9033` RTL826x LED（#24034 carry） → `9028` mt76 bump → `9010` txpower ucode → `vendor/11` LRO → `9011–9016` 08 切片 → `9035` flow-stats 共存（ci-88 后转 default） → **ci-74 毕业并入**：`vendor/05` bridge offload → `vendor/06` nft L2 → `9024` deps/table → `9026` init/conntrack → `vendor/07` HW_RRO teardown → `vendor/09` HW1.1/2.1 compat → `vendor/17` cmonroe 稳定 → `vendor/18` smartrg 稳定。
 
-**实验档仅剩 4 条**：`vendor/02`（EIP93）、`vendor/04`（DSA）、`9029`（JCPLL，待 10G 对端）、`mt76-0010`（NPU RX skb->dev，待 6G 客户端）。
+**实验档仅剩 4 条**：`vendor/02`（EIP93）、`vendor/04`（DSA）、`9029`（JCPLL，待 10G 对端）、`mt76-0010`（NPU RX skb->dev，待 6G 客户端）。`9035`（FLOW_STATS=y 与 NPU offload 共存）已于 2026-08-31 ci-88 验证后转 default（config hunk 为 stock `=y` 上下文，置于 04 前；04 config hunk 已改为 FLOW_STATS=y 上下文）。
 
 **mt76 包补丁默认档**：`mt76-0001/0003/0005/0006/0007/0008/0009/9990/9991/9993/9994`；另 mac80211 subsys `411`（9993 编译依赖，已随毕业转 default）。
 
@@ -145,7 +145,7 @@ stock 基本项通过后，同法刷 experimental（或同布局 sysupgrade）�
 ### 7.3 通过后收口
 
 - ~~可毕业项转 default~~ **已完成**（`e0cbe4a`，ci-74 实机后毕业 12 项；剩余 `#EXP`：`vendor/02/04`、`9029`、`mt76-0010`，分别待 EIP93 实机/DSA 实机/10G 对端/6G 客户端）。
-- **run #83 已复核**（`docs/acceptance-results/2026-08-31-stock-ci83-main.md`）；**run #87 修复后 fresh flash 复验通过**（`docs/acceptance-results/2026-08-31-stock-ci87-fixes.md`）：P1 LED 首启探测 rc=0、P2 stock 档 `bridge-flow-offload` 已安装并生成 `bridge flow_offload` flowtable。**run #88 experimental 也已 fresh flash 复验**（`docs/acceptance-results/2026-08-31-experimental-ci88-9035.md`）：9035 FLOW_STATS=y 共存验证通过（dmesg `NPU flow stats unavailable (-22)`、NPU offload 存活）；LED 探测在 `mt7530_dsa-0` 路径同样 rc=0。**注意：run 编号与档位**：#88=experimental，#89=all（oc-1.3/oc-1.4/stock，均 success，产物待下载）。
+- **run #83 已复核**（`docs/acceptance-results/2026-08-31-stock-ci83-main.md`）；**run #87 修复后 fresh flash 复验通过**（`docs/acceptance-results/2026-08-31-stock-ci87-fixes.md`）：P1 LED 首启探测 rc=0、P2 stock 档 `bridge-flow-offload` 已安装并生成 `bridge flow_offload` flowtable。**run #88 experimental 也已 fresh flash 复验**（`docs/acceptance-results/2026-08-31-experimental-ci88-9035.md`）：9035 FLOW_STATS=y 共存验证通过（dmesg `NPU flow stats unavailable (-22)`、NPU offload 存活）；LED 探测在 `mt7530_dsa-0` 路径同样 rc=0。**注意：run 编号与档位**：#88=experimental，#89=all（oc-1.3/oc-1.4/stock，均 success）。**9035 已转 default**：a820ea0 起 default 链含 9035；aba19bf 重建 04 config 上下文后，#94 all（a820ea0，stock/oc 与 aba19bf 等价）与 #96 experimental（aba19bf）构建中。
 - 继续跟踪 mt76/mac80211 上游联动 bump；合入后删 `9028`/`9994`，再验（08-30 复核：mt76 master 仍 `c5a3bd91`、main 仍 pin `59676919`，暂无动作）。
 - 跟进 F77（fanboy `vendor/18` 83 行版吸收）与 F78（naoki66 LAN2 SDS-mode 评估，与 `9029` 对照）。
 - 跑 `docs/ACCEPTANCE.md` 全项（含 D3 72h 长稳、C2/C3/B2 物理对端项），冻结 known-good tag。

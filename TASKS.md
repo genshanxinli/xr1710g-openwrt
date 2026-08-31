@@ -15,3 +15,6 @@
 - [x] 14. 推送 main（602d9d0）并等待新 stock build #87 绿后 fresh flash 复验：LED 首启探测 rc=0、bridge-flow-offload 已安装、nft bridge flow_offload flags offload 通过
 - [x] 15. 合入 LED 探测 uci-defaults 与 9035 #EXP；dispatch #88 experimental 与 #89 all（oc-1.3/oc-1.4/stock），均 success
 - [x] 16. fresh flash #88 experimental：9035 FLOW_STATS=y 共存验证通过（dmesg `NPU flow stats unavailable (-22)`、NPU offload 存活）；LED 探测在 `mt7530_dsa-0` 内核路径同样 rc=0；bridge-flow-offload 安装
+- [x] 17. 9035 经 ci-88 experimental fresh flash 验证后转 default（config hunk 改为 stock y 上下文，置于 04 前）
+- [x] 18. 重建 vendor/04 config hunk 为 FLOW_STATS=y 上下文，修复 9035 提前应用后的实验档 dry-run 冲突；本地 temp repo 验证 9035→04 顺序可应用
+- [ ] 19. 等 #94 all（stock/oc）与 #96 experimental 绿后：下载 stock fresh flash 复验 9035 default 对 NPU offload 无回归；下载 experimental 复验 9035→04 顺序
