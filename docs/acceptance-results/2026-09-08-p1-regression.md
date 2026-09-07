@@ -16,6 +16,7 @@
 | R5 | LED/风扇 | LED 在位（status + mt7530_dsa lan），风扇 nct7802 1312 RPM | 2026-09-08 01:35 |
 | R6 | sysupgrade -T | **PASS**（rc=0，图像元数据校验通过；itb 与 CI 产物 md5 逐字节一致 e9be0753…） | 2026-09-08 02:00 |
 | R7 | 三频/链路稳态 | 4 AP up；eth0=10G / lan2=2.5G / wan=1G / br-lan=2.5G；mem Avail 1.6G | post-flash 稳态捕获 |
+| R8 | GPIO 46/31（F83/9040） | 受限：debugfs 仍显示 `PHY reset` 功能（out hi）；sysfs export 46/31 被拒（无 gpio46/31 节点，CONFIG_GPIO_SYSFS 限制）→ 方向写入不可直接验证；**间接证据**：20 次冷启动均无 PHY ID 读失败/复位异常（9001 reset 路径功能正常） | 2026-09-08 02:07 |
 
 ## 2. 结论与决策输入（§7.3）
 
