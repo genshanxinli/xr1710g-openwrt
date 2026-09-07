@@ -149,6 +149,7 @@ stock 基本项通过后，同法刷 experimental（或同布局 sysupgrade）�
 - 继续跟踪 mt76/mac80211 上游联动 bump；合入后删 `9028`/`9994`，再验（08-30 复核：mt76 master 仍 `c5a3bd91`、main 仍 pin `59676919`，暂无动作）。
 - 跟进 F77（fanboy `vendor/18` 83 行版吸收）与 F78（naoki66 LAN2 SDS-mode 评估，与 `9029` 对照）。
 - 跑 `docs/ACCEPTANCE.md` 全项（含 D3 72h 长稳、C2/C3/B2 物理对端项），冻结 known-good tag。
+  - **2026-09-07 D3 时长维度达标**：experimental `r0-93cf01b`（#88/#96 批次）连续运行 **7 天零重启、零内核报错**（dmesg 全缓冲仅已知良性项、pstore 空、无泄漏迹象；NPU/PPE offload、三频含 6G EHT320、双 10G RTL8261BE、风扇/LED 全健康，F75 四路探针 rc=0）。负载为轻负载家用，`2×10G + 三频高负载` 压力条件未达，D3 整项保持 open。详见 `docs/acceptance-results/2026-09-07-d3-longrun-7d.md`。旁证：`#EXP` 四条（02/04/9029/mt76-0010）随镜像无故障运行 7 天。
 
 ### 7.4 CI#70 experimental 实机结果（2026-08-23）
 
@@ -191,6 +192,7 @@ stock 基本项通过后，同法刷 experimental（或同布局 sysupgrade）�
 - 本地浅克隆 openwrt master：`/root/workspace/xr1710g-openwrt/tmp/openwrt-src`（partial clone）；源码缓存：`tmp/copy-patch-verify`。
 - 社区源码临时仓库：`/tmp/orangeyoo-xr1710g`、`/tmp/gilly-w1700k`、`/tmp/naoki66-xr1710g`、`/tmp/lvcdy-xr1710g`。
 - mt76 bump 调试树：`tmp/mt76-bump/`；fanboy/YYH 资产若已清理则按 `fetch-sources.sh` 重取。
+- **新宿主（2026-09-07 起）**：仓库在 `~/项目/xr1710g_openwrt/xr1710g-openwrt`；无 `.gh-token`（旧宿主遗留）。ssh 免密已重建：`.ssh/id_ed25519`（新钥）+ `.ssh/ssh-device` wrapper（本宿主 `/etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf` 属主损坏，wrapper 固定 `-F /dev/null` 绕过；首参含空白自动补 `DEVICE_HOST`）。沙箱每次 bash 调用 `/tmp` 隔离，probe `OUT_PREFIX` 须指向工作区 `tmp/`。
 
 
 ## 9. 2026-09-07 会话：上游吸收批次（待办与交付物）
