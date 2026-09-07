@@ -214,7 +214,26 @@ stock 基本项通过后，同法刷 experimental（或同布局 sysupgrade）�
 sync-upstream 恢复绿）；mac80211-411 重建 b978e02（backports-7.2，ci-97 构建验证中）；
 9036/9037（issue#7 防御补丁族，#EXP 已入库 aa4c8cb1，dry-run 已验证）。
 
-**P1 工作包（按依赖顺序）**：
+**P1 工作包（2026-09-08 全部执行完成——10/10 WP 产物已入库并本地验证，见下；commit 本地未推送）**：
+
+- [x] **WP-9029｜9029 内层按 rdmitry PR#143 机制重写**：外层/内层（9992）整体重写（post_config hook 仅 an7581_pcs_eth + TCLVAR 0x3→0x5 脉冲 + ETH/PON 分值 0x5/0x3）；旧同值重写=HW no-op 已证（devmem 0x1fa7a030）；KB 真应用 + OWT --check 通过（F71 更新）
+- [x] **WP-0011｜mt76-0011（NTB NPU RX ownership ①）**：default 档落盘（148 行，Oever González 原样 + 头注）；对 be5ce791 三副本真应用通过（F79）
+- [x] **WP-SerDes｜SerDes/SDS bundle（9041 = 742/743/744 + 9001 dts 属性）**：622 取 naoki66 09feeff 6.18.44 版（742，删 export hunk——sds_set 已非 static）、743/744 取 6.18.44 适配版；KB 按 742→743→744 真应用通过；9001 phy5（sds-mode 0x88c6 + reset-before-id-read + patch-rtk-serdes）/phy8（patch-rtk-serdes）已并入（F78/F84）。⚠️ `reset-before-id-read` 内核侧消费（naoki66 hack 705）未吸收，属性惰性无害；naoki66 源仓 622 文件 hunk 计数损坏（本地已修正）
+- [x] **WP-USXGMII｜USXGMII 稳定化 625/628（9038）**：628（RX CDR SDK crossing，9994）已吸收并对 KB 重建真应用通过；**625 未吸收**（语义前提=YYH 私有 620/622，master 无 `airoha_pcs_set_usxgmii_speed`；9993 号段保留待 620/622 吸收后补）（F81）
+- [x] **WP-delsta｜NPU del_sta（mt76-0012）**：#EXP 落盘（naoki66 2d3aa30/Ryan Chen）；对 be5ce791 真应用通过（F80）
+- [x] **WP-pinctrl｜pinctrl force-GPIO（9040）**：master 74eb10e 已合 202-xx/203-01/02 → 内层（9998）对 KB 直接适用零重建（F83）
+- [x] **WP-PPE｜PPE 本地流留 CPU（9039）**：9990（hurryman 底座 + 916e91a HEAD 态）对 KB 直接可应用；与 9035（9995）双向顺序验证通过（F82）
+- [x] **WP-F77｜992-21 83 行版（vendor/18 更新）**：992-21 74→83 行（mbox DONE 轮询 1000→500ms）；992-20 未动；OWT 真应用后 blob 与 e352c48673 逐字节一致（F77 收口）
+- [x] **WP-675｜新 675 系列（vendor/06 替换 + 9026 复核）**：06 = format-patch 2ed1af79c7 原样（675-01/02/03 精简 -28%，**删 650 KEEP_HW 段**——枚举已删、无消费方）；9026（675-04）复核通过未改动；KB 全量 675-01→04 真应用通过（F85）
+- [x] **WP-vendor07｜vendor/07 0014 按 be5ce791 重生成**：hunk 行号重基（1043→779/791 等），语义零变化；对 be5ce791 真应用零 offset（F86）
+
+> ⚠️ 遗留提示：① 06 文件名仍含旧 hash `c0ed8295`（无害，改名连同注释下轮做）；② MT 共享树工作区曾损坏
+> （git ls-files=0），验证以 `git archive HEAD` 副本规避——已不影响任何产物；③ 评审报告中的"master 已合
+> 203-01/02"编号半对：203-01/02 在 09-08 前后（main 74eb10e）才合入，评估日（09-07）master 尚无；
+> ④ 收尾全链验证：audit 61/61 一致 + dry-run --oc --experimental + verify 全部通过（2026-09-08）。
+> ⑤ 内层号占用：9991/9992/9995/9996/9997（原）+ 9990/9993/9994/9998（新增）；外层新增 9038-9041。
+
+**P1 工作包原始编排（素材/步骤/落点，已于 2026-09-08 执行完毕，保留备查）**：
 
 - **WP-9029｜9029 内层按 rdmitry PR#143 机制重写**
   现状：9029 大概率无效（①重写与首次相同的 VCOVAR/TCLVAR=硬件 no-op——rdmitry devmem 实测；
