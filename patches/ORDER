@@ -53,8 +53,8 @@ default vendor/fanboy/06-nft-flow-offload-l2-22533-c0ed8295.patch   # 2026-08-22
 default root/9024-bridge-flow-offload-deps-table.patch   # issue #1 E1/E3：DEPENDS 改 kmod-nft-offload + 独立表名 flow_offload
 default root/9026-bridge-flow-offload-init-conntrack.patch   # issue #1 E2：bridge 族 flow 表达式 init/destroy 复用 inet conntrack
 default root/9035-airoha-ppe-flow-stats-coexist.patch   # 2026-08-31 ci-88 验证后转 default：FLOW_STATS=y 与 NPU offload 共存（9995 wrapper；须在 04 前应用）
-experimental root/9036-xr1710g-airoha-npu-dirty-lazy-clean.patch   # issue #7 防御（首选）：UNBIND 只置脏，重绑后首个命令统一 drain FOE（9996；待 CI 构建验证）
-experimental root/9037-xr1710g-airoha-ppe-offload-drain.patch   # issue #7 防御（备选）：UNBIND 立即 drain FOE，CPU 直写 SRAM（9997）；与 9036 二选一
+experimental root/9036-xr1710g-airoha-npu-dirty-lazy-clean.patch   # issue #7 防御（首选生效）：UNBIND 只置脏，重绑后首个命令统一 drain FOE（9996；待 CI 构建验证）
+# experimental root/9037-xr1710g-airoha-ppe-offload-drain.patch   # issue #7 防御（备选，未启用）：UNBIND 立即 drain FOE，CPU 直写 SRAM（9997）；若改选方案 B 则启用此行并停用 9036
 experimental vendor/fanboy/02-eip93-f80d0507.patch
 experimental vendor/fanboy/04-dsa-kmod-netlink-22532-aa531917.patch
 experimental root/9029-xr1710g-airoha-pcs-jcpll-tclvar-recal.patch   # A8/IP10：lan2 10G JCPLL VCO TCLVAR 重写（毕业转 default）

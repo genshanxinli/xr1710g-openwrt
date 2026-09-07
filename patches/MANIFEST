@@ -115,11 +115,11 @@ patches/root/9035-airoha-ppe-flow-stats-coexist.patch ROOT
 # 9036/9037：issue #7 防御补丁族（flow_offloading_hw 1→0→1 + fw4 reload 后整机无声重启）。
 # H1 根因一句话：nf_tables 销毁 hardware flowtable 时逐流 FLOW_CLS_DESTROY 晚于
 # FLOW_BLOCK_UNBIND（cb 已摘除）而永远到不了驱动 → NPU/PPE 固件侧 FOE 与驱动侧条目残留。
-# 9036（9996，方案 A：UNBIND 只置 npu_dirty，重绑后首个命令统一 drain；推荐首选）/
-# 9037（9997，方案 B：UNBIND 立即 drain，CPU 直写 SRAM）——二者二选一，勿同时应用。
+# 9036（9996，方案 A：UNBIND 只置 npu_dirty，重绑后首个命令统一 drain；默认启用）/
+# 9037（9997，方案 B：UNBIND 立即 drain，CPU 直写 SRAM）——二者二选一，勿同时应用；
+# 9037 文件保留为备选：若改选方案 B，把下面 9036 行替换为 9037 行即可。
 # 补丁已入库草案，待 CI 构建验证（2026-09-07）。
 #EXP patches/root/9036-xr1710g-airoha-npu-dirty-lazy-clean.patch ROOT
-#EXP patches/root/9037-xr1710g-airoha-ppe-offload-drain.patch ROOT
 #EXP patches/vendor/fanboy/02-eip93-f80d0507.patch ROOT
 #EXP patches/vendor/fanboy/04-dsa-kmod-netlink-22532-aa531917.patch ROOT
 # 9029：lan2 10G JCPLL VCO TCLVAR 重写（IP10/A8，experimental；实机 10G 对端验证后毕业 default）
