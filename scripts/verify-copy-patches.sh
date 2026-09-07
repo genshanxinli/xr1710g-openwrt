@@ -117,6 +117,18 @@ prep_src() {
       url="https://github.com/openwrt/mt76/archive/$sv.tar.gz"
       subdir="mt76-$sv"
       ;;
+    */mac80211/patches/subsys)
+      # mac80211 包补丁分目录（subsys/ath/ath10k…）各应用于 backports 树不同层次；
+      # subsys 应用于 backports 根（net/mac80211、include/net/mac80211.h 在根下）。
+      # ci-97 教训（2026-09-08）：411 的 vht.c hunk 与 7.2 不匹配、b978e02e 版 pub->band
+      # 编译错误——应用层漂移应在此拦截（编译层仍需 CI 构建兜底）。
+      pkgdir="package/kernel/mac80211"
+      local sv; sv="$(awk -F':=' '/^PKG_SOURCE_VERSION:=/{print $2; exit}' "$TREE/$pkgdir/Makefile")"
+      if [[ -z "$sv" ]]; then echo "⚠ [verify] $pkgdir 缺 PKG_SOURCE_VERSION——跳过 $dest" >&2; SKIPPED[$dest]=1; unverified=$((unverified+1)); return 1; fi
+      file="backports-$sv.tar.zst"
+      url="https://github.com/openwrt/backports/releases/download/backports-v$sv/$file"   # 包 Makefile PKG_SOURCE_URL
+      subdir="backports-$sv"
+      ;;
     */uboot-airoha/patches)
       # 派生目标（F21）：补丁文件由 ROOT 补丁 9002 生成于树内；源码取包 Makefile 版本
       pkgdir="package/boot/uboot-airoha"
@@ -192,9 +204,17 @@ for dest in "${dests[@]}"; do
   mkdir -p "$pdir"
   # 树内该包已有补丁（真实构建时与本层拷贝共存于同一 patches/ 目录，glob 一并排序；
   # mt76 在 master 无 patches/ 目录则跳过）
-  if [[ -d "$TREE/${PKGDIR[$dest]}/patches" ]]; then
-    cp "$TREE/${PKGDIR[$dest]}/patches/"* "$pdir/" 2>/dev/null || true
-  fi
+  case "$dest" in
+    */mac80211/patches/subsys)
+      # mac80211 的 patches/ 是分目录结构（subsys/ath/...），只取 subsys 平铺
+      cp "$TREE/${PKGDIR[$dest]}/patches/subsys/"* "$pdir/" 2>/dev/null || true
+      ;;
+    *)
+      if [[ -d "$TREE/${PKGDIR[$dest]}/patches" ]]; then
+        cp "$TREE/${PKGDIR[$dest]}/patches/"* "$pdir/" 2>/dev/null || true
+      fi
+      ;;
+  esac
   # 本层补丁（MANIFEST 顺序拷贝，与构建的 copy 步骤一致）
   for entry in "${entries[@]}"; do
     [[ "${entry%%|*}" == "$dest" ]] && cp -f "${entry#*|}" "$pdir/"
