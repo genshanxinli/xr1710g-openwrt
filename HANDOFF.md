@@ -205,7 +205,7 @@ stock 基本项通过后，同法刷 experimental（或同布局 sysupgrade）�
 ### 9.1 待办（按优先级）
 
 **P0（构建级，等 ci-97 构建结果）**
-- [ ] **mac80211-411 重建适配 7.2**：411 为 vht.c 版（对 mac80211 6.18.39 写），master 7.2 下应用失败（vht.c:445 已重构为 MU_GROUPS）；7.2 等价基元 = \`ieee80211_sta_bw_capability\`（sta_info.c:3615）+ \`link_sta->capa_nss\`（sta_info.h:529）；重建 = vht.c hunk 迁到 sta_info.c 该函数后、导出 wrapper（cap_bw=ieee80211_sta_bw_capability(link_sta, band)、cap_nss=capa_nss），header 按 7.2 上下文微调；参考 naoki66 9009304b6 的 sta_info.c 版；验证 = mac80211 包编译 + 9993 依赖链 + 实机 EHT320 2x2 NSS 回归（ci-74 同款判据）
+- [x] **mac80211-411 重建适配 7.2** OK 已完成（commit b978e02，2026-09-07 已推送）：对 backports-7.2 重建（vht.c hunk 迁至 sta_info.c 的 ieee80211_sta_bw_capability 之后，7.2 惯用法 sdata_dereference + pub->band；声明移至 mac80211.h 8176 区域）；backports-7.2 源码 patch 应用验证通过；剩余：等 ci-97 构建确认 9993 依赖链（构建中）
 
 **P1（实验档吸收，下一轮）**
 - [ ] **9029 内层按 rdmitry PR#143 机制重写**（OW1700k PR#143，rdmitry0911，未合）：现有 9029 **大概率无效**（①重写与首次相同的 VCOVAR/TCLVAR 值=硬件 no-op——rdmitry devmem 实测 0x1fa7a030 写 0x1D 立即 link、写回同值仍 dead；②时点在 bringup 内过早，须 airoha_pcs_config() 末尾 PLL 运行+AN enable 后）；机制 = match-data post_config hook（仅 an7581_pcs_eth）+ TCLVAR 0x3→0x5 脉冲 + ETH/PON 分值 0x5/0x3（PON 不动）；落地两步：a) devmem 一行实证 b) 冷启动 5/5；上游 Golle 643c7bf9（PHY 侧）已在基线内，互补
