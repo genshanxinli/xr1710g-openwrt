@@ -56,6 +56,7 @@ Gemtek XR1710G（Airoha AN7581 + MT7996 三频 Wi-Fi7、2×10G + 2×1G）的**�
 - **最后绿 CI**：#94 all（stock/oc-1.3/oc-1.4，`a820ea0`/`aba19bf`）、#96 experimental（`aba19bf`）；#94 stock fresh flash 复验通过（`docs/acceptance-results/2026-08-31-stock-ci94-9035-default.md`）。
 - **ci-97（`b978e02` 411 backports-7.2 重建）状态待查**——09-07 记录为"构建验证中"，交接后先查 GitHub Actions 该 run 结果。
 - **P1 吸收（`e99b88e`）未推送 → 尚无 CI 构建**。本地验证已全绿（见 §2.7 全链验证）；推送后将自动触发 build（push stock）+ 需手动 dispatch all/experimental + sync-upstream。
+- **ci-97 已定性并修复（2026-09-08 追加）**：`b978e02e` 的 push 构建（run 34107054747）失败 = 411 重建版引用不存在的 `pub->band`（编译错）——已按 naoki66 9009304b6 重写（本地 commit `0db03a4`）；同轮审计另发现并修复 **F87**（vendor/18 的 992-21 F77 吸收版重引入 F25⑥ 已删超时 hunk）与新增 verify-copy mac80211 映射。修复后本地全链验证：audit 61/61、dry-run 全绿、verify-copy 4/4、内核内层 19/19 真实应用。
 - sync-upstream：09-07 恢复绿（run 34097546620）；09-08 无推送 → 无新 run。
 - 历史：#87 stock/#88 all/#89 experimental 全绿（`602d9d0`）；D3 时长维度 09-07 达标（experimental `r0-93cf01b` 连续运行 7 天零重启零报错，`docs/acceptance-results/2026-09-07-d3-longrun-7d.md`；`2×10G + 三频高负载` 压力条件未达，D3 整项保持 open）。
 
@@ -79,7 +80,7 @@ DEVICE_HOST=root@192.168.123.1 ./scripts/device-npu-ipv6-probe.sh
 
 ## 5. 当前 patch 层速览（2026-09-08，与 MANIFEST 逐行核对）
 
-**默认档 ROOT 链**（按应用顺序）：`9000/9001/9002` 板级（66MiB reserved_bmt + rdinit；9001 含 phy5/phy8 SerDes/复位属性） → `vendor/03` cpufreq → `vendor/10` pstore → `9017` apps-pack → `9030` FlowSense 1.1.8-r5 → `9018` VLAN/PPPoE → `9019` CLIENTS → `9020` memory_regions → `9021` sysfs stats → `9022` IPv6/UDP → `9023` 优雅降级 → `9032` PPE 每流统计 → `9025` no-carrier rx stats → `9027` ledtrig-netdev → `9031` LED interval skip → `9033` RTL826x LED → `9010` txpower ucode → `vendor/11` LRO → `9011–9016` 08 切片 → `9035` flow-stats 共存（9995；须在 04 前） → `vendor/05` bridge offload → `vendor/06` nft L2（**2026-09-08 替换为 2ed1af79c7 版**） → `9024` deps/table → `9026` init/conntrack（675-04，复核通过未动） → `vendor/07` HW_RRO teardown（**0014 已按 be5ce791 重生成**） → `vendor/09` HW1.1/2.1 → `vendor/17` cmonroe → `vendor/18` smartrg（**992-21 83 行版**）。2026-09-07 CI 批次后 **9028/9994 已删**（上游 bump be5ce791 自带）。
+**默认档 ROOT 链**（按应用顺序）：`9000/9001/9002` 板级（66MiB reserved_bmt + rdinit；9001 含 phy5/phy8 SerDes/复位属性） → `vendor/03` cpufreq → `vendor/10` pstore → `9017` apps-pack → `9030` FlowSense 1.1.8-r5 → `9018` VLAN/PPPoE → `9019` CLIENTS → `9020` memory_regions → `9021` sysfs stats → `9022` IPv6/UDP → `9023` 优雅降级 → `9032` PPE 每流统计 → `9025` no-carrier rx stats → `9027` ledtrig-netdev → `9031` LED interval skip → `9033` RTL826x LED → `9010` txpower ucode → `vendor/11` LRO → `9011–9016` 08 切片 → `9035` flow-stats 共存（9995；须在 04 前） → `vendor/05` bridge offload → `vendor/06` nft L2（**2026-09-08 替换为 2ed1af79c7 版**） → `9024` deps/table → `9026` init/conntrack（675-04，复核通过未动） → `vendor/07` HW_RRO teardown（**0014 已按 be5ce791 重生成**） → `vendor/09` HW1.1/2.1 → `vendor/17` cmonroe → `vendor/18` smartrg（**992-21 74 行版，2026-09-08 重建删 F77 吸收版重引入的超时 hunk——F87**）。2026-09-07 CI 批次后 **9028/9994 已删**（上游 bump be5ce791 自带）。
 
 **实验档（#EXP，10 条）**：`vendor/02`（EIP93）、`vendor/04`（DSA）、`mt76-0010`（NPU RX skb->dev，待 6G 客户端）、`mt76-0012`（del_sta）、`9029`（JCPLL recal，PR#143 重写版）、`9036`（issue#7 方案 A，9996；9037 方案 B 备选未启用）、`9038`（USXGMII 628，9994）、`9039`（PPE 本地流，9990）、`9040`（pinctrl force-GPIO，9998）、`9041`（SerDes/SDS 742/743/744）。
 
