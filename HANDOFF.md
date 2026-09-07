@@ -1,4 +1,4 @@
-# HANDOFF — 交接文档（2026-08-31 更新：feat 分支已合并 main）
+# HANDOFF — 交接文档（2026-09-07 更新：上游吸收批次待办与交付物，见 §9）
 
 > 接任维护者请先读：`README.md`、`CONTEXT.md`、`docs/FIXES.md`（F01–F78）、`docs/adr/0001`、`docs/adr/0002`、`docs/ROADMAP.md`。
 
@@ -191,3 +191,70 @@ stock 基本项通过后，同法刷 experimental（或同布局 sysupgrade）�
 - 本地浅克隆 openwrt master：`/root/workspace/xr1710g-openwrt/tmp/openwrt-src`（partial clone）；源码缓存：`tmp/copy-patch-verify`。
 - 社区源码临时仓库：`/tmp/orangeyoo-xr1710g`、`/tmp/gilly-w1700k`、`/tmp/naoki66-xr1710g`、`/tmp/lvcdy-xr1710g`。
 - mt76 bump 调试树：`tmp/mt76-bump/`；fanboy/YYH 资产若已清理则按 `fetch-sources.sh` 重取。
+
+
+## 9. 2026-09-07 会话：上游吸收批次（待办与交付物）
+
+> 背景：openwrt 2026-09-01 bump mt76（59676919→be5ce791，a46721f0/6c315233），导致 sync-upstream 自 08-31 20:03Z（run 33433908434）起连续失败约 7 天、build 无新产物。
+> 本会话已完成 **CI 修复批次**（commit **be72915**，已推送 main）：删 9028/9994、重建 9010/9014；本地 dry-run 55/55 全绿，**sync-upstream 已恢复绿**（run 34097546620）。
+> 并行五路吸收调研（mt76 / YYH2913 / fanboy / naoki66 / 社区上游）完成，结论见 §9.2 交付物。
+> **aa4c8cb1**（issue #7 防御补丁族 9036/9037 #EXP + 分析文档）：调研子代理直接提交推送，dry-run 已验证通过（55/55），流程越权已记录。
+
+### 9.1 待办（按优先级）
+
+**P0（构建级，等 ci-97 构建结果）**
+- [ ] **mac80211-411 重建适配 7.2**：411 为 vht.c 版（对 mac80211 6.18.39 写），master 7.2 下应用失败（vht.c:445 已重构为 MU_GROUPS）；7.2 等价基元 = \`ieee80211_sta_bw_capability\`（sta_info.c:3615）+ \`link_sta->capa_nss\`（sta_info.h:529）；重建 = vht.c hunk 迁到 sta_info.c 该函数后、导出 wrapper（cap_bw=ieee80211_sta_bw_capability(link_sta, band)、cap_nss=capa_nss），header 按 7.2 上下文微调；参考 naoki66 9009304b6 的 sta_info.c 版；验证 = mac80211 包编译 + 9993 依赖链 + 实机 EHT320 2x2 NSS 回归（ci-74 同款判据）
+
+**P1（实验档吸收，下一轮）**
+- [ ] **9029 内层按 rdmitry PR#143 机制重写**（OW1700k PR#143，rdmitry0911，未合）：现有 9029 **大概率无效**（①重写与首次相同的 VCOVAR/TCLVAR 值=硬件 no-op——rdmitry devmem 实测 0x1fa7a030 写 0x1D 立即 link、写回同值仍 dead；②时点在 bringup 内过早，须 airoha_pcs_config() 末尾 PLL 运行+AN enable 后）；机制 = match-data post_config hook（仅 an7581_pcs_eth）+ TCLVAR 0x3→0x5 脉冲 + ETH/PON 分值 0x5/0x3（PON 不动）；落地两步：a) devmem 一行实证 b) 冷启动 5/5；上游 Golle 643c7bf9（PHY 侧）已在基线内，互补
+- [ ] **mt76-0011**（NoTengoBattery NPU RX ownership 补丁①，论坛 t/222776 n=3890，未托管仓库，全文在 tmp/research_20260907/ntb_patch5.txt）：对 be5ce791 npu.c git apply --check 干净（RC=0）；修 consume 侧越界 walk panic + refill 零地址竞态；默认档 + MANIFEST/ORDER 注册 + verify 校验
+- [ ] **SerDes/SDS bundle**（622+743/744+dts 增量）：naoki66 d3a0fa1/09feeff + YYH2913 b74553b；9001 phy5 加 realtek,sds-mode=0x88c6/reset-before-id-read/patch-rtk-serdes（phy8 加 patch-rtk-serdes）；核对 6.18.44 sds_set 可见性（static 需回补 export hunk）；与 9029 互补对照
+- [ ] **USXGMII 稳定化 625/628**（YYH2913 e61a1bb，FBCK/#22397 同域，疑为 LAN2 "No FBCK Lock" 真根因）→ root 9037-9038 号段 experimental
+- [ ] **NPU del_sta**（naoki66 2d3aa30，上游未含）：修复断开→同 MAC 重连 ~1Mbps NPU 残留；整文件移植 experimental；与 0010/9019/9035 无重叠
+- [ ] **pinctrl force-GPIO**（YYH2913 436765d / naoki66 2481b89b2）：9001 phy5/phy8 reset-gpios=GPIO46/31 的 pad mux 隐患；按 master 203-01/203-02（已部分上游化）后状态重建，experimental
+- [ ] **PPE 本机流留 CPU**（916e91a）：需带 hurryman 9990 底座整体 vendor；与 9035 同文件不同区，dry-run 确序
+- [ ] **F77 收口：992-21 83 行版**（fanboy 08-30 起未变）：更新 vendor/fanboy/18 → 对 master 重建 + verify → 实验档回归后转 default（mbox 轮询 1000→500ms 增量 hunk；992-20 变 184 行/新栈）
+- [ ] **新 675 系列**（fanboy 2ed1af79c7，精简 -28%，去 650/KEEP_HW，nf_ct_bridge_inner 重构）：整体替换 vendor/06 内核件；**9026 对新 675-02 复核**；650 KEEP_HW 增量去留评估；实验档实机回归（bridge+FLOW_STATS 共存）后转 default
+- [ ] **vendor/07 内层 0014 重生成**（HW-RRO teardown；wed_rro_event 行号 1043→766）：按 be5ce791 对齐；与上游 bd49f06 互补（本地保留；fanboy 已在重建中删除同款——本地继续自持观察）
+
+**P2（低优先/跟踪）**
+- [ ] OPP dts 增量（naoki66 bb84606：离散 OPP 1250-1400 + smcc_opp15-18 BL31 电压台阶，比本地全表平移更可控）：重建 OC 档补丁 + 保留 oc-limit 1300；实机验证 BL31 接受 opp-level 15-18
+- [ ] PPE bind_rate 补丁②（NTB，BIND_RATE 30→8 + debugfs knob；需对 6.18 airoha_ppe.c:148 重建）
+- [ ] 20260721 mt7996 固件（fanboy fork 260901=be5ce791+1 提交；固件自 07-29 未变）：**不跟 fork**（F13 PKG_MIRROR_HASH=skip 否决继续成立）；需要走自有固件覆盖层或等上游收录
+- [ ] e4e7c4f（FW_LOADER_USER_HELPER_FALLBACK off，NPU 固件 60s hang 修复）已合入：本地 5 个 config-6.18 补丁区（9015/9035/vendor04/08/10）全部不相交 → 仅跟踪；FIXES 记录 NPU probe deferred 语义依赖 FALLBACK off
+- [ ] **#24973（PCS fwnode phylink DRAFT）跟踪**：唯一冲突窗口（影响 9029/9001），每轮 sync 检查其状态
+- [ ] #25004（VSOL V2902A：AN7581ST+RTL8261BE 同 PHY 家族参考）；#25019（EHT320 中心频点表仅 320-1）；px5g-mbedtls（与 TLS 决策绑定）；DHCP clientid 一行（wan 加 sendclientid 'hardware'，不搬脚本）
+- [ ] master→main 清理：CI/脚本注释、docs/adr/0001、README 措辞（main/master 现同提交）
+
+**不采用 / 等上游（勿重复工作）**
+- regdb 510/520 合并 30dBm（naoki66 09-07）：不采用——5250-5350/5470-5725 是 FCC DFS 频段却删 DFS flag、U-NII-4 无 NO-IR、CN 2.4G 30dBm 超 MIIT 限；本地（DFS 结构+UNII-1 29+UNII-4 30@0521+6G 29/OC 30）更稳
+- luci-app-airoha-factory：不预装——fw_env.config 指 stock env（/dev/mtd0@0x200000），本地链加载 env 在 UBI ubootenv/ubootenv2 卷会假成功；包一天三修未稳；需要时做只读裁剪版或稳定后锁 commit 入 packages-xr1710g 并重写 env 联动
+- MIB lossless（3251fd2/d58a97b6f）：上游 netdev 已合（Aniket Negi）→ 等内核 bump；**届时本地 9025/F55 需同步重建**（"清 MIB"与 delta 法冲突→下轮 delta 回绕虚增 2^32，改为只同步 mib_prev 基线）
+- eeprom 0 值填充（Mironov aaf90b24，PR#954）：与本地 0008 不同函数互补不冲突，但 XR1710G 原厂非 0 → 本机空转
+- v1.5.0 前台 CAC 策略（恩山 8484444 / orangeyoo）：本地默认已前台 CAC（background_radar:0 + 5G ch149 HE80 非 DFS、HE160 注释化）→ 仅归档；密码哈希直写镜像不做（安全权衡）
+- 上游 PR 全 open（#22397 08-30 有 YYH2913 LAN2 PCS FBCK 报告、#22029、#22473、#22532/33、#24034、#24619、#23990、#24025）→ 9000-9002、vendor/03 等继续携带；#23990 合入则 9010 可删
+
+### 9.2 交付物（报告/方案/证据）
+
+| 文件 | 内容 |
+|---|---|
+| \`上游吸收方案-2026-09-07.md\`（工作区根） | 吸收方案汇总（P0-P3 表 + 实机回归清单 + 不采用清单） |
+| \`评估-YYH2913-08-31八提交-吸收评估.md\`（工作区根） | YYH2913 8 提交逐项评估（9036-9041 号段落点；9025 联动重建） |
+| \`fanboy-ubi2oc-09-06重建评审报告.md\`（工作区根） | fanboy 整枝评审（992-21/675 系列/HW-RRO 删除/20260721 固件） |
+| \`tmp/naoki66-0907-absorb-report.md\` | naoki66 提交评估（411 重建/SerDes/SDS/factory/regdb/OPP） |
+| \`tmp/research_20260907/\` | rdmitry PR#143/144 diff、NTB 补丁全文、backports-7.2 解包、论坛 JSON |
+| \`tmp/research/dryrun-logs/\` | 四轮 dry-run 复现日志（9028/9010/9014 漂移证据链） |
+| \`docs/analysis-issue7-flow-offload-reboot.md\` | issue #7 离线根因分析（aa4c8cb1 提交） |
+
+### 9.3 上游状态快照（2026-09-07 重新查询）
+
+| 源 | 快照（vs 08-30） |
+|---|---|
+| openwrt master/main | fe4bb132（09-06 推送；默认分支已改名 main）；+98 commits：mt76 bump a46721f0/6c315233、wifi-scripts e21a4ef9/93d975fe、airoha 9550b20/2700e9b/e4e7c4f/928f5c5、mac80211 7.2、netifd e801f59 |
+| openwrt mt76 pin | **be5ce791**（09-01）；mt76 包 patches/ 目录已空（上游删 100-mac80211-support-kernel-version-7.1.patch） |
+| fanboy ubi2-oc | f08c3d1e（09-06 整枝；mt76 fork 01367e60=be5ce791+1 提交 + 20260721 固件）；ubi2=00ed581b；无新 release |
+| YYH2913 integration | c82129e7（08-31，+8 提交：USXGMII/SerDes/PPE/MIB/pinctrl/px5g/DHCP） |
+| naoki66 | 621c27093（09-07）；09-03 新固件 release（0e959250f7）；mt76 pin=be5ce791 与本地一致 |
+| YYH2913/http-uboot 锁版 | 53b73174 无变化（锁版不受影响） |
+| wireless-regdb | 上游 2026.09.03 新发布；openwrt 包仍 2026.05.30（本地 regdb 补丁无漂移） |
+| openwrt feeds | packages=1056fa0f、luci=7dda604a（09-07） |
