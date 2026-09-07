@@ -109,7 +109,7 @@ patches/root/9016-xr1710g-silence-phy-led-error.patch ROOT
 # 05 的 target.mk 在文件末尾追加 DEFAULT_PACKAGES，与 02 顺序无关。
 patches/vendor/fanboy/05-bridge-offload-22533-33ac9c66.patch ROOT
 # 06 已替换为 ubi2-oc 2ed1af79c7 版（2026-09-07 WP-675：675-01/02/03 精简 -28%、删 650/KEEP_HW；9026 复核通过未动）
-patches/vendor/fanboy/06-nft-flow-offload-l2-22533-c0ed8295.patch ROOT
+patches/vendor/fanboy/06-nft-flow-offload-l2-22533-2ed1af79c7.patch ROOT
 # 9024：bridge-flow-offload 依赖改为 kmod-nft-offload，规则表名避开用户 fw4 桥表（issue #1 E1/E3）
 patches/root/9024-bridge-flow-offload-deps-table.patch ROOT
 # 9026：bridge 族 nft_flow_offload_init/destroy 复用 inet conntrack 语义（issue #1 E2）

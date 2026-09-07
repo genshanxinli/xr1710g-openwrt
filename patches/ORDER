@@ -48,7 +48,7 @@ oc regdb/0555-w1700k-unii4-6g-30.patch   # 仅 6G 29->30；5G UNII-3/4@160 已�
 
 # ── 原实验档：已毕业项转 default（2026-08-31 ci-74 实机）；剩余 experimental 见下 ──
 default vendor/fanboy/05-bridge-offload-22533-33ac9c66.patch
-default vendor/fanboy/06-nft-flow-offload-l2-22533-c0ed8295.patch   # 2026-09-07 替换为 ubi2-oc 2ed1af79c7 版：675-01/02/03 精简 -28%、删 650/KEEP_HW（WP-675）；9026 复核未动
+default vendor/fanboy/06-nft-flow-offload-l2-22533-2ed1af79c7.patch   # 2026-09-07 替换为 ubi2-oc 2ed1af79c7 版：675-01/02/03 精简 -28%、删 650/KEEP_HW（WP-675）；9026 复核未动
 default root/9024-bridge-flow-offload-deps-table.patch   # issue #1 E1/E3：DEPENDS 改 kmod-nft-offload + 独立表名 flow_offload
 default root/9026-bridge-flow-offload-init-conntrack.patch   # issue #1 E2：bridge 族 flow 表达式 init/destroy 复用 inet conntrack
 default root/9035-airoha-ppe-flow-stats-coexist.patch   # 2026-08-31 ci-88 验证后转 default：FLOW_STATS=y 与 NPU offload 共存（9995 wrapper；须在 04 前应用）
