@@ -52,12 +52,9 @@ Gemtek XR1710G（Airoha AN7581 + MT7996 三频 Wi-Fi7、2×10G + 2×1G）的**�
 
 ## 3. 构建与验证状态（2026-09-08）
 
-- **最后绿 CI**：#94 all（stock/oc-1.3/oc-1.4，`a820ea0`/`aba19bf`）、#96 experimental（`aba19bf`）；#94 stock fresh flash 复验通过（`docs/acceptance-results/2026-08-31-stock-ci94-9035-default.md`）。
-- **ci-97（`b978e02` 411 backports-7.2 重建）状态待查**——09-07 记录为"构建验证中"，交接后先查 GitHub Actions 该 run 结果。
-- **P1 吸收（`e99b88e`）未推送 → 尚无 CI 构建**。本地验证已全绿（见 §2.7 全链验证）；推送后将自动触发 build（push stock）+ 需手动 dispatch all/experimental + sync-upstream。
-- **ci-97 已定性并修复（2026-09-08 追加）**：`b978e02e` 的 push 构建（run 34107054747）失败 = 411 重建版引用不存在的 `pub->band`（编译错）——已按 naoki66 9009304b6 重写（本地 commit `0db03a4`）；同轮审计另发现并修复 **F87**（vendor/18 的 992-21 F77 吸收版重引入 F25⑥ 已删超时 hunk）与新增 verify-copy mac80211 映射。修复后本地全链验证：audit 61/61、dry-run 全绿、verify-copy 4/4、内核内层 19/19 真实应用。
-- sync-upstream：09-07 恢复绿（run 34097546620）；09-08 无推送 → 无新 run。
-- 历史：#87 stock/#88 all/#89 experimental 全绿（`602d9d0`）；D3 时长维度 09-07 达标（experimental `r0-93cf01b` 连续运行 7 天零重启零报错，`docs/acceptance-results/2026-09-07-d3-longrun-7d.md`；`2×10G + 三频高负载` 压力条件未达，D3 整项保持 open）。
+- **最后绿 CI（2026-09-08 P1 批次 7ce6c81）**：stock（34134102608）/ all 三档（34134117948）/ experimental（34134122223）**全绿** + sync-upstream（34134102601）绿。ci-97 双缺陷（411 pub->band + 992-21 F77 回归 hunk）已修复并实机构建验证。
+- **实机回归（firmware experimental r0-7b39600，已刷）**：见 `docs/acceptance-results/2026-09-08-p1-regression.md` —— LAN2 冷启动 ×20 = 20/20 2.5G（10G 未达成；9029 生效 devmem=0x301D；10G 对端项延后→机制取舍 open）、#22397 未复现、wifi down/up PASS、hw-probe 全绿、风扇 1312RPM、sysupgrade -T PASS。known-good tag：`known-good-p1-20260908`（指向 7ce6c81）。
+- 历史：#87 stock/#88 all/#89 experimental 全绿（`602d9d0`）；D3 时长维度 09-07 达标（`docs/acceptance-results/2026-09-07-d3-longrun-7d.md`；2×10G + 三频高负载压力条件未达，D3 整项保持 open）。
 
 ## 4. 实机可用命令
 
