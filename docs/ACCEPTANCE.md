@@ -44,3 +44,4 @@
 | 版本（commit/tag） | 档位 | 测试日期 | 结果 | 备注 |
 |---|---|---|---|---|
 | `feat/antenna-eeprom-power-unlock` @ 77170e1（+F28 实机修复） | experimental | 2026-08-21 | **未冻结**（远程可验项通过；B2/C3/C4/D3/A2/A3 待补测） | 详细记录：`docs/acceptance-results/2026-08-21-experimental.md` |
+| `7ce6c81` @ `known-good-p1-20260908` | experimental（r0-7b39600） | 2026-09-08 | **未冻结**（R1–R7 已执行：wifi down/up、hw-probe、风扇/LED、sysupgrade -T、#22397 均通过；**B2 10G 未达成**（LAN2 冷启动 20/20 2.5G，9029 生效 devmem=0x301D）；C2/C3/C4/B5.1/B2 对打/D3 72h 压力等对端项按用户口径延后） | 详细记录：`docs/acceptance-results/2026-09-08-p1-regression.md`；tag 已推（冻结门槛 = 全项通过，本行仅为 P1 阶段状态） |
