@@ -6,10 +6,9 @@
 
 - **本地仓库（新宿主，2026-09-07 起）**：`/home/lishujun/项目/xr1710g_openwrt/xr1710g-openwrt`（旧宿主 `/root/workspace/xr1710g-openwrt` 仅为历史记录）
 - 工作区根：`/home/lishujun/项目/xr1710g_openwrt/`（素材/验证树在根下 `tmp/`，见 §8）
-- 当前分支：**`main`**；当前 HEAD：`git log --oneline -1`（2026-09-08 应为 `d0398d2`）
-- **本地领先 origin/main 5 个 commit（未推送，用户指示暂不推送）**：
-  - P1 吸收批次（2026-09-08）：`e99b88e`（feat(absorb)：10 个工作包全部补丁 + MANIFEST/ORDER）、`d0398d2`（docs：FIXES F71/F77-F86 + HANDOFF §9.1 勾选）
-  - 09-07 批次：`a8e8270`/`08b6ad8`/`b978e02`（handoff 工作包化 / 411 重建标记 / mac80211-411 backports-7.2 重建）
+- 当前分支：**`main`**；当前 HEAD：`git log --oneline -1`（2026-09-08 应为 `8ce968b`）
+- **P1 批次已推送（2026-09-08，`b978e02..7ce6c81`，7 commit）**：P1 吸收（`e99b88e`）+ FIXES/HANDOFF（`d0398d2`/`41a2e7b`）+ 411 修复（`0db03a4`）+ 992-21 重建（`7ce6c81`）；**本地领先 1 commit `8ce968b`（vendor/06 改名，未推送）**，待随下轮（CI 结果/收口）一起推。
+- 历史 09-07 批次（已推送）：`a8e8270`/`08b6ad8`/`b978e02`（handoff 工作包化 / 411 重建标记 / mac80211-411 backports-7.2 重建）
 - 关键节点：`3a7257c` = antenna 合并点；`e0cbe4a` = 实验档毕业批次；`ecb1191` = NPU FDK 合并点；`602d9d0` = P1/P2 修复主推送（build #87/#88/#89 全绿）；`aa4c8cb` = issue#7 防御补丁族；`be72915` = CI 修复批次（删 9028/9994、重建 9010/9014，sync-upstream 恢复）
 - 远程：`https://github.com/genshanxinli/xr1710g-openwrt`（默认分支 `main`）
 - 推送到 main（**push 自动触发 build.yml——push 事件默认 stock 档——与 sync-upstream**）：
@@ -106,11 +105,15 @@ DEVICE_HOST=root@192.168.123.1 ./scripts/device-npu-ipv6-probe.sh
 
 ## 7. 下一步：P1 推送 → CI → 实机回归 → 收口
 
-### 7.1 推送与构建（等用户确认）
-1. 用户确认后按 §0 push main（自动触发 stock build + sync-upstream）。
-2. 手动 dispatch：all（stock/oc-1.3/oc-1.4）+ experimental。
-3. 查 `ci-97`（411 backports-7.2）历史 run 结果；本次推送应包含其确认。
-4. 牵动面：本次吸收含 1 条 default 新补丁（0011）+ 4 条新 #EXP 内核补丁目录（9038-9041）+ 3 个 vendor 内容更新（06/07/18）+ 9029 重写——**experimental 构建是主要验证载体**。
+### 7.1 推送与构建（2026-09-08 已执行：推送 + dispatch 完成）
+1. ✅ `b978e02..7ce6c81` 已推 main（2026-09-08 14:38Z，7 commit）——自动触发 stock build + sync-upstream。
+2. ✅ 手动 dispatch：all + experimental（runs 34134117948 / 34134122223）。
+3. ✅ ci-97 已定性并修复：run 34107054747 失败 = 411 重建版 `pub->band` 编译错（构建日志实证：
+   `sta_info.c:3735:55: error: 'struct ieee80211_link_sta' has no member named 'band'`）→ `0db03a4`
+   按 naoki66 9009304b6 重写；另发现并修复 F87（992-21 F77 回归 hunk，`7ce6c81`）。
+4. 牵动面（同 §7.1 原文）：experimental 是主要验证载体——本批含 1 条 default 新补丁（0011）+
+   4 条新 #EXP 内核补丁目录（9038-9041）+ 3 个 vendor 内容更新（06/07/18）+ 9029 重写；
+   **内核内层链已本地全序真实应用 19/19 + 符号审计（9029/9038-9041/742-746/992-20/21/9990-9998）**。
 
 ### 7.2 实机回归清单（P1 吸收后；判据见 FIXES F71/F77-F86 / 上游吸收方案 §五）
 - **LAN2 10G 冷启动 ×20 + link 率**：9029（PCS JCPLL）/9038（RX 校准）/9041（PHY SerDes）三机制联合判定；`devmem 0x1fa7a030` 一行实证（写 `0x1D` 后 lan2 link → 冷启动 5/5 → F71 收口）
