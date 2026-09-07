@@ -3,11 +3,13 @@
 # Upstream: open（#22397）；合入即删
 # Reason: XR1710G 板级 dts（BMT/BBT 链加载布局与 W1700K 相同；10G=RTL8261BE 同 USXGMII）
 # 注意：WAN=1G-1 命名（gsw_port1→wan）按自用决策，与 PR 的 10G-wan 不同，见 FIXES F01
+# 9041 SerDes/SDS bundle 依赖：phy5 加 realtek,sds-mode=0x88c6 + reset-before-id-read +
+#   realtek,patch-rtk-serdes；phy8 加 realtek,patch-rtk-serdes（naoki66/YYH 方案）
 diff --git a/target/linux/airoha/dts/an7581-xr1710g-ubi.dts b/target/linux/airoha/dts/an7581-xr1710g-ubi.dts
 new file mode 100644
 --- /dev/null
 +++ b/target/linux/airoha/dts/an7581-xr1710g-ubi.dts
-@@ -0,0 +1,447 @@
+@@ -0,0 +1,451 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 +
 +/dts-v1/;
@@ -360,12 +362,15 @@ new file mode 100644
 +			compatible = "ethernet-phy-ieee802.3-c45";
 +			reg = <5>;
 +			reset-gpios = <&en7581_pinctrl 46 GPIO_ACTIVE_LOW>;
++			reset-before-id-read;
 +			reset-assert-us = <200000>;
 +			reset-deassert-us = <200000>;
 +			// interrupt-parent = <&en7581_pinctrl>;
 +			// interrupts = <22 IRQ_TYPE_LEVEL_LOW>;
 +			tx-polarity = <PHY_POL_INVERT>;
 +			rx-polarity = <PHY_POL_INVERT>;
++			realtek,sds-mode = <0x88c6>;
++			realtek,patch-rtk-serdes;
 +
 +			leds {
 +				#address-cells = <1>;
@@ -389,6 +394,7 @@ new file mode 100644
 +			// interrupts = <23 IRQ_TYPE_LEVEL_LOW>;
 +			tx-polarity = <PHY_POL_INVERT>;
 +			rx-polarity = <PHY_POL_INVERT>;
++			realtek,patch-rtk-serdes;
 +
 +			leds {
 +				#address-cells = <1>;

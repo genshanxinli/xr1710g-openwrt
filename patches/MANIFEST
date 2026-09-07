@@ -38,6 +38,11 @@ patches/packages/mt76-0009-report-only-terminal-tx-failures.patch          packa
 # 0005 TXFREE 截断静默（2026-08-31 毕业；再同步自 ubi2-oc e7a8143，构建绿 + wifi down/up 通过）
 patches/packages/mt76-0005-wifi-mt76-mt7996-guard-txfree-overrun.patch          package/kernel/mt76/patches/
 #EXP patches/packages/mt76-0010-set-skb-device-for-npu-rx.patch          package/kernel/mt76/patches/
+# 0011：NPU RX descriptor ownership 修复（Oever González，NTB 素材；consume 越界 walk panic + refill 零地址
+#       竞态；对 be5ce791 git apply 干净。2026-09-07 吸收批次 WP-0011，default 档）
+patches/packages/mt76-0011-wifi-mt76-npu-fix-rx-descriptor-ownership.patch          package/kernel/mt76/patches/
+# 0012：NPU del_sta（naoki66 2d3aa30 / Ryan Chen：STA 断开→同 MAC 重连 ~1Mbps 残留修复；#EXP，2026-09-07 WP-delsta）
+#EXP patches/packages/mt76-0012-wifi-mt76-npu-del-sta.patch          package/kernel/mt76/patches/
 patches/packages/mt76-9990-wifi-mt76-mt7996-advertise-eht-to-firmware-rate-control.patch    package/kernel/mt76/patches/
 patches/packages/mt76-9991-wifi-mt76-mt7996-fill-160mhz-bf-fallback-for-eht-320.patch       package/kernel/mt76/patches/
 patches/packages/mt76-9993-wifi-mt76-mt7996-pass-operating-mode-to-rate-control.patch       package/kernel/mt76/patches/
@@ -103,7 +108,7 @@ patches/root/9016-xr1710g-silence-phy-led-error.patch ROOT
 # 以下 05/06/9024/9026/07/09/17/18 已于 2026-08-31 毕业为默认（ci-74 实机 E1/E2/E3、wifi down/up、NPU 探针通过）。
 # 05 的 target.mk 在文件末尾追加 DEFAULT_PACKAGES，与 02 顺序无关。
 patches/vendor/fanboy/05-bridge-offload-22533-33ac9c66.patch ROOT
-# 06/07 已再同步 ubi2-oc ba58ba46（2026-08-22；diff 无变化，仅 commit hash/文件名更新：06 c0ed8295，07 5b917d4b）
+# 06 已替换为 ubi2-oc 2ed1af79c7 版（2026-09-07 WP-675：675-01/02/03 精简 -28%、删 650/KEEP_HW；9026 复核通过未动）
 patches/vendor/fanboy/06-nft-flow-offload-l2-22533-c0ed8295.patch ROOT
 # 9024：bridge-flow-offload 依赖改为 kmod-nft-offload，规则表名避开用户 fw4 桥表（issue #1 E1/E3）
 patches/root/9024-bridge-flow-offload-deps-table.patch ROOT
@@ -120,9 +125,23 @@ patches/root/9035-airoha-ppe-flow-stats-coexist.patch ROOT
 # 9037 文件保留为备选：若改选方案 B，把下面 9036 行替换为 9037 行即可。
 # 补丁已入库草案，待 CI 构建验证（2026-09-07）。
 #EXP patches/root/9036-xr1710g-airoha-npu-dirty-lazy-clean.patch ROOT
+# 9038：USXGMII 稳定化（YYH2913 e61a1bb 628：AN7581 RX CDR PR IDAC SDK crossing 搜索——#22397 "No FBCK Lock"
+#       根因域，与 9029 同域互补；625 因依赖 YYH 私有 620/622 未吸收，9993 号段保留待补。2026-09-07 WP-USXGMII，#EXP）
+#EXP patches/root/9038-xr1710g-pcs-usxgmii-stabilize.patch ROOT
+# 9039：PPE 本地流留 CPU（YYH2913 916e91a + hurryman 9990 底座：PACKET_HOST 不走 bridge L2 fallback；
+#       与 9035 同文件不同区。2026-09-07 WP-PPE，#EXP）
+#EXP patches/root/9039-xr1710g-airoha-ppe-keep-local-flows-cpu.patch ROOT
+# 9040：pinctrl force-GPIO（YYH2913 436765d：phy5/phy8 reset pad GPIO46/31 真 mux——基于 master 202-xx/203-01/02
+#       后增量收敛。2026-09-07 WP-pinctrl，#EXP）
+#EXP patches/root/9040-xr1710g-airoha-pinctrl-force-gpio.patch ROOT
+# 9041：RTK SerDes/SDS bundle（742=622 SDS-mode + 743/744 restore/reapply；9001 phy5/phy8 属性同步；
+#       与 9029/9038 PCS 侧互补。2026-09-07 WP-SerDes，#EXP）
+#EXP patches/root/9041-xr1710g-rtk-serdes-bundle.patch ROOT
 #EXP patches/vendor/fanboy/02-eip93-f80d0507.patch ROOT
 #EXP patches/vendor/fanboy/04-dsa-kmod-netlink-22532-aa531917.patch ROOT
-# 9029：lan2 10G JCPLL VCO TCLVAR 重写（IP10/A8，experimental；实机 10G 对端验证后毕业 default）
+# 9029：lan2 10G JCPLL VCO TCLVAR recal（IP10/A8，experimental；2026-09-07 按 rdmitry PR#143 机制重写：
+#       post_config hook（仅 an7581_pcs_eth）+ TCLVAR 0x3→0x5 脉冲 + ETH/PON 分值 0x5/0x3；
+#       旧版（bringup 内同值重写=HW no-op，devmem 0x1fa7a030 证据）已失效；实机 10G 对端验证后毕业 default）
 #EXP patches/root/9029-xr1710g-airoha-pcs-jcpll-tclvar-recal.patch ROOT
 patches/vendor/fanboy/07-mt76-release-hw-rro-session-5b917d4b.patch ROOT
 patches/vendor/fanboy/09-hw11-hw21-compat-afc6dc93.patch ROOT
