@@ -25,7 +25,6 @@ default root/9025-xr1710g-airoha-no-carrier-rx-stats.patch   # F38/#15：无 car
 default root/9027-ledtrig-netdev-link-mode-mutex.patch   # F37③/#14：ledtrig-netdev 写 link 时清除冲突的 link_speed 模式
 default root/9031-base-files-led-skip-interval-hw-offload.patch   # #14：hw-offloaded netdev LED 跳过 interval 写入，led start 退出码归 0
 default root/9033-openwrt-24034-rtl826x-led.patch   # issue #13：RTL826x 10G PHY LED class 支持（carry openwrt/openwrt #24034）
-default root/9028-mt76-bump-c5a3bd91.patch   # mt76 pin 59676919→c5a3bd91；MT7996 修复吸收；0001/0003 已对 c5a3bd91 重建；9992 随 bump 删除（F59）
 default root/9010-wifi-scripts-txpower-ucode.patch   # 16 号重建（pr-23990 按 radio 独立 txpower）
 default vendor/fanboy/11-airoha-lro-default-0e90a420.patch   # HW GRO/LRO 默认
 default mt76/0001-wifi-mt76-mt7996-add-token-and-NPU-debugfs-counters.patch   # fanboy14 0001 重建（issue #4）：c5a3bd91 无 token_info，非冗余
@@ -44,7 +43,6 @@ default mt76/0007-wifi-mt76-mt7996-enable-firmware-txpower-limit-controls.patch
 default mt76/0008-wifi-mt76-mt7996-eeprom-power-unlock.patch   # 07 天线报告附A.1/附A.2：eeprom 功率解锁（2G 28->30、5G UNII-3 28->30）；默认档全开
 default mt76/0009-report-only-terminal-tx-failures.patch   # A5/IP25/IP26：tx_failed 只记终端失败
 default mt76/9994-mac80211-api-compat.patch   # F62：c5a3bd91 新 mac80211 API 适配 6.18；main 联动 bump 后删除
-
 # ── oc（--oc 才应用）──
 oc regdb/0555-w1700k-unii4-6g-30.patch   # 仅 6G 29->30；5G UNII-3/4@160 已由默认档 0521 承载
 # OC 本体（OPP/PLL/governor）由 scripts/prepare-oc.sh 树编辑实现（不占 MANIFEST）
@@ -55,6 +53,8 @@ default vendor/fanboy/06-nft-flow-offload-l2-22533-c0ed8295.patch   # 2026-08-22
 default root/9024-bridge-flow-offload-deps-table.patch   # issue #1 E1/E3：DEPENDS 改 kmod-nft-offload + 独立表名 flow_offload
 default root/9026-bridge-flow-offload-init-conntrack.patch   # issue #1 E2：bridge 族 flow 表达式 init/destroy 复用 inet conntrack
 default root/9035-airoha-ppe-flow-stats-coexist.patch   # 2026-08-31 ci-88 验证后转 default：FLOW_STATS=y 与 NPU offload 共存（9995 wrapper；须在 04 前应用）
+experimental root/9036-xr1710g-airoha-npu-dirty-lazy-clean.patch   # issue #7 防御（首选）：UNBIND 只置脏，重绑后首个命令统一 drain FOE（9996；待 CI 构建验证）
+experimental root/9037-xr1710g-airoha-ppe-offload-drain.patch   # issue #7 防御（备选）：UNBIND 立即 drain FOE，CPU 直写 SRAM（9997）；与 9036 二选一
 experimental vendor/fanboy/02-eip93-f80d0507.patch
 experimental vendor/fanboy/04-dsa-kmod-netlink-22532-aa531917.patch
 experimental root/9029-xr1710g-airoha-pcs-jcpll-tclvar-recal.patch   # A8/IP10：lan2 10G JCPLL VCO TCLVAR 重写（毕业转 default）

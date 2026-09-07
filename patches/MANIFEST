@@ -31,8 +31,6 @@ patches/packages/mt76-0007-wifi-mt76-mt7996-enable-firmware-txpower-limit-contro
 patches/packages/mt76-0008-wifi-mt76-mt7996-eeprom-power-unlock.patch          package/kernel/mt76/patches/
 # 0009：tx_failed 只记终端失败，retries 不再计入 tx_failed（IP25/IP26，A5，default）
 patches/packages/mt76-0009-report-only-terminal-tx-failures.patch          package/kernel/mt76/patches/
-# 9994：c5a3bd91 新 mac80211 API 兼容（F62）——mt76 master 需 kernel/mac80211 >= 7.2，先适配 6.18 API；main 联动 bump 后删除
-patches/packages/mt76-9994-mac80211-api-compat.patch          package/kernel/mt76/patches/
 # ── packages：mt76 EHT 补丁（2026-08-31 毕业，ci-74 实机；9990-9993 评审 F25/F59）──
 #   毕业证据：ci-74 experimental 实机 6G AP 侧 EHT320 生效、5 轮 wifi down/up 无复发；
 #   6G 客户端侧行为按用户口径延后补验（无 6G 客户端），发现问题再修。
@@ -83,8 +81,6 @@ patches/root/9027-ledtrig-netdev-link-mode-mutex.patch ROOT
 patches/root/9031-base-files-led-skip-interval-hw-offload.patch ROOT
 # 9033：RTL826x 10G PHY LED class 支持（carry openwrt/openwrt #24034；RTL8261BE lan1/lan2，issue #13）
 patches/root/9033-openwrt-24034-rtl826x-led.patch ROOT
-# 9028：mt76 pin 59676919 → c5a3bd91（2026-08-22，master 147 commits 领先；吸收 MT7996 修复；锁源实算 hash，禁 skip）
-patches/root/9028-mt76-bump-c5a3bd91.patch ROOT
 # wifi-scripts 按 radio 独立 txpower（pr-23990/YYH2913；2026-08-17 对 master 重建，源于 fanboy 16 号 41b9e3ac，F13）
 patches/root/9010-wifi-scripts-txpower-ucode.patch ROOT
 # HW GRO/LRO 默认开启（11 号定档 default——README 声明的 HW-GRO/LRO 能力载体；kernel 6.18 编译期验证中）
@@ -116,6 +112,14 @@ patches/root/9026-bridge-flow-offload-init-conntrack.patch ROOT
 # 9035：FLOW_STATS=y 与 NPU offload 共存（内核 patch 9995 生成 wrapper）——2026-08-31 ci-88 experimental fresh flash 验证后转 default。
 # 必须在 04 之前应用：04 会把 NET_AIROHA/NPU y->m，而本补丁 config hunk 以 y 为上下文；先应用则 FLOW_STATS=y 保持。
 patches/root/9035-airoha-ppe-flow-stats-coexist.patch ROOT
+# 9036/9037：issue #7 防御补丁族（flow_offloading_hw 1→0→1 + fw4 reload 后整机无声重启）。
+# H1 根因一句话：nf_tables 销毁 hardware flowtable 时逐流 FLOW_CLS_DESTROY 晚于
+# FLOW_BLOCK_UNBIND（cb 已摘除）而永远到不了驱动 → NPU/PPE 固件侧 FOE 与驱动侧条目残留。
+# 9036（9996，方案 A：UNBIND 只置 npu_dirty，重绑后首个命令统一 drain；推荐首选）/
+# 9037（9997，方案 B：UNBIND 立即 drain，CPU 直写 SRAM）——二者二选一，勿同时应用。
+# 补丁已入库草案，待 CI 构建验证（2026-09-07）。
+#EXP patches/root/9036-xr1710g-airoha-npu-dirty-lazy-clean.patch ROOT
+#EXP patches/root/9037-xr1710g-airoha-ppe-offload-drain.patch ROOT
 #EXP patches/vendor/fanboy/02-eip93-f80d0507.patch ROOT
 #EXP patches/vendor/fanboy/04-dsa-kmod-netlink-22532-aa531917.patch ROOT
 # 9029：lan2 10G JCPLL VCO TCLVAR 重写（IP10/A8，experimental；实机 10G 对端验证后毕业 default）

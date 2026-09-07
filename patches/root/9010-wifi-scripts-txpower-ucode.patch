@@ -37,18 +37,17 @@ values for all three radios, including a DFS channel on 5 GHz.
 
 Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
 ---
- package/network/config/wifi-scripts/Makefile  |   2 +-
- .../lib/netifd/wireless/mac80211.sh           | 162 ++++++++++++++++++
- 2 files changed, 161 insertions(+), 3 deletions(-)
-
-
-（2026-08-17 对当前 master 重建：仅 hunk #3 上下文漂移，手工合入后重新 diff；
+（2026-08-17 对当时 master 重建：仅 hunk #3 上下文漂移，手工合入后重新 diff；
  源码 41b9e3ac = YYH2913 wifi-scripts txpower per-radio（pr-23990），重建记录见 FIXES F13）
 （2026-08-21 实机验收修复：ucode 中 set_txpower 需定义在 setup_phy 之前，否则单 radio 设备
  会在 setup_phy 内触发 undeclared variable。）
+（2026-09-07 对 master fe4bb132 重建：上游 e21a4ef9（09-02，iw antenna/distance 静默）与
+ 93d975fe（09-05，auth_type）改动 mac80211.sh 后整体重放语义；diff 由 git 构造（语义与
+ 41b9e3ac 逐项对应：import uloop/常量/token 函数/set_txpower/setup_radio_txpower/
+ pending_txpower_ifnames/schedule_radio_txpower_retry/owe_transition push/尾部调用）；
+ Makefile 依赖新增 +ucode-mod-uloop（原始提交即含，重建时补回）。）
 ---
-diff --git a/package/network/config/wifi-scripts/Makefile b/package/network/config/wifi-scripts/Makefile
-index e398bd5..f9d36ce 100644
+index b4b1a72..a36002f 100644
 --- a/package/network/config/wifi-scripts/Makefile
 +++ b/package/network/config/wifi-scripts/Makefile
 @@ -20,7 +20,7 @@ include $(INCLUDE_DIR)/package.mk
@@ -61,7 +60,7 @@ index e398bd5..f9d36ce 100644
    PKGARCH:=all
  endef
 diff --git a/package/network/config/wifi-scripts/files-ucode/lib/netifd/wireless/mac80211.sh b/package/network/config/wifi-scripts/files-ucode/lib/netifd/wireless/mac80211.sh
-index a0aeed4..93ba0df 100755
+index 6c4fd89..528495a 100644
 --- a/package/network/config/wifi-scripts/files-ucode/lib/netifd/wireless/mac80211.sh
 +++ b/package/network/config/wifi-scripts/files-ucode/lib/netifd/wireless/mac80211.sh
 @@ -11,9 +11,13 @@ import * as iface from 'wifi.iface';
@@ -78,7 +77,7 @@ index a0aeed4..93ba0df 100755
  const mesh_param_list = [
  	"mesh_retry_timeout", "mesh_confirm_timeout", "mesh_holding_timeout", "mesh_max_peer_links",
  	"mesh_max_retries", "mesh_ttl", "mesh_element_ttl", "mesh_hwmp_max_preq_retries",
-@@ -31,7 +35,20 @@ function phy_suffix(radio, sep) {
+@@ -31,7 +35,19 @@ function phy_suffix(radio, sep) {
  	return sep + radio;
  }
  
@@ -95,15 +94,13 @@ index a0aeed4..93ba0df 100755
 +
  function reset_config(phy, radio) {
 +	invalidate_radio_txpower_retry(phy, radio);
-+
  	let name = phy + phy_suffix(radio, ".");
  	let prev_config = `/var/run/hostapd-${name}.conf`;
  
-@@ -64,6 +81,14 @@ function get_channel_frequency(band, channel) {
+@@ -64,6 +80,13 @@ function get_channel_frequency(band, channel) {
  	}
  }
  
-+
 +function set_txpower(cmd, txpower) {
 +	for (let arg in split(txpower, ' '))
 +		push(cmd, arg);
@@ -114,21 +111,20 @@ index a0aeed4..93ba0df 100755
  function setup_phy(phy, config, data) {
  	if (config.channel == "auto")
  		config.channel = 0;
-@@ -106,7 +131,8 @@ function setup_phy(phy, config, data) {
- 		system(`iw phy ${phy} set antenna ${config.txantenna} ${config.rxantenna}`);
+@@ -106,7 +129,8 @@ function setup_phy(phy, config, data) {
+ 		system(`iw phy ${phy} set antenna ${config.txantenna} ${config.rxantenna} >/dev/null 2>&1`);
  	}
- 	system(`iw phy ${phy} set distance ${config.distance}`);
+ 	system(`iw phy ${phy} set distance ${config.distance} >/dev/null 2>&1`);
 -	system(`iw phy ${phy} set txpower ${config.txpower}`);
 +	if (config.radio == null || config.radio < 0)
 +		set_txpower([ 'iw', 'phy', phy, 'set', 'txpower' ], config.txpower);
  
  	if (config.frag)
  		system(`iw phy ${phy} set frag ${config.frag}`);
-@@ -114,6 +140,133 @@ function setup_phy(phy, config, data) {
+@@ -114,6 +138,131 @@ function setup_phy(phy, config, data) {
  		system(`iw phy ${phy} set rts ${config.rts}`);
  }
  
-+
 +function get_interface_info(ifname) {
 +	return nl80211.request(nl80211.const.NL80211_CMD_GET_INTERFACE, 0, { dev: ifname });
 +}
@@ -254,11 +250,10 @@ index a0aeed4..93ba0df 100755
 +	}))
 +		log(`Failed to schedule txpower retry for '${phy}' radio ${config.radio}`);
 +}
-+
  function iw_htmode(config) {
  	let suffix = substr(config.htmode, 3);
  	if (suffix == "40+" || suffix == "40-")
-@@ -224,7 +377,7 @@ function setup() {
+@@ -226,7 +375,7 @@ function setup() {
  		if (v.config.encryption == 'owe' && v.config.owe_transition) {
  			mode_idx = idx[mode]++;
  			v.config.owe_transition_ifname = data.ifname_prefix + mode + mode_idx;
@@ -267,7 +262,7 @@ index a0aeed4..93ba0df 100755
  		}
  
  		switch (mode) {
-@@ -313,8 +466,13 @@ function setup() {
+@@ -315,8 +464,13 @@ function setup() {
  	if (length(supplicant_data) > 0)
  		supplicant.start(data);
  
