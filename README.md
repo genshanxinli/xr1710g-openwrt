@@ -16,7 +16,7 @@ in-band phylink、PCIe x2、MLO/EHT320、US regdb 功率体系、CPU 超频）�
 | 刷机 | 固化 YYH2913 HTTP U-Boot，官方 chainloader 备用（ADR-0002） |
 | 版本线 | 滚动 master + known-good 冻结（`docs/ACCEPTANCE.md` 全项通过才打 tag） |
 | 交付 | 单一 CPU 档（F89）：**OPP 650–1350MHz** + `oc-auto` 自动退档（1350 不稳→1300，崩溃→1200；5min 确认窗口）；档位仅剩 stock/experimental（同一 CPU 配置，包集合不同） |
-| 预装 | 见 `config/seed-config.diff`（mlo/fancontrol/npu 等）；科学上网/Docker 暂缓（ROADMAP P3） |
+| 预装 | 见 `config/seed-config.diff`（mlo/fancontrol/npu 等）；科学上网 = **nikki 三包 experimental 档**（F90，不入默认镜像），Docker 暂缓（ROADMAP P3） |
 
 ## 目录结构
 

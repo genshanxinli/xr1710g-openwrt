@@ -1,3 +1,11 @@
 # seed-config.experimental.diff — 实验档增量 seed（追加在 seed-config.diff 之后）
 # 仅在 profile=experimental 时追加；符号必须与 MANIFEST #EXP 补丁供给的包一一对应。
 # bridge-flow-offload 已移入共享 seed（2026-08-31 stock ci-83 发现 stock 档未安装，根因 DEFAULT_PACKAGES 未生效）。
+
+# ── nikki 三包（F90，2026-09-08 调研定稿；experimental 档供给，不入 stock 默认镜像）──
+# 源：feeds.custom.conf `src-git-full nikki ^3799926b`（nikkinikki-org/OpenWrt-nikki）；
+# mihomo-meta 由 nikki 的 DEPENDS +mihomo（PROVIDES）拉入，显式声明以便 audit-config 全量核对；
+# 依赖核对（上游 Makefile 实测）无 bash/ruby；体积预算 ~70-90MB（调研 §1.2）。
+CONFIG_PACKAGE_nikki=y
+CONFIG_PACKAGE_luci-app-nikki=y
+CONFIG_PACKAGE_mihomo-meta=y
