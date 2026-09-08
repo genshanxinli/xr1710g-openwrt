@@ -71,6 +71,11 @@ CONFIG_PACKAGE_luci-app-ddns=y           # LuCI 管理界面（服务 → 动态
 # bridge-flow-offload 由 vendor/05 + root/9024 提供（issue #1 E1/E3；ci-74 实验档验证通过，毕业 default 后 stock 档也应安装）。
 CONFIG_PACKAGE_bridge-flow-offload=y
 
-# ── 暂缓（决策）：科学上网 / Docker ──
+# ── DNS 中枢（C：config/feeds.custom.conf src-git-full mosdns 锁 df6d67b，2026-09-08 决策；
+#    fake-ip 空规则预置见 files/etc/mosdns/config.yaml，P3 代理上线才喂规则）──
+CONFIG_PACKAGE_mosdns=y          # DNS 中枢：国内 DoH 防污染 + geosite 分流 + lazy_cache（内存）
+CONFIG_PACKAGE_luci-app-mosdns=y # LuCI 面板 + 名单数据管理（sbwml 包依赖 +mosdns + geosite/geoip）
+
+# ── 暂缓（决策）：科学上网 / Docker（P3 前保持注释；mosdns 已为其预置 fake-ip 接口）──
 # CONFIG_PACKAGE_luci-app-openclash=y
 # CONFIG_PACKAGE_docker=y

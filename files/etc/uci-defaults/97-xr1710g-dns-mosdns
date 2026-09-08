@@ -1,0 +1,12 @@
+#!/bin/sh
+# XR1710G DNS Phase 0 (2026-09-08 decision, 见 DNS方案深度调研-2026-09-08.md §五):
+# dnsmasq 归位——53 继续由 dnsmasq 服务（DHCP 联动/router.lan 本地域/PTR/缓存兜底），
+# 解析上游移交 mosdns 127.0.0.1:5353（与 files/etc/mosdns/config.yaml 监听一致）。
+# 守卫：目标上游已存在则不重写 server 列表（sysupgrade 保留配置时不清除用户自定义项）。
+uci -q set dhcp.@dnsmasq[0].noresolv='1'
+if ! uci -q get dhcp.@dnsmasq[0].server | grep -qx '127.0.0.1#5353'; then
+  uci -q delete dhcp.@dnsmasq[0].server
+  uci -q add_list dhcp.@dnsmasq[0].server='127.0.0.1#5353'
+fi
+uci commit dhcp
+exit 0

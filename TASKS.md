@@ -18,3 +18,9 @@
 - [x] 17. 9035 经 ci-88 experimental fresh flash 验证后转 default（config hunk 改为 stock y 上下文，置于 04 前）
 - [x] 18. 重建 vendor/04 config hunk 为 FLOW_STATS=y 上下文，修复 9035 提前应用后的实验档 dry-run 冲突；本地 temp repo 验证 9035→04 顺序可应用
 - [x] 19. #94 all（stock/oc）与 #96 experimental 均 success；#94 stock fresh flash 复验 9035 default 通过：dmesg `NPU flow stats unavailable (-22)`、NPU offload 存活（bound 24/131、HW_OFFLOAD 55）、LED rc=0、bridge-flow-offload 正常
+
+## DNS Phase 0（2026-09-08 定稿，F91；调研见 `DNS方案深度调研-2026-09-08.md`）
+- [x] 20. mosdns 供应线：`feeds.custom.conf` 锁 v5.3.4-r13（`df6d67b`，git ls-remote 核实）+ `seed-config.diff` 两符号（mosdns/luci-app-mosdns）
+- [x] 21. dnsmasq 归位 127.0.0.1#5353（`files/etc/uci-defaults/97`）+ `files/etc/mosdns/config.yaml`（国内 DoH×2/国外降级/geosite/lazy_cache/fakeip 空规则）+ 防火墙（`96`：LAN→53 ACCEPT、5353 非回环 REJECT）
+- [x] 22. 台账登记：ACCEPTANCE B7-B10（实机延后）、FIXES F91（锁 commit + hash 实算义务 + M1 季度复核）、ROADMAP P3 前置说明
+- [ ] 23. CI stock 构建验证（mosdns 包编译进镜像）+ 实机 DNS 验收（B7-B10，按用户口径延后）

@@ -1,0 +1,81 @@
+# mosdns v5 中枢配置 — Phase 0（2026-09-08 决策，见 DNS方案深度调研-2026-09-08.md §四/§五）
+# 职责：国内 DoH 直连防污染 + geosite:cn 分流 + 内存缓存 + fake-ip 预置（P3 代理启用）
+# 注意：监听 127.0.0.1:5353（仅回环）；bootstrap 不得指向 127.0.0.1:53（会与
+#       dnsmasq→mosdns 形成解析环），故 DoH 主机名用各自厂商公共 DNS 明文解析。
+log:
+  level: info
+
+plugins:
+  # ── 国内组：阿里 dns.alidns.com + 腾讯 doh.pub DoH 双上游互备（concurrent=2 并发取先答，M4 单点故障互备）──
+  - tag: forward_cn
+    type: forward
+    args:
+      concurrent: 2
+      upstreams:
+        - addr: https://dns.alidns.com/dns-query
+          bootstrap: 223.5.5.5
+        - addr: https://doh.pub/dns-query
+          bootstrap: 119.29.29.29
+
+  # ── 国外组：DoT 直连（墙内不稳，仅作主链路试连，见调研 §4.3）──
+  - tag: forward_foreign
+    type: forward
+    args:
+      concurrent: 2
+      upstreams:
+        - addr: tls://8.8.8.8
+        - addr: tls://1.1.1.1
+
+  # ── 国外超时快速降级：主链 >1000ms 或拒绝/超时 → 落到国内 DoH（宁要 CDN 错配不要超时）──
+  - tag: foreign_fallback
+    type: fallback
+    args:
+      primary:
+        - tag: forward_foreign
+      secondary:
+        - tag: forward_cn
+      threshold: 1000
+      always_standby: false
+      triggers:
+        - rejected
+        - timeout
+
+  # ── 内存缓存（lazy_cache；不落盘 = 无任何持久化配置，NAND 零写入）──
+  - tag: cache
+    type: cache
+    args:
+      size: 4096
+      lazy_cache_ttl: 86400
+
+  # ── fake-ip 预置：仅注册池（198.18.0.0/16 映射段），主序列不执行本插件 → 空规则不拦截；
+  #    P3 代理（OpenClash/mihomo）上线时按 Phase 1 二选一接入路径启用 ──
+  - tag: fakeip
+    type: fakeip
+    args:
+      ipset:
+        - 198.18.0.0/16
+      skip_AAAA: false
+
+  # ── 主序列：geosite:cn → 国内组；其余 → 国外组（超时降级国内兜底）──
+  - tag: main
+    type: sequence
+    args:
+      - matches: qname $geosite:cn
+        exec:
+          - cache
+          - forward_cn
+      - exec:
+          - cache
+          - foreign_fallback
+
+  # ── 监听：仅回环 5353（TCP/UDP），由 dnsmasq 指向上游（files/etc/uci-defaults/97-xr1710g-dns-mosdns）──
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: main
+      listen: 127.0.0.1:5353
+  - tag: tcp_server
+    type: tcp_server
+    args:
+      entry: main
+      listen: 127.0.0.1:5353

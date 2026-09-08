@@ -1,0 +1,26 @@
+#!/bin/sh
+# XR1710G DNS Phase 0 (2026-09-08 decision, 见 DNS方案深度调研-2026-09-08.md §五):
+# DNS 防火墙约束（fw4 / uci firewall）：
+#   ① LAN→53 允许：LAN 客户端访问设备 53（dnsmasq 服务端）；
+#   ② 5353 非回环拒绝：mosdns 只服务回环（config.yaml listen 127.0.0.1:5353），
+#      本规则对全部 zone（src 缺省=*，含 lan/wan）到 5353 一律 REJECT——
+#      即使监听被误改为非回环也无外部暴露面；回环流量不经 zone 过滤，本机自访不受影响；
+#   ③ WAN→53 隐含拒绝：不添加任何 WAN 放行规则（OpenWrt 默认 wan input REJECT）。
+# 幂等：rule 已存在则跳过（sysupgrade 保留配置时不清除用户既有规则）。
+if ! uci -q get firewall.dns_lan53 >/dev/null 2>&1; then
+  uci set firewall.dns_lan53=rule
+  uci set firewall.dns_lan53.name='DNS-lan53'
+  uci set firewall.dns_lan53.src='lan'
+  uci set firewall.dns_lan53.proto='tcp udp'
+  uci set firewall.dns_lan53.dest_port='53'
+  uci set firewall.dns_lan53.target='ACCEPT'
+fi
+if ! uci -q get firewall.dns_block_5353 >/dev/null 2>&1; then
+  uci set firewall.dns_block_5353=rule
+  uci set firewall.dns_block_5353.name='DNS-block-5353'
+  uci set firewall.dns_block_5353.proto='tcp udp'
+  uci set firewall.dns_block_5353.dest_port='5353'
+  uci set firewall.dns_block_5353.target='REJECT'
+fi
+uci commit firewall
+exit 0

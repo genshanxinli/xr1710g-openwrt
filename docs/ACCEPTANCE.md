@@ -23,6 +23,12 @@
 - [ ] B5.1 纯 IPv6 无线客户端（该站无 IPv4 地址/租约）产生 IPv6 TCP 流：`getPpeEntries.client_bnd` 中该站 `bnd>0` 且 `ip6` 非空（issue #19 终验）
 - [ ] B6 管理面改址回连：LuCI 将 LAN IP 改为 192.168.50.1/24（或静态 CIDR）后仍可从新地址回连；改回后恢复（IP20）
 
+## 网络（DNS Phase 0，2026-09-08 定稿：mosdns 主推线，见 DNS方案深度调研-2026-09-08.md §五）
+- [ ] B7 DNS 防泄漏：dnsleaktest.com / ipleak.net / Check My DNS（browserleaks）全部显示本机出口 IP 的 ISP、无第三方 DNS（实机项，按用户口径延后）
+- [ ] B8 DNS 分流正确：taobao.com 解析到国内 IP 段、google.com 非污染应答（dig +o 对照；实机项，按用户口径延后）
+- [ ] B9 裸连国外解析：代理关闭时国外域名解析延迟 <1s（mosdns 国外 DoT 超时降级到国内 DoH 链路生效；实机项，按用户口径延后）
+- [ ] B10 DNS 资源观察：mosdns QPS/RAM 24h 无增长异常（metrics/ubus + free；实机项，按用户口径延后）
+
 ## Wi-Fi
 - [ ] C1 三频全部起来且可连接：2.4G / 5G / 6G，统一 SSID「K2P」、WPA2/WPA3 混合
 - [ ] C2 6GHz 正常工作（US regdb、EHT320 or 160MHz fallback 注明当前实际）；**客户端国家码须为 US**——非 US 客户端看不到 6G SSID 是预期行为，不作为失败，但必须记录客户端国家码与“可见可连”双侧判据（IP14）
