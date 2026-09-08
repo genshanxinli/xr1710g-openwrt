@@ -154,3 +154,43 @@ git -C /tmp/mosdns-src archive HEAD | gzip -n | sha256sum   # 以 OpenWrt 打包
 | Makefile 带实算哈希 **或** 已记录回填方案 | ✅ 以「已记录回填方案」达成（§2-§3 可执行步骤，情形 A/B 判定由 CI 大类触发） |
 | 实算过程可复现（命令+产物 hash 存档） | ✅ 命令原文存档（§3 步骤 2）；情形 B 产物 hash 于回填时补记 |
 | 无 hash=skip 进 CI | ✅ 本仓库零引入；情形 B 以实值覆盖 |
+---
+
+# 附：CI stock 构建验证记录（2026-09-08，CI 大类第一/二小类联动）
+
+## 1. run 与终态
+
+- run **#34196307154**（https://github.com/genshanxinli/xr1710g-openwrt/actions/runs/34196307154）
+- 触发：`gh workflow run build.yml --ref feat/dns-phase0 -f profile=stock`；矩阵实证「build (stock)」
+- 时间线（`tmp/ci/run-34196307154-watch2.log`，30s 轮询）：07:10:13 in_progress → **08:13:26 completed success**（约 1h3m；23 次 API 断流均重试存活）
+- 首轮 watch 因 API EOF 中断（watch exit=1 为网络错误），换抗断流轮询器续盯，无状态丢失
+
+## 2. firmware artifact（`tmp/ci/run34196307154/firmware-stock/`）
+
+| 产物 | 大小(B) |
+|---|---|
+| openwrt-stock-…-squashfs-sysupgrade.itb | 25,596,741 |
+| openwrt-stock-…-initramfs-recovery.itb | 23,592,960 |
+| openwrt-stock-…-chainload-uboot.itb | 287,696 |
+
+## 3. 镜像包清单（manifest 证据）
+
+`openwrt-stock-airoha-an7581-stock.manifest`（218 行）：
+
+```
+L148  luci-app-mosdns - 1.7.13-r1
+L162  mosdns - 5.3.4-r13
+```
+
+## 4. M6 风险点对应（Go 交叉编译链）
+
+build log 实证：mosdns-5.3.4 经 `feeds/packages/lang/golang/golang-build.sh`（GO_PKG=IrineSistiana/mosdns，hostpkg go-1.27，toolchain aarch64_cortex-a53_gcc-14.4.0_musl）编译、`rstrip.sh: …/usr/bin/mosdns: executable`；luci-app-mosdns 与 geo2txt 同链编译 → **M6 构建链在 CI 全通，风险关闭**。
+
+## 5. PKG_MIRROR_HASH 情形判定（镜像哈希实算小类收口）
+
+build log L172519：`download.pl … "mosdns-5.3.4.tar.gz" "0302a685db2a6c3c09af7bf4ff0dffd24f1e583383a47f064564f5270033671b" … codeload.github.com/IrineSistiana/mosdns/…` → 上游 Makefile **自带实哈希且校验通过（情形 A 命中）**，回填方案无需启用；此前「未证实」项在此闭环。
+
+## 6. 结论
+
+- run 终态=completed success；firmware 三件产物在册；镜像含 mosdns 5.3.4-r13 + luci-app-mosdns 1.7.13-r1（manifest 证据）。
+- M6（Go 构建链）与 PKG_MIRROR_HASH（情形 A）双风险点闭环。
