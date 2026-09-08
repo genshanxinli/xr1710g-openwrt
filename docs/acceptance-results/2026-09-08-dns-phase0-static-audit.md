@@ -203,3 +203,11 @@ build log L172519：`download.pl … "mosdns-5.3.4.tar.gz" "0302a685db2a6c3c09af
 - 闭环状态机：**第 1 轮即达终态绿 → 零修复 commit、零重跑、零降级/删包绕行**（「修复而非降级」判据空置，无压力下改动）。
 - 阻塞上报：不适用（无连续 2 轮同根因红）。
 - 结论：本小类验收 = 最终状态「stock 构建绿（含 mosdns 包）」✅。
+
+---
+
+# 附：PR 存档（2026-09-08，PR 大类第一小类）
+
+- PR **#27**：https://github.com/genshanxinli/xr1710g-openwrt/pull/27
+- base=main / head=feat/dns-phase0 / state=OPEN / isDraft=false
+- 正文四要素（动机/改动清单/验证证据/验收项引用）经 gh pr view 断言全通过
