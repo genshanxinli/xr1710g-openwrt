@@ -2132,7 +2132,7 @@ new file mode 100755
 index 00000000000000..748f3ea2a35f8d
 --- /dev/null
 +++ b/package/luci-app-airoha-flowsense/root/usr/libexec/rpcd/luci.airoha_flowsense
-@@ -0,0 +1,1186 @@
+@@ -0,0 +1,1188 @@
 +#!/bin/sh
 +
 +# Airoha FlowSense RPC backend for LuCI (Offload & PPE Monitor)
@@ -2536,16 +2536,18 @@ index 00000000000000..748f3ea2a35f8d
 +	local gdm4_rx=$(($(devmem 0x1fb52648)))
 +	local gdm4_rxd=$(($(devmem 0x1fb5264c)))
 +
-+	# CDM counters (TX_OK, RXCPU_OK, RXHWF_OK, RXCPU_DROP, RXHWF_DROP)
++	# CDM counters (TX_OK, RXCPU_OK, RXHWF_OK, RXHWF_FAST_OK, RXCPU_DROP, RXHWF_DROP)
 +	local cdm1_tx=$(($(devmem 0x1fb50580)))
 +	local cdm1_rxcpu=$(($(devmem 0x1fb50590)))
 +	local cdm1_rxhwf=$(($(devmem 0x1fb50594)))
++	local cdm1_rxhwf_fast=$(($(devmem 0x1fb50598)))
 +	local cdm1_rxcpud=$(($(devmem 0x1fb505a0)))
 +	local cdm1_rxhwfd=$(($(devmem 0x1fb505a4)))
 +
 +	local cdm2_tx=$(($(devmem 0x1fb51580)))
 +	local cdm2_rxcpu=$(($(devmem 0x1fb51590)))
 +	local cdm2_rxhwf=$(($(devmem 0x1fb51594)))
++	local cdm2_rxhwf_fast=$(($(devmem 0x1fb51598)))
 +	local cdm2_rxcpud=$(($(devmem 0x1fb515a0)))
 +	local cdm2_rxhwfd=$(($(devmem 0x1fb515a4)))
 +
@@ -2553,8 +2555,8 @@ index 00000000000000..748f3ea2a35f8d
 +	printf '"gdm1":{"tx":%d,"tx_drop":%d,"rx":%d,"rx_drop":%d},' "$gdm1_tx" "$gdm1_txd" "$gdm1_rx" "$gdm1_rxd"
 +	printf '"gdm2":{"tx":%d,"tx_drop":%d,"rx":%d,"rx_drop":%d},' "$gdm2_tx" "$gdm2_txd" "$gdm2_rx" "$gdm2_rxd"
 +	printf '"gdm4":{"tx":%d,"tx_drop":%d,"rx":%d,"rx_drop":%d},' "$gdm4_tx" "$gdm4_txd" "$gdm4_rx" "$gdm4_rxd"
-+	printf '"cdm1":{"tx":%d,"rx_cpu":%d,"rx_hwf":%d,"rx_cpu_drop":%d,"rx_hwf_drop":%d},' "$cdm1_tx" "$cdm1_rxcpu" "$cdm1_rxhwf" "$cdm1_rxcpud" "$cdm1_rxhwfd"
-+	printf '"cdm2":{"tx":%d,"rx_cpu":%d,"rx_hwf":%d,"rx_cpu_drop":%d,"rx_hwf_drop":%d}}' "$cdm2_tx" "$cdm2_rxcpu" "$cdm2_rxhwf" "$cdm2_rxcpud" "$cdm2_rxhwfd"
++	printf '"cdm1":{"tx":%d,"rx_cpu":%d,"rx_hwf":%d,"rx_hwf_fast":%d,"rx_cpu_drop":%d,"rx_hwf_drop":%d},' "$cdm1_tx" "$cdm1_rxcpu" "$cdm1_rxhwf" "$cdm1_rxhwf_fast" "$cdm1_rxcpud" "$cdm1_rxhwfd"
++	printf '"cdm2":{"tx":%d,"rx_cpu":%d,"rx_hwf":%d,"rx_hwf_fast":%d,"rx_cpu_drop":%d,"rx_hwf_drop":%d}}' "$cdm2_tx" "$cdm2_rxcpu" "$cdm2_rxhwf" "$cdm2_rxhwf_fast" "$cdm2_rxcpud" "$cdm2_rxhwfd"
 +}
 +
 +get_tx_stats() {
@@ -3750,7 +3752,7 @@ new file mode 100644
 index 00000000000000..329d186970e246
 --- /dev/null
 +++ b/package/luci-app-airoha-npu/htdocs/luci-static/resources/view/airoha_npu/status.js
-@@ -0,0 +1,485 @@
+@@ -0,0 +1,486 @@
 +'use strict';
 +'require view';
 +'require poll';
@@ -3947,8 +3949,9 @@ index 00000000000000..329d186970e246
 +	// Helper: CDM offload bar
 +	function cdmCard(key, name, label, pse) {
 +		var d = fe[key] || {};
-+		var total = (d.rx_cpu||0) + (d.rx_hwf||0);
-+		var pct = total > 0 ? ((d.rx_hwf/total)*100).toFixed(1) : '0.0';
++		var rx_hwf = (d.rx_hwf||0) + (d.rx_hwf_fast||0);
++		var total = (d.rx_cpu||0) + rx_hwf;
++		var pct = total > 0 ? ((rx_hwf/total)*100).toFixed(1) : '0.0';
 +		var barCol = total===0 ? 'var(--soc-border)' : parseFloat(pct)>80 ? '#4caf50' : parseFloat(pct)>50 ? '#ff9800' : '#f44336';
 +		return E('div', { 'class': 'soc-card' }, [
 +			E('div', { 'style': 'display:flex;justify-content:space-between;margin-bottom:4px' }, [
@@ -3961,7 +3964,7 @@ index 00000000000000..329d186970e246
 +			]),
 +			E('div', { 'style': 'display:flex;justify-content:space-between;font-size:11px;margin-top:4px' }, [
 +				E('span', { 'class': 'soc-muted' }, 'CPU: '+fmtK(d.rx_cpu||0)),
-+				E('span', { 'class': 'soc-muted' }, 'HWF: '+fmtK(d.rx_hwf||0)),
++				E('span', { 'class': 'soc-muted' }, 'HWF: '+fmtK(rx_hwf)),
 +				E('span', { 'class': 'soc-muted' }, 'TX: '+fmtK(d.tx||0))
 +			])
 +		]);
@@ -4593,7 +4596,7 @@ new file mode 100755
 index 00000000000000..d5d00af168659c
 --- /dev/null
 +++ b/package/luci-app-airoha-npu/root/usr/libexec/rpcd/luci.airoha_npu
-@@ -0,0 +1,553 @@
+@@ -0,0 +1,555 @@
 +#!/bin/sh
 +
 +# Airoha SoC Status RPC backend for LuCI (NPU + CPU + Overclock)
@@ -5020,16 +5023,18 @@ index 00000000000000..d5d00af168659c
 +	local gdm4_rx=$(($(devmem 0x1fb52648)))
 +	local gdm4_rxd=$(($(devmem 0x1fb5264c)))
 +
-+	# CDM counters (TX_OK, RXCPU_OK, RXHWF_OK, RXCPU_DROP, RXHWF_DROP)
++	# CDM counters (TX_OK, RXCPU_OK, RXHWF_OK, RXHWF_FAST_OK, RXCPU_DROP, RXHWF_DROP)
 +	local cdm1_tx=$(($(devmem 0x1fb50580)))
 +	local cdm1_rxcpu=$(($(devmem 0x1fb50590)))
 +	local cdm1_rxhwf=$(($(devmem 0x1fb50594)))
++	local cdm1_rxhwf_fast=$(($(devmem 0x1fb50598)))
 +	local cdm1_rxcpud=$(($(devmem 0x1fb505a0)))
 +	local cdm1_rxhwfd=$(($(devmem 0x1fb505a4)))
 +
 +	local cdm2_tx=$(($(devmem 0x1fb51580)))
 +	local cdm2_rxcpu=$(($(devmem 0x1fb51590)))
 +	local cdm2_rxhwf=$(($(devmem 0x1fb51594)))
++	local cdm2_rxhwf_fast=$(($(devmem 0x1fb51598)))
 +	local cdm2_rxcpud=$(($(devmem 0x1fb515a0)))
 +	local cdm2_rxhwfd=$(($(devmem 0x1fb515a4)))
 +
@@ -5037,8 +5042,8 @@ index 00000000000000..d5d00af168659c
 +	printf '"gdm1":{"tx":%d,"tx_drop":%d,"rx":%d,"rx_drop":%d},' "$gdm1_tx" "$gdm1_txd" "$gdm1_rx" "$gdm1_rxd"
 +	printf '"gdm2":{"tx":%d,"tx_drop":%d,"rx":%d,"rx_drop":%d},' "$gdm2_tx" "$gdm2_txd" "$gdm2_rx" "$gdm2_rxd"
 +	printf '"gdm4":{"tx":%d,"tx_drop":%d,"rx":%d,"rx_drop":%d},' "$gdm4_tx" "$gdm4_txd" "$gdm4_rx" "$gdm4_rxd"
-+	printf '"cdm1":{"tx":%d,"rx_cpu":%d,"rx_hwf":%d,"rx_cpu_drop":%d,"rx_hwf_drop":%d},' "$cdm1_tx" "$cdm1_rxcpu" "$cdm1_rxhwf" "$cdm1_rxcpud" "$cdm1_rxhwfd"
-+	printf '"cdm2":{"tx":%d,"rx_cpu":%d,"rx_hwf":%d,"rx_cpu_drop":%d,"rx_hwf_drop":%d}}' "$cdm2_tx" "$cdm2_rxcpu" "$cdm2_rxhwf" "$cdm2_rxcpud" "$cdm2_rxhwfd"
++	printf '"cdm1":{"tx":%d,"rx_cpu":%d,"rx_hwf":%d,"rx_hwf_fast":%d,"rx_cpu_drop":%d,"rx_hwf_drop":%d},' "$cdm1_tx" "$cdm1_rxcpu" "$cdm1_rxhwf" "$cdm1_rxhwf_fast" "$cdm1_rxcpud" "$cdm1_rxhwfd"
++	printf '"cdm2":{"tx":%d,"rx_cpu":%d,"rx_hwf":%d,"rx_hwf_fast":%d,"rx_cpu_drop":%d,"rx_hwf_drop":%d}}' "$cdm2_tx" "$cdm2_rxcpu" "$cdm2_rxhwf" "$cdm2_rxhwf_fast" "$cdm2_rxcpud" "$cdm2_rxhwfd"
 +}
 +
 +get_vlan_offload() {

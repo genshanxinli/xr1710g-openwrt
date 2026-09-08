@@ -121,7 +121,7 @@
 --- a/package/luci-app-airoha-npu/root/usr/libexec/rpcd/luci.airoha_npu
 +++ b/package/luci-app-airoha-npu/root/usr/libexec/rpcd/luci.airoha_npu
 @@ -445,10 +445,39 @@
- 	printf '"cdm2":{"tx":%d,"rx_cpu":%d,"rx_hwf":%d,"rx_cpu_drop":%d,"rx_hwf_drop":%d}}' "$cdm2_tx" "$cdm2_rxcpu" "$cdm2_rxhwf" "$cdm2_rxcpud" "$cdm2_rxhwfd"
+ 	printf '"cdm2":{"tx":%d,"rx_cpu":%d,"rx_hwf":%d,"rx_hwf_fast":%d,"rx_cpu_drop":%d,"rx_hwf_drop":%d}}' "$cdm2_tx" "$cdm2_rxcpu" "$cdm2_rxhwf" "$cdm2_rxhwf_fast" "$cdm2_rxcpud" "$cdm2_rxhwfd"
  }
  
 +_flow_offload_hw_enabled() {
