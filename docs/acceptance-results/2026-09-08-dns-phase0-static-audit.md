@@ -194,3 +194,12 @@ build log L172519：`download.pl … "mosdns-5.3.4.tar.gz" "0302a685db2a6c3c09af
 
 - run 终态=completed success；firmware 三件产物在册；镜像含 mosdns 5.3.4-r13 + luci-app-mosdns 1.7.13-r1（manifest 证据）。
 - M6（Go 构建链）与 PKG_MIRROR_HASH（情形 A）双风险点闭环。
+
+---
+
+# 附：构建问题闭环判定（2026-09-08，CI 大类第三小类）
+
+- 首轮 run #34196307154 = **success**（08:13:26 终态），镜像含 mosdns 5.3.4-r13 / luci-app-mosdns 1.7.13-r1（manifest L148/L162）。
+- 闭环状态机：**第 1 轮即达终态绿 → 零修复 commit、零重跑、零降级/删包绕行**（「修复而非降级」判据空置，无压力下改动）。
+- 阻塞上报：不适用（无连续 2 轮同根因红）。
+- 结论：本小类验收 = 最终状态「stock 构建绿（含 mosdns 包）」✅。
