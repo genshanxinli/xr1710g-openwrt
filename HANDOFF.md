@@ -169,3 +169,12 @@ regdb 510/520 合并 30dBm（naoki66：删 DFS flag、U-NII-4 无 NO-IR、CN 2.4
 | `tmp/research/dryrun-logs/` | 四轮 dry-run 复现日志（9028/9010/9014 漂移证据链） |
 | `docs/analysis-issue7-flow-offload-reboot.md` | issue #7 离线根因分析（aa4c8cb1 提交） |
 | `tmp/absorb/00-wp-specs.md` + `tmp/absorb/dryrun-full.log` | P1 工作包规格/验证指南 + 2026-09-08 全链 dry-run 日志 |
+## 10. DNS Phase 0 落地（2026-09-08，F91）
+
+> 调研：`DNS方案深度调研-2026-09-08.md`（工作区根）；实施：mosdns 主推线（国内 DoH 防污染 + geosite 分流 + fake-ip 预置）。
+
+- **状态**：PR **#27**（feat/dns-phase0 → main）已创建，验证全部通过，**待用户审核合并**（不自行合并）。提交链：`b674873`（落地）→ `bba2820`（CI 证据）→ `b7c9e77`（闭环判定）→ `3838311`（PR 存档）。
+- **交付物**：`config/feeds.custom.conf` mosdns feed 锁 `df6d67b`（注：随并发提交 1284dfb 入 main）；`config/seed-config.diff` 两符号；`files/etc/uci-defaults/96/97`；`files/etc/mosdns/config.yaml`；ACCEPTANCE B7-B10、FIXES F91、ROADMAP P3 前置、TASKS 登记。
+- **验证**：CI run #34196307154 success（stock；manifest 含 mosdns 5.3.4-r13 / luci-app-mosdns 1.7.13-r1）；M6 Go 链与 PKG_MIRROR_HASH 情形 A 闭环；静态审计记录 `docs/acceptance-results/2026-09-08-dns-phase0-static-audit.md`。
+- **遗留**：实机 DNS 验收（ACCEPTANCE B7-B10）按用户口径延后；mosdns 社区 feed 季度复核（M1，F91 登记）。
+- **P3 衔接**：科学上网（nikki/OpenClash）上线时按 Phase 1 二选一接入——mosdns fakeip 插件激活（198.18.0.0/16 已预置），或代理以 127.0.0.1:5353 为上游；验收含 dnsleaktest 防泄漏。
