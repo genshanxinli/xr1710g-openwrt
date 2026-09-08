@@ -8,6 +8,8 @@
 #     - 开机按 /etc/oc-state/level 设置上限（默认 1350；performance governor；可 sysfs 调低）；
 #     - 撑过 CONFIRM_WINDOW 秒（默认 300，覆盖“两分钟重置”不稳窗口）才写 confirmed 标记；
 #     - 若窗口内崩溃/重启（confirmed 缺失）→ 下次启动自动退档：1350→1300→1200；
+#     - 首启（无 level 文件 = 全新安装）默认 1350，不误判退档；
+#     - 窗口外崩溃不自动退档（如需降：sysfs 调低或写 level 文件后重启）；
 #     - 1200 为最终兜底（原 stock 上限），不再退；
 #     - 手动回高挡：echo 1350 > /etc/oc-state/level && reboot
 #     - 手动即时调低：echo 1300000 > /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq
@@ -28,11 +30,13 @@ degrade() {
 boot() {
 	mkdir -p /etc/oc-state
 
+	had_level=0
+	[ -f "$LEVEL_FILE" ] && had_level=1
 	cur="$(cat "$LEVEL_FILE" 2>/dev/null)"
 	[ -n "$cur" ] || cur=1350
 	case "$cur" in 1350|1300|1200) ;; *) cur=1350 ;; esac
 
-	if [ ! -f "$CONFIRM_FILE" ]; then
+	if [ "$had_level" -eq 1 ] && [ ! -f "$CONFIRM_FILE" ]; then
 		next="$(degrade "$cur")"
 		if [ "$next" != "$cur" ]; then
 			logger -t oc-auto "上次 ${cur}MHz 未通过稳性确认（窗口内崩溃/重启），自动退档 → ${next}MHz"
