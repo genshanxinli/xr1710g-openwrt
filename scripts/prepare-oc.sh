@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
 # prepare-oc.sh — 对 openwrt 树应用/撤销 CPU 超频（确定性编辑，失败即报错）
-# 用法：prepare-oc.sh <1.3|1.4|stock> <openwrt树目录>
-#   - 1.3：OPP 500–1200MHz → 600–1300MHz（PLL base 600）保守档
-#   - 1.4：OPP 500–1200MHz → 700–1400MHz（PLL base 700）激进档（与 fanboy ubi2-oc 一致）
-#   - stock：撤销（git restore 涉及文件）
-# 前置依赖：cpufreq / PM domain 修复可用（见 docs/FIXES.md 条目 #22029）——无修复时 OC 不稳定，本脚本会提示。
+# 用法：prepare-oc.sh <oc|stock> <openwrt树目录>
+#   oc：OPP 500–1200MHz → 650–1350MHz（PLL base 650）——唯一 CPU 档
+#       （2026-09-08 决策：取消 oc-1.3/oc-1.4 分档；1350 的稳性兜底不在构建侧，
+#        由运行时 files/etc/init.d/oc-auto 承担：1350 不稳自动退档 1300，崩溃退档 1200）。
+#   stock：撤销（git restore 涉及文件）。
+# 前置依赖：cpufreq / PM domain 修复可用（patches/vendor/fanboy/03-cpufreq-pmdomain，
+#           见 docs/FIXES.md #22029）——无修复时 OC 不稳定，本脚本会提示。
 # 参考：OpenW1700k ubi2-oc commit 80096373b5（patches/specs/original-oc-80096373b5-6.12-reference.patch）
 set -euo pipefail
 
-TIER="${1:-stock}"
+TIER="${1:-oc}"
 TREE="${2:-${OPENWRT_DIR:-}}"
-[[ -n "$TREE" && -d "$TREE/.git" ]] || { echo "用法：prepare-oc.sh <1.3|1.4|stock> <openwrt树目录>" >&2; exit 1; }
+[[ -n "$TREE" && -d "$TREE/.git" ]] || { echo "用法：prepare-oc.sh <oc|stock> <openwrt树目录>" >&2; exit 1; }
 
 case "$TIER" in
-  1.3) BASE=600 ;;
-  1.4) BASE=700 ;;
+  oc) BASE=650 ;;
   stock) ;;
-  *) echo "错误：档位必须是 1.3 / 1.4 / stock" >&2; exit 1 ;;
+  *) echo "错误：档位必须是 oc / stock" >&2; exit 1 ;;
 esac
 
 DTS="$TREE/target/linux/airoha/dts/an7581.dtsi"
@@ -43,7 +44,7 @@ revert_stock() {
 
 if [[ "$TIER" == "stock" ]]; then revert_stock; exit 0; fi
 
-echo "== OC 档位 $TIER（OPP base=$BASE MHz）=="
+echo "== OC 唯一档（OPP base=$BASE MHz → 上限 1350MHz，稳性退档由 oc-auto 运行时兜底）=="
 [[ -f "$DTS" ]] || { echo "错误：无 $DTS——#22397 板级补丁未应用？先跑 apply-patches.sh" >&2; exit 1; }
 touched "$DTS"
 
@@ -93,4 +94,4 @@ fi
 
 echo "---- 变更摘要："
 (cd "$TREE" && git status --short -- "${TOUCHED[@]}" 2>/dev/null | sed 's/^/  /')
-echo "完成。构建后请核对：cat /sys/devices/system/cpu/cpufreq/policy0/cpuinfo_max_freq（应为 ${BASE}00000）"
+echo "完成。构建后请核对：cat /sys/devices/system/cpu/cpufreq/policy0/cpuinfo_max_freq（应为 1350000）"

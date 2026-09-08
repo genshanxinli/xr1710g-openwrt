@@ -152,3 +152,10 @@ diff 原文：https://github.com/OpenWRT-fanboy/OpenW1700k/commit/80096373b5a519
 - [【首发】XG-040G-MD全网唯一超频到1.4Ghz固件（恩山 #8464638）](https://www.right.com.cn/forum/forum.php?mod=viewthread&tid=8464638)："经过2天的测试非常的稳定"，保留自动变频模式
 - [brightspeed XR1710G 或者 w1700K 类似物（包含教程）（恩山 #8465834）](https://www.right.com.cn/forum/archiver/tid-8465834.html?page=1)
 - [Brightspeed XR1710G same device as the W1700K（OpenWrt Forum #247242）](https://forum.openwrt.org/t/brightspeed-xr1710g-same-device-as-the-w1700k/247242)
+---
+
+## 2026-09-08 决策更新（F89，取代上文"绝缘档位设计"与 oc-1.3/1.4 分档）
+
+- **取消 oc-1.3 / oc-1.4 双变体构建与 oc-limit 静态限频**；唯一 CPU 档 = **OPP 650–1350MHz**（`scripts/prepare-oc.sh oc`，PLL base 650：`freq_mhz = 650 + state * 50`，15 档网格同时覆盖退档目标 1200/1300/1350）。
+- 1350 的已知个例风险（"两分钟后重置"、启动 panic 体质差异）由运行时 **`files/etc/init.d/oc-auto`** 兜底：开机按 `/etc/oc-state/level` 设置上限（默认 1350，performance，可 sysfs 调低）；5 分钟稳性确认窗口（覆盖 2 分钟不稳案例），窗口内崩溃/重启 → 下电自动退档 **1350→1300→1200**（overlay 持久化，1200 = 原 stock 上限，最终兜底）。
+- 构建矩阵仅剩 stock/experimental（同一 CPU 配置，包集合不同）；`apply-patches --oc` 的 #OC 资产（regdb 555 等）随档取消，无线功率回落默认 regdb 521 路径。

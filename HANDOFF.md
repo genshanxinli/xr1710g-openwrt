@@ -25,7 +25,7 @@ Gemtek XR1710G（Airoha AN7581 + MT7996 三频 Wi-Fi7、2×10G + 2×1G）的**�
 - 基线 = `openwrt/openwrt` **main**（kernel 6.18；默认分支已改名 main，2026-09-06 起）；板级/功率/诊断等未合入内容全部由 `patches/` 携带。
 - 铁律：**修复而不是降级**；上游已吸收能力的冗余补丁应撤下（非降级）。
 - `patches/MANIFEST` 是实际应用清单；`patches/ORDER` 是档位评审视图，二者必须一致。
-- 构建：`scripts/build.sh <stock|oc-1.3|oc-1.4|experimental> [树]`（容器缺构建工具，实际构建以 GitHub Actions 为准）；CI：`.github/workflows/build.yml`（workflow_dispatch：profile=all/stock/oc-1.3/oc-1.4/experimental）、`sync-upstream.yml`（2h dry-run）、`collect-sources.yml`。
+- 构建：`scripts/build.sh <stock|experimental> [树]`（唯一 CPU 档 OPP 650–1350 + oc-auto 自动退档，见 FIXES F89；容器缺构建工具，实际构建以 GitHub Actions 为准）；CI：`.github/workflows/build.yml`（workflow_dispatch：profile=all/stock/experimental）、`sync-upstream.yml`（2h dry-run）、`collect-sources.yml`。
 - 实机：`root@192.168.123.1`，优先免密（`.ssh/id_ed25519`，新宿主已重建），否则密码 `password`。
 
 ## 2. 近期会话成果（别重复做）
@@ -147,7 +147,7 @@ DEVICE_HOST=root@192.168.123.1 ./scripts/device-npu-ipv6-probe.sh
 > ⚠️ 遗留提示：① `vendor/06` 文件名旧 hash `c0ed8295`（改名下轮做）；② naoki66 源仓 622 补丁文件 hunk 计数损坏（其 fork 直接搬用会红，本地已修正）；③ `reset-before-id-read` 内核侧消费（naoki66 hack-6.18/705）未吸收——属性惰性无害，实机需要再补；④ 625 待 620/622；⑤ 内层号/外层号段占用表见 §5。
 
 ### 9.1 P2（可选/低优先）
-- OPP dts 增量（naoki66 bb84606：smcc_opp15-18，OC 档重建，保留 oc-limit 1300；BL31 须接受 opp-level 15-18，实机验证）
+- OPP dts 增量（naoki66 bb84606：smcc_opp15-18，唯一档 base 650 重建（F89），运行时段由 oc-auto 退档链（1350→1300→1200）替代 oc-limit 1300；BL31 须接受 opp-level 15-18，实机验证）
 - PPE bind_rate 补丁②（`tmp/research_20260907/ntb_patch6.txt`，对 6.18 airoha_ppe.c:148 重建）
 - 20260721 mt7996 固件覆盖层（不跟 fork——F13 fork+hash=skip 否决；需时自制或等上游收录）
 - e4e7c4f 仅跟踪（FW_LOADER_FALLBACK off，本地 5 个 config 区不相交）；px5g-mbedtls / DHCP clientid 一行（各 1 行级，可选）

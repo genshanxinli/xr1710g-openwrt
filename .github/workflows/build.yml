@@ -1,15 +1,16 @@
 name: build
 
-# 构建：手动触发（matrix stock/oc-1.3/oc-1.4/experimental）或 main push。
+# 构建：手动触发（matrix stock/experimental）或 main push。
 # 上游同步不在此处——由 sync-upstream.yml 每 2h 自动校验补丁层（决策：同步越勤冲突越少）。
+# CPU 唯一档（F89，2026-09-08）：所有档位均 OPP 650–1350 + oc-auto 自动退档（1350→1300→1200）。
 # experimental 档（F25，2026-08-18）：默认档 + MANIFEST #EXP 条目，供实验补丁构建验证；
-#   'all' 仍只聚合三个 release 档位（stock/oc-1.3/oc-1.4），experimental 单独 dispatch。
+#   'all' 聚合 release 档位（stock），experimental 单独 dispatch。
 
 on:
   workflow_dispatch:
     inputs:
       profile:
-        description: '构建档位（stock / oc-1.3 / oc-1.4 / experimental / all）'
+        description: '构建档位（stock / experimental / all）'
         default: 'all'
         required: true
   push:
@@ -27,8 +28,8 @@ jobs:
       - id: set-matrix
         run: |
           P='${{ github.event.inputs.profile || 'stock' }}'
-          case "$P" in stock|oc-1.3|oc-1.4|experimental|all) ;; *) echo "错误：未知档位 $P" >&2; exit 1 ;; esac
-          if [ "$P" = "all" ]; then echo "matrix={\"profile\":[\"stock\",\"oc-1.3\",\"oc-1.4\"]}" >> "$GITHUB_OUTPUT"
+          case "$P" in stock|experimental|all) ;; *) echo "错误：未知档位 $P" >&2; exit 1 ;; esac
+          if [ "$P" = "all" ]; then echo "matrix={\"profile\":[\"stock\"]}" >> "$GITHUB_OUTPUT"
           else echo "matrix={\"profile\":[\"$P\"]}" >> "$GITHUB_OUTPUT"; fi
 
   build:
@@ -64,19 +65,18 @@ jobs:
         with:
           key: openwrt-${{ env.PROFILE }}
 
-      - name: 应用补丁层（OC/实验档补丁）+ files overlay
+      - name: 应用补丁层（实验档补丁）+ files overlay
         run: |
           cd "$TREE"
-          OC_FLAG=""; EXP_FLAG=""
-          [[ "$PROFILE" == "oc-1.3" || "$PROFILE" == "oc-1.4" ]] && OC_FLAG="--oc"
+          EXP_FLAG=""
           [[ "$PROFILE" == "experimental" ]] && EXP_FLAG="--experimental"
-          ./scripts/apply-patches.sh . $OC_FLAG $EXP_FLAG
+          ./scripts/apply-patches.sh . $EXP_FLAG
           mkdir -p files && cp -rf "$GITHUB_WORKSPACE/overlay/files/." files/
 
-      - name: OC 档位（prepare-oc.sh：1.3/1.4 两档，OC 变体默认限频 1300 由 files/etc/init.d/oc-limit 实现）
+      - name: CPU OC（唯一档：OPP 650–1350；稳性退档由 files/etc/init.d/oc-auto 运行时兜底，F89）
         run: |
           cd "$TREE"
-          if [[ "$PROFILE" == "oc-1.3" || "$PROFILE" == "oc-1.4" ]]; then ./scripts/prepare-oc.sh "${PROFILE#oc-}" .; fi
+          ./scripts/prepare-oc.sh oc .
 
       - name: feeds
         run: |

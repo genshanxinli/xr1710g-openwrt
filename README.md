@@ -15,7 +15,7 @@ in-band phylink、PCIe x2、MLO/EHT320、US regdb 功率体系、CPU 超频）�
 | 基线 | openwrt master fork（6.18）+ 自维护补丁层（ADR-0001） |
 | 刷机 | 固化 YYH2913 HTTP U-Boot，官方 chainloader 备用（ADR-0002） |
 | 版本线 | 滚动 master + known-good 冻结（`docs/ACCEPTANCE.md` 全项通过才打 tag） |
-| 交付 | 双 release：**stock**（默认 known-good）+ **oc 变体**（1.4G 能力 + 默认限频 1300MHz，可解锁；oc-1.3 保守档可选） |
+| 交付 | 单一 CPU 档（F89）：**OPP 650–1350MHz** + `oc-auto` 自动退档（1350 不稳→1300，崩溃→1200；5min 确认窗口）；档位仅剩 stock/experimental（同一 CPU 配置，包集合不同） |
 | 预装 | 见 `config/seed-config.diff`（mlo/fancontrol/npu 等）；科学上网/Docker 暂缓（ROADMAP P3） |
 
 ## 目录结构
@@ -42,7 +42,7 @@ git clone https://github.com/openwrt/openwrt.git openwrt
 
 ### 1) 构建
 ```bash
-./scripts/build.sh stock            # 默认档（或 oc-1.3 / oc-1.4 / experimental）；补丁原料已 vendor 入库，fetch-sources.sh 仅用于重取/刷新
+./scripts/build.sh stock            # 档位：stock / experimental（唯一 CPU 档 650–1350 + 自动退档，见 FIXES F89）；补丁原料已 vendor 入库，fetch-sources.sh 仅用于重取/刷新
 ```
 产物：`bin/targets/airoha/an7581/*-sysupgrade.itb`（+ initramfs）。
 
@@ -64,7 +64,7 @@ git clone https://github.com/openwrt/openwrt.git openwrt
 | mt76 上游追踪 | 已携带 `c5a3bd91` bump（`9028`）+ `mt76-9994` 兼容层（F62：适配 6.18 mac80211 API）；待 CI all/experimental 验证（见 `HANDOFF.md` §3/§7） |
 | 天线优化（07 报告） | 默认无线：5G ch149/HE80（国行 5.8G 合规/兼容，issue #21 实机定位）、6G ch37/EHT320、2.4G MU-MIMO 关；HE160 可选档已注释化（非国行/支持 5.8G 160MHz 终端）；eeprom 解锁见 mt76 0008 |
 | cpufreq / PM domain（#22029） | 已自持（`vendor/fanboy/03`，含 direct-PLL fallback，OC 前置） |
-| CPU 超频 | `scripts/prepare-oc.sh`（1.3/1.4 两档）+ OC 变体默认限频 1300（`files/etc/init.d/oc-limit`） |
+| CPU 超频 | `scripts/prepare-oc.sh oc`（唯一档 OPP 650–1350，PLL base 650）+ `files/etc/init.d/oc-auto` 自动退档（1350→1300→1200，5min 稳性确认窗口，overlay 持久化） |
 | NPU（#24593） | master 已合，无需携带 |
 | pstore / ramoops（#22473） | kernel 侧已自持（`vendor/fanboy/10`）；uboot 侧待上游 |
 | 风扇温控 | `files/etc/init.d/fan` 动态探测（NCT7802/NCT7511Y） |
@@ -75,6 +75,6 @@ git clone https://github.com/openwrt/openwrt.git openwrt
 ## 风险声明（自用范围）
 
 - 6GHz/功率补丁（US regdb 520/521、mt76-0008 eeprom 解锁）**无 AFC/合规背书**，自用责任自负；
-- 超频存在**个体体质差异**（部分机器启动 panic）——默认档 stock 无此风险；OC 档按 FIXES F08 使用；
+- 超频存在**个体体质差异**（部分机器启动 panic）——由 `oc-auto` 退档链（1350→1300→1200）兜底，1200 即原 stock 上限；按 FIXES F08/F89；
 - 第三方 U-Boot 刷入后厂商恢复通道失效——锁版 + 校验，救砖通道见 FLASHING；
 - 网口命名已固化（netdev-name：lan1/lan2=10G、wan=1G-1、lan3=1G-2），物理口 ↔ 逻辑名仍需首次实机核对（ROADMAP P0）。
