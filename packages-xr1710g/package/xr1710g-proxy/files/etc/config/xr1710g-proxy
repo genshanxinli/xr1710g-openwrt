@@ -1,0 +1,47 @@
+# /etc/config/xr1710g-proxy — 代理与组网：分流代理（ADR-0003 架构 C）
+# 默认全部不启用（I4）：enabled=0 时 init 立即退出，不建表不建路由不起进程。
+
+config global 'global'
+	# ── 总开关 ──
+	option enabled '0'
+
+	# ── 名单客户端（源 IP / CIDR）──
+	# 只有这些源会被捕获进用户态；其余客户端行为与本组件不存在时逐字节一致（保 offload）。
+	# 注意：flags interval 集合内**不允许区间重叠/包含**——写 192.168.1.0/24 就不要再写 192.168.1.5。
+	list proxy_hosts ''
+
+	# ── fake-ip 作用域 ──
+	# 架构 C 的核心约束：只允许 proxy_hosts。改这个值不会改变行为，
+	# 但会让"普通客户端会不会拿到 198.18.x"失去静态保证——保持默认。
+	option dns_scope 'proxy_hosts'
+
+	# ── sing-box ──
+	# DNS 监听端口：名单客户端的 :53 由 nft redirect 投递到此端口
+	option singbox_dns_port '5333'
+	# TUN 接口名（auto_route/auto_redirect 恒为 false，绝不全局接管）
+	option singbox_tun 'singtun0'
+	# 出站节点（可选）：一个 sing-box outbound 对象的 JSON 文件，**tag 必须是 'proxy'**。
+	#   { "type": "shadowsocks", "tag": "proxy", "server": "example.com", "server_port": 8388,
+	#     "method": "2022-blake3-aes-128-gcm", "password": "..." }
+	# 文件不存在或非法 ⇒ 回落为 direct（本组件负责"分流 + 卸载不变量"，节点由用户自备）。
+	option outbounds_file '/etc/xr1710g-proxy/outbounds.json'
+
+	# ── CN 放行集合 ──
+	# 名单客户端的 CN 域名必须回真实 IP，否则内核 @china_ip4 匹配不到 → 卸载全丢（ADR-0003 硬约束）
+	option cn_list_url 'https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/china.txt'
+	option cn_list_url6 'https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/china6.txt'
+	# 默认关：只用只读 squashfs 快照，零 NAND 写入（G2）
+	option cn_list_update '0'
+	# 更新周期（秒），仅 cn_list_update=1 时生效
+	option cn_list_interval '86400'
+
+	# ── 策略路由 ──
+	# 启动前会检测冲突（Tailscale 已占 0x80000/0xff0000 + table 52）；
+	# 冲突即拒绝启动并落明确日志，绝不改他人条目。
+	option fwmark '0x40'
+	option fwmark_mask '0x40'
+	option route_table '100'
+
+	# ── 失败行为 ──
+	# open = sing-box/DNS 不健康时撤抓取与劫持规则，名单客户端退回直连（与 G4 一致）
+	option fail_mode 'open'

@@ -28,3 +28,8 @@ audit-ubi2oc/
 .gh-device-flow.stdout
 # 本地 SSH 密钥/known_hosts/快捷脚本（勿提交）
 .ssh/
+
+# 代理方案的本地验证工具链与临时产物（不入库）
+.toolchain/
+.nftchk/
+plan-evidence/

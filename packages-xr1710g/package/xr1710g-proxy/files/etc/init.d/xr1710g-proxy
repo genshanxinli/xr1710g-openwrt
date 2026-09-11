@@ -1,0 +1,335 @@
+#!/bin/sh /etc/rc.common
+# xr1710g-proxy — 名单客户端分流代理（ADR-0003 架构 C）
+#
+# 不变量（plan/00 §3，破坏任一条 = 直接打回）：
+#   I1 本脚本与所辖控件**永不写 flow_offloading***；
+#   I2 **永不 reload fw4**（`fw4 reload` 会 flush+重建硬件 flowtable，正是 issue #7 的触发面）；
+#   I3 nft 只建独立表 inet xr1710g_proxy，绝不碰 inet fw4；
+#   I4 enabled=0（默认）时立即退出：无 nft 表、无 ip rule/route、无进程。
+#
+# 启动序列：清残留 → 冲突检测 → guard 先起 → DNS 名单 → 渲染载入 → 策略路由 → 起 sing-box
+# 停止序列：停 sing-box → 撤策略路由 → 删表 → 清运行态
+# fail-open：sing-box/DNS 不健康 ⇒ 撤 capture+dns_redirect，名单客户端退回直连 + dnsmasq。
+
+START=95
+STOP=10
+USE_PROCD=1
+
+. /lib/functions.sh
+. /lib/functions/network.sh
+
+PROG=/usr/bin/sing-box
+RUNDIR=/tmp/xr1710g-proxy
+STATE="$RUNDIR/state"
+CONF="$RUNDIR/config.json"
+LOG="$RUNDIR/sing-box.log"
+GUARD_LOG="$RUNDIR/guard.log"
+TABLE_NAME=xr1710g_proxy
+CN_SHARE=/usr/share/xr1710g-proxy
+CN_RUN="$RUNDIR/cn"
+LIBEXEC=/usr/libexec/xr1710g-proxy
+
+## ── uci 读取（带默认值）──────────────────────────────────────────────────
+cfg_get() {
+	local key="$1" def="$2" v
+	config_load xr1710g_proxy
+	config_get v global "$key" "$def"
+	printf '%s' "$v"
+}
+
+mark_hex() { printf '0x%x' "$1"; }
+mark_mask_hex() { printf '0x%x' "$1"; }
+
+## ── I4 前置：总开关 ──────────────────────────────────────────────────────
+is_enabled() {
+	config_load xr1710g_proxy
+	local e
+	config_get_bool e global enabled 0
+	[ "$e" = "1" ]
+}
+
+## ── 运行态清理（幂等）────────────────────────────────────────────────────
+cleanup_runtime() {
+	rm -rf "$RUNDIR"
+	mkdir -p "$RUNDIR" "$CN_RUN"
+}
+
+## ── nft 表回收（幂等；只删自己的表）──────────────────────────────────────
+nft_drop_table() {
+	nft delete table inet "$TABLE_NAME" 2>/dev/null
+	return 0
+}
+
+## ── 策略路由回收（只删"我们自己那几条"，绝不动他人）──────────────────────
+# 用**精确参数**删除，不靠解析 `ip rule show` 的文本（busybox 下无 sed \s）。
+# mask 枚举：当前配置值 + 历史值（0x40/0xff）⇒ 覆盖"管理员改过 mask"的升级路径。
+route_drop() {
+	local table="$1" tun="$2" mark="$3" mask="$4" prio
+	local -x m
+
+	# 删除以本 TUN 为 dev 的 table 内路由（default 优先，避免误删同名路由）
+	ip route del default dev "$tun" table "$table" 2>/dev/null
+	while ip route show table "$table" 2>/dev/null | grep -q " dev $tun "; do
+		ip route del $(ip route show table "$table" | grep " dev $tun " | head -1) table "$table" 2>/dev/null || break
+	done
+
+	# 删除 fwmark 规则：当前 mask + 已知历史 mask
+	for m in "$mask" 0x40 0xff; do
+		[ -n "$m" ] || continue
+		ip rule del fwmark "$(mark_hex "$mark")/$(mark_mask_hex "$m")" table "$table" 2>/dev/null
+	done
+}
+
+## ── 冲突检测：mark / table 是否被他人占用 ────────────────────────────────
+# 判据（不是"表内有没有条目"，而是"我们的条目能不能装上去"）：
+#   ① 目标 table 已存在**他人路由**（不是以我们 TUN 为 dev 的）⇒ 拒绝，不覆盖；
+#   ② 目标 mark 已被他人 nft 规则用作 `meta mark set` ⇒ 拒绝；
+#   ③ probe：试装我们的 rule + route，失败即冲突 ⇒ 拒绝并回收。
+conflict_check() {
+	local mark="$1" mask="$2" table="$3" tun="$4" hex out
+
+	# 我们自己上一轮的残留不算冲突：先回收（幂等）
+	if nft list table inet "$TABLE_NAME" >/dev/null 2>&1; then
+		logger -t xr1710g-proxy "发现自身残留表，先精确回收"
+		nft_drop_table
+		route_drop "$table" "$tun" "$mark" "$mask"
+	fi
+
+	# ① table 内已存在他人路由
+	out="$(ip route show table "$table" 2>/dev/null | grep -v " dev $tun ")"
+	if [ -n "$out" ]; then
+		logger -t xr1710g-proxy "冲突：路由表 $table 已被他人占用：$out"
+		return 1
+	fi
+
+	# ② mark 已被他人 nft 规则使用
+	hex="$(mark_hex "$mark")"
+	out="$(nft list ruleset 2>/dev/null | grep "meta mark set $hex" | grep -v "table inet $TABLE_NAME")"
+	if [ -n "$out" ]; then
+		logger -t xr1710g-proxy "冲突：fwmark $hex 已被他人 nft 规则占用：$out"
+		return 1
+	fi
+
+	# ③ probe：真实试装再立即回收（唯一同时覆盖 rule 优先级/table 语义的判据）
+	if ! ip rule add fwmark "$hex/$(mark_mask_hex "$mask")" table "$table" 2>/dev/null; then
+		logger -t xr1710g-proxy "冲突：无法安装 ip rule fwmark $hex/$(mark_mask_hex "$mask") table $table"
+		return 1
+	fi
+	if ! ip route add default dev "$tun" table "$table" 2>/dev/null; then
+		ip rule del fwmark "$hex/$(mark_mask_hex "$mask")" table "$table" 2>/dev/null
+		logger -t xr1710g-proxy "冲突：无法向 table $table 安装 default dev $tun（TUN 未就绪或表被占用）"
+		return 1
+	fi
+	ip route del default dev "$tun" table "$table" 2>/dev/null
+	ip rule del fwmark "$hex/$(mark_mask_hex "$mask")" table "$table" 2>/dev/null
+	return 0
+}
+
+## ── CN 放行集合装载（快照 / 运行期更新结果，单批原子替换）───────────────
+load_cn_sets() {
+	local f4="$CN_RUN/china_ip4.txt" f6="$CN_RUN/china_ip6.txt" batch="$RUNDIR/cn-batch.nft"
+	[ -s "$f4" ] || f4="$CN_SHARE/china_ip4.txt"
+	[ -s "$f6" ] || f6="$CN_SHARE/china_ip6.txt"
+	[ -s "$f4" ] || { logger -t xr1710g-proxy "警告：无 CN 快照，放行集合留空（所有名单流量走代理）"; return 0; }
+
+	{
+		echo "table inet $TABLE_NAME {"
+		echo "  flush set china_ip4"
+		[ -s "$f4" ] && printf '  add element china_ip4 { %s }\n' "$(tr '\n' ',' < "$f4" | sed 's/,$//')"
+		echo "  flush set china_ip6"
+		[ -s "$f6" ] && printf '  add element china_ip6 { %s }\n' "$(tr '\n' ',' < "$f6" | sed 's/,$//')"
+		echo "}"
+	} > "$batch"
+
+	if ! nft -f "$batch" 2>"$RUNDIR/cn-load.err"; then
+		logger -t xr1710g-proxy "CN 集合装载失败，保留旧集合：$(cat "$RUNDIR/cn-load.err")"
+	fi
+	rm -f "$batch"
+}
+
+## ── guard：健康检查 + fail-open（与 sing-box 同生命周期，procd 之外）────
+# 判据（plan/01 §4.5）：进程不在 或 健康文件缺失 ⇒ 撤 capture+dns_redirect，
+# 名单客户端退回直连 + dnsmasq（fail-open = 与 G4「失败不影响正常网络」一致）。
+guard_loop() {
+	local pid="$1" hb="$RUNDIR/healthy" fail=0
+	while kill -0 "$pid" 2>/dev/null; do
+		sleep 5
+		if [ -f "$hb" ]; then
+			fail=0
+			date +%s > "$hb"
+		else
+			fail=$((fail + 1))
+		fi
+	done
+	# 进程已退出：撤掉抓取与劫持规则（表整体删除 = 最干净的 fail-open）
+	logger -t xr1710g-proxy "sing-box 退出，guard 进入 fail-open：撤 capture + dns_redirect"
+	nft_drop_table
+	date +%s > "$RUNDIR/fail-open"
+}
+
+## ── sing-box 配置生成 ───────────────────────────────────────────────────
+# 硬约束（ADR-0003 / plan/01 §4.3）：
+#   ① dns.rules 必须把 CN 域名指到真实上游——否则名单客户端拿 fake-ip，
+#      内核 `ip daddr @china_ip4` 匹配不到真实 CN 目的 IP，CN 放行失效 ⇒ 卸载全丢；
+#   ② auto_route / auto_redirect 恒 false（全局接管 = 全部流量进用户态，反模式①）；
+#   ③ 所有可变路径（cache_file/日志）必须在 /tmp（G2 零 NAND 写）；
+#   ④ auto_detect_interface=true（防路由环）。
+# 已用真机同版二进制（sing-box 1.14.0）`sing-box check` 验证 schema。
+gen_config() {
+	local dnsport="$1" tun="$2" proxyfile="$3"
+	local proxy_out
+	# 单一事实源：配置文件恒为 $CONF（= $RUNDIR/config.json，顶部定义）
+	# 无节点时 route.final=direct（本组件负责"分流与卸载不变量"，节点由用户提供）
+	proxy_out='{ "type": "direct", "tag": "proxy" }'
+	if [ -s "$proxyfile" ]; then
+		if python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$proxyfile" 2>/dev/null; then
+			proxy_out="$(cat "$proxyfile")"
+			logger -t xr1710g-proxy "已载入出站节点：$proxyfile"
+		else
+			logger -t xr1710g-proxy "警告：$proxyfile 不是合法 sing-box 出站 JSON，回落 direct"
+		fi
+	fi
+
+	cat > "$CONF" <<EOF
+{
+  "log": { "level": "warn", "output": "$LOG" },
+  "dns": {
+    "servers": [
+      { "type": "udp",    "tag": "cn", "server": "223.5.5.5", "detour": "direct" },
+      { "type": "fakeip", "tag": "fakeip",
+        "inet4_range": "198.18.0.0/15", "inet6_range": "fc00::/18" }
+    ],
+    "rules": [
+      { "rule_set": "geosite-cn", "server": "cn" },
+      { "query_type": [ "A", "AAAA" ], "server": "fakeip" }
+    ],
+    "final": "cn"
+  },
+  "inbounds": [
+    { "type": "tun", "tag": "tun-in", "interface_name": "$tun",
+      "address": [ "172.19.0.1/30", "fdfe:dcba:9876::1/126" ],
+      "stack": "system", "mtu": 1500,
+      "auto_route": false, "auto_redirect": false }
+  ],
+  "outbounds": [
+    $proxy_out,
+    { "type": "direct", "tag": "direct" }
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "default_domain_resolver": { "server": "cn" },
+    "rules": [
+      { "protocol": "dns", "action": "hijack-dns" }
+    ],
+    "final": "proxy",
+    "rule_set": [
+      { "type": "local", "tag": "geosite-cn", "format": "binary",
+        "path": "$CN_SHARE/geosite-cn.srs" }
+    ]
+  },
+  "experimental": {
+    "cache_file": { "enabled": true, "path": "$RUNDIR/cache.db" }
+  }
+}
+EOF
+}
+
+## ── 启动 ────────────────────────────────────────────────────────────────
+start_service() {
+	local enabled mark mask table tun dnsport
+
+	is_enabled || { logger -t xr1710g-proxy "enabled=0，不启动（I4）"; return 0; }
+
+	mark="$(cfg_get fwmark 0x40)"
+	mask="$(cfg_get fwmark_mask 0x40)"
+	table="$(cfg_get route_table 100)"
+	tun="$(cfg_get singbox_tun singtun0)"
+	dnsport="$(cfg_get singbox_dns_port 5333)"
+
+	[ -x "$PROG" ] || { logger -t xr1710g-proxy "错误：$PROG 不存在，拒绝启动（不留半配置）"; return 1; }
+
+	cleanup_runtime
+
+	# kmod-tun 缺失检查（内核跳版后）
+	if [ ! -c /dev/net/tun ] && ! grep -qw tun /proc/modules 2>/dev/null; then
+		logger -t xr1710g-proxy "错误：无 TUN 支持（/dev/net/tun 不存在）——安装 kmod-tun。拒绝启动"
+		return 1
+	fi
+
+	if ! conflict_check "$mark" "$mask" "$table" "$tun"; then
+		logger -t xr1710g-proxy "启动被拒绝：fwmark/table 冲突（详见 logread）"
+		return 1
+	fi
+
+	# 渲染 nft（单一事实源 = libexec/render.sh；名单为空 → 不可路由占位元素保证集合可引用）
+	if ! PROXY_HOSTS="$(uci -q get xr1710g_proxy.global.proxy_hosts)" \
+	     FW_MARK="$(mark_hex "$mark")" DNS_PORT="$dnsport" \
+	     "$LIBEXEC/render.sh" > "$RUNDIR/ruleset.nft" 2>"$RUNDIR/render.err"; then
+		logger -t xr1710g-proxy "渲染失败：$(cat "$RUNDIR/render.err")"
+		return 1
+	fi
+
+	if ! nft -c -f "$RUNDIR/ruleset.nft" 2>"$RUNDIR/nft-check.err"; then
+		logger -t xr1710g-proxy "nft 模板校验失败：$(cat "$RUNDIR/nft-check.err")"
+		return 1
+	fi
+	if ! nft -f "$RUNDIR/ruleset.nft" 2>"$RUNDIR/nft-load.err"; then
+		logger -t xr1710g-proxy "nft 载入失败：$(cat "$RUNDIR/nft-load.err")"
+		nft_drop_table
+		return 1
+	fi
+
+	load_cn_sets
+
+	# 策略路由（判定已在内核层，这里只是把 mark 的路由指到 TUN）
+	ip rule add fwmark "$(mark_hex "$mark")/$(mark_mask_hex "$mask")" table "$table" 2>/dev/null
+	ip route add default dev "$tun" table "$table" 2>/dev/null
+
+	gen_config "$dnsport" "$tun" "$(cfg_get outbounds_file /etc/xr1710g-proxy/outbounds.json)"
+
+	procd_open_instance
+	procd_set_param command "$PROG" run -c "$CONF"
+	procd_set_param respawn 3600 5 5
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_set_param file "$CONF"
+	procd_close_instance
+
+	# guard：等 sing-box 起来后接管生命周期（fail-open 兜底）
+	(
+		for _ in $(seq 1 20); do
+			sleep 0.5
+			pgrep -f "$PROG run -c $CONF" >/dev/null 2>&1 && break
+		done
+		pid="$(pgrep -f "$PROG run -c $CONF" | head -1)"
+		[ -n "$pid" ] && guard_loop "$pid"
+	) &
+
+	logger -t xr1710g-proxy "已启动：mark=$(mark_hex "$mark") table=$table tun=$tun dns=:$dnsport hosts=$(uci -q get xr1710g_proxy.global.proxy_hosts | wc -w)"
+	return 0
+}
+
+## ── 停止 ────────────────────────────────────────────────────────────────
+stop_service() {
+	local mark mask table tun
+	mark="$(cfg_get fwmark 0x40)"
+	mask="$(cfg_get fwmark_mask 0x40)"
+	table="$(cfg_get route_table 100)"
+	tun="$(cfg_get singbox_tun singtun0)"
+
+	# procd 已负责杀 sing-box；这里回收内核侧状态
+	route_drop "$table" "$tun" "$mark" "$mask"
+	nft_drop_table
+	rm -rf "$RUNDIR"
+	logger -t xr1710g-proxy "已停止：表/规则/运行态已回收（不碰 fw4、不碰 flow_offloading*）"
+	return 0
+}
+
+reload_service() {
+	stop_service
+	start_service
+}
+
+service_triggers() {
+	procd_add_reload_trigger "xr1710g_proxy"
+}
