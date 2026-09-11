@@ -1,0 +1,55 @@
+# Source: 本仓库自持（不是上游 PR 的原始 diff——PR #30370/#30406 仅改版本与 hash，本补丁多带一个 ipset 依赖）
+# Upstream: openwrt/packages PR #30370 / #30406（update netbird to 0.78.1，均仍 open）；合入即删
+# Reason: 官方 feed 的 netbird 0.73.2 早于 v0.76.0 的本地提权修复（GHSA-qcpp-8vwj-hhwr）；
+#         且本机要做内核态 WireGuard 组网（G3），需要新版客户端。
+#
+# 效果（对 feeds/packages/net/netbird/Makefile 应用）：
+#   1) PKG_VERSION 0.73.2 → 0.78.1，PKG_HASH 同步（**实算**，非抄 PR）
+#   2) DEPENDS 增补 +kmod-ipt-ipset（本地偏离，见下）
+#
+# 关于 +kmod-ipt-ipset（**这是刻意的本地偏离，必须记账**）：
+#   - netbird 的 ipset 依赖只作用于 **iptables 后端**；nftables 后端用原生 nft set（google/nftables），不需要 ipset。
+#   - 0.73.2 在缺 ipset 时会把 ACL 规则**静默回滚为空**（netbirdio/netbird#7134）；
+#     0.78.1 已含 v0.77.0 的 probeIPSetSupport 回退 ⇒ 该失败模式本身已被上游修掉。
+#   - 保留 +kmod-ipt-ipset 是"belt and braces"：一旦 netbird 退回 iptables 后端（探测失败，
+#     见 #4484/#3363），ACL 仍能正常建立。代价 ~几十 KB，值得。
+#   - 注意：**不存在 kmod-ipset 这个包名**，提供 IP_SET_HASH_NET 的只有 kmod-ipt-ipset
+#     （netfilter.mk）。写 kmod-ipset 会导致构建期依赖解析失败。
+#
+# 关于 DEPENDS 未加 +ca-bundle：默认镜像的 DEFAULT_PACKAGES 已含 ca-bundle
+#   （include/target.mk），netbird 的 x509.SystemCertPool() 有证书源可用；本仓库 seed 未裁默认包，
+#   故不加（只有 imagebuilder/裁剪镜像才需要）。
+#
+# 关于 PKG_MIRROR_HASH：上游没有，本补丁也不加。下游据此跳过 OpenWrt 镜像、直接取 codeload
+#   （见 include/download.mk）；加了反而要与 PKG_HASH 保持同步，徒增第二真相源。
+#
+# 关于 CGO_ENABLED：**不要**试图改 CGO_ENABLED=0 做全静态。
+#   golang-package.mk 强制 CGO_ENABLED=1 + -linkmode external；CGO_ENABLED=0 与该 flag 组合是
+#   硬链接错误（本机已复现："-linkmode requires external (cgo) linking, but cgo is not enabled"）。
+#   上游即 CGO_ENABLED=1 动态链接，本仓库遵循上游配方。
+--- a/Makefile	2026-09-11 18:07:07.337887471 +0800
++++ b/Makefile	2026-09-11 18:07:07.367056595 +0800
+@@ -1,12 +1,12 @@
+ include $(TOPDIR)/rules.mk
+ 
+ PKG_NAME:=netbird
+-PKG_VERSION:=0.73.2
++PKG_VERSION:=0.78.1
+ PKG_RELEASE:=1
+ 
+ PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
+ PKG_SOURCE_URL:=https://codeload.github.com/netbirdio/netbird/tar.gz/v$(PKG_VERSION)?
+-PKG_HASH:=ba8d1615a6676e6d17f5d4a3c8027cd2e7437c862da3f963d3b337c09efff423
++PKG_HASH:=2adde8bbd77ea595b5f50174be10574466f1c07fc9fbf827024245aec2f4dabc
+ 
+ PKG_MAINTAINER:=Wesley Gimenes <wehagy@proton.me>
+ PKG_LICENSE:=BSD-3-Clause
+@@ -29,7 +29,7 @@
+   SUBMENU:=VPN
+   TITLE:=Connect your devices into a single secure private WireGuard®-based mesh network
+   URL:=https://netbird.io
+-  DEPENDS:=$(GO_ARCH_DEPENDS) +kmod-wireguard
++  DEPENDS:=$(GO_ARCH_DEPENDS) +kmod-wireguard +kmod-ipt-ipset
+ endef
+ 
+ define Package/netbird/description

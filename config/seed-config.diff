@@ -61,6 +61,19 @@ CONFIG_PACKAGE_luci-app-filemanager=y         # 官方 luci feed（O）
 CONFIG_PACKAGE_luci-app-airoha-recovery=y     # 恢复页入口（C：packages-xr1710g src-link，锁 dd9ecfeef）
 # ── 代理与组网（ADR-0003/0004；docs/plans/proxy-dns-stack/）──
 # 预装但**默认不启用**：xr1710g-proxy 的 uci-defaults 只写 enabled=0，不 enable 任何服务（I4）。
+# ── 方案二 kmod 预装（D6 封闭清单；ADR-0006）──
+# 为什么必须**预装**而不是运行期装：官方 kmods 目录是
+#   downloads.openwrt.org/snapshots/targets/airoha/an7581/kmods/<ver>-<hash>/
+# 本机构建 hash 与官方发布 hash **不同**（两者 vermagic 都不含 hash，所以 apk 不会自己发现——
+# 属静默 ABI 风险）。且设备 distfeeds 只挂了 .../packages/packages.adb，**没有 kmods 这一项**，
+# 所以 `apk add kmod-wireguard` 只会得到 "no such package"。这是 F5 闸门的完整版本。
+# 因此：方案二的内核态 WG 只能走"随固件预装"这条路。
+CONFIG_PACKAGE_kmod-wireguard=y                # G3 硬要求：netbird 必须报 Interface type: Kernel
+CONFIG_PACKAGE_kmod-ipt-ipset=y                # netbird 依赖（注意：**不存在** kmod-ipset 这个包名）
+CONFIG_PACKAGE_kmod-tun=y                      # sing-box TUN 入站（F6 已在，显式固化）
+CONFIG_PACKAGE_kmod-nft-tproxy=y               # 本轮不用，为将来 TProxy 留路（成本极低）
+# netbird 本体（自持提版 0.78.1，见 patches/packages/netbird-0001-* 与 ADR-0006）
+CONFIG_PACKAGE_netbird=y                       # 方案二核心；预装但默认不启用（官方包不带 rc.d/uci-defaults）
 CONFIG_PACKAGE_xr1710g-proxy=y                 # 数据面：sing-box + 内核层分流 nft + CN 放行集合（C：packages-xr1710g）
 CONFIG_PACKAGE_luci-app-xr1710g-proxy=y        # 极简前端：开关/名单/CN 更新/只读状态（C：packages-xr1710g）
 CONFIG_PACKAGE_sing-box=y                      # 官方 feed 1.14.0（O）
