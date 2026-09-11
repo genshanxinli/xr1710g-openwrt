@@ -1,0 +1,100 @@
+#!/bin/sh
+# luci.xr1710g_proxy — LuCI 后端（只读状态 + 两个动作）
+#
+# 铁律：
+#   - 只读 getStatus 绝不改系统状态
+#   - updateCnList 只走 libexec/cn-list.sh（抓取→校验→单批原子换集合；失败保留旧集合）
+#   - **绝不** 触发 fw4 / firewall reload；**绝不** 写 flow_offloading*
+#   - 开关走 uci + /etc/init.d/xr1710g-proxy reload（由 LuCI CBI 直接做，不经本后端）
+
+. /lib/functions.sh
+. /usr/share/libubox/jshn.sh
+
+TABLE=xr1710g_proxy
+RUNDIR=/tmp/xr1710g-proxy
+LIBEXEC=/usr/libexec/xr1710g-proxy
+CN_SHARE=/usr/share/xr1710g-proxy
+
+get_status() {
+	local enabled mark table tun dnsport running nft_present rule_present
+	local cn4 cn6 cn4_mtime fail_open guard_note
+
+	config_load xr1710g_proxy
+	config_get_bool enabled global enabled 0
+	config_get mark   global fwmark '0x40'
+	config_get mask   global fwmark_mask '0x40'
+	config_get table  global route_table '100'
+	config_get tun    global singbox_tun 'singtun0'
+	config_get dnsport global singbox_dns_port '5333'
+	config_get cn_url global cn_list_url ''
+	config_get_bool cn_update global cn_list_update 0
+
+	pgrep -f "/usr/bin/sing-box run -c $RUNDIR/config.json" >/dev/null 2>&1 && running=1 || running=0
+	nft list table inet "$TABLE" >/dev/null 2>&1 && nft_present=1 || nft_present=0
+	ip rule show 2>/dev/null | grep -q "lookup $table" && rule_present=1 || rule_present=0
+	[ -f "$RUNDIR/fail-open" ] && fail_open=1 || fail_open=0
+
+	# CN 集合条目数：直接数内核集合（快照为空时是占位元素）。
+	# nft -j 的元素形状有**两种**（实机 nft 1.1.6 取证）：
+	#   单地址 → "192.0.2.2"（字符串）；CIDR → {"prefix":{"addr":"1.0.1.0","len":24}}
+	# 所以只写 .elem.val 会恒得 0；用 jq 对 `.set.elem` 求长度最稳（不做文本解析）。
+	# 设备已装 jq（seed-config.diff），本包显式声明依赖。
+	cn_count() { # $1=集合名
+		nft -j list set inet "$TABLE" "$1" 2>/dev/null | \
+			jq '[.nftables[] | select(.set) | .set.elem | length] | add // 0' 2>/dev/null
+	}
+	cn4="$(cn_count china_ip4)"; [ -n "$cn4" ] || cn4=0
+	cn6="$(cn_count china_ip6)"; [ -n "$cn6" ] || cn6=0
+
+	# 快照信息（只读 squashfs）
+	local snap4="$CN_SHARE/china_ip4.txt" snap6="$CN_SHARE/china_ip6.txt"
+	local snap4_n=0 snap6_n=0 snap_time=''
+	[ -s "$snap4" ] && snap4_n="$(wc -l < "$snap4")"
+	[ -s "$snap6" ] && snap6_n="$(wc -l < "$snap6")"
+	if [ -s "$CN_SHARE/geosite-cn.srs" ]; then
+		snap_time="$(date -r "$CN_SHARE/geosite-cn.srs" '+%F %T' 2>/dev/null)"
+	fi
+
+	# 策略路由实际值（只读展示）
+	local rules; rules="$(ip rule show 2>/dev/null | grep "lookup $table" | tr '\n' ';' | sed 's/;$//')"
+
+	# 最近日志（只取本组件，最多 5 行）
+	local logs; logs="$(logread -e xr1710g-proxy 2>/dev/null | tail -5 | sed 's/^[A-Za-z]* [A-Za-z]* [0-9]* [0-9:]* //' | tr '\n' '|')"
+
+	json_init
+	json_add_boolean enabled "$enabled"
+	json_add_string  fwmark "$mark"
+	json_add_string  fwmark_mask "$mask"
+	json_add_string  route_table "$table"
+	json_add_string  tun "$tun"
+	json_add_string  dns_port "$dnsport"
+	json_add_boolean running "$running"
+	json_add_boolean nft_table "$nft_present"
+	json_add_boolean ip_rule "$rule_present"
+	json_add_boolean fail_open "$fail_open"
+	json_add_int     cn4_kernel "$cn4"
+	json_add_int     cn6_kernel "$cn6"
+	json_add_int     cn4_snapshot "$snap4_n"
+	json_add_int     cn6_snapshot "$snap6_n"
+	json_add_string  snapshot_time "$snap_time"
+	json_add_boolean cn_autoupdate "$cn_update"
+	json_add_string  cn_url "$cn_url"
+	json_add_string  rules "$rules"
+	json_add_string  logs "$logs"
+	json_dump
+}
+
+update_cn_list() {
+	local out rc
+	out="$("$LIBEXEC/cn-list.sh" update 2>&1)"; rc=$?
+	json_init
+	json_add_boolean success "$([ "$rc" = 0 ] && echo 1 || echo 0)"
+	json_add_string  output "$out"
+	json_dump
+}
+
+case "$1" in
+	getStatus)    get_status ;;
+	updateCnList) update_cn_list ;;
+	*) echo "用法：$0 {getStatus|updateCnList}" >&2; exit 1 ;;
+esac

@@ -48,7 +48,7 @@
 - [ ] **漫游优化**（决策：暂不设置，固件稳定后实施）：802.11s/EHT320 回程、usteer/802.11k/v/r、（如多设备）mesh 配置
 - [x] **iQOO 5G 兼容性实机复核（F41/issue #21，2026-08-26）**：二分矩阵闭环——HE160（psk2/sae-mixed 均拒，AP 零 auth）→ HE80（psk2/sae-mixed 均可连，PHY 1200.9Mbps）。默认 5G 改 HE80，HE160 转注释化可选档（非国行终端）；K2P-5G 保留 sae-mixed。测试记录：`docs/acceptance-results/2026-08-26-iqoo-5g-he80-fix.md`
 - [ ] OC 实机验证报告：oc-1.3 与 oc-1.4 在实机的稳定性/温度，归档到 FIXES F08
-- [ ] 科学上网（OpenClash/PassWall）+ Docker——暂缓项，稳定后再决策 feed 与体积预算
+- [ ] 科学上网（OpenClash/PassWall）+ Docker——暂缓项，稳定后再决策 feed 与体积预算。**2026-09-11 部分落地**：代理与组网三方案见 `docs/plans/proxy-dns-stack/`——方案一（sing-box + 内核 CN 放行 + 极简 LuCI）与方案二（netbird 内核 WG）已实现；方案三（AGH + mosdns）经裁决**拒绝落地**（`docs/adr/0005`）。**不用 OpenClash/PassWall**：它们把分流判定放在用户态 ⇒ 不保硬件卸载（ADR-0003）
 - [x] mt76 实验补丁（integration 树 9990-9993：EHT 广告/320M BF fallback/PS-sync/rate control）——**F25 评审（2026-08-18）+ F59 复核（2026-08-22）**：9990/9991/9993 重建入实验档；**2026-08-31 毕业转默认**（ci-74 实机 AP 侧 EHT320 + wifi down/up 5 轮通过；6G 客户端侧延后）；9992 已随 9028 bump 删除
 - [ ] **IPsec/站点间 VPN 硬件卸载探索（EIP93，issue #6/F52）**：驱动已在实验档编译、/proc/crypto 注册正常；先实机验证 xfrm 连通性与 EIP93 refcnt，再按档位预装 strongswan/kmod-ipsec/ip-full；注意 EIP93 未注册 GCM-AEAD，rfc4106(gcm(aes)) 可能落软加密
 - [ ] 530 实验室 6GHz SP 补丁——默认停用；如需高功率实验，手动启用并在验收注明非合规

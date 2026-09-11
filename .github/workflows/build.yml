@@ -86,6 +86,19 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
+      - name: feed 包定义补丁（改 feed 包 Makefile 的唯一正确机制）
+        # netbird 提版改的是 feed 包 Makefile，不能走 patches/packages/（那条路在解开的**包源码**
+        # tarball 上应用；netbird tarball 是上游源码仓库、无 OpenWrt 包 Makefile，且 Go 配方不跑
+        # 源码 make ⇒ 必然 Patch failed）。详见 patches/feeds/ 补丁头注释与 verify-copy-patches.sh。
+        run: |
+          set -euo pipefail
+          cd "$TREE"
+          "${GITHUB_WORKSPACE}/overlay/scripts/patch-feeds.sh" .
+          # 断言落地生效（避免"跑过了但没改到"）
+          grep -q '^PKG_VERSION:=0.78.1$' feeds/packages/net/netbird/Makefile
+          grep -q 'kmod-ipt-ipset' feeds/packages/net/netbird/Makefile
+          echo "✓ netbird 提版已生效：$(grep -E '^PKG_VERSION:=' feeds/packages/net/netbird/Makefile)"
+
       - name: 配置（defconfig + seed）
         run: |
           cd "$TREE"
@@ -106,6 +119,41 @@ jobs:
             "${GITHUB_WORKSPACE}/overlay/scripts/audit-config.sh" "${GITHUB_WORKSPACE}/overlay/config/seed-config.experimental.diff" .config
           fi
 
+      - name: 代理/组网不变量门禁（I1–I4，plan/00 §3）
+        # 把"不写 flow_offloading / 不 reload fw4 / .nft 不碰 inet fw4 / uci-defaults 不 enable"
+        # 从文档条款变成构建前的一道红/绿闸门（脚本已负向验证：注入违规必红）。
+        run: |
+          set -euo pipefail
+          "${GITHUB_WORKSPACE}/overlay/scripts/gate-proxy-invariants.sh"
+
+      - name: workflow 结构自检（build.yml 是最关键自动化，改错一行会静默失效）
+        run: |
+          set -euo pipefail
+          cd "${GITHUB_WORKSPACE}/overlay"
+          python3 scripts/check-workflow-yaml.py
+
+      - name: 代理数据面离线冒烟（渲染 + I1–I4 + sing-box schema）
+        # 用与设备同版（1.14.0）的 sing-box 官方 amd64 二进制做真实 `check`，
+        # 覆盖：nft 模板四态渲染、区间重叠拒绝、硬约束静态断言、配置 schema。
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          # CN 快照完整性（离线：只校验已提交的快照，不联网）
+          "${GITHUB_WORKSPACE}/overlay/scripts/fetch-cn-list.sh" --check
+          # 取与设备同版（feed 里的 sing-box 1.14.0）官方 amd64 二进制，仅用于 schema 校验
+          SB_VER=1.14.0
+          if curl -fsSL --retry 3 -o sb.tgz \
+              "https://github.com/SagerNet/sing-box/releases/download/v${SB_VER}/sing-box-${SB_VER}-linux-amd64.tar.gz"; then
+            tar xzf sb.tgz && SINGBOX="$(find . -name sing-box -type f -perm -u+x | head -1)"
+            echo "sing-box for schema check: $SINGBOX ($($SINGBOX version | head -1))"
+            SINGBOX="$GITHUB_WORKSPACE/$SINGBOX" "${GITHUB_WORKSPACE}/overlay/scripts/test-proxy-package.sh"
+          else
+            # 网络不可用不应假红（与 verify-copy-patches 对下载失败的策略一致）；
+            # 但**必须**至少跑不含 schema 的静态部分，避免整步静默跳过。
+            echo "⚠ 无法下载 sing-box（网络）——跳过 schema 校验，仅跑静态部分"
+            "${GITHUB_WORKSPACE}/overlay/scripts/test-proxy-package.sh"
+          fi
+
       - name: 构建
         # F19：显式 pipefail——make 失败必须红（默认 bash 无 pipefail，`make | tee` 会把失败吞成假绿；
         #   曾导致 2026-08-17 三次构建（openssl 下载失败）全部假绿、firmware artifact 从未产出）
@@ -115,12 +163,82 @@ jobs:
           # E2：DISTRIB_DESCRIPTION 注入档位标识（CONFIG_VERSION_DIST 经 include/version.mk 进入 /etc/openwrt_release）
           make -j"$(nproc)" V=s CONFIG_VERSION_DIST="OpenWrt $PROFILE" 2>&1 | tee "$GITHUB_WORKSPACE/build-$PROFILE.log"
 
+      - name: 产出 kmod 包与包索引（自建 feed 的前提）
+        # ⚠️ **为什么必须单独跑**（dsh-2026-09-11 的教训，ci-118 实测）：
+        #   默认 `make` 只把 `=y` 的 kmod 编进镜像，**不产出**
+        #   `bin/targets/<t>/<s>/kmods/` 目录，也**不产** `packages.adb` 索引。
+        #   ci-118 的 kmodsfeed 附件因此是空的（0 个 kmod-*.apk、0 个 .adb）——
+        #   而上传步骤当时是 `if-no-files-found: warn`，**静默通过**。
+        #   ⇒ 这里显式产出 + 下面的上传步骤改为 `error` + 断言索引存在。
+        run: |
+          set -euo pipefail
+          cd "$TREE"
+          echo "== 编译 target/linux（产出 kmods/ 与未选入镜像的 kmod 包）=="
+          make -j"$(nproc)" V=s target/linux/compile 2>&1 | tee -a "$GITHUB_WORKSPACE/build-$PROFILE.log"
+          echo "== 生成包索引（packages.adb / APKINDEX）=="
+          make -j"$(nproc)" V=s package/index 2>&1 | tee -a "$GITHUB_WORKSPACE/build-$PROFILE.log"
+          echo "== 产出核对 =="
+          KMODS_DIR="$(ls -d bin/targets/airoha/an7581/kmods/*/ 2>/dev/null | head -1)"
+          echo "kmods 目录：${KMODS_DIR:-（未产出）}"
+          if [[ -z "$KMODS_DIR" ]]; then
+            echo "✗ 未产出 bin/targets/airoha/an7581/kmods/ —— 自建 kmods feed 无法成立" >&2
+            exit 1
+          fi
+          echo "  kmod 包数：$(find "$KMODS_DIR" -name '*.apk' | wc -l)"
+          echo "  索引：$(ls "$KMODS_DIR" | grep -cE 'packages\.adb|APKINDEX' || true)"
+          for m in wireguard ipt-ipset tun nft-tproxy; do
+            if find "$KMODS_DIR" -name "kmod-$m-*.apk" | grep -q .; then
+              echo "  ✓ kmod-$m 在 feed 内"
+            else
+              echo "  ⚠ kmod-$m 不在 feed 内（可能已 =y 编进镜像，或需加 CONFIG_PACKAGE_kmod-$m=m）"
+            fi
+          done
+          echo "== 索引文件 =="
+          find bin -name 'packages.adb' -o -name 'APKINDEX*' | head -10
+
       - name: 上传构建日志
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: buildlog-${{ env.PROFILE }}
           path: build-${{ env.PROFILE }}.log
+
+      - name: 固件体积自检（plan/00 §4.5）+ 产出基线
+        if: success()
+        run: |
+          set -euo pipefail
+          cd "$TREE/bin/targets/airoha/an7581"
+          # 与上一版比：从最近一个 ci-* tag 取基线（没有就只报告）
+          BASE="$GITHUB_WORKSPACE/size-baseline.txt"
+          PREV_TAG="$(git -C "$GITHUB_WORKSPACE" describe --tags --abbrev=0 2>/dev/null || true)"
+          if [[ -n "$PREV_TAG" ]]; then
+            curl -fsSL --retry 2 -o "$BASE" \
+              "https://github.com/${{ github.repository }}/releases/download/${PREV_TAG}/size-baseline.txt" || true
+          fi
+          "${GITHUB_WORKSPACE}/overlay/scripts/size-report.sh" . \
+            ${BASE:+"$BASE"} --write-baseline "$GITHUB_WORKSPACE/size-baseline.txt" | tee "$GITHUB_WORKSPACE/size-report-$PROFILE.txt"
+          # 把 release notes 提示词暴露给后续 job
+          grep -o 'RELEASE_NOTE_HINT=.*' "$GITHUB_WORKSPACE/size-report-$PROFILE.txt" \
+            | sed 's/^RELEASE_NOTE_HINT=//' > "$GITHUB_WORKSPACE/size-hint-$PROFILE.txt" || true
+
+      - name: 上传 kmods + 自建包 feed（D5：自建 kmods/包供给链）
+        # 为什么必须自建：官方 kmods 目录发布的是 6.18.44-1-<官方hash>，与本机构建 hash 不同；
+        # 且 aarch64 vermagic 不含 config hash ⇒ apk 依赖解析**不会**发现不匹配（静默 ABI 风险）。
+        # 设备 distfeeds 也没挂 kmods 这一项 ⇒ 运行期 apk add 官方 kmod 只会得到 "no such package"。
+        # 因此能力只能随固件预装，而**增量** kmod/包由本 Release 附件供给（见 docs/adr/0006 §4、F92）。
+        #
+        # ⚠️ **if-no-files-found: error**（ci-118 教训）：原为 warn，而当时 kmods/ 根本不存在
+        #   ⇒ 附件里 0 个 kmod、0 个索引，却**静默通过**。宁可红，不要假绿。
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kmodsfeed-${{ env.PROFILE }}
+          if-no-files-found: error
+          path: |
+            ${{ env.TREE }}/bin/targets/airoha/an7581/kmods/**
+            ${{ env.TREE }}/bin/packages/**/*.apk
+            ${{ env.TREE }}/bin/packages/**/packages.adb
+            ${{ env.TREE }}/bin/packages/**/APKINDEX*
 
       - name: 上传固件产物（sysupgrade + 首刷/initramfs）
         if: success()
@@ -133,6 +251,10 @@ jobs:
             ${{ env.TREE }}/bin/targets/airoha/an7581/*.itb
             ${{ env.TREE }}/bin/targets/airoha/an7581/*.manifest
             !${{ env.TREE }}/bin/targets/airoha/an7581/*-factory*
+            # 体积自检结论与基线（release job 汇总进 release notes）
+            size-report-*.txt
+            size-hint-*.txt
+            size-baseline.txt
 
   # P4（ROADMAP）：构建产出自动 pre-release。仅手动 dispatch 生成（push 触发只做门禁，
   # 不刷 release 噪音）；matrix 全档成功后才聚合发布，一个 run 一个 tag。
@@ -158,11 +280,45 @@ jobs:
           pattern: firmware-*
           # 不用 merge-multiple：同名 itb（openwrt-...-sysupgrade.itb 等）三档同名，
           # 合并会互相覆盖只剩一套——保留 firmware-<profile>/ 子目录结构，三档全保留
+
+      - name: 下载 kmods / 自建包 feed（D5 供给链）
+        # 与固件同一次构建产出 ⇒ 与内核 config hash 严格同源。设备侧把它挂进
+        # /etc/apk/repositories.d/customfeeds.list 即可增量安装自建 kmod/包。
+        uses: actions/download-artifact@v4
+        with:
+          path: _pkg
+          pattern: kmodsfeed-*
+
+      - name: 汇总体积自检结论（构建期已与上一版对比）
+        id: size
+        run: |
+          set -uo pipefail
+          hint=""
+          for f in _rel/size-hint-*.txt; do
+            [ -f "$f" ] || continue
+            hint="$(cat "$f")"
+          done
+          base=""
+          for f in _rel/size-baseline.txt; do
+            [ -f "$f" ] && base="$f"
+          done
+          echo "hint<<EOF" >> "$GITHUB_OUTPUT"
+          echo "${hint:-（无体积变化结论）}" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          [ -n "$base" ] && cp "$base" _pkg/size-baseline.txt || true
+
       - name: 生成 release 备注（自上次 tag 的提交 + FIXES 台账头部）
         id: notes
         run: |
           prev=$(git describe --tags --abbrev=0 2>/dev/null || echo '（首次）')
           {
+            echo "### 刷机前必读（体积 / 布局）"
+            echo "${{ steps.size.outputs.hint }}"
+            echo
+            echo "> 背景：\`fit\` 只读卷尺寸由 HTTP U-Boot 恢复页在上传镜像时**按镜像大小自动决定**（ADR-0004）。"
+            echo "> 恢复页路径会移除 \`rootfs_data\` 卷 ⇒ **overlay 与全部配置被清空**，刷前务必 \`tar czf - /etc/config\` 备份。"
+            echo "> 布局选择器**必须选 UBI 2.0**。详见 \`docs/FLASHING.md\` A3.4。"
+            echo
             echo "### 自上次版本（$prev）以来的提交"
             git log --oneline -30 --no-merges
             echo
@@ -173,7 +329,13 @@ jobs:
             echo "请核对 docs/FLASHING.md（HTTP U-Boot 主路径，锁版 SHA256 以 YYH2913 release 页为准）。"
             echo
             echo "### 产物说明"
-            echo "firmware-<profile>.tar.gz 各档打包产物（sysupgrade + initramfs + chainload-uboot + manifest）；本次档位：${{ github.event.inputs.profile }}。"
+            echo "· \`firmware-<profile>.tar.gz\`：固件产物（sysupgrade + initramfs + chainload-uboot + manifest）"
+            echo "· \`kmodsfeed-<profile>.tar.gz\`：**自建 kmods + 包 feed**，与本次固件同源（同一次构建、同一内核 config hash）"
+            echo "  ↳ 设备侧挂载：\`echo '<解包目录的 file:// 或 https:// 地址>' >> /etc/apk/repositories.d/customfeeds.list\`"
+            echo "  ↳ ⚠️ 官方 kmods 目录与本机构建 hash 不同，且 aarch64 vermagic 不含 hash ⇒ apk **不会**发现不匹配（静默 ABI 风险）——只能装本附件，勿混装官方 kmod（F92）"
+            echo "· \`size-baseline.txt\`：体积基线，供下次构建对比"
+            echo
+            echo "本次档位：${{ github.event.inputs.profile }}"
           } > relnotes.md
           echo "prev=$prev" >> "$GITHUB_OUTPUT"
 
@@ -185,6 +347,14 @@ jobs:
             profile="${d%/}"
             tar -czf "${profile}.tar.gz" "$d"
           done
+          cd ../_pkg
+          for d in kmodsfeed-*/; do
+            [ -d "$d" ] || continue
+            profile="${d%/}"
+            tar -czf "${profile}.tar.gz" "$d"
+          done
+          # 体积基线与 kmods 包放到 release 根，便于直接下载
+          [ -f size-baseline.txt ] && cp size-baseline.txt ../_rel/ || true
 
       - name: 创建 pre-release
         uses: softprops/action-gh-release@v2
@@ -192,5 +362,8 @@ jobs:
           tag_name: ci-${{ github.run_number }}
           name: "CI 构建 #${{ github.run_number }}（${{ github.ref_name }} @ ${{ steps.notes.outputs.prev }} 起）"
           body_path: relnotes.md
-          files: _rel/*.tar.gz
+          files: |
+            _rel/*.tar.gz
+            _pkg/*.tar.gz
+            _rel/size-baseline.txt
           prerelease: true

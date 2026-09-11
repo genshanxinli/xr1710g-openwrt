@@ -1,0 +1,17 @@
+{
+	"luci-app-xr1710g-proxy": {
+		"description": "Grant access to the XR1710G split-routing proxy status and CN list update",
+		"read": {
+			"ubus": {
+				"luci.xr1710g_proxy": [ "getStatus" ]
+			},
+			"uci": [ "xr1710g_proxy" ]
+		},
+		"write": {
+			"ubus": {
+				"luci.xr1710g_proxy": [ "updateCnList" ]
+			},
+			"uci": [ "xr1710g_proxy" ]
+		}
+	}
+}

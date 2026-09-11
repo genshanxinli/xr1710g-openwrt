@@ -1,0 +1,261 @@
+msgid ""
+msgstr "Content-Type: text/plain; charset=UTF-8"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:148
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:154
+msgid "(none)"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:131
+msgid "Absent"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:129
+msgid "Capture table inet xr1710g_proxy"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:68
+msgid "China allow-list (what preserves hardware offload)"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:102
+msgid ""
+"Conflicts are detected before start. On conflict the service refuses to "
+"start instead of overwriting foreign entries."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:146
+msgid "Effective policy routes"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:84
+msgid "Enable scheduled update"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:47
+msgid "Enable split-routing proxy"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:141
+msgid ""
+"Fail-open is active: capture and redirect rules were removed, proxy clients "
+"fall back to direct routing."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:137
+msgid "Fail-open state"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:144
+msgid ""
+"Failing open is deliberate: if the proxy core dies, proxy clients fall back "
+"to direct routing instead of losing connectivity, which matches the rule "
+"that a failure must never affect normal networking. The trade-off is that "
+"during a fault those clients are not proxied, which is stated here "
+"explicitly."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:63
+msgid "Fake-IP scope"
+msgstr ""
+
+#: root/usr/share/rpcd/acl.d/luci-app-xr1710g-proxy.json:3
+msgid ""
+"Grant access to the XR1710G split-routing proxy status and CN list update"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:66
+msgid ""
+"Hard constraint of this architecture: fake-IP may only be handed to proxy "
+"clients. Ordinary clients always receive real IPs. If an ordinary client "
+"received 198.18.x, the kernel allow-rule (which only matches proxy clients) "
+"would never let it out, so foreign sites would be unreachable rather than "
+"merely slow."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:135
+msgid "Installed"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:42
+msgid ""
+"Kernel-level classification. Only clients on the proxy list are captured "
+"into userspace; all other clients stay on the original forwarding path with "
+"hardware offload fully preserved. Disabled by default. On start failure or "
+"process crash it fails open by removing the capture and redirect rules, so "
+"the proxy clients fall back to direct routing and normal networking is never "
+"affected."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:78
+msgid "Live kernel set entries"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:131
+msgid "Loaded"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:21
+msgid ""
+"Master switch. When disabled the init script exits immediately: no nft "
+"table, no policy route, no process."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:59
+msgid ""
+"Must be an IPv4 address or CIDR, for example 192.168.123.224 or "
+"192.168.123.0/24"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:142
+msgid "Normal (not triggered)"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:135
+msgid "Not installed"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:126
+msgid "Not running"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:127
+msgid "Not running is the normal state while the master switch is off."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:25
+msgid ""
+"Note: the set must not contain overlapping or nested ranges. If you list "
+"192.168.1.0/24, do not also list 192.168.1.5 - rendering rejects it and the "
+"service refuses to start."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:26
+msgid ""
+"Off by default: only the snapshot shipped in the read-only firmware volume "
+"is used, so there are zero NAND writes at runtime."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:24
+msgid ""
+"Only these clients are captured into userspace. Every other client keeps "
+"exactly the same forwarding path as if this component did not exist, so "
+"hardware offload (PPE/NPU) is fully preserved."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:101
+msgid "Policy routing"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:133
+msgid "Policy-routing entries"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:28
+msgid ""
+"Policy-routing mark (hex). Conflicts are detected before start; if the mark "
+"is already taken (for example Tailscale uses 0x80000/0xff0000) the service "
+"refuses to start and logs it, never touching someone else’s entries."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:29
+msgid ""
+"Policy-routing table number. A conflict with an existing routing table makes "
+"the service refuse to start."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:41
+msgid "Proxy and networking - split-routing proxy"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:52
+msgid "Proxy clients"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:23
+msgid "Proxy clients (source IP / CIDR, one entry per line)."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:150
+msgid "Recent log lines"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:109
+msgid "Routing table"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:126
+msgid "Running"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:122
+msgid "Runtime state"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:70
+msgid "Snapshot shipped in firmware"
+msgstr ""
+
+#: root/usr/share/luci/menu.d/luci-app-xr1710g-proxy.json:3
+msgid "Split-routing proxy"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:44
+msgid "Split-routing settings"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:118
+msgid "TUN interface name"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:76
+msgid ""
+"The snapshot lives in the read-only squashfs volume, so it uses no overlay "
+"space and causes no NAND writes. China domains of proxy clients must resolve "
+"to real IPs, otherwise the kernel cannot match this set and the direct path "
+"- which is what keeps hardware offload for domestic traffic - stops working."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:22
+msgid ""
+"Toggling only does uci commit plus /etc/init.d/xr1710g-proxy reload; the "
+"firewall (fw4) is never reloaded, because a fw4 reload rebuilds the hardware "
+"flowtable."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:90
+msgid "Update China allow-list now"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:95
+msgid "Update failed, the previous set was kept:"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:95
+msgid "Update succeeded:"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:27
+msgid ""
+"When enabled, lists are fetched to /tmp periodically and swapped into the "
+"kernel set atomically only after validation; a failed validation keeps the "
+"previous set."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:120
+msgid ""
+"auto_route and auto_redirect are always false, so traffic is never taken "
+"over globally."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:104
+msgid "fwmark"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:114
+msgid "sing-box DNS port"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:124
+msgid "sing-box process"
+msgstr ""

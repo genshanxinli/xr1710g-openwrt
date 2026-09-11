@@ -47,6 +47,12 @@ cat "$ROOT/config/feeds.custom.conf" >> feeds.conf
 ./scripts/feeds update -a
 ./scripts/feeds install -a
 
+echo "== [3.5/6] feed 包定义补丁（改 feed 包 Makefile 的唯一正确机制）=="
+# 为什么不能走 patches/packages/：那条路把补丁当**包源码**补丁，在解开的 tarball 上应用；
+# netbird 的 tarball 是上游源码仓库（无 OpenWrt 包 Makefile），且 Go 配方不调用源码 make
+# ⇒ 必然 Patch failed（verify-copy-patches.sh 实机复现）。见 patches/feeds/ 补丁头注释。
+"$ROOT/scripts/patch-feeds.sh" "$TREE"
+
 echo "== [4/6] 配置 =="
 # 首次需先建 .config；之后每次用 seed 差量刷新（决策：可复现、显式）
 if [[ ! -f .config ]]; then

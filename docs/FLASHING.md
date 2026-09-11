@@ -41,10 +41,26 @@
 5. 重启进恢复页验证；本步骤是救砖底牌，不是日常升级路径。
 
 ### A3 日常升级 / 恢复（免串口）
+
+> ⚠️ **恢复页刷写会清空 overlay 与全部配置**（见 A3.4）。**刷前必须先备份 `/etc/config`**：
+> ```sh
+> ssh root@192.168.123.1 'tar czf - /etc/config' > baseline-etc-config-$(date +%F).tgz
+> ```
+
 1. PC 接 **10GbE 口**、DHCP；开机待 10G 口 LED 开始闪时**按住 reset**；
 2. 状态 LED 由常红变跑马灯后松开 → 打开 `http://192.168.255.1`；
 3. `firmware` → 上传 `*-sysupgrade.itb`（写 `ubi:fit`）；`uboot` → 上传 `*-flash-slot.bin`（写 chainloader 槽）；
 4. **布局选择器必须与镜像匹配**（UBI 2.0 / 1.5 / 1.0）：选错会 `not enough PEBs / Waiting for root device /dev/fit0`——重刷匹配布局即可恢复。
+
+### A3.4 本机必须选 **UBI 2.0**，且该路径会重建 `fit` 卷与清空 overlay
+
+自 `DEVICE_COMPAT_VERSION := 3.0`（ADR-0004）起，本仓库镜像**已大于旧 `fit` 卷（206 LEB = 24.94 MiB，原余量仅约 32 KiB）**，必须经恢复页刷入：
+
+- **布局选择器选 UBI 2.0**（`part="ubi"`，对应 `mtd2` `0x1b700000`）。选 1.5/1.0 会落到更小的分区 → `not enough PEBs`。
+- 恢复页在上传固件时会**按镜像大小自动重建并扩容 `fit` 卷**，`rootfs_data` 以 size=0 吃掉剩余 PEB —— 不需要新 installer、不需要改 DTS、不需要硬编码容量。
+- ⚠️ **同一机制会移除旧 `rootfs_data` 卷**（`recovery_preserve_ubi_volume()` 白名单只有 `ubootenv`/`ubootenv2`/`factory`）⇒ **overlay / 全部配置被清空**。这是该路径的必然结果，不是 bug。
+- ⚠️ **在旧布局上跑 in-OS `sysupgrade` 大镜像会失败**（`ubiupdatevol` 写不下）。compat 已升到 3.0，`sysupgrade` 会**在动手前干净拒绝**，而不是写到一半失败。
+- 源码实证与完整推理见 `docs/adr/0004-fit-volume-auto-resize-and-compat-3.0.md`。
 
 ### A4 严禁事项
 - 不要上传 `u-boot.bin` / `u-boot.img` / `xr1710g-ubi.img` 到恢复页；

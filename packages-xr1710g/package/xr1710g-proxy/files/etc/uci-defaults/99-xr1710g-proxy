@@ -1,0 +1,23 @@
+#!/bin/sh
+# 99-xr1710g-proxy — 一次性默认值（I4：只写默认值，不 enable 任何服务、不碰 firewall/network）
+#
+# 铁律：
+#   - 绝不 `uci set ...enabled=1`、绝不 `/etc/init.d/... enable`
+#   - 绝不写 `firewall` / `network` 的任何字段（尤其 offload 相关）
+#   - 绝不 reload fw4
+# 本脚本的全部作用 = 首次刷机后 /etc/config/xr1710g_proxy 存在且 enabled=0。
+
+[ -e /etc/config/xr1710g_proxy ] || exit 0
+
+# 仅在未设置时补默认值（幂等；尊重用户/固件已写入的值）
+uci -q get xr1710g_proxy.global.enabled >/dev/null 2>&1 || \
+	uci -q set xr1710g_proxy.global.enabled='0'
+
+# 显式确认关闭（默认即 0，这里是"防止打包时被误改"的兜底断言，不改变用户已设置的值）
+case "$(uci -q get xr1710g_proxy.global.enabled)" in
+	''|'0') uci -q set xr1710g_proxy.global.enabled='0' ;;
+esac
+
+uci -q commit xr1710g_proxy
+
+exit 0

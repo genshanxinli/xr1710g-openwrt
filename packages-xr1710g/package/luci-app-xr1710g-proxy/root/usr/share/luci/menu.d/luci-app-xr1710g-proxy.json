@@ -1,0 +1,13 @@
+{
+	"admin/services/xr1710g-proxy": {
+		"title": "Split-routing proxy",
+		"order": 45,
+		"action": {
+			"type": "view",
+			"path": "xr1710g_proxy/proxy"
+		},
+		"depends": {
+			"acl": [ "luci-app-xr1710g-proxy" ]
+		}
+	}
+}
