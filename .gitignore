@@ -33,3 +33,6 @@ audit-ubi2oc/
 .toolchain/
 .nftchk/
 plan-evidence/
+
+# gh CLI 运行日志缓存（本地排障用，勿提交）
+.ghcache/

@@ -163,6 +163,39 @@ jobs:
           # E2：DISTRIB_DESCRIPTION 注入档位标识（CONFIG_VERSION_DIST 经 include/version.mk 进入 /etc/openwrt_release）
           make -j"$(nproc)" V=s CONFIG_VERSION_DIST="OpenWrt $PROFILE" 2>&1 | tee "$GITHUB_WORKSPACE/build-$PROFILE.log"
 
+      - name: 产出 kmod 包与包索引（自建 feed 的前提）
+        # ⚠️ **为什么必须单独跑**（dsh-2026-09-11 的教训，ci-118 实测）：
+        #   默认 `make` 只把 `=y` 的 kmod 编进镜像，**不产出**
+        #   `bin/targets/<t>/<s>/kmods/` 目录，也**不产** `packages.adb` 索引。
+        #   ci-118 的 kmodsfeed 附件因此是空的（0 个 kmod-*.apk、0 个 .adb）——
+        #   而上传步骤当时是 `if-no-files-found: warn`，**静默通过**。
+        #   ⇒ 这里显式产出 + 下面的上传步骤改为 `error` + 断言索引存在。
+        run: |
+          set -euo pipefail
+          cd "$TREE"
+          echo "== 编译 target/linux（产出 kmods/ 与未选入镜像的 kmod 包）=="
+          make -j"$(nproc)" V=s target/linux/compile 2>&1 | tee -a "$GITHUB_WORKSPACE/build-$PROFILE.log"
+          echo "== 生成包索引（packages.adb / APKINDEX）=="
+          make -j"$(nproc)" V=s package/index 2>&1 | tee -a "$GITHUB_WORKSPACE/build-$PROFILE.log"
+          echo "== 产出核对 =="
+          KMODS_DIR="$(ls -d bin/targets/airoha/an7581/kmods/*/ 2>/dev/null | head -1)"
+          echo "kmods 目录：${KMODS_DIR:-（未产出）}"
+          if [[ -z "$KMODS_DIR" ]]; then
+            echo "✗ 未产出 bin/targets/airoha/an7581/kmods/ —— 自建 kmods feed 无法成立" >&2
+            exit 1
+          fi
+          echo "  kmod 包数：$(find "$KMODS_DIR" -name '*.apk' | wc -l)"
+          echo "  索引：$(ls "$KMODS_DIR" | grep -cE 'packages\.adb|APKINDEX' || true)"
+          for m in wireguard ipt-ipset tun nft-tproxy; do
+            if find "$KMODS_DIR" -name "kmod-$m-*.apk" | grep -q .; then
+              echo "  ✓ kmod-$m 在 feed 内"
+            else
+              echo "  ⚠ kmod-$m 不在 feed 内（可能已 =y 编进镜像，或需加 CONFIG_PACKAGE_kmod-$m=m）"
+            fi
+          done
+          echo "== 索引文件 =="
+          find bin -name 'packages.adb' -o -name 'APKINDEX*' | head -10
+
       - name: 上传构建日志
         if: always()
         uses: actions/upload-artifact@v4
@@ -193,14 +226,19 @@ jobs:
         # 且 aarch64 vermagic 不含 config hash ⇒ apk 依赖解析**不会**发现不匹配（静默 ABI 风险）。
         # 设备 distfeeds 也没挂 kmods 这一项 ⇒ 运行期 apk add 官方 kmod 只会得到 "no such package"。
         # 因此能力只能随固件预装，而**增量** kmod/包由本 Release 附件供给（见 docs/adr/0006 §4、F92）。
+        #
+        # ⚠️ **if-no-files-found: error**（ci-118 教训）：原为 warn，而当时 kmods/ 根本不存在
+        #   ⇒ 附件里 0 个 kmod、0 个索引，却**静默通过**。宁可红，不要假绿。
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: kmodsfeed-${{ env.PROFILE }}
-          if-no-files-found: warn
+          if-no-files-found: error
           path: |
             ${{ env.TREE }}/bin/targets/airoha/an7581/kmods/**
             ${{ env.TREE }}/bin/packages/**/*.apk
+            ${{ env.TREE }}/bin/packages/**/packages.adb
+            ${{ env.TREE }}/bin/packages/**/APKINDEX*
 
       - name: 上传固件产物（sysupgrade + 首刷/initramfs）
         if: success()

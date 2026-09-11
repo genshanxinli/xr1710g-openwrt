@@ -49,6 +49,11 @@ recovery_ensure_rootfs_data(&target);    // size=0 ⇒ 吃掉剩余全部 PEB
 - **运行期装到 overlay（不预装）**：可行（350 MiB 空闲），但用户要的是「预装进固件」（Q12）；且运行期装 kmod 被 apk 依赖解析挡住——官方 kmods 目录是 `6.18.44-1-6297b246…`，本机 hash 不同，`apk` 直接 ERROR。两条路并行：预装（本 ADR）+ 自建 kmods feed（ADR-0005 以外的供给链决策，见 `plan/00` §4.4）。
 - **保持 compat 2.0 + 只在文档里要求「先扩卷」**：把风险留给用户操作，且 in-OS `sysupgrade` 会静默走到失败。否决。
 
+**实测印证（2026-09-11 ci-118）**：本分支首个成功构建产出
+`openwrt-stock-airoha-an7581-gemtek_xr1710g-ubi-squashfs-sysupgrade.itb` = **48 293 011 B = 46.06 MiB**，
+**远超旧 `fit` 卷 24.94 MiB** ⇒ 「必须经恢复页重刷（会清 overlay）」不是理论推演，而是本版的确凿后果；
+`DEVICE_COMPAT_VERSION := 3.0` 的作用也随之落地：旧布局设备上的 in-OS `sysupgrade` 会被**干净拒绝**。
+
 **Consequences**:
 - ✅ 扩容路径与刷机路径**同一条**（用户已选 HTTP U-Boot），无新增流程；
 - ⚠️ **恢复页刷写会清空 `rootfs_data`（overlay / 全部配置）** —— 这是 `recovery_preserve_ubi_volume()` 白名单的必然结果（白名单只有 `ubootenv`/`ubootenv2`/`factory`），不是 bug。`FLASHING.md`、release notes、T0 都必须显著警告「刷前备份 `/etc/config`」；
