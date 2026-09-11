@@ -1,0 +1,152 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: luci-app-xr1710g-proxy\n"
+"PO-Revision-Date: 2026-09-11\n"
+"Last-Translator: XR1710G Maintainer\n"
+"Language-Team: \n"
+"Language: zh_Hans\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:148
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:154
+msgid "(none)"
+msgstr "（无）"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:131
+msgid "Absent"
+msgstr "不存在"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:129
+msgid "Capture table inet xr1710g_proxy"
+msgstr "抓取表 inet xr1710g_proxy"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:68
+msgid "China allow-list (what preserves hardware offload)"
+msgstr "CN 放行集合（保住硬件卸载的关键）"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:146
+msgid "Effective policy routes"
+msgstr "实际策略路由"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:84
+msgid "Enable scheduled update"
+msgstr "启用定时更新"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:47
+msgid "Enable split-routing proxy"
+msgstr "启用分流代理"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:137
+msgid "Fail-open state"
+msgstr "fail-open 状态"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:63
+msgid "Fake-IP scope"
+msgstr "fake-ip 作用域"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:135
+msgid "Installed"
+msgstr "已安装"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:78
+msgid "Live kernel set entries"
+msgstr "内核集合当前条目"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:131
+msgid "Loaded"
+msgstr "已载入"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:142
+msgid "Normal (not triggered)"
+msgstr "正常（未触发）"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:135
+msgid "Not installed"
+msgstr "未安装"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:126
+msgid "Not running"
+msgstr "未运行"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:127
+msgid "Not running is the normal state while the master switch is off."
+msgstr "总开关关闭时「未运行」是正常状态。"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:101
+msgid "Policy routing"
+msgstr "策略路由"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:133
+msgid "Policy-routing entries"
+msgstr "策略路由条目"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:41
+msgid "Proxy and networking - split-routing proxy"
+msgstr "代理与组网 — 分流代理"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:52
+msgid "Proxy clients"
+msgstr "名单客户端"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:23
+msgid "Proxy clients (source IP / CIDR, one entry per line)."
+msgstr "名单客户端（源 IP / CIDR，每行一条）。"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:150
+msgid "Recent log lines"
+msgstr "最近日志"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:109
+msgid "Routing table"
+msgstr "路由表号"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:126
+msgid "Running"
+msgstr "运行中"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:122
+msgid "Runtime state"
+msgstr "运行状态"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:70
+msgid "Snapshot shipped in firmware"
+msgstr "随固件快照"
+
+#: root/usr/share/luci/menu.d/luci-app-xr1710g-proxy.json:3
+msgid "Split-routing proxy"
+msgstr "分流代理"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:44
+msgid "Split-routing settings"
+msgstr "分流设置"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:118
+msgid "TUN interface name"
+msgstr "TUN 接口名"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:90
+msgid "Update China allow-list now"
+msgstr "立即更新 CN 放行集合"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:95
+msgid "Update failed, the previous set was kept:"
+msgstr "更新失败（旧集合保持不变）："
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:95
+msgid "Update succeeded:"
+msgstr "更新成功："
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:104
+msgid "fwmark"
+msgstr "fwmark"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:114
+msgid "sing-box DNS port"
+msgstr "sing-box DNS 端口"
+
+#: htdocs/luci-static/resources/view/xr1710g_proxy/proxy.js:124
+msgid "sing-box process"
+msgstr "sing-box 进程"
+

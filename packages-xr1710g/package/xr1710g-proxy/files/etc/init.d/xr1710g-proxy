@@ -147,6 +147,24 @@ load_cn_sets() {
 	rm -f "$batch"
 }
 
+## ── CN 定期更新（cn_list_update=1 时；默认 0 = 只用只读快照，零 NAND 写）────
+# 与 guard 同属"procd 之外的辅助循环"：请求 stop 时由 procd kill 整个进程组，
+# 因此用一个 stop 标志文件让它自然退出。
+update_loop() {
+	local interval="$1" stopf="$RUNDIR/stop"
+	while [ ! -f "$stopf" ]; do
+		local i=0
+		while [ "$i" -lt "$interval" ] && [ ! -f "$stopf" ]; do
+			sleep 30
+			i=$((i + 30))
+		done
+		[ -f "$stopf" ] && break
+		logger -t xr1710g-proxy "定时更新 CN 放行集合"
+		"$LIBEXEC/cn-list.sh" update >>"$RUNDIR/cn-update.log" 2>&1 \
+			|| logger -t xr1710g-proxy "定时更新失败，旧集合保持不变（详见 $RUNDIR/cn-update.log）"
+	done
+}
+
 ## ── guard：健康检查 + fail-open（与 sing-box 同生命周期，procd 之外）────
 # 判据（plan/01 §4.5）：进程不在 或 健康文件缺失 ⇒ 撤 capture+dns_redirect，
 # 名单客户端退回直连 + dnsmasq（fail-open = 与 G4「失败不影响正常网络」一致）。
@@ -305,6 +323,15 @@ start_service() {
 		[ -n "$pid" ] && guard_loop "$pid"
 	) &
 
+	# CN 定期更新（默认关。与 guard 同一个辅助进程组，stop 时由 stop 标志文件退出）
+	if [ "$(cfg_get cn_list_update 0)" = "1" ]; then
+		local interval; interval="$(cfg_get cn_list_interval 86400)"
+		case "$interval" in ''|*[!0-9]*) interval=86400 ;; esac
+		[ "$interval" -ge 300 ] || interval=300
+		( update_loop "$interval" ) &
+		logger -t xr1710g-proxy "CN 定时更新已启用，周期 ${interval}s"
+	fi
+
 	logger -t xr1710g-proxy "已启动：mark=$(mark_hex "$mark") table=$table tun=$tun dns=:$dnsport hosts=$(uci -q get xr1710g_proxy.global.proxy_hosts | wc -w)"
 	return 0
 }
@@ -316,6 +343,9 @@ stop_service() {
 	mask="$(cfg_get fwmark_mask 0x40)"
 	table="$(cfg_get route_table 100)"
 	tun="$(cfg_get singbox_tun singtun0)"
+
+	# 先立 stop 标志：让 guard / update_loop 自然退出（procd 随后会杀整个进程组）
+	[ -d "$RUNDIR" ] && : > "$RUNDIR/stop"
 
 	# procd 已负责杀 sing-box；这里回收内核侧状态
 	route_drop "$table" "$tun" "$mark" "$mask"
