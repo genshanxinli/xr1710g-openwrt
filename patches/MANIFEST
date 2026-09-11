@@ -173,6 +173,11 @@ patches/vendor/fanboy/07-mt76-release-hw-rro-session-5b917d4b.patch ROOT
 patches/vendor/fanboy/09-hw11-hw21-compat-afc6dc93.patch ROOT
 patches/vendor/fanboy/17-cmonroe-stability-8c530f05.patch ROOT
 patches/vendor/fanboy/18-smartrg-stability-b45d5117.patch ROOT
+# 9046（必须在 18 之后）：修 992-20 内层 hunk#3 的上下文——它写死 `RX_IRQ1_BANK_PIN_MASK 0x7fe00000`，
+#   而实验档的 9045 内层 976 已把该值改为 0xffe00000 → 严格上下文失配，992-20 整份 patch 失败
+#   （ci experimental run 34625416045 实测：Hunk #3 FAILED at 526，kernel prepare 阶段 Error 1）。
+#   本补丁仅同步该上下文值（**语义不变**：992-20 仍改 RX_IRQ0 0x839f→0xbb9f），对 default 档无影响。
+patches/root/9046-xr1710g-fix-992-20-context.patch ROOT
 
 # ── 待拆分/评审后解锁（原料桶已有，见 FIXES F13/F14）──
 # 08-reliability-compat：2026-08-17 切片完成——六项（SPI33MHz/banner/dropbear/antenna-memo/snd-off/LED-silence）
