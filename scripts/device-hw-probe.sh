@@ -142,7 +142,39 @@ if command -v phytool >/dev/null 2>&1; then
     printf "  %-6s 0x%s 0x%s\n" "$port" "${id2#0x}" "${id3#0x}"
   done
 else
-  echo "phytool not installed; apk add phytool 后重跑以获取 VEND1 0x103/0x104 判据"
+  # F99（2026-09-11）：无 phytool 时的**只读回退**——用内核绑定信息 + C45 寄存器镜像判定 PHY 变体。
+  # 实测（本机 2026-09-11，固件 r0-f36067d）：dmesg 明确 "RTL8261BE 10Gbps PHY"；
+  # /sys/class/mdio_bus/*/*/phy_id 对 C45-only PHY 返回 0x00000000（C22 reg2/3 读不到），
+  # 故不能只看 phy_id —— 必须结合 driver 名与 c45_phy_ids。
+  echo "phytool 未安装 —— 走只读回退判定（driver 绑定 + C45 sysfs 镜像 + dmesg）："
+  for bus in /sys/class/mdio_bus/*/; do
+    bname=$(basename "$bus")
+    case "$bname" in mt7530*) ;; *) continue ;; esac
+    for dev in "$bus"*/; do
+      [ -e "$dev/phy_id" ] || continue
+      addr=$(basename "$dev")
+      drv=$(basename "$(readlink -f "$dev/driver" 2>/dev/null)" 2>/dev/null)
+      c22=$(cat "$dev/phy_id" 2>/dev/null)
+      c45=""
+      if [ -d "$dev/c45_phy_ids" ]; then
+        c45=$(cat "$dev"/c45_phy_ids/* 2>/dev/null | sort -u | tr '\n' ' ')
+      fi
+      # C45 器件族判定（2026-09-11 实机基线：RTL8261BE => 0x001ccaf3）
+      fam=""
+      case "$c45" in
+        *001ccaf3*) fam="RTL8261BE/N" ;;
+        *001cc898*|*001cc899*) fam="RTL8261C/CG(CE 专属路径)" ;;
+        "") fam="-" ;;
+        *) fam="unrecognized" ;;
+      esac
+      printf "  %-14s %-12s drv=%-20s c22=%s c45=%s [%s]\n" "$bname" "$addr" "${drv:-<none>}" "$c22" "${c45:-<none>}" "$fam"
+    done
+  done
+  echo "  dmesg 识别（最具判据力，驱动 probe 自带型号）："
+  dmesg 2>/dev/null | grep -iE "RTL8261|RTL8264|rtl826x" | tail -6 | sed 's/^/    /' || true
+  echo "  → 判定口径：drv/dmesg 含 'RTL8261BE' = BE 变体（<0x001cc899> CE 专属补丁不适用）；"
+  echo "    含 'RTL8261N'/'RTL8261CE' 则需按 FIXES F75 与 #25092 适用性复核。"
+  echo "  如需 VEND1 0x103/0x104 原始值：apk add phytool 后重跑（本段自动切换为直接读寄存器）。"
 fi
 echo "--- B3 baseline counters ---"
 for i in eth0 lan1 lan2 wan lan3; do

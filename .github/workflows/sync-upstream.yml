@@ -31,6 +31,15 @@ jobs:
           cd openwrt
           chmod +x scripts/*.sh
 
+      - name: 上游基线守护（重基预警，只读）
+        run: |
+          cd openwrt
+          # 2026-09-11：本仓多个补丁的内层基线是上游具体文件（如 9041/9033 依赖
+          # generic/pending-6.18/742|743 的旧版上下文）。上游改这些文件不会立刻让 dry-run 红，
+          # 却会在构建期才失败（典型：PR #25092 改 742/743 并新增 744/745）。用 blob SHA
+          # 精确比对 → 漂移即预警，并点出需重基的本仓补丁。
+          ./scripts/audit-upstream-watch.sh . --fail-on-drift
+
       - name: 补丁层 dry-run（默认 + OC + 实验档）
         run: |
           cd openwrt

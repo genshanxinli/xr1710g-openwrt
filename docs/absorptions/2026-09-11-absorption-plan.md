@@ -296,3 +296,32 @@
 | `scripts/prepare-oc.sh` | PLL 公式改为**断言式**（F98）：公式在 → 替换并计数；PM domain 补丁在但公式不匹配 → 硬失败；无补丁 → 提示先 apply-patches | 三路径实测 + `bash -n` 通过 |
 
 > 至此 objective A 的"含 FIXES 台账、README 一致性"两个显式要求在字面上均已闭合。
+
+## 13. 第 4 批（用户授权后）：commit+push、实机只读验证、剩余待办
+
+### 13.1 已推送
+- commit **`629b3e8`** → push 到 `main`（`df3b12e..629b3e8`）。
+- 该 commit 触发的 **sync-upstream 已 success**（= 在全新克隆中 67 补丁 + 新监控步骤全绿）；build 当时 in_progress。
+
+### 13.2 实机只读验证（2026-09-11，设备 `192.168.123.1`，固件 `r0-f36067d`；全程只读，唯一写入是 `force_tx_status` 置位后**立即恢复原值**）
+- **10G PHY 变体判定（原 U1 未知项）已实机定论**：
+  - `dmesg`：`RTL8261BE 10Gbps PHY` 绑定 `mt7530-0:05`（lan2）与 `mt7530-0:08`（lan1）；
+  - C45 sysfs `c45_phy_ids` = **`0x001ccaf3`**（两个 10G 口一致）；C22 `phy_id` = `0x00000000`（C45-only 器件，C22 读不到——**不能只看 phy_id**）；
+  - 1G 口 `mt7530-0:09/:0a` = `Airoha AN7581 PHY`（c22 `0x03a294c1`）。
+  - **结论**：#25092 的 `0x001cc899`（RTL8261CE_CG）与 CE 专用 SerDes polarity 路径 **对本机不适用**；合入后只需按 §5.3 处理 9041/9033 的重基。
+- **`device-hw-probe.sh` B2.1 增强（F99 同批）**：原实现依赖 `phytool`，本机未安装 → 只能打印一句提示，**实际从未取到判据**。已补**只读回退**：driver 绑定名 + `c45_phy_ids`（去重）+ dmesg 识别 + 器件族归类（`0x001ccaf3`→RTL8261BE/N、`0x001cc898/99`→RTL8261C/CG），并在实机以 POSIX `sh` 复跑验证输出正确。
+- **`mt76-0013` 的 TXS 判定实验：本机不可闭环，已判定为"需带补丁的新固件"**：
+  - `tracefs`/kprobe **不可用**（无 `/sys/kernel/tracing`）→ 无法用 ftrace 无侵入观测 `mt7996_mac_add_txs_skb`；
+  - `force_tx_status` 可写（已置 1 并立刻恢复 0），但本机**无已关联站点**（stations=0），无法产生卸载数据面流量；
+  - 且设备运行 `r0-f36067d`（**早于本批 0013**），即使有 TXS 也不含新门。
+  - → 判定方法保留为：在**含 0013 的 experimental 固件**上测"Intel 客户端 Samba 大文件是否仍塌陷 + `devmem 0x1fa7a030` 类旁证"，或在 `mt7996_mac_add_txs_skb()` 刷新点加临时 debugfs 计数器（若计数不涨 → 按 §3.1 改 `mt7996_mac_work()` 周期刷新）。
+- NPU 状态旁证：`token_info` 显示 `NPU Offload status: active`、`wed_token_count: 0`（NPU 路径生效、WED 未用）；`wed_enable=N`。
+
+### 13.3 剩余待办处置
+| 项 | 处置 | 理由 |
+|---|---|---|
+| `#25092` 重基监控 | **已实施**：`scripts/audit-upstream-watch.sh` + 接入 sync-upstream.yml（见 F99） | 把"等 dry-run 红"提前为确定性预警 |
+| `device-hw-probe.sh` PHY 变体判定 | **已完成**（§13.2，只读回退 + 实机验证） | 原实现因缺 phytool 形同虚设 |
+| `mt76-0013` TXS 判定 | **转实机流程**（§13.2）：需含补丁的新固件，本轮无法在不刷机的前提下闭环 | tracefs 不可用 + 无站点 + 设备固件早于本批 |
+| Gilly `046` | **观察（不吸收）** | 与本仓 `mt76-0003`（固件 AIR_TIME/ADM_STAT 轮询）路线重叠，需先做逐行比对；单条价值不足以单独携带 |
+| Gilly `972/973`（IPv6 UPDMEM 源 MAC） | **观察（先复现）** | 前提是"存在克隆 MAC 的 VLAN 且路径走 `airoha_gdm_dev`"；本机 WAN=`gsw_port1`，§13.2 的只读探测未能构造该条件（无第二 10G 链路在测） |
