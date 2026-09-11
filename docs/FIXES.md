@@ -107,6 +107,8 @@
 
 （本轮 A1–A12 已全部执行完毕并转正为 F64–F75，清单清空。）
 
+| F90 | `fit` 只读固件卷余量耗尽（≈32 KiB）——代理/组网能力无法预装 | 实机 `ubinfo -a`：`fit` = 206 LEB（24.94 MiB），镜像 rootfs 子镜像 ≈20.82 MiB，`/rom` 已用 19.5 MiB；UBI `available logical eraseblocks = 0` ⇒ **不能在线扩容** | 不改 DTS、不新增 installer、不硬编码容量：**靠 HTTP U-Boot 恢复页上传固件时自动重建/缩放卷**（`recovery_resize_ubi_target()` → `ubi_resize_volume(DIV_ROUND_UP(image_size, usable_leb_size))`，`recovery_ensure_rootfs_data()` 以 size=0 吃剩余 PEB）。配套把 `DEVICE_COMPAT_VERSION` 2.0→**3.0**（`patches/root/9000`、`files/etc/config/system` 的 `compat_version` 同步） | n/a（依赖第三方 U-Boot 行为，`YYH2913/http-uboot` `net/lwip/httpd_recovery.c` 源码实证） | **代价（用户已接受）**：恢复页白名单只保留 `ubootenv/ubootenv2/factory` ⇒ **每次刷机清空 `rootfs_data`（overlay/全部配置）**，刷前必须备份 `/etc/config`；布局选择器必须 UBI 2.0。升 compat 的作用 = 在旧布局上跑 in-OS `sysupgrade` 会被**干净拒绝**而非写到一半失败。原理见 `docs/adr/0004-fit-volume-auto-resize-and-compat-3.0.md`，基线与余量见 `docs/acceptance-results/2026-09-11-t0-baseline.md` |
+
 ## 未确认/待实机核实清单
 - 物理口 ↔ 逻辑名（netdev-name 已固化：lan1/lan2=双 10G、wan=1G-1（gsw_port1）、lan3=1G-2（gsw_port2），见 9001）→ 首次实机 `ip -br link` 核对
 - U-Boot flash-slot.bin 的 SHA256 全文 → 以 YYH2913/http-uboot release 页为准（升级时校验）

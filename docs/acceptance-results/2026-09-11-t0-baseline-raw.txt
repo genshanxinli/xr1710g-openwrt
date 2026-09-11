@@ -1,0 +1,741 @@
+##### META
+2026-09-11T08:35:58Z
+Linux xr1710g 6.18.44 #0 SMP Mon Sep  7 22:22:33 2026 aarch64 GNU/Linux
+DISTRIB_ID='OpenWrt stock'
+DISTRIB_RELEASE='SNAPSHOT'
+DISTRIB_REVISION='r0-f36067d'
+DISTRIB_TARGET='airoha/an7581'
+DISTRIB_ARCH='aarch64_cortex-a53'
+DISTRIB_DESCRIPTION='OpenWrt stock SNAPSHOT r0-f36067d'
+DISTRIB_TAINTS='no-all busybox'
+##### KERNEL_MODULES
+6.18.44
+air_en8811h.ko authenc.ko authencesn.ko cfg80211.ko cmac.ko compat.ko des_generic.ko drbg.ko geniv.ko gpio-button-hotplug.ko hmac.ko hwmon.ko jitterentropy_rng.ko leds-gpio.ko libdes.ko libmd5.ko libsha512.ko mac80211.ko md5.ko modules.builtin modules.builtin.modinfo mt76-connac-lib.ko mt76.ko mt7915e.ko mt7996e.ko nct7802.ko nf_conntrack.ko nf_conntrack_netlink.ko nf_defrag_ipv4.ko nf_defrag_ipv6.ko nf_flow_table.ko nf_flow_table_inet.ko nf_log_syslog.ko nf_nat.ko nf_reject_ipv4.ko nf_reject_ipv6.ko nf_tables.ko nfnetlink.ko nft_chain_nat.ko nft_ct.ko nft_fib.ko nft_fib_inet.ko nft_fib_ipv4.ko nft_fib_ipv6.ko nft_flow_offload.ko nft_hash.ko nft_limit.ko nft_log.ko nft_masq.ko nft_nat.ko nft_numgen.ko nft_quota.ko nft_redir.ko nft_reject.ko nft_reject_inet.ko nft_reject_ipv4.ko nft_reject_ipv6.ko ppp_async.ko ppp_generic.ko pppoe.ko pppox.ko realtek.ko regmap-i2c.ko rtc-pcf8563.ko seqiv.ko sha1.ko sha256.ko sha3_generic.ko sha512.ko slhc.ko tcp_bbr.ko tun.ko usb-common.ko usbcore.ko xhci-hcd.ko xhci-mtk-hcd.ko xhci-pci.ko xhci-plat-hcd.ko 
+##### LAYOUT
+UBI version:                    1
+Count of UBI devices:           1
+UBI control device major/minor: 10:256
+Present UBI devices:            ubi0
+
+ubi0
+Volumes count:                           5
+Logical eraseblock size:                 126976 bytes, 124.0 KiB
+Total amount of logical eraseblocks:     3512 (445939712 bytes, 425.2 MiB)
+Amount of available logical eraseblocks: 0 (0 bytes)
+Maximum count of volumes                 128
+Count of bad physical eraseblocks:       0
+Count of reserved physical eraseblocks:  80
+Current maximum erase counter value:     3
+Minimum input/output unit size:          2048 bytes
+Character device major/minor:            251:0
+Present volumes:                         0, 1, 2, 3, 4
+
+Volume ID:   0 (on ubi0)
+Type:        dynamic
+Alignment:   1
+Size:        206 LEBs (26157056 bytes, 24.9 MiB)
+State:       OK
+Name:        fit
+Character device major/minor: 251:1
+-----------------------------------
+Volume ID:   1 (on ubi0)
+Type:        dynamic
+Alignment:   1
+Size:        9 LEBs (1142784 bytes, 1.0 MiB)
+State:       OK
+Name:        ubootenv
+Character device major/minor: 251:2
+-----------------------------------
+Volume ID:   2 (on ubi0)
+Type:        dynamic
+Alignment:   1
+Size:        9 LEBs (1142784 bytes, 1.0 MiB)
+State:       OK
+Name:        ubootenv2
+Character device major/minor: 251:3
+-----------------------------------
+Volume ID:   3 (on ubi0)
+Type:        static
+Alignment:   1
+Size:        9 LEBs (1142784 bytes, 1.0 MiB)
+Data bytes:  24582 bytes (24.0 KiB)
+State:       OK
+Name:        factory
+Character device major/minor: 251:4
+-----------------------------------
+Volume ID:   4 (on ubi0)
+Type:        dynamic
+Alignment:   1
+Size:        3195 LEBs (405688320 bytes, 386.8 MiB)
+State:       OK
+Name:        rootfs_data
+Character device major/minor: 251:5
+----- /proc/mtd
+dev:    size   erasesize  name
+mtd0: 00600000 00020000 "vendor"
+mtd1: 00100000 00020000 "chainloader"
+mtd2: 1b700000 00020000 "ubi"
+mtd3: 04200000 00020000 "reserved_bmt"
+----- df
+Filesystem                Size      Used Available Use% Mounted on
+/dev/root                19.5M     19.5M         0 100% /rom
+tmpfs                   912.2M      2.3M    910.0M   0% /tmp
+/dev/ubi0_4             355.4M     84.0K    350.6M   0% /overlay
+overlayfs:/overlay      355.4M     84.0K    350.6M   0% /
+tmpfs                   512.0K         0    512.0K   0% /dev
+----- dmesg FIT
+[    1.537284] ubi0: attaching mtd2
+[    3.250658] ubi0: scanning is finished
+[    3.301251] ubi0: attached mtd2 (name "ubi", size 439 MiB)
+[    3.306761] ubi0: PEB size: 131072 bytes (128 KiB), LEB size: 126976 bytes
+[    3.313659] ubi0: min./max. I/O unit sizes: 2048/2048, sub-page size 2048
+[    3.320456] ubi0: VID header offset: 2048 (aligned 2048), data offset: 4096
+[    3.327420] ubi0: good PEBs: 3512, bad PEBs: 0, corrupted PEBs: 0
+[    3.333519] ubi0: user volume: 5, internal volumes: 1, max. volumes count: 128
+[    3.340742] ubi0: max/mean erase counter: 3/1, WL threshold: 4096, image sequence number: 0
+[    3.349087] ubi0: available PEBs: 0, total reserved PEBs: 3512, PEBs reserved for bad PEB handling: 80
+[    3.358411] ubi0: background thread "ubi_bgt0d" started, PID 205
+[    3.358898] block ubiblock0_0: created from ubi0:0(fit)
+[    3.720764] FIT: Detected U-Boot 2026.07-00766-g53b73174c0fc
+[    3.726443] FIT: Selected configuration: "config-1" (OpenWrt gemtek_xr1710g-ubi)
+[    3.733887] FIT:           kernel sub-image 0x00001000..0x00570879 "kernel-1" (ARM64 OpenWrt Linux-6.18.44) 
+[    3.743751] FIT:          flat_dt sub-image 0x00571000..0x00576acc "fdt-1" (ARM64 OpenWrt gemtek_xr1710g-ubi device tree blob) 
+[    3.755249] FIT:       filesystem sub-image 0x00577000..0x018e9fff "rootfs-1" (ARM64 OpenWrt gemtek_xr1710g-ubi rootfs) 
+[   11.539449] UBIFS (ubi0:4): Mounting in unauthenticated mode
+[   11.545220] UBIFS (ubi0:4): background thread "ubifs_bgt0_4" started, PID 931
+[   11.627333] UBIFS (ubi0:4): UBIFS: mounted UBI device 0, volume 4, name "rootfs_data"
+##### CPUINFO
+processor	: 0
+Features	: fp asimd evtstrm crc32 cpuid
+processor	: 1
+Features	: fp asimd evtstrm crc32 cpuid
+processor	: 2
+Features	: fp asimd evtstrm crc32 cpuid
+processor	: 3
+Features	: fp asimd evtstrm crc32 cpuid
+##### CRYPTO
+##### FEEDS_AND_PKGS
+# add your custom package feeds here
+#
+# http://www.example.com/path/to/files/packages.adb
+# This file is auto-generated and build-specific, any changes will be intentionally lost in sysupgrade.
+# Add your custom feeds to /etc/apk/repositories.d/customfeeds.list
+https://downloads.openwrt.org/snapshots/targets/airoha/an7581/packages/packages.adb
+https://downloads.openwrt.org/snapshots/packages/aarch64_cortex-a53/base/packages.adb
+https://downloads.openwrt.org/snapshots/packages/aarch64_cortex-a53/luci/packages.adb
+https://downloads.openwrt.org/snapshots/packages/aarch64_cortex-a53/packages/packages.adb
+https://downloads.openwrt.org/snapshots/packages/aarch64_cortex-a53/routing/packages.adb
+https://downloads.openwrt.org/snapshots/packages/aarch64_cortex-a53/telephony/packages.adb
+https://downloads.openwrt.org/snapshots/packages/aarch64_cortex-a53/video/packages.adb
+https://downloads.openwrt.org/snapshots/packages/aarch64_cortex-a53/xr1710g/packages.adb
+----- installed (interesting)
+dnsmasq-full-2.93-r2 aarch64_cortex-a53 {feeds/base/network/services/dnsmasq} (GPL-2.0) [installed]
+ethtool-7.1-r1 aarch64_cortex-a53 {feeds/base/network/utils/ethtool} (GPL-2.0) [installed]
+firewall4-2025.03.17~b6e51575-r2 aarch64_cortex-a53 {feeds/base/network/config/firewall4} (ISC) [installed]
+kmod-nf-conntrack-6.18.44-r1 aarch64_cortex-a53 {feeds/base/kernel/linux} (GPL-2.0-only) [installed]
+kmod-nf-conntrack-netlink-6.18.44-r1 aarch64_cortex-a53 {feeds/base/kernel/linux} (GPL-2.0-only) [installed]
+kmod-tun-6.18.44-r1 aarch64_cortex-a53 {feeds/base/kernel/linux} (GPL-2.0-only) [installed]
+libnetfilter-conntrack3-1.1.0-r1 aarch64_cortex-a53 {feeds/base/libs/libnetfilter-conntrack} (GPL-2.0-or-later) [installed]
+nftables-json-1.1.6-r4 aarch64_cortex-a53 {feeds/base/network/utils/nftables} (GPL-2.0) [installed]
+tcpdump-4.99.6-r1 aarch64_cortex-a53 {feeds/base/network/utils/tcpdump} (BSD-3-Clause) [installed]
+----- available (interesting)
+adguardhome-0.107.79-r1 aarch64_cortex-a53 {feeds/packages/feeds/packages/net/adguardhome} (GPL-3.0-only)
+netbird-0.73.2-r1 aarch64_cortex-a53 {feeds/packages/feeds/packages/net/netbird} (BSD-3-Clause)
+sing-box-1.14.0-r1 aarch64_cortex-a53 {feeds/packages/feeds/packages/net/sing-box} (GPL-3.0-or-later)
+sing-box-tiny-1.14.0-r1 aarch64_cortex-a53 {feeds/packages/feeds/packages/net/sing-box} (GPL-3.0-or-later)
+##### NFT
+table inet fw4 {
+	flowtable ft {
+		hook ingress priority filter
+		devices = { "lan1", "lan2", "lan3", "phy0.0-ap0", "phy0.1-ap0", "phy0.1-ap1", "phy0.2-ap0", "pppoe-wan", "wan" }
+		flags offload
+		counter
+	}
+
+	chain input {
+		type filter hook input priority filter; policy drop;
+		iif "lo" accept comment "!fw4: Accept traffic from loopback"
+		ct state vmap { established : accept, related : accept } comment "!fw4: Handle inbound flows"
+		tcp flags & (fin | syn | rst | ack) == syn jump syn_flood comment "!fw4: Rate limit TCP syn packets"
+		iifname { "br-lan", "tailscale0" } jump input_lan comment "!fw4: Handle lan IPv4/IPv6 input traffic"
+		iifname { "wan", "pppoe-wan" } jump input_wan comment "!fw4: Handle wan IPv4/IPv6 input traffic"
+		jump handle_reject
+	}
+
+	chain forward {
+		type filter hook forward priority filter; policy drop;
+		meta l4proto { tcp, udp } flow add @ft
+		ct state vmap { established : accept, related : accept } comment "!fw4: Handle forwarded flows"
+		iifname { "br-lan", "tailscale0" } jump forward_lan comment "!fw4: Handle lan IPv4/IPv6 forward traffic"
+		iifname { "wan", "pppoe-wan" } jump forward_wan comment "!fw4: Handle wan IPv4/IPv6 forward traffic"
+		jump handle_reject
+	}
+
+	chain output {
+		type filter hook output priority filter; policy accept;
+		oif "lo" accept comment "!fw4: Accept traffic towards loopback"
+		ct state vmap { established : accept, related : accept } comment "!fw4: Handle outbound flows"
+		tcp dport 5353 counter packets 0 bytes 0 jump handle_reject comment "!fw4: DNS-block-5353"
+		udp dport 5353 counter packets 0 bytes 0 jump handle_reject comment "!fw4: DNS-block-5353"
+		oifname { "br-lan", "tailscale0" } jump output_lan comment "!fw4: Handle lan IPv4/IPv6 output traffic"
+		oifname { "wan", "pppoe-wan" } jump output_wan comment "!fw4: Handle wan IPv4/IPv6 output traffic"
+	}
+
+	chain prerouting {
+		type filter hook prerouting priority filter; policy accept;
+		iifname { "br-lan", "tailscale0" } jump helper_lan comment "!fw4: Handle lan IPv4/IPv6 helper assignment"
+	}
+
+	chain handle_reject {
+		meta l4proto tcp reject with tcp reset comment "!fw4: Reject TCP traffic"
+		reject comment "!fw4: Reject any other traffic"
+	}
+
+	chain syn_flood {
+		limit rate 25/second burst 50 packets return comment "!fw4: Accept SYN packets below rate-limit"
+		drop comment "!fw4: Drop excess packets"
+	}
+
+	chain input_lan {
+		tcp dport 53 counter packets 17 bytes 1220 accept comment "!fw4: DNS-lan53"
+		udp dport 53 counter packets 26261 bytes 2220035 accept comment "!fw4: DNS-lan53"
+		jump accept_from_lan
+	}
+
+	chain output_lan {
+		jump accept_to_lan
+	}
+
+	chain forward_lan {
+		jump accept_to_wan comment "!fw4: Accept lan to wan forwarding"
+		jump accept_to_lan
+	}
+
+	chain helper_lan {
+	}
+
+	chain accept_from_lan {
+		iifname { "br-lan", "tailscale0" } counter packets 171942 bytes 18175959 accept comment "!fw4: accept lan IPv4/IPv6 traffic"
+	}
+
+	chain accept_to_lan {
+		oifname { "br-lan", "tailscale0" } counter packets 15759 bytes 1202654 accept comment "!fw4: accept lan IPv4/IPv6 traffic"
+	}
+
+	chain input_wan {
+		meta nfproto ipv4 udp dport 68 counter packets 0 bytes 0 accept comment "!fw4: Allow-DHCP-Renew"
+		icmp type echo-request counter packets 0 bytes 0 accept comment "!fw4: Allow-Ping"
+		meta nfproto ipv4 meta l4proto igmp counter packets 0 bytes 0 accept comment "!fw4: Allow-IGMP"
+		meta nfproto ipv6 udp dport 546 counter packets 2 bytes 424 accept comment "!fw4: Allow-DHCPv6"
+		ip6 saddr fe80::/10 icmpv6 type . icmpv6 code { mld-listener-query . 0, mld-listener-report . 0, mld-listener-done . 0, mld2-listener-report . 0 } counter packets 4551 bytes 327672 accept comment "!fw4: Allow-MLD"
+		icmpv6 type { destination-unreachable, time-exceeded, echo-request, echo-reply, nd-router-solicit, nd-router-advert } limit rate 1000/second burst 5 packets counter packets 95 bytes 9880 accept comment "!fw4: Allow-ICMPv6-Input"
+		icmpv6 type . icmpv6 code { packet-too-big . 0, parameter-problem . 0, nd-neighbor-solicit . 0, nd-neighbor-advert . 0, parameter-problem . 1 } limit rate 1000/second burst 5 packets counter packets 0 bytes 0 accept comment "!fw4: Allow-ICMPv6-Input"
+		jump reject_from_wan
+	}
+
+	chain output_wan {
+		jump accept_to_wan
+	}
+
+	chain forward_wan {
+		icmpv6 type { destination-unreachable, time-exceeded, echo-request, echo-reply } limit rate 1000/second burst 5 packets counter packets 0 bytes 0 accept comment "!fw4: Allow-ICMPv6-Forward"
+		icmpv6 type . icmpv6 code { packet-too-big . 0, parameter-problem . 0, parameter-problem . 1 } limit rate 1000/second burst 5 packets counter packets 0 bytes 0 accept comment "!fw4: Allow-ICMPv6-Forward"
+		meta l4proto esp counter packets 0 bytes 0 jump accept_to_lan comment "!fw4: Allow-IPSec-ESP"
+		udp dport 500 counter packets 0 bytes 0 jump accept_to_lan comment "!fw4: Allow-ISAKMP"
+		jump drop_to_wan
+	}
+
+	chain accept_to_wan {
+		meta nfproto ipv4 oifname { "wan", "pppoe-wan" } ct state invalid counter packets 2552 bytes 181545 drop comment "!fw4: Prevent NAT leakage"
+		oifname { "wan", "pppoe-wan" } counter packets 446225 bytes 47570016 accept comment "!fw4: accept wan IPv4/IPv6 traffic"
+	}
+
+	chain reject_from_wan {
+		iifname { "wan", "pppoe-wan" } counter packets 157904 bytes 13009526 jump handle_reject comment "!fw4: reject wan IPv4/IPv6 traffic"
+	}
+
+	chain drop_to_wan {
+		oifname { "wan", "pppoe-wan" } counter packets 0 bytes 0 drop comment "!fw4: drop wan IPv4/IPv6 traffic"
+	}
+
+	chain dstnat {
+		type nat hook prerouting priority dstnat; policy accept;
+	}
+
+	chain srcnat {
+		type nat hook postrouting priority srcnat; policy accept;
+		oifname { "wan", "pppoe-wan" } jump srcnat_wan comment "!fw4: Handle wan IPv4/IPv6 srcnat traffic"
+	}
+
+	chain srcnat_wan {
+		meta nfproto ipv4 masquerade comment "!fw4: Masquerade IPv4 wan traffic"
+	}
+
+	chain raw_prerouting {
+		type filter hook prerouting priority raw; policy accept;
+	}
+
+	chain raw_output {
+		type filter hook output priority raw; policy accept;
+	}
+
+	chain mangle_prerouting {
+		type filter hook prerouting priority mangle; policy accept;
+	}
+
+	chain mangle_postrouting {
+		type filter hook postrouting priority mangle; policy accept;
+		oifname { "wan", "pppoe-wan" } tcp flags & (fin | syn | rst) == syn tcp option maxseg size set rt mtu comment "!fw4: Zone wan IPv4/IPv6 egress MTU fixing"
+	}
+
+	chain mangle_input {
+		type filter hook input priority mangle; policy accept;
+	}
+
+	chain mangle_output {
+		type route hook output priority mangle; policy accept;
+	}
+
+	chain mangle_forward {
+		type filter hook forward priority mangle; policy accept;
+		iifname { "wan", "pppoe-wan" } tcp flags & (fin | syn | rst) == syn tcp option maxseg size set rt mtu comment "!fw4: Zone wan IPv4/IPv6 ingress MTU fixing"
+	}
+}
+table ip filter {
+	chain FORWARD {
+		type filter hook forward priority filter; policy accept;
+		counter packets 642744 bytes 74123859 jump ts-forward
+	}
+
+	chain INPUT {
+		type filter hook input priority filter; policy accept;
+		counter packets 408053 bytes 53745224 jump ts-input
+	}
+
+	chain ts-forward {
+		iifname "tailscale0*" counter packets 0 bytes 0 meta mark set meta mark & 0xff04ffff | 0x00040000
+		meta mark & 0x00ff0000 == 0x00040000 counter packets 0 bytes 0 accept
+		oifname "tailscale0*" ip saddr 100.64.0.0/10 counter packets 0 bytes 0 drop
+		oifname "tailscale0*" counter packets 0 bytes 0 accept
+	}
+
+	chain ts-input {
+		iifname "lo*" ip saddr 100.125.148.116 counter packets 24 bytes 2229 accept
+		iifname "tailscale0*" counter packets 4782 bytes 561407 accept
+		udp dport 41641 counter packets 13362 bytes 1946832 accept
+		iifname != "tailscale0*" ip saddr 100.115.92.0/23 counter packets 0 bytes 0 return
+		iifname != "tailscale0*" ip saddr 100.64.0.0/10 counter packets 0 bytes 0 drop
+	}
+}
+table ip nat {
+	chain POSTROUTING {
+		type nat hook postrouting priority srcnat; policy accept;
+		counter packets 178391 bytes 15578275 jump ts-postrouting
+	}
+
+	chain ts-postrouting {
+		meta mark & 0x00ff0000 == 0x00040000 counter packets 0 bytes 0 masquerade
+	}
+}
+table ip6 filter {
+	chain FORWARD {
+		type filter hook forward priority filter; policy accept;
+		counter packets 441950 bytes 268493451 jump ts-forward
+	}
+
+	chain INPUT {
+----- chain forward
+table inet fw4 {
+	chain forward {
+		type filter hook forward priority filter; policy drop;
+		meta l4proto { tcp, udp } flow add @ft
+		ct state vmap { established : accept, related : accept } comment "!fw4: Handle forwarded flows"
+		iifname { "br-lan", "tailscale0" } jump forward_lan comment "!fw4: Handle lan IPv4/IPv6 forward traffic"
+		iifname { "wan", "pppoe-wan" } jump forward_wan comment "!fw4: Handle wan IPv4/IPv6 forward traffic"
+		jump handle_reject
+	}
+}
+----- flowtable
+table inet fw4 {
+	flowtable ft {
+		hook ingress priority filter
+		devices = { "lan1", "lan2", "lan3", "phy0.0-ap0", "phy0.1-ap0", "phy0.1-ap1", "phy0.2-ap0", "pppoe-wan", "wan" }
+		flags offload
+		counter
+	}
+}
+table ip filter {
+}
+table ip nat {
+}
+table ip6 filter {
+}
+table ip6 nat {
+}
+table ip mangle {
+}
+table ip6 mangle {
+}
+table bridge flow_offload {
+	flowtable br_offload {
+		hook ingress priority filter
+		devices = { "lan1", "lan2", "lan3", "phy0.0-ap0", "phy0.1-ap0", "phy0.1-ap1", "phy0.2-ap0" }
+		flags offload
+	}
+}
+##### IP
+----- ip rule
+0:	from all lookup local 
+5210:	from all fwmark 0x80000/0xff0000 lookup main 
+5230:	from all fwmark 0x80000/0xff0000 lookup default 
+5250:	from all fwmark 0x80000/0xff0000 lookup unspec unreachable
+5270:	from all lookup 52 
+32766:	from all lookup main 
+32767:	from all lookup default 
+----- ip route table all
+100.76.218.110 dev tailscale0 table 52 
+100.86.22.114 dev tailscale0 table 52 
+100.100.100.100 dev tailscale0 table 52 
+100.112.45.66 dev tailscale0 table 52 
+100.116.38.98 dev tailscale0 table 52 
+100.119.92.75 dev tailscale0 table 52 
+100.119.124.87 dev tailscale0 table 52 
+default via 172.27.0.1 dev pppoe-wan 
+172.27.0.1 dev pppoe-wan scope link  src 172.27.79.144 
+192.168.123.0/24 dev br-lan scope link  src 192.168.123.1 
+local 100.125.148.116 dev tailscale0 table local scope host  src 100.125.148.116 
+local 127.0.0.0/8 dev lo table local scope host  src 127.0.0.1 
+local 127.0.0.1 dev lo table local scope host  src 127.0.0.1 
+broadcast 127.255.255.255 dev lo table local scope link  src 127.0.0.1 
+local 172.27.79.144 dev pppoe-wan table local scope host  src 172.27.79.144 
+local 192.168.123.1 dev br-lan table local scope host  src 192.168.123.1 
+broadcast 192.168.123.255 dev br-lan table local scope link  src 192.168.123.1 
+fd7a:115c:a1e0::53 dev tailscale0 table 52  metric 1024 
+fd7a:115c:a1e0::/48 dev tailscale0 table 52  metric 1024 
+default from 2409:8a55:c906:a098::/64 via fe80::deef:80ff:fe59:a70d dev pppoe-wan  metric 512 
+default from 2409:8a55:c961:a9b0::/60 via fe80::deef:80ff:fe59:a70d dev pppoe-wan  metric 512 
+2409:8a55:c906:a098::/64 dev pppoe-wan  metric 256  expires 0sec
+2409:8a55:c961:a9b0::/64 dev br-lan  metric 1024 
+unreachable 2409:8a55:c961:a9b0::/60 dev lo  metric 2147483647 
+fd7a:115c:a1e0::f632:9476 dev tailscale0  metric 256 
+fe80::cd1a:9599:a15b:d011 dev pppoe-wan  metric 256 
+fe80::deef:80ff:fe59:a70d dev pppoe-wan  metric 256 
+fe80::/64 dev eth0  metric 256 
+fe80::/64 dev wan  metric 256 
+fe80::/64 dev br-lan  metric 256 
+fe80::/64 dev tailscale0  metric 256 
+local ::1 dev lo table local  metric 0 
+anycast 2409:8a55:c906:a098:: dev pppoe-wan table local  metric 0 
+local 2409:8a55:c906:a098:cd1a:9599:a15b:d011 dev pppoe-wan table local  metric 0 
+anycast 2409:8a55:c961:a9b0:: dev br-lan table local  metric 0 
+local 2409:8a55:c961:a9b0::1 dev br-lan table local  metric 0 
+local fd7a:115c:a1e0::f632:9476 dev tailscale0 table local  metric 0 
+anycast fe80:: dev wan table local  metric 0 
+anycast fe80:: dev eth0 table local  metric 0 
+anycast fe80:: dev tailscale0 table local  metric 0 
+anycast fe80:: dev br-lan table local  metric 0 
+local fe80::258:28ff:fed7:445d dev br-lan table local  metric 0 
+local fe80::258:28ff:fed7:445e dev wan table local  metric 0 
+local fe80::258:28ff:fed7:445e dev eth0 table local  metric 0 
+local fe80::8088:4cb0:5f43:982e dev tailscale0 table local  metric 0 
+local fe80::cd1a:9599:a15b:d011 dev pppoe-wan table local  metric 0 
+multicast ff00::/8 dev eth0 table local  metric 256 
+multicast ff00::/8 dev wan table local  metric 256 
+multicast ff00::/8 dev br-lan table local  metric 256 
+multicast ff00::/8 dev pppoe-wan table local  metric 256 
+multicast ff00::/8 dev tailscale0 table local  metric 256 
+----- ip -6 rule
+0:	from all lookup local 
+5210:	from all fwmark 0x80000/0xff0000 lookup main 
+5230:	from all fwmark 0x80000/0xff0000 lookup default 
+5250:	from all fwmark 0x80000/0xff0000 lookup unspec unreachable
+5270:	from all lookup 52 
+32766:	from all lookup main 
+4200000000:	from 2409:8a55:c961:a9b0::1/60 iif br-lan lookup unspec unreachable
+##### UCI
+----- firewall (offload related)
+firewall.@defaults[0].flow_offloading='1'
+firewall.@defaults[0].flow_offloading_hw='1'
+firewall.@zone[0]=zone
+firewall.@zone[0].name='lan'
+firewall.@zone[0].network='lan'
+firewall.@zone[0].input='ACCEPT'
+firewall.@zone[0].output='ACCEPT'
+firewall.@zone[0].forward='ACCEPT'
+firewall.@zone[0].device='tailscale0'
+firewall.@zone[1]=zone
+firewall.@zone[1].name='wan'
+firewall.@zone[1].network='wan' 'wan6'
+firewall.@zone[1].input='REJECT'
+firewall.@zone[1].output='ACCEPT'
+firewall.@zone[1].forward='DROP'
+firewall.@zone[1].masq='1'
+firewall.@zone[1].mtu_fix='1'
+firewall.@forwarding[0]=forwarding
+firewall.@forwarding[0].src='lan'
+firewall.@forwarding[0].dest='wan'
+----- full firewall
+firewall.@defaults[0]=defaults
+firewall.@defaults[0].input='REJECT'
+firewall.@defaults[0].output='ACCEPT'
+firewall.@defaults[0].forward='REJECT'
+firewall.@defaults[0].synflood_protect='1'
+firewall.@defaults[0].flow_offloading='1'
+firewall.@defaults[0].flow_offloading_hw='1'
+firewall.@zone[0]=zone
+firewall.@zone[0].name='lan'
+firewall.@zone[0].network='lan'
+firewall.@zone[0].input='ACCEPT'
+firewall.@zone[0].output='ACCEPT'
+firewall.@zone[0].forward='ACCEPT'
+firewall.@zone[0].device='tailscale0'
+firewall.@zone[1]=zone
+firewall.@zone[1].name='wan'
+firewall.@zone[1].network='wan' 'wan6'
+firewall.@zone[1].input='REJECT'
+firewall.@zone[1].output='ACCEPT'
+firewall.@zone[1].forward='DROP'
+firewall.@zone[1].masq='1'
+firewall.@zone[1].mtu_fix='1'
+firewall.@forwarding[0]=forwarding
+firewall.@forwarding[0].src='lan'
+firewall.@forwarding[0].dest='wan'
+firewall.@rule[0]=rule
+firewall.@rule[0].name='Allow-DHCP-Renew'
+firewall.@rule[0].src='wan'
+firewall.@rule[0].proto='udp'
+firewall.@rule[0].dest_port='68'
+firewall.@rule[0].target='ACCEPT'
+firewall.@rule[0].family='ipv4'
+firewall.@rule[1]=rule
+firewall.@rule[1].name='Allow-Ping'
+firewall.@rule[1].src='wan'
+firewall.@rule[1].proto='icmp'
+firewall.@rule[1].icmp_type='echo-request'
+firewall.@rule[1].family='ipv4'
+firewall.@rule[1].target='ACCEPT'
+firewall.@rule[2]=rule
+firewall.@rule[2].name='Allow-IGMP'
+firewall.@rule[2].src='wan'
+firewall.@rule[2].proto='igmp'
+firewall.@rule[2].family='ipv4'
+firewall.@rule[2].target='ACCEPT'
+firewall.@rule[3]=rule
+firewall.@rule[3].name='Allow-DHCPv6'
+firewall.@rule[3].src='wan'
+firewall.@rule[3].proto='udp'
+firewall.@rule[3].dest_port='546'
+firewall.@rule[3].family='ipv6'
+firewall.@rule[3].target='ACCEPT'
+firewall.@rule[4]=rule
+firewall.@rule[4].name='Allow-MLD'
+firewall.@rule[4].src='wan'
+firewall.@rule[4].proto='icmp'
+firewall.@rule[4].src_ip='fe80::/10'
+firewall.@rule[4].icmp_type='130/0' '131/0' '132/0' '143/0'
+firewall.@rule[4].family='ipv6'
+firewall.@rule[4].target='ACCEPT'
+firewall.@rule[5]=rule
+firewall.@rule[5].name='Allow-ICMPv6-Input'
+firewall.@rule[5].src='wan'
+firewall.@rule[5].proto='icmp'
+firewall.@rule[5].icmp_type='echo-request' 'echo-reply' 'destination-unreachable' 'packet-too-big' 'time-exceeded' 'bad-header' 'unknown-header-type' 'router-solicitation' 'neighbour-solicitation' 'router-advertisement' 'neighbour-advertisement'
+firewall.@rule[5].limit='1000/sec'
+firewall.@rule[5].family='ipv6'
+firewall.@rule[5].target='ACCEPT'
+firewall.@rule[6]=rule
+firewall.@rule[6].name='Allow-ICMPv6-Forward'
+firewall.@rule[6].src='wan'
+firewall.@rule[6].dest='*'
+firewall.@rule[6].proto='icmp'
+firewall.@rule[6].icmp_type='echo-request' 'echo-reply' 'destination-unreachable' 'packet-too-big' 'time-exceeded' 'bad-header' 'unknown-header-type'
+firewall.@rule[6].limit='1000/sec'
+firewall.@rule[6].family='ipv6'
+firewall.@rule[6].target='ACCEPT'
+firewall.@rule[7]=rule
+firewall.@rule[7].name='Allow-IPSec-ESP'
+firewall.@rule[7].src='wan'
+firewall.@rule[7].dest='lan'
+firewall.@rule[7].proto='esp'
+firewall.@rule[7].target='ACCEPT'
+firewall.@rule[8]=rule
+firewall.@rule[8].name='Allow-ISAKMP'
+firewall.@rule[8].src='wan'
+firewall.@rule[8].dest='lan'
+firewall.@rule[8].dest_port='500'
+firewall.@rule[8].proto='udp'
+firewall.@rule[8].target='ACCEPT'
+firewall.nikki=include
+firewall.nikki.type='script'
+firewall.nikki.path='/etc/nikki/scripts/firewall_include.sh'
+firewall.nikki.fw4_compatible='1'
+firewall.dns_lan53=rule
+firewall.dns_lan53.name='DNS-lan53'
+firewall.dns_lan53.src='lan'
+firewall.dns_lan53.proto='tcp udp'
+firewall.dns_lan53.dest_port='53'
+firewall.dns_lan53.target='ACCEPT'
+firewall.dns_block_5353=rule
+firewall.dns_block_5353.name='DNS-block-5353'
+firewall.dns_block_5353.proto='tcp udp'
+firewall.dns_block_5353.dest_port='5353'
+firewall.dns_block_5353.target='REJECT'
+----- network
+network.loopback=interface
+network.loopback.device='lo'
+network.loopback.proto='static'
+network.loopback.ipaddr='127.0.0.1'
+network.loopback.netmask='255.0.0.0'
+network.lan=interface
+network.lan.device='br-lan'
+network.lan.proto='static'
+network.lan.ipaddr='192.168.123.1'
+network.lan.netmask='255.255.255.0'
+network.lan.ip6assign='60'
+network.@device[0]=device
+network.@device[0].name='br-lan'
+network.@device[0].type='bridge'
+network.@device[0].ports='lan1' 'lan2' 'lan3'
+network.wan=interface
+network.wan.device='wan'
+network.wan.proto='pppoe'
+network.wan.username='13926613622@139.gd'
+network.wan.password='613622'
+network.wan.norelease='1'
+network.wan6=interface
+network.wan6.device='wan'
+network.wan6.proto='dhcpv6'
+network.wan6.reqaddress='try'
+network.wan6.reqprefix='auto'
+----- dnsmasq
+dhcp.@dnsmasq[0]=dnsmasq
+dhcp.@dnsmasq[0].domainneeded='1'
+dhcp.@dnsmasq[0].localise_queries='1'
+dhcp.@dnsmasq[0].rebind_protection='0'
+dhcp.@dnsmasq[0].local='/lan/'
+dhcp.@dnsmasq[0].domain='lan'
+dhcp.@dnsmasq[0].expandhosts='1'
+dhcp.@dnsmasq[0].cachesize='1000'
+dhcp.@dnsmasq[0].authoritative='1'
+dhcp.@dnsmasq[0].readethers='1'
+dhcp.@dnsmasq[0].leasefile='/tmp/dhcp.leases'
+dhcp.@dnsmasq[0].localservice='1'
+dhcp.@dnsmasq[0].ednspacket_max='1232'
+dhcp.@dnsmasq[0].server='223.5.5.5' '119.29.29.29'
+dhcp.lan=dhcp
+dhcp.lan.interface='lan'
+dhcp.lan.start='100'
+dhcp.lan.limit='150'
+dhcp.lan.leasetime='12h'
+dhcp.lan.ra='server'
+dhcp.lan.dhcpv4='server'
+dhcp.lan.dhcpv6='server'
+dhcp.lan.ra_slaac='1'
+dhcp.lan.ra_flags='managed-config' 'other-config'
+dhcp.wan=dhcp
+dhcp.wan.interface='wan'
+dhcp.wan.ignore='1'
+dhcp.odhcpd=odhcpd
+dhcp.odhcpd.maindhcp='0'
+dhcp.odhcpd.leasefile='/tmp/odhcpd.leases'
+dhcp.odhcpd.leasetrigger='/usr/sbin/odhcpd-update'
+dhcp.odhcpd.loglevel='4'
+dhcp.odhcpd.piodir='/tmp/odhcpd-piodir'
+dhcp.odhcpd.hostsdir='/tmp/hosts'
+----- /etc/config listing
+drwxr-xr-x    1 root     root          1672 Sep 10 09:03 .
+drwxr-xr-x    1 root     root          1968 Sep 10 08:37 ..
+-rw-r--r--    1 root     root           230 Sep  8 21:56 attendedsysupgrade
+-rw-------    1 root     root           990 Sep  8 06:22 ddns
+-rw-------    1 root     root           925 Sep  9 16:45 dhcp
+-rw-------    1 root     root            69 Sep 10 09:03 dropbear
+-rw-r--r--    1 root     root          1481 Sep  8 06:22 fan
+-rw-r--r--    1 root     root          3023 Sep 10 08:53 firewall
+-rw-r--r--    1 root     root           339 Sep  8 06:22 irqbalance
+-rw-r--r--    1 root     root           740 Sep  8 06:22 luci
+-rw-r--r--    1 root     root            24 Sep  8 06:22 luci_plugins
+-rw-r--r--    1 root     root           734 Sep  9 12:00 mosdns
+-rw-r--r--    1 root     root           673 Sep  8 11:10 network
+-rw-------    1 root     root          6657 Sep  9 10:50 nikki
+-rw-------    1 root     root          6204 Sep  8 21:35 nikki.bak.1788874552
+-rw-r--r--    1 root     root           259 Sep  8 06:22 npu-monitor
+-rw-------    1 root     root           167 Sep  8 06:22 rpcd
+-rw-r--r--    1 root     root          1379 Sep  9 10:50 system
+-rw-r--r--    1 root     root           255 Sep  8 06:22 tailscale
+-rw-------    1 root     root            68 Sep  8 06:22 ttyd
+-rw-r--r--    1 root     root            73 Sep  8 06:22 ubihealthd
+-rw-r--r--    1 root     root           271 Jan  1  1970 ubootenv
+-rw-------    1 root     root           796 Sep  8 06:22 uhttpd
+-rw-r--r--    1 root     root          1547 Sep  8 11:12 wireless
+##### PPE
+ppe/bind count: 14
+ppe/entries count: 48
+----- ppe/bind first 10
+0020c BND IPv4 5T orig=192.168.123.224:55892->8.152.204.11:443 new=172.27.79.144:55892->8.152.204.11:443 eth=00:58:28:d7:44:5e->dc:ef:80:59:a7:0d etype=8002 data=007f0800 vlan=0,0 ib1=2140359f ib2=0003e621 packets=0 bytes=0
+0050c BND IPv6 5T orig=2403:2500:8000:0001:0000:0000:0000:05fb:443->2409:8a55:c961:a9b0:0000:0000:0000:0239:49490 eth=00:04:00:00:00:00->00:e0:4c:e2:01:2b etype=86dd data=007f0000 vlan=0,0 ib1=2b0035a0 ib2=0003e720 packets=0 bytes=0
+0058c BND IPv4 5T orig=223.5.5.5:443->172.27.79.144:38027 new=223.5.5.5:443->192.168.123.224:38027 eth=00:58:28:d7:44:5d->00:e0:4c:e2:01:2b etype=0800 data=007f0000 vlan=0,0 ib1=6100359f ib2=0003e720 packets=0 bytes=0
+00774 BND IPv6 5T orig=2409:8a55:c961:a9b0:0000:0000:0000:0239:58264->2a04:3543:1000:2310:2465:1fff:fe8a:72c9:443 eth=00:01:40:89:00:00->dc:ef:80:59:a7:0d etype=8002 data=007f0800 vlan=0,0 ib1=2b4035a0 ib2=0403e621 packets=0 bytes=0
+00da0 BND IPv4 5T orig=192.168.123.224:44726->125.89.136.66:51820 new=172.27.79.144:44726->125.89.136.66:51820 eth=00:58:28:d7:44:5e->dc:ef:80:59:a7:0d etype=8002 data=007f0800 vlan=0,0 ib1=614035a0 ib2=0003e621 packets=0 bytes=0
+00ec4 BND IPv4 5T orig=192.168.123.224:38027->223.5.5.5:443 new=172.27.79.144:38027->223.5.5.5:443 eth=00:58:28:d7:44:5e->dc:ef:80:59:a7:0d etype=8002 data=007f0800 vlan=0,0 ib1=6140359f ib2=0003e621 packets=0 bytes=0
+01028 BND IPv6 5T orig=2a04:3543:1000:2310:2465:1fff:fe8a:72c9:443->2409:8a55:c961:a9b0:0000:0000:0000:0239:58264 eth=00:04:00:00:00:00->00:e0:4c:e2:01:2b etype=86dd data=007f0000 vlan=0,0 ib1=2b0035a0 ib2=0403e720 packets=0 bytes=0
+014c8 BND IPv6 5T orig=2409:8a55:c961:a9b0:0000:0000:0000:0239:48962->2607:f740:0000:003f:0000:0000:0000:044c:443 eth=00:01:40:89:00:00->dc:ef:80:59:a7:0d etype=8002 data=007f0800 vlan=0,0 ib1=2b4035a0 ib2=0003e621 packets=0 bytes=0
+0153c BND IPv4 5T orig=223.5.5.5:443->172.27.79.144:41121 new=223.5.5.5:443->192.168.123.224:41121 eth=00:58:28:d7:44:5d->00:e0:4c:e2:01:2b etype=0800 data=007f0000 vlan=0,0 ib1=6100359e ib2=0003e720 packets=0 bytes=0
+0181c BND IPv6 5T orig=2607:f740:0000:003f:0000:0000:0000:044c:443->2409:8a55:c961:a9b0:0000:0000:0000:0239:48962 eth=00:04:00:00:00:00->00:e0:4c:e2:01:2b etype=86dd data=007f0000 vlan=0,0 ib1=2b0035a0 ib2=0003e720 packets=0 bytes=0
+##### OVERLAY
+72782	/overlay/upper
+----- tmp usage
+Filesystem                Size      Used Available Use% Mounted on
+tmpfs                   912.2M      2.3M    910.0M   0% /tmp
+##### DNSMASQ_CAPS
+-K, --dhcp-authoritative                               Assume we are the only DHCP server on the local network.
+-M, --dhcp-boot=<bootp opts>                           Specify BOOTP options to DHCP server.
+-o, --strict-order                                     Use nameservers strictly in the order given in /etc/resolv.conf.
+    --servers-file=<path>                              Specify path to file with server= options
+-S, --server=/<domain>/<ipaddr>                        Specify address(es) of upstream servers with optional domains.
+    --rev-server=<addr>/<prefix>,<ipaddr>              Specify address of upstream servers for reverse address queries
+-V, --alias=<ipaddr>,<ipaddr>,<netmask>                Translate IPv4 addresses from upstream servers.
+-1, --enable-dbus[=<busname>]                          Enable the DBus interface for setting upstream servers, etc.
+-5, --no-ping                                          Disable ICMP echo address checking in the DHCP server.
+    --dhcp-no-override                                 Do NOT reuse filename and server fields for extra DHCP options.
+##### PROCESSES
+  PID USER       VSZ STAT COMMAND
+    1 root      1736 S    /sbin/procd
+    2 root         0 SW   [kthreadd]
+    3 root         0 SW   [pool_workqueue_]
+    4 root         0 IW<  [kworker/R-rcu_g]
+    5 root         0 IW<  [kworker/R-sync_]
+    6 root         0 IW<  [kworker/R-kvfre]
+    7 root         0 IW<  [kworker/R-slub_]
+    8 root         0 IW<  [kworker/R-netns]
+   13 root         0 IW<  [kworker/R-mm_pe]
+   14 root         0 SW   [ksoftirqd/0]
+   15 root         0 IW   [rcu_sched]
+   16 root         0 SW   [rcu_exp_par_gp_]
+   17 root         0 SW   [rcu_exp_gp_kthr]
+   18 root         0 SW   [migration/0]
+   19 root         0 SW   [cpuhp/0]
+   20 root         0 SW   [cpuhp/1]
+   21 root         0 SW   [migration/1]
+   22 root         0 SW   [ksoftirqd/1]
+   25 root         0 SW   [cpuhp/2]
+   26 root         0 SW   [migration/2]
+   27 root         0 SW   [ksoftirqd/2]
+   29 root         0 IW<  [kworker/2:0H-kb]
+   30 root         0 SW   [cpuhp/3]
+   31 root         0 SW   [migration/3]
+   32 root         0 SW   [ksoftirqd/3]
+   34 root         0 IW<  [kworker/3:0H-kb]
+   39 root         0 IW<  [kworker/R-inet_]
+   40 root         0 IW   [rcu_tasks_trace]
+   41 root         0 SW   [oom_reaper]
+   42 root         0 IW<  [kworker/R-write]
+   43 root         0 SW   [kcompactd0]
+   44 root         0 IW<  [kworker/R-kbloc]
+   46 root         0 SW   [watchdogd]
+   47 root         0 IW<  [kworker/0:1H-kb]
+   48 root         0 SW   [kswapd0]
+   60 root         0 IW<  [kworker/R-kthro]
+   61 root         0 IW<  [kworker/u21:0]
+  138 root         0 SW   [hwrng]
+  167 root         0 SW   [irq/19-aerdrv]
+##### DONE

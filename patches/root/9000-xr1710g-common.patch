@@ -70,7 +70,7 @@ diff --git a/target/linux/airoha/image/an7581.mk b/target/linux/airoha/image/an7
 index eb77df6..d1be04d 100644
 --- a/target/linux/airoha/image/an7581.mk
 +++ b/target/linux/airoha/image/an7581.mk
-@@ -127,6 +127,38 @@ define Device/gemtek_w1700k-ubi
+@@ -127,6 +127,40 @@ define Device/gemtek_w1700k-ubi
    SOC := an7581
  endef
  TARGET_DEVICES += gemtek_w1700k-ubi
@@ -82,10 +82,12 @@ index eb77df6..d1be04d 100644
 +  DEVICE_ALT0_MODEL := XR1710G
 +  DEVICE_ALT0_VARIANT := UBI
 +  DEVICE_DTS := an7581-xr1710g-ubi
-+  DEVICE_COMPAT_VERSION := 2.0
-+  DEVICE_COMPAT_MESSAGE := Partition table has been changed to cooperate \
-+       with the vendor bootloader with regard to the BMT/BBT partition at \
-+       the end of flash. A reinstall including corrected chainloader is needed.
++  DEVICE_COMPAT_VERSION := 3.0
++  DEVICE_COMPAT_MESSAGE := Flash layout changed: this image no longer fits the \
++       legacy fit volume (206 LEBs). Reinstall via the HTTP U-Boot recovery \
++       page (192.168.255.1, layout selector MUST be UBI 2.0). That path removes \
++       the rootfs_data volume: overlay and all configuration will be erased, so \
++       back up /etc/config first. See docs/adr/0004-fit-volume-auto-resize-and-compat-3.0.md
 +  DEVICE_PACKAGES := airoha-en7581-mt7996-npu-firmware fitblk \
 +		    kmod-hwmon-nct7802 kmod-mt7996-firmware \
 +		    rtl826x-firmware
