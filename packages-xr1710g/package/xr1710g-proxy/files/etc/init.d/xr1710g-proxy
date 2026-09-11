@@ -64,8 +64,10 @@ nft_drop_table() {
 # 用**精确参数**删除，不靠解析 `ip rule show` 的文本（busybox 下无 sed \s）。
 # mask 枚举：当前配置值 + 历史值（0x40/0xff）⇒ 覆盖"管理员改过 mask"的升级路径。
 route_drop() {
-	local table="$1" tun="$2" mark="$3" mask="$4" prio
-	local -x m
+	local table="$1" tun="$2" mark="$3" mask="$4" m
+	# 注：**不可**用 `local -x m` —— busybox ash 的 local 不支持 -x
+	# （实机报 "local: line N: -x: bad variable name"，导致 stop 整条失败、
+	#  表与规则全残留）。导出也不必要：m 只在下面的 for 里用。
 
 	# 删除以本 TUN 为 dev 的 table 内路由（default 优先，避免误删同名路由）
 	ip route del default dev "$tun" table "$table" 2>/dev/null
@@ -84,7 +86,13 @@ route_drop() {
 # 判据（不是"表内有没有条目"，而是"我们的条目能不能装上去"）：
 #   ① 目标 table 已存在**他人路由**（不是以我们 TUN 为 dev 的）⇒ 拒绝，不覆盖；
 #   ② 目标 mark 已被他人 nft 规则用作 `meta mark set` ⇒ 拒绝；
-#   ③ probe：试装我们的 rule + route，失败即冲突 ⇒ 拒绝并回收。
+#   ③ probe：试装我们的 rule，失败即冲突 ⇒ 拒绝并回收。
+#
+# ⚠️ **顺序约束（实机踩过）**：`ip route add default dev <tun>` 在 TUN 界面**存在之前**
+#   必然失败（"Network is down"）。而 TUN 由 sing-box 启动时才创建。所以：
+#   - 本函数**只**在 `tun_wait` 之后调用，且**只** probe 安装 rule（不 probe route）；
+#   - route 的安装与失败处理放在 start_service 的 TUN 就绪之后（那里才做 probe+安装）。
+#   早期版本在这里 probe route ⇒ 启动永远被自己的冲突检测拒绝。
 conflict_check() {
 	local mark="$1" mask="$2" table="$3" tun="$4" hex out
 
@@ -110,18 +118,47 @@ conflict_check() {
 		return 1
 	fi
 
-	# ③ probe：真实试装再立即回收（唯一同时覆盖 rule 优先级/table 语义的判据）
+	# ③ probe 只装 rule（route 需 TUN 就绪，见上方顺序约束）
 	if ! ip rule add fwmark "$hex/$(mark_mask_hex "$mask")" table "$table" 2>/dev/null; then
 		logger -t xr1710g-proxy "冲突：无法安装 ip rule fwmark $hex/$(mark_mask_hex "$mask") table $table"
 		return 1
 	fi
-	if ! ip route add default dev "$tun" table "$table" 2>/dev/null; then
-		ip rule del fwmark "$hex/$(mark_mask_hex "$mask")" table "$table" 2>/dev/null
-		logger -t xr1710g-proxy "冲突：无法向 table $table 安装 default dev $tun（TUN 未就绪或表被占用）"
+	ip rule del fwmark "$hex/$(mark_mask_hex "$mask")" table "$table" 2>/dev/null
+	return 0
+}
+
+## ── 等 TUN 就绪（sing-box 启动时创建）────────────────────────────────────
+# 轮询 `ip link show <tun>`，最多 $1 次（每次 0.5s）。返回 0 = 就绪。
+tun_wait() {
+	local tun="$1" tries="${2:-40}" i=0
+	while [ "$i" -lt "$tries" ]; do
+		if ip link show "$tun" >/dev/null 2>&1; then
+			return 0
+		fi
+		sleep 0.5
+		i=$((i + 1))
+	done
+	return 1
+}
+
+## ── 策略路由安装（必须在 TUN 就绪后调用）──────────────────────────────────
+# 安装 + **验证**：装完立刻核对 rule 与 route 都在（不假设成功）。
+route_install() {
+	local mark="$1" mask="$2" table="$3" tun="$4" hex
+	hex="$(mark_hex "$mark")"
+
+	ip rule add fwmark "$hex/$(mark_mask_hex "$mask")" table "$table" 2>/dev/null
+	if ! ip rule show 2>/dev/null | grep -q "lookup $table"; then
+		logger -t xr1710g-proxy "错误：ip rule 安装后未生效（table $table）"
 		return 1
 	fi
-	ip route del default dev "$tun" table "$table" 2>/dev/null
-	ip rule del fwmark "$hex/$(mark_mask_hex "$mask")" table "$table" 2>/dev/null
+
+	ip route add default dev "$tun" table "$table" 2>/dev/null
+	if ! ip route show table "$table" 2>/dev/null | grep -q " dev $tun "; then
+		logger -t xr1710g-proxy "错误：ip route 安装后未生效（default dev $tun table $table）"
+		ip rule del fwmark "$hex/$(mark_mask_hex "$mask")" table "$table" 2>/dev/null
+		return 1
+	fi
 	return 0
 }
 
@@ -299,12 +336,12 @@ start_service() {
 
 	load_cn_sets
 
-	# 策略路由（判定已在内核层，这里只是把 mark 的路由指到 TUN）
-	ip rule add fwmark "$(mark_hex "$mark")/$(mark_mask_hex "$mask")" table "$table" 2>/dev/null
-	ip route add default dev "$tun" table "$table" 2>/dev/null
-
 	gen_config "$dnsport" "$tun" "$(cfg_get outbounds_file /etc/xr1710g-proxy/outbounds.json)"
 
+	# ⚠️ **顺序约束（实机踩过）**：TUN 界面由 sing-box 启动时创建，而
+	# `ip route add default dev <tun>` 在该界面存在之前必然失败。因此顺序必须是
+	#   起 sing-box → 等 TUN 就绪 → 装策略路由
+	# 早期版本先装路由再起进程 ⇒ 路由永远装不上（或静默为一个指向不存在设备的条目）。
 	procd_open_instance
 	procd_set_param command "$PROG" run -c "$CONF"
 	procd_set_param respawn 3600 5 5
@@ -313,22 +350,41 @@ start_service() {
 	procd_set_param file "$CONF"
 	procd_close_instance
 
-	# guard：等 sing-box 起来后接管生命周期（fail-open 兜底）
+	# 等 TUN 就绪（最多 20s）。就绪失败 ⇒ 撤表 + 停进程，不留半配置。
+	if ! tun_wait "$tun" 40; then
+		logger -t xr1710g-proxy "错误：TUN $tun 在 20s 内未就绪 ⇒ 撤表并停止（不留半状态）"
+		nft_drop_table
+		/etc/init.d/xr1710g-proxy stop >/dev/null 2>&1
+		return 1
+	fi
+
+	# 策略路由（判定已在内核层，这里只是把 mark 的路由指到 TUN）
+	if ! route_install "$mark" "$mask" "$table" "$tun"; then
+		logger -t xr1710g-proxy "错误：策略路由安装失败 ⇒ 撤表并停止（不留半状态）"
+		nft_drop_table
+		route_drop "$table" "$tun" "$mark" "$mask"
+		/etc/init.d/xr1710g-proxy stop >/dev/null 2>&1
+		return 1
+	fi
+
+	# guard：进程已在跑，直接接管生命周期（fail-open 兜底）
+	#
+	# ⚠️ 后台辅助进程必须**脱离 stdin/stdout/stderr**（`</dev/null >log 2>&1`）：
+	#   否则它们会继承调用方的文件描述符。当 init 脚本经 SSH 调用时，
+	#   子 shell 持有 SSH 会话的 stdin → SSH 等到子 shell 结束才返回 → **会话挂死**
+	#   （实机踩过：A/B 脚本 60s 超时被杀）。procd 正常运行不受影响，但
+	#   "运行期装卸 + 排障" 是本项目的明确使用场景，必须修。
 	(
-		for _ in $(seq 1 20); do
-			sleep 0.5
-			pgrep -f "$PROG run -c $CONF" >/dev/null 2>&1 && break
-		done
 		pid="$(pgrep -f "$PROG run -c $CONF" | head -1)"
 		[ -n "$pid" ] && guard_loop "$pid"
-	) &
+	) </dev/null >>"$RUNDIR/guard.log" 2>&1 &
 
 	# CN 定期更新（默认关。与 guard 同一个辅助进程组，stop 时由 stop 标志文件退出）
 	if [ "$(cfg_get cn_list_update 0)" = "1" ]; then
 		local interval; interval="$(cfg_get cn_list_interval 86400)"
 		case "$interval" in ''|*[!0-9]*) interval=86400 ;; esac
 		[ "$interval" -ge 300 ] || interval=300
-		( update_loop "$interval" ) &
+		( update_loop "$interval" ) </dev/null >>"$RUNDIR/cn-update.log" 2>&1 &
 		logger -t xr1710g-proxy "CN 定时更新已启用，周期 ${interval}s"
 	fi
 

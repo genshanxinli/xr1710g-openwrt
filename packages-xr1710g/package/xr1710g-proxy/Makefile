@@ -41,7 +41,7 @@ define Package/xr1710g-proxy/description
 endef
 
 define Package/xr1710g-proxy/conffiles
-/etc/config/xr1710g-proxy
+/etc/config/xr1710g_proxy
 endef
 
 define Build/Compile
@@ -49,7 +49,7 @@ endef
 
 define Package/xr1710g-proxy/install
 	$(INSTALL_DIR) $(1)/etc/config
-	$(INSTALL_CONF) ./files/etc/config/xr1710g-proxy $(1)/etc/config/xr1710g-proxy
+	$(INSTALL_CONF) ./files/etc/config/xr1710g_proxy $(1)/etc/config/xr1710g_proxy
 
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/etc/init.d/xr1710g-proxy $(1)/etc/init.d/xr1710g-proxy

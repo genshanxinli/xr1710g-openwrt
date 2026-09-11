@@ -21,7 +21,7 @@ TEMPLATE="$PKG/files/usr/share/xr1710g-proxy/template.nft"
 RENDER="$PKG/files/usr/libexec/xr1710g-proxy/render.sh"
 SNAP="$PKG/snapshot"
 UCI_DEFAULTS="$PKG/files/etc/uci-defaults/99-xr1710g-proxy"
-UCI_CONFIG="$PKG/files/etc/config/xr1710g-proxy"
+UCI_CONFIG="$PKG/files/etc/config/xr1710g_proxy"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT

@@ -1,5 +1,8 @@
-# /etc/config/xr1710g-proxy — 代理与组网：分流代理（ADR-0003 架构 C）
+# /etc/config/xr1710g_proxy — 代理与组网：分流代理（ADR-0003 架构 C）
 # 默认全部不启用（I4）：enabled=0 时 init 立即退出，不建表不建路由不起进程。
+# ⚠️ 文件名必须是下划线的 `xr1710g_proxy`：UCI 的**包名不允许连字符**，
+#    用 `xr1710g-proxy` 会 load 成功但无法 `uci set/get`（实机已复现），
+#    而 init/前端一律用 `xr1710g_proxy.` 寻址。
 
 config global 'global'
 	# ── 总开关 ──

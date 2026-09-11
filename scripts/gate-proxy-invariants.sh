@@ -140,7 +140,7 @@ fi
 
 echo "== 附加：默认关闭（G4） =="
 # 代理总开关必须默认 0（预装但默认不启用）
-if grep -qE "^[[:space:]]*option enabled '0'" packages-xr1710g/package/xr1710g-proxy/files/etc/config/xr1710g-proxy 2>/dev/null; then
+if grep -qE "^[[:space:]]*option enabled '0'" packages-xr1710g/package/xr1710g-proxy/files/etc/config/xr1710g_proxy 2>/dev/null; then
 	ok "xr1710g-proxy 默认 enabled=0"
 else
 	bad "xr1710g-proxy 默认不是 enabled=0 —— 违反 G4「默认关闭」"
