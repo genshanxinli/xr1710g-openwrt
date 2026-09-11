@@ -49,10 +49,6 @@ patches/packages/mt76-9993-wifi-mt76-mt7996-pass-operating-mode-to-rate-control.
 # 9993 的编译依赖（F25 二次构建暴露）：mac80211 backport 未导出 cap_bw/cap_nss helper，
 #   integration 树以 mac80211 包 subsys 补丁补充——随 9993 毕业为默认。
 patches/packages/mac80211-411-export-link-sta-capability-limits.patch package/kernel/mac80211/patches/subsys/
-# ── packages：netbird 提版（方案二 G3：内核态 WireGuard 组网）──
-# 官方 feed 0.73.2 → 自持 0.78.1（含 v0.76.0 本地提权修复 GHSA-qcpp-8vwj-hhwr）；
-# 多带 +kmod-ipt-ipset（本地偏离，理由见补丁头注释与 FIXES F91）。上游 PR #30370/#30406 合入即删。
-patches/packages/netbird-0001-bump-to-0.78.1-and-ipset-dep.patch package/feeds/packages/net/netbird/patches/
 
 # ── root：跨目录 git apply（默认档）──
 # XR1710G 板级支持（2026-08-17 对 master 重建三件套，替代 PR 原 diff——PR 对 master 5 文件冲突，见 FIXES F01）

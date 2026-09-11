@@ -86,6 +86,19 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
+      - name: feed 包定义补丁（改 feed 包 Makefile 的唯一正确机制）
+        # netbird 提版改的是 feed 包 Makefile，不能走 patches/packages/（那条路在解开的**包源码**
+        # tarball 上应用；netbird tarball 是上游源码仓库、无 OpenWrt 包 Makefile，且 Go 配方不跑
+        # 源码 make ⇒ 必然 Patch failed）。详见 patches/feeds/ 补丁头注释与 verify-copy-patches.sh。
+        run: |
+          set -euo pipefail
+          cd "$TREE"
+          "${GITHUB_WORKSPACE}/overlay/scripts/patch-feeds.sh" .
+          # 断言落地生效（避免"跑过了但没改到"）
+          grep -q '^PKG_VERSION:=0.78.1$' feeds/packages/net/netbird/Makefile
+          grep -q 'kmod-ipt-ipset' feeds/packages/net/netbird/Makefile
+          echo "✓ netbird 提版已生效：$(grep -E '^PKG_VERSION:=' feeds/packages/net/netbird/Makefile)"
+
       - name: 配置（defconfig + seed）
         run: |
           cd "$TREE"

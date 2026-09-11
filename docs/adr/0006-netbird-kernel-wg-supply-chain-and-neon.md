@@ -13,8 +13,22 @@
 
 ### 1. netbird 用**补丁层提版**，不 vendor 整包
 
-`patches/packages/netbird-0001-bump-to-0.78.1-and-ipset-dep.patch` → 落到 `package/feeds/packages/net/netbird/patches/`，
-只改三行：`PKG_VERSION` 0.73.2→0.78.1、`PKG_HASH` 同步、`DEPENDS` 增补 `+kmod-ipt-ipset`。
+`patches/feeds/netbird-0001-bump-to-0.78.1-and-ipset-dep.patch` → 由 `scripts/patch-feeds.sh`
+在 **feeds update/install 之后**以 `git apply` 打到 `<tree>/feeds/packages`，只改三行：
+`PKG_VERSION` 0.73.2→0.78.1、`PKG_HASH` 同步、`DEPENDS` 增补 `+kmod-ipt-ipset`。
+
+> ⚠️ **落地机制（实施期更正，代价是一次 CI 红）**：最初按 `patches/packages/` 拷贝机制放到
+> `package/feeds/packages/net/netbird/patches/`。**那是错的**——拷贝机制把补丁当**包源码**补丁，
+> 在解开的 netbird tarball 上 `patch -p1` 应用；而该 tarball 是**上游源码仓库**（含 netbird 自己的
+> Makefile，没有 OpenWrt 包 Makefile），且 OpenWrt 的 Go 配方（`golang-package.mk` →
+> `golang-build.sh build`）**根本不调用源码里的 make**。`verify-copy-patches.sh` 实机复现
+> `Patch failed!`。
+>
+> 更危险的是：在该脚本里 netbird 目标最初**未登记包源映射**，于是它只打印
+> `⚠ [verify] 未知拷贝目标 …——跳过` ⇒ 补丁的**真实应用从未被校验**（假绿）。CI 首次运行
+> （run 34621855785）暴露了这条：dry-run 对未登记的拷贝目标只警告不红。
+> ⇒ 修正为独立的 `scripts/patch-feeds.sh`，**并且**：补丁未在脚本内登记落地根即**红**，
+> 从机制上杜绝再次"静默跳过"。
 
 - `PKG_HASH := 2adde8bbd77ea595b5f50174be10574466f1c07fc9fbf827024245aec2f4dabc`（**实算**，非抄 PR）。
   方法自证：对 0.73.2 tarball 实算得 `ba8d1615a6676e6d17f5d4a3c8027cd2e7437c862da3f963d3b337c09efff423`，
