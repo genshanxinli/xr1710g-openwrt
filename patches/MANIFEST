@@ -43,6 +43,14 @@ patches/packages/mt76-0005-wifi-mt76-mt7996-guard-txfree-overrun.patch          
 patches/packages/mt76-0011-wifi-mt76-npu-fix-rx-descriptor-ownership.patch          package/kernel/mt76/patches/
 # 0012：NPU del_sta（naoki66 2d3aa30 / Ryan Chen：STA 断开→同 MAC 重连 ~1Mbps 残留修复；#EXP，2026-09-07 WP-delsta）
 #EXP patches/packages/mt76-0012-wifi-mt76-npu-del-sta.patch          package/kernel/mt76/patches/
+# 0013：NPU offload 下刷新 tx-agg(BlockAck) 会话定时器（Gilly 045，2026-09-10 论坛 t/249319 #441 发布；
+#   全驱动唯一刷新点 mt7996_mac_add_txs_skb() 的门由 WED 扩为 WED||NPU。社区实测：Samba/大文件传输
+#   吞吐塌陷、单包 ping 即恢复（t/222776 #3900/#3901）。**机制前提未实机确认**（NPU 下 PKT_TYPE_TXS
+#   是否仍上报 host），故先 #EXP；实机判据通过后毕业 default，见 docs/absorptions/2026-09-11-absorption-plan.md）
+#EXP patches/packages/mt76-0013-wifi-mt76-mt7996-refresh-tx-agg-timer-under-npu-offload.patch    package/kernel/mt76/patches/
+# 0014：NPU 复位 + panic/竞态/越界加固（Gilly 047/034/035/036/042/026/044）——047 修整机复位后
+#   host TX 永死与 NAPI NULL oops；034 reg_lock irqsave 防 AP panic；其余为 wcid 竞态与事件越界校验
+#EXP patches/packages/mt76-0014-wifi-mt76-npu-reset-panic-race-hardening.patch    package/kernel/mt76/patches/
 patches/packages/mt76-9990-wifi-mt76-mt7996-advertise-eht-to-firmware-rate-control.patch    package/kernel/mt76/patches/
 patches/packages/mt76-9991-wifi-mt76-mt7996-fill-160mhz-bf-fallback-for-eht-320.patch       package/kernel/mt76/patches/
 patches/packages/mt76-9993-wifi-mt76-mt7996-pass-operating-mode-to-rate-control.patch       package/kernel/mt76/patches/
@@ -86,6 +94,13 @@ patches/root/9027-ledtrig-netdev-link-mode-mutex.patch ROOT
 patches/root/9031-base-files-led-skip-interval-hw-offload.patch ROOT
 # 9033：RTL826x 10G PHY LED class 支持（carry openwrt/openwrt #24034；RTL8261BE lan1/lan2，issue #13）
 patches/root/9033-openwrt-24034-rtl826x-led.patch ROOT
+# 9042：airoha small RX rings 增长（上游 PR #24872，Vitaliy Sochnev，2026-09-10 抓取；backport kernel 7.4
+#   e84b89f17a12）。ring 4 = force-to-CPU 共享环（DHCP/PPPoE/PPP/LCP/ISAKMP/LLDP…），16 描述符只占
+#   512B/4096B page，硬件越过环尾把"描述符形状"数据写进内核内存 → DHCP/PPPoE 握手期 panic 或协商卡死。
+#   修法：fallback 16→32 + ring4→128。**必须置于 vendor/11 之前**：本补丁同时把 916-02 内层上下文
+#   16→32 与 310-10/920-12/920-13 的内层 hunk 行号同步，vendor/11 的 @@ -553,8 段依赖该新基线
+#   （顺序实证：9042 → vendor/11 连续可应用）。合入上游后删除，见 FIXES F92。
+patches/root/9042-xr1710g-airoha-rx-ring-grow.patch ROOT
 # wifi-scripts 按 radio 独立 txpower（pr-23990/YYH2913；2026-08-17 对 master 重建，源于 fanboy 16 号 41b9e3ac，F13）
 patches/root/9010-wifi-scripts-txpower-ucode.patch ROOT
 # HW GRO/LRO 默认开启（11 号定档 default——README 声明的 HW-GRO/LRO 能力载体；kernel 6.18 编译期验证中）
@@ -112,6 +127,9 @@ patches/vendor/fanboy/05-bridge-offload-22533-33ac9c66.patch ROOT
 patches/vendor/fanboy/06-nft-flow-offload-l2-22533-2ed1af79c7.patch ROOT
 # 9024：bridge-flow-offload 依赖改为 kmod-nft-offload，规则表名避开用户 fw4 桥表（issue #1 E1/E3）
 patches/root/9024-bridge-flow-offload-deps-table.patch ROOT
+# 9043：bridge-flow-offload 规则注入两防护（hw offload 守门 + 清陈旧 ruleset-post include；
+#   对照 yahuisme/w1700k-openwrt 实践，2026-09-10。表名/reload 重入已由 9024 处理，此处不重复）
+patches/root/9043-xr1710g-bridge-offload-guard.patch ROOT
 # 9026：bridge 族 nft_flow_offload_init/destroy 复用 inet conntrack 语义（issue #1 E2）
 patches/root/9026-bridge-flow-offload-init-conntrack.patch ROOT
 # 9035：FLOW_STATS=y 与 NPU offload 共存（内核 patch 9995 生成 wrapper）——2026-08-31 ci-88 experimental fresh flash 验证后转 default。
@@ -137,6 +155,14 @@ patches/root/9035-airoha-ppe-flow-stats-coexist.patch ROOT
 # 9041：RTK SerDes/SDS bundle（742=622 SDS-mode + 743/744 restore/reapply；9001 phy5/phy8 属性同步；
 #       与 9029/9038 PCS 侧互补。2026-09-07 WP-SerDes，#EXP）
 #EXP patches/root/9041-xr1710g-rtk-serdes-bundle.patch ROOT
+# 9044：USXGMII 速率自适应被 else 分支关死（naoki66 625 / Ryan Chen）——上游 airoha_pcs_link_up()
+#   把 RATE_UPDATE_MODE/FORCE_RATE_ADAPT_MODE 段放在 `neg_mode != INBAND_ENABLED` 的 else 里，
+#   而 USXGMII 走 in-band → 速率切换后寄存器停在旧档。直接关联本仓 2026-09-08 验收记录
+#   "PHY 宣告 10G、AN 落 2.5G"。#EXP（本仓构建树内层未实跑）；实机判据见 FIXES F93。
+#EXP patches/root/9044-xr1710g-pcs-usxgmii-rate-adaptation.patch ROOT
+# 9045：RX 环停顿恢复 + RX_NO_CPU_DSCP/q31 中断 + QDMA TX BQL UAF + thermal 两处 1 行 bug
+#   （Gilly 981/980/976/957/960/961；与 9042 的 DMA 越环不同 hunk，互补）
+#EXP patches/root/9045-xr1710g-airoha-rx-recover-irq-thermal.patch ROOT
 #EXP patches/vendor/fanboy/02-eip93-f80d0507.patch ROOT
 #EXP patches/vendor/fanboy/04-dsa-kmod-netlink-22532-aa531917.patch ROOT
 # 9029：lan2 10G JCPLL VCO TCLVAR recal（IP10/A8，experimental；2026-09-07 按 rdmitry PR#143 机制重写：

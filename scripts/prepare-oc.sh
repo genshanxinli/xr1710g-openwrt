@@ -70,18 +70,36 @@ PY
 touched "$DTS"
 
 # 2) PM domain PLL 公式：freq_mhz = <old> + state * 50 → <BASE> + state * 50
-#    6.18 下该公式可能在 patches-6.18/ 携带的补丁或内核源里；树内找不到就报错并要求定位（修复不是降级）。
-found=0
-while IFS= read -r f; do
-  sed -i -E "s/freq_mhz = [0-9]+ \+ state \* 50/freq_mhz = $BASE + state * 50/" "$f"
-  echo "  PLL 公式更新：$f（base=$BASE）"
-  touched "$f"
-  found=$((found+1))
-done < <(grep -rl -E 'freq_mhz = [0-9]+ \+ state \* 50' "$TREE/target/linux/airoha" 2>/dev/null || true)
-if [[ "$found" -eq 0 ]]; then
-  echo "⚠ 树内未找到 'freq_mhz = <n> + state * 50'：6.18 下 PM domain 的 PLL 公式可能位于内核源码树（drivers/pmdomain/airoha）。" >&2
-  echo "  处理（修复而非降级）：内核 prepare 后定位该行并同步为 $BASE + state * 50；首次构建请人工核验 (dmesg | grep -i freq)。" >&2
+#    断言式（2026-09-11 加固，范式取自 yahuisme/w1700k-openwrt）：
+#      - 公式所在 patch 存在（vendor/fanboy/03 的 940-pmdomain-* 已随 apply-patches 落到树内）；
+#      - 公式确实匹配预期基线模式。
+#    旧版"找不到只告警"会让 OC 静默不完整（OPP 平移了、PLL 公式没跟上 → 频率语义错），
+#    故此处改为硬失败（修复而不是降级）：patch 在、公式不在 = 上游/补丁结构变了，必须人工定位。
+PLL_FOUND=0
+PLL_PATCHES=$(grep -rl -E 'freq_mhz = [0-9]+ \+ state \* 50' "$TREE/target/linux/airoha" 2>/dev/null || true)
+if [[ -n "$PLL_PATCHES" ]]; then
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    sed -i -E "s/freq_mhz = [0-9]+ \+ state \* 50/freq_mhz = $BASE + state * 50/" "$f"
+    echo "  PLL 公式更新：$f（base=$BASE）"
+    touched "$f"
+    PLL_FOUND=$((PLL_FOUND+1))
+  done <<< "$PLL_PATCHES"
+else
+  # 树内没有可改的公式：区分两种情况，避免误红也可避免静默
+  PMDOMAIN_PATCH=$(find "$TREE/target/linux/airoha" -name '*pmdomain*' -type f 2>/dev/null | head -1)
+  if [[ -n "$PMDOMAIN_PATCH" ]]; then
+    echo "✗ 错误：找到 PM domain 补丁 $PMDOMAIN_PATCH，但其中没有预期的 'freq_mhz = <n> + state * 50'。" >&2
+    echo "  含义：上游/该补丁的 PLL 频率基线结构已变化——OC 若继续会在频率语义错误下运行（危险）。" >&2
+    echo "  处理（修复而非降级）：定位新的基线写法并同步为 $BASE + state * 50，然后更新本脚本的断言模式；" >&2
+    echo "  参考基线：vendor/fanboy/03 的内层 940-pmdomain-airoha-Add-Airoha-CPU-PM-Domain-support.patch。" >&2
+    exit 1
+  fi
+  echo "⚠ 树内没有 PM domain 补丁（target/linux/airoha 下无 *pmdomain*）：OC 前置补丁未应用。" >&2
+  echo "  处理：先跑 scripts/apply-patches.sh <树>（MANIFEST 含 vendor/fanboy/03），再跑本脚本。" >&2
+  exit 1
 fi
+[[ "$PLL_FOUND" -ge 1 ]] || { echo "✗ 错误：PLL 公式断言失败（未更新任何文件）" >&2; exit 1; }
 
 # 3) 默认 governor → performance
 if [[ -f "$CFG" ]]; then

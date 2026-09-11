@@ -1,0 +1,28 @@
+From 36da8e02b2e12f56ff3582770da2a34499d42613 Mon Sep 17 00:00:00 2001
+From: fanboy <fanboy@openwrt.org>
+Date: Sat, 10 Jan 2026 09:58:15 -1000
+Subject: xr1710g: silence PHY LED pinctrl error message
+
+Suppress the "Failed to setup PHY LED pinctrl" dev_err caused by GPS fix (harmless on boards without the pinctrl).
+
+（2026-08-17 F13 切片：源 = vendor/fanboy/08-reliability-compat-36da8e02.patch 的 led 段；
+ 重建/应用顺序实证见 FIXES F13。上游：n/a（自用可靠性/体验项，不打算上游））
+---
+diff --git a/target/linux/airoha/patches-6.18/998-silence-PHY-LED-pinctrl-error.patch b/target/linux/airoha/patches-6.18/998-silence-PHY-LED-pinctrl-error.patch
+new file mode 100644
+index 0000000..94112ce
+--- /dev/null
++++ b/target/linux/airoha/patches-6.18/998-silence-PHY-LED-pinctrl-error.patch
+@@ -0,0 +1,12 @@
++--- a/drivers/net/phy/mediatek/mtk-ge-soc.c
+++++ b/drivers/net/phy/mediatek/mtk-ge-soc.c
++@@ -1425,9 +1425,6 @@ static int an7581_phy_probe(struct phy_d
++ 
++ 	/* Toggle pinctrl to enable PHY LED */
++ 	pinctrl = devm_pinctrl_get_select(&phydev->mdio.dev, "gbe-led");
++-	if (IS_ERR(pinctrl))
++-		dev_err(&phydev->mdio.bus->dev,
++-			"Failed to setup PHY LED pinctrl\n");
++ 
++ 	priv = devm_kzalloc(&phydev->mdio.dev, sizeof(*priv), GFP_KERNEL);
++ 	if (!priv)
