@@ -231,6 +231,15 @@ patches/root/9052-xr1710g-iwinfo-freqlist-per-radio.patch ROOT
 #   GCM/rfc4106）透明回退软件。真源全序 5/5 实证可应用（新增 eip93-fallback.{c,h} 并入 Makefile）。
 #   依赖 vendor/fanboy/02（EIP93 驱动，同为 #EXP）。
 #EXP patches/root/9054-xr1710g-crypto-eip93-dynamic-fallback.patch ROOT
+# 9060（#EXP）：9054 的**打包侧配套** —— modules/crypto.mk 补 eip93 新模块的包定义。
+#   9054 让 eip93 产出第二只模块 `fallback.ko`（eip93-fallback.o）+ crypto 新增
+#   `crypt-benchmark.ko`/`fallback.ko`，但 OpenWrt 包定义未同步 → 实验档打包报
+#   "Package kmod-crypto-hw-eip93 is missing dependencies for the following libraries: fallback.ko"
+#   → modules/crypto.mk:549 Error 1（CI run 34669202875 实测）。本补丁新增
+#   KernelPackage/crypto-benchmark + crypto-dynamic-fallback，eip93 加 +kmod-crypto-dynamic-fallback
+#   并去掉被动态回退取代的两个静态阈值 KCONFIG，crypto-test 加 +kmod-crypto-benchmark。
+#   **与 9054 必须同档**（否则内核有模块而包里没有，或反之）。
+#EXP patches/root/9060-xr1710g-crypto-eip93-package-deps.patch ROOT
 # 9055（#EXP）：AN7581 PCS RX-lock **诊断**（naoki66 原作 + orangeyoo kernel/0923 v1.6.1 抑噪版，
 #   2026-09-12 P2 吸收）。F93（PHY 宣告 10G / AN 落 2.5G）与 F81（#22397 LAN2 No FBCK Lock）
 #   都卡在"PCS 无 carrier 时看不出是对端没信号还是 CDR 没锁"这一盲点；本项提供可判读证据：
