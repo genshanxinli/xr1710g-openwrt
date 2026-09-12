@@ -1,0 +1,175 @@
+diff --git a/target/linux/airoha/patches-6.18/9999-net-airoha-soe-20-flowtable-discover-xfrm-state.patch b/target/linux/airoha/patches-6.18/9999-net-airoha-soe-20-flowtable-discover-xfrm-state.patch
+new file mode 100644
+--- /dev/null
++++ b/target/linux/airoha/patches-6.18/9999-net-airoha-soe-20-flowtable-discover-xfrm-state.patch
+@@ -0,0 +1,170 @@
++# Source: hurryman2212/OpenW1700k-test @offload-oc 9999-20（2026-09-12 P2 SOE 主体吸收，按本仓真源重基）
++# 完整说明（依赖链/重基依据/判据）见 patches/MANIFEST 与 research-20260912/inner/soe-head.txt
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: Jihong Min <hurryman2212@gmail.com>
++Date: Tue, 4 Aug 2026 16:29:39 +0900
++Subject: [PATCH] netfilter: flowtable: discover XFRM state for flow
++ routes
++
++Discover authenticated inbound and eligible outbound XFRM state while resolving flow routes.
++
++Assisted-by: Codex:gpt-5.6
++Signed-off-by: Jihong Min <hurryman2212@gmail.com>
++---
++ net/netfilter/nf_flow_table_path.c | 94 ++++++++++++++++++++++++++++--
++ 1 file changed, 90 insertions(+), 4 deletions(-)
++
++# Reason（适配本仓真源 = OpenWrt 真实 prepare 树，kernel-base commit 058cfa7；
++#        对照树 tmp/soe-adapt4/real；不是 soe-basetree.sh --fuzz=2 重放的近似树 kvanilla）：
++#   - 原 hunk #1（include 区）：真源 include 列表里没有 `#include <linux/if_bridge.h>`（hurryman 基线更新），
++#     按真源重写上下文；`+#include <net/xfrm.h>` 位置不变。
++#   - 原 hunk #3：真源该函数名为 nft_flow_route()（真源 226 行），不是 hurryman 的 nft_flow_route_routing()；
++#     变量声明块在真源 230-232 行，按真源重写上下文，新增的 xo/sp 声明不变。
++#   - 原 hunk #6：真源 nft_flow_route() 尾部有两处形态差异，按真源等价改写：
++#       (a) 真源 nft_dev_forward_path() 返回 void（真源 192 行定义），没有原 hunk 假定的 <0 错误返回，
++#           故保留真源的 `if (xmit_type == NEIGH && xmit_type == NEIGH) { nft_dev_forward_path(route, ct, dir, ft);
++#           ... }` 原样，不再改成 `if (... < 0) goto err_dst_release;`（语义等价：真源无从取错误码）；
++#       (b) 其余 XFRM 语义（skb_sec_path/xfrm_input_offload 发现块、nft_flow_route_needs_xfrm_input/
++#           xfrm_policy_flowtable_eligible 校验块、err_dst_release 释放块）逐字保留，仅按真源重写上下文。
++#   - 原 hunk #2/#4/#5：真源上下文原样匹配，未改动。
++#   - 无整体重复：真源 nf_flow_table_path.c 无 xfrm_input/policy_flowtable 相关代码；
++#     A 系列（9053 内层）不触碰 net/netfilter/，与本补丁无重叠。
++diff --git a/net/netfilter/nf_flow_table_path.c b/net/netfilter/nf_flow_table_path.c
++index 10ef70c..5469be6 100644
++--- a/net/netfilter/nf_flow_table_path.c
+++++ b/net/netfilter/nf_flow_table_path.c
++@@ -14,6 +14,7 @@
++ #include <net/netfilter/nf_conntrack_core.h>
++ #include <net/netfilter/nf_conntrack_extend.h>
++ #include <net/netfilter/nf_flow_table.h>
+++#include <net/xfrm.h>
++ 
++ static enum flow_offload_xmit_type nft_xmit_type(struct dst_entry *dst)
++ {
++@@ -28,6 +29,24 @@ static enum flow_offload_xmit_type nft_xmit_type(struct dst_entry *dst)
++ 	return FLOW_OFFLOAD_XMIT_NEIGH;
++ }
++ 
+++#if IS_ENABLED(CONFIG_XFRM)
+++static bool nft_flow_route_needs_xfrm_input(const struct nf_flow_route *route,
+++					    enum ip_conntrack_dir dir)
+++{
+++	const struct dst_entry *dst = route->tuple[dir].dst;
+++	const struct xfrm_state *x;
+++
+++	if (route->tuple[dir].xmit_type != FLOW_OFFLOAD_XMIT_XFRM)
+++		return false;
+++
+++	x = dst_xfrm(dst);
+++	if (x && x->xso.flags & XFRM_DEV_OFFLOAD_FLAG_FLOWTABLE_INPUT)
+++		return true;
+++
+++	return false;
+++}
+++#endif
+++
++ static void nft_default_forward_path(struct nf_flow_route *route,
++ 				     struct dst_entry *dst_cache,
++ 				     enum ip_conntrack_dir dir)
++@@ -230,6 +230,10 @@ int nft_flow_route(const struct nft_pktinfo *pkt, const struct nf_conn *ct,
++ 	struct dst_entry *this_dst = skb_dst(pkt->skb);
++ 	struct dst_entry *other_dst = NULL;
++ 	struct flowi fl;
+++#if IS_ENABLED(CONFIG_XFRM)
+++	struct xfrm_offload *xo;
+++	struct sec_path *sp;
+++#endif
++ 
++ 	memset(&fl, 0, sizeof(fl));
++ 	switch (nft_pf(pkt)) {
++@@ -367,6 +390,10 @@ int nft_flow_route_routing(const struct nft_pktinfo *pkt,
++ 		fl.u.ip4.flowi4_dscp = ip4h_dscp(ip_hdr(pkt->skb));
++ 		fl.u.ip4.flowi4_mark = pkt->skb->mark;
++ 		fl.u.ip4.flowi4_flags = FLOWI_FLAG_ANYSRC;
+++		fl.u.ip4.flowi4_proto =
+++			ct->tuplehash[!dir].tuple.dst.protonum;
+++		fl.u.ip4.fl4_sport = ct->tuplehash[!dir].tuple.src.u.all;
+++		fl.u.ip4.fl4_dport = ct->tuplehash[dir].tuple.src.u.all;
++ 		break;
++ 	case NFPROTO_IPV6:
++ 		fl.u.ip6.daddr = ct->tuplehash[dir].tuple.src.u3.in6;
++@@ -376,6 +403,10 @@ int nft_flow_route_routing(const struct nft_pktinfo *pkt,
++ 		fl.u.ip6.flowlabel = ip6_flowinfo(ipv6_hdr(pkt->skb));
++ 		fl.u.ip6.flowi6_mark = pkt->skb->mark;
++ 		fl.u.ip6.flowi6_flags = FLOWI_FLAG_ANYSRC;
+++		fl.u.ip6.flowi6_proto =
+++			ct->tuplehash[!dir].tuple.dst.protonum;
+++		fl.u.ip6.fl6_sport = ct->tuplehash[!dir].tuple.src.u.all;
+++		fl.u.ip6.fl6_dport = ct->tuplehash[dir].tuple.src.u.all;
++ 		break;
++ 	}
++ 
++@@ -263,14 +263,68 @@ int nft_flow_route(const struct nft_pktinfo *pkt, const struct nf_conn *ct,
++ 	}
++ 
+++#if IS_ENABLED(CONFIG_XFRM)
+++	sp = skb_sec_path(pkt->skb);
+++	xo = xfrm_input_offload(pkt->skb);
+++	if (sp && xo && (xo->flags & XFRM_HW_FLOW_ID)) {
+++		struct xfrm_state *x = sp->xvec[sp->len - 1];
+++
+++		other_dst = xfrm_lookup(nft_net(pkt), other_dst, &fl, NULL, 0);
+++		if (IS_ERR(other_dst)) {
+++			dst_release(this_dst);
+++			return -ENOENT;
+++		}
+++
+++		xfrm_state_hold(x);
+++		route->tuple[dir].xfrm_input = x;
+++		route->tuple[dir].xfrm_input_flow_id = xo->hw_flow_id;
+++		route->tuple[dir].xfrm_policy_genid = sp->policy_genid;
+++		route->tuple[!dir].xfrm_policy_genid = sp->policy_genid;
+++	}
+++#endif
+++
++ 	nft_default_forward_path(route, this_dst, dir);
++ 	nft_default_forward_path(route, other_dst, !dir);
++ 
+++#if IS_ENABLED(CONFIG_XFRM)
+++	if (!route->tuple[dir].xfrm_input) {
+++		if (nft_flow_route_needs_xfrm_input(route, !dir))
+++			goto err_dst_release;
+++
+++		if (nft_flow_route_needs_xfrm_input(route, dir)) {
+++			u32 genid;
+++
+++			/* Only an unmarked, locally initiated flow with a verified
+++			 * output policy may precede its authenticated input path.
+++			 */
+++			if (dir != IP_CT_DIR_ORIGINAL || pkt->skb->mark ||
+++			    !xfrm_policy_flowtable_eligible(nft_net(pkt)))
+++				goto err_dst_release;
+++
+++			genid = xfrm_policy_generation(nft_net(pkt));
+++			route->tuple[dir].xfrm_policy_genid = genid;
+++			route->tuple[!dir].xfrm_policy_genid = genid;
+++			route->tuple[!dir].xfrm_input_deferred = true;
+++		}
+++	}
+++#endif
+++
++ 	if (route->tuple[dir].xmit_type	== FLOW_OFFLOAD_XMIT_NEIGH &&
++ 	    route->tuple[!dir].xmit_type == FLOW_OFFLOAD_XMIT_NEIGH) {
++ 		nft_dev_forward_path(route, ct, dir, ft);
++ 		nft_dev_forward_path(route, ct, !dir, ft);
++ 	}
++ 
++ 	return 0;
+++
+++err_dst_release:
+++	dst_release(route->tuple[dir].dst);
+++	dst_release(route->tuple[!dir].dst);
+++#if IS_ENABLED(CONFIG_XFRM)
+++	if (route->tuple[dir].xfrm_input) {
+++		xfrm_state_put(route->tuple[dir].xfrm_input);
+++		route->tuple[dir].xfrm_input = NULL;
+++	}
+++#endif
+++	return -ENOENT;
++ }
++ EXPORT_SYMBOL_GPL(nft_flow_route);

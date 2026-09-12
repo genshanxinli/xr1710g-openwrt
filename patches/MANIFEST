@@ -231,6 +231,35 @@ patches/root/9052-xr1710g-iwinfo-freqlist-per-radio.patch ROOT
 #   GCM/rfc4106）透明回退软件。真源全序 5/5 实证可应用（新增 eip93-fallback.{c,h} 并入 Makefile）。
 #   依赖 vendor/fanboy/02（EIP93 驱动，同为 #EXP）。
 #EXP patches/root/9054-xr1710g-crypto-eip93-dynamic-fallback.patch ROOT
+# 9055（#EXP）：AN7581 PCS RX-lock **诊断**（naoki66 原作 + orangeyoo kernel/0923 v1.6.1 抑噪版，
+#   2026-09-12 P2 吸收）。F93（PHY 宣告 10G / AN 落 2.5G）与 F81（#22397 LAN2 No FBCK Lock）
+#   都卡在"PCS 无 carrier 时看不出是对端没信号还是 CDR 没锁"这一盲点；本项提供可判读证据：
+#   打 PCS/Base-R/AN/SigDet/FreqDet/reset 寄存器，区分 `action=no-signal` 与 `action=cdr-reset`
+#   并累计 resets。**抑噪是硬约束**（早期版空置 WAN 口 ~2 行/秒刷屏，8 分钟冲空 logread 环形
+#   缓冲挤掉 hostapd 历史）——本版 no-signal/AN down 每周期只打一次，cdr-reset 仍每次打印。
+#   同域互补：9029（JCPLL TCLVAR recal）/9038（USXGMII RX CDR crossing）/9044（rate adaptation）
+#   治"能不能起来"，本项治"为什么起不来"。双向顺序共存已实证（终态 sha256 一致）。
+#EXP patches/root/9055-xr1710g-pcs-rxlock-diagnostics.patch ROOT
+# 9057（default）：MLO 编辑页隐藏 mode=mesh 接口（orangeyoo luci/0660，2026-09-12 P2 吸收）。
+#   MLO 页把所有 wifi-iface 列进可编辑 AP/STA 网格 → 选中 802.11s mesh 回程会被通用表单
+#   改写 mode/ssid/network，6GHz 回程静默断开。改的是本仓 9017 生成的文件
+#   `luci-app-mlo/htdocs/.../mlo.js`，故**必须置于 9017 之后**；内层装到
+#   `luci-app-mlo/patches/001-xr1710g-mlo-hide-mesh.patch` 由构建期应用。
+#   实证：对抽取出的 9017 mlo.js（693 行）`patch -p1 --fuzz=0` 两个 hunk 干净命中
+#   （插入点与 0660 逐字吻合）。纯前端只读过滤+提示，本仓当前无 mesh 接口 → 现网零影响。
+patches/root/9057-xr1710g-mlo-hide-mesh.patch ROOT
+# 9058/9059（#EXP）：hwrng/TRNG 先开 SCU 时钟门再置 RNG_EN|RNG_OSC_EN（2026-09-12 P2 吸收）。
+#   9058 改驱动（drivers/char/hw_random/airoha-trng.c）：加 SCU regmap 句柄 + 三道时钟门
+#   （BUS_CLK_GAT bit3 / PER_CLK_GAT_1 bit21 / PER_CLK_GAT_2 bit0）**先于** TRNG 使能；
+#   9059 改 DTS/绑定：SCU 节点下加只覆盖时钟门寄存器段的 syscon 子节点，TRNG 节点加
+#   `airoha,scu` 句柄（并补 rng 绑定的该属性）。**两者必须同档**。
+#   来源：naoki66 原作 / orangeyoo kernel/0921（v1.6.1 顺序修正）+ OpenWRT-fanboy PR#1 18/18
+#   （经 yyh2913-patches 920 的 SCU 上下文）——缓存 0921 依赖 920 引入的 `RNG_OSC_EN`/`trng->scu`，
+#   在本仓真源上畸形失败，故按真源重写为一份自洽补丁（不含 920 的 DRBG 输出改动）。
+#   实证：对 kernel 6.18.44 真源 `patch -p1 --fuzz=0` 干净应用。收益概率低（作者自述需两台机
+#   反复冷启动），故 #EXP；判据见 FIXES F120。
+#EXP patches/root/9058-xr1710g-hwrng-scu-clock-order.patch ROOT
+#EXP patches/root/9059-xr1710g-hwrng-scu-dts.patch ROOT
 # 9047：PPE flow bind rate 30→8 + debugfs 旋钮（2026-09-12 调研吸收；来源 openwrt 论坛 t/222776 #3890
 #   NoTengoBattery/Oever González，2026-09-04，与本仓 F79=mt76-0011 同一作者同帖的 Patch 2）。
 #   vendor 默认 0x1e(30) 高于交互流包速率 → 游戏/VoIP/延迟探针永不绑定，与批量卸载并存时吃 60-250ms 尖峰；
@@ -238,6 +267,26 @@ patches/root/9052-xr1710g-iwinfo-freqlist-per-radio.patch ROOT
 #   之后：同 airoha_ppe.c 但区段不相交——9990 改 853/1046/1057，本项改 136/223，全序真实应用已实证）。
 #   实机判据见 FIXES F104。
 patches/root/9047-xr1710g-airoha-ppe-bind-rate.patch ROOT
+# 9056（default）：PPPoE 自动 IPv6 与显式 DHCPv6 双客户端互斥（orangeyoo 0103+0104，2026-09-12 P2 §2.2）。
+#   本仓 files/etc/config/network 预置 `config interface 'wan6' { proto 'dhcpv6' }`，注释写"PPPoE 在
+#   LuCI 面板改"；用户切 PPPoE 后 PPP 的 ipv6=auto 再建一个动态 DHCPv6（ppp6-up 的 AUTOIPV6 路径）
+#   → 两个 odhcp6c 跑同一 L3 设备，而 odhcp6c 的 ubus 对象名固定 `odhcp6c.<设备>`（真源 src/ubus.c
+#   ubus_init()，ifname = proto_run_command 末参）→ 第二个 ubus_add_object EEXIST → 退出 → netifd
+#   重启 → IPv6 间歇不可用（**本仓已文档化的操作路径**，非边角场景）。
+#   机制：guard 脚本（overlay files/lib/netifd/xr1710g-dhcpv6-guard.sh）双向查冲突，**只让后到的
+#   netifd 客户端不启动**：① ppp6-up 建 auto IPv6 前查"同设备已有启用的显式 dhcpv6 接口"（支持
+#   @parent 间接引用、深度上限 16 防环）→ 清空 AUTOIPV6；② dhcpv6.sh 的 proto_dhcpv6_setup() 入口
+#   查同设备已有**另一 netifd 接口**的 odhcp6c（/proc/<pid>/cmdline 末参比对设备 + environ
+#   INTERFACE= 归属不同接口）→ logger + proto_notify_error DHCPV6_DUPLICATE_CLIENT +
+#   proto_block_restart。**绝不杀**没有 INTERFACE= 的第三方 odhcp6c（手工调试不受影响）；
+#   config_load/config_get_* 全包在子 shell，不污染 PPP hook 的 JSON/env。
+#   档位 **default**：无冲突时两条路径与现状逐字等价（不改变默认行为），只在真冲突时生效。
+#   内层 4 份（外层包裹，构建期由包 patches/ 目录应用）：ppp/patches/001（ppp6-up）+ 002（PKG_RELEASE
+#   2→3）、odhcp6c/patches/001（dhcpv6.sh）+ 002（PKG_RELEASE 3→4）。**odhcp6c 上游无 patches/ 目录**
+#   ——由本外层 new file mode 直接创建，构建期按目录 glob 应用，无需脚本 mkdir（对比 mt76 需 mkdir）。
+#   实证：f0d3e332 真源抽取内层 `patch -p1 --fuzz=0 --dry-run` **4/4 洁净**（0003 上下文按真源重算：
+#   @@ -72,6 +72,16 @@ / @@ -15,6 +15,13 @@，修正了缓存 0103 的作者树行号）。判据见 FIXES F117。
+patches/root/9056-xr1710g-dhcpv6-duplicate-guard.patch ROOT
 
 # ── 待拆分/评审后解锁（原料桶已有，见 FIXES F13/F14）──
 # 08-reliability-compat：2026-08-17 切片完成——六项（SPI33MHz/banner/dropbear/antenna-memo/snd-off/LED-silence）
@@ -252,3 +301,41 @@ patches/root/9047-xr1710g-airoha-ppe-bind-rate.patch ROOT
 # 01-vermagic-inject 与 20-oc-governor 见 F14/F08（01 待评估；20 为 fanboy 原版参考不直接应用）
 # patches/vendor/fanboy/01-vermagic-inject-85005e10.patch ROOT
 # patches/vendor/fanboy/20-oc-governor-200mhz-ed7cbc80.patch ROOT
+
+# ── SOE 主体（B 系列，19 个补丁；#EXP 捆绑）────────────────────────────────
+# 来源：hurryman2212/OpenW1700k-test @offload-oc（tip 73c3ab3081）target/linux/airoha/patches-6.18/9999-10..28，
+#   2026-09-12 P2 吸收（handoff §2.9）。让 AN7581 的 **SOE** 做 inline IPSec（含 NAT-T）：
+#   XFRM state 经 nft flowtable 下发 PPE/SOE，数据面硬件加解密 —— issue #6 / F52 的终点。
+# **依赖链**：A=xfrm packet-offload 框架（9053，本仓已有）+ D=EIP93 动态软回退（9054，本仓已有）
+#   + B=本捆绑；**三者同档才有完整意义**。另有两条构建期前置（都已在真实构建里先于本捆绑应用）：
+#   ① `9039` 内层 `9990`（airoha_ppe.c 的 bind-WLAN / subflow 重构）——本捆绑的 25 已按其形态适配；
+#   ② `yyh2913 179`（shared QDMA TX ring BQL/UAF，引入 `airoha_queue.flushing`）——B14 的上下文前提。
+# **重基**：原作者基线 ≠ 本仓真源（差异：ppe 重构、QDQ start/stop helper 化、flowtable 侧无
+#   `net/xfrm.h`/函数名不同/`nft_dev_forward_path()` 返回 void）。19 个补丁逐个按真源重写上下文/锚点，
+#   其中 25 的 2 个 hunk 在"真源+9990"上重锚。逐条处置见 research-20260912/inner/soe-rebased/*.patch
+#   顶部 `# Reason:`，重基工具与验收脚本见 research-20260912/inner/。
+# **实证**：真实构建顺序（airoha 全序 168 + 179 + 9039/9990 + 9053/9054 内层 + 本 19 个）上
+#   **逐个 `patch -p1 --fuzz=0` 全部干净应用**（0 FAILED，`soe-basetree.sh`/`gen-25-real9990.py` 可复现）；
+#   终态新增 `drivers/net/ethernet/airoha/airoha_soe.{c,h}`、`NET_AIROHA_SOE`、数据面/flowtable/PPE 钩子。
+# **判据（实机）**：① 构建通过（experimental）；② `ip xfrm state add` 后 devmem/debugfs 看 SOE/PPE 计数增长；
+#   ③ `authenc(hmac(sha256),cbc(aes))`（硬件）vs `rfc4106(gcm(aes))`（软回退，9054 保证）；
+#   ④ iperf3 over IPsec 吞吐 vs 软件路径；⑤ 开 IPsec 卸载后普通转发/无线不回归。台账见 FIXES F122。
+#EXP patches/root/9999-net-airoha-soe-10-dt-bindings-en7581-soe.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-11-maintainers-soe-binding.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-12-dtsi-en7581-soe-node.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-13-soe-ppe-ipsec-registers.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-14-soe-state-datapath-metadata.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-15-soe-ppe-driver-interfaces.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-16-integrate-soe-eth-datapath.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-17-flow-offload-xfrm-actions.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-18-flowtable-xfrm-route-metadata.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-19-flowtable-retain-xfrm-input.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-20-flowtable-discover-xfrm-state.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-21-flowtable-xfrm-hw-actions.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-22-flowtable-keep-xfrm-off-sw-path.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-23-flowtable-admit-authed-xfrm.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-24-flowtable-ctx-offload-api.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-25-autonomous-soe-xfrm-offload.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-26-soe-xfrm-packet-offload.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-27-build-soe-provider.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-28-soe-offload-kconfig.patch ROOT

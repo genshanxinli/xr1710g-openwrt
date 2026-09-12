@@ -2,13 +2,15 @@
 # device-hw-probe.sh — XR1710G 硬件驱动深度测试（灯光 / 网口 / 网口灯光）
 #
 # 用法：
-#   ./scripts/device-hw-probe.sh                 # 默认 4 路并行，只读为主（LED 会写并恢复）
+#   ./scripts/device-hw-probe.sh                 # 默认 5 路并行，只读为主（LED 会写并恢复）
 #   TOGGLE_10G=1 ./scripts/device-hw-probe.sh     # 追加 10G 口 admin down/up 循环（注意会污染 lan1 计数器，见 FIXES HD-3）
+#   LAN_MAC_PING=1 ./scripts/device-hw-probe.sh   # 追加 route_e 的 lan1/lan2 → 网关 ICMP 连通性探测
 #   DEVICE_HOST=root@192.168.123.1 ./scripts/device-hw-probe.sh
 #
 # 说明：
 #   - 测试期间会短暂改写 LED brightness/trigger，每路结束后恢复原状。
 #   - 不会 down/up wan 与 lan3（SSH 所在网段），不会破坏 WAN/PPPoE。
+#   - route_e 是 br-lan 与 10G 成员口的 MAC 一致性检查（只读，F119）；LAN_MAC_PING=1 才发 ICMP。
 #   - 输出写入 /tmp/device-hw-probe-<route>.log，并打印每路尾部摘要。
 set -eu
 
@@ -294,11 +296,82 @@ lsmod | grep -E "mt76|mt7996|realtek|nct7802|mt7530|airoha_eth"
 '
 }
 
-# 多路齐发：4 条路由同时执行
-: > "$OUT_PREFIX.route_a.log"
-: > "$OUT_PREFIX.route_b.log"
-: > "$OUT_PREFIX.route_c.log"
-: > "$OUT_PREFIX.route_d.log"
+route_e() {
+    $SSH_CMD '
+echo "===== ROUTE E: br-lan vs 10G PORT MAC CONSISTENCY (read-only) ====="
+echo "--- E1 ip -br link (fallback: ip -o link) ---"
+ip -br link 2>/dev/null || ip -o link 2>/dev/null || echo "ip link unavailable"
+echo "--- E2 br-lan vs lan1/lan2/lan3/wan/eth0 MAC ---"
+m() { cat "/sys/class/net/$1/address" 2>/dev/null || echo "<absent>"; }
+br=$(m br-lan)
+printf "%-8s %s\n" br-lan "$br"
+for i in lan1 lan2 lan3 wan eth0; do
+  printf "%-8s %s\n" "$i" "$(m "$i")"
+done
+echo "--- E3 conflict verdict (F119: br-lan must NOT share a MAC with a 10G member port) ---"
+if [ "$br" = "<absent>" ]; then
+  echo "SKIP: br-lan absent (interface not up) -> cannot judge; re-run after network start"
+else
+  bad=0
+  for i in lan1 lan2; do
+    v=$(m "$i")
+    if [ "$v" = "$br" ]; then
+      printf "  10G %-5s %s == br-lan %s  => CONFLICT (shared MAC)\n" "$i" "$v" "$br"; bad=1
+    else
+      printf "  10G %-5s %s != br-lan %s  => unique\n" "$i" "$v" "$br"
+    fi
+  done
+  for i in lan3 wan; do
+    v=$(m "$i")
+    if [ "$v" = "$br" ]; then
+      printf "  1G  %-5s %s == br-lan %s  => CONFLICT (shared MAC)\n" "$i" "$v" "$br"; bad=1
+    else
+      printf "  1G  %-5s %s != br-lan %s  => unique\n" "$i" "$v" "$br"
+    fi
+  done
+  if [ "$bad" = "1" ]; then
+    echo "VERDICT: CONFLICT — br-lan shares a MAC with a member port (management-plane loss risk under bridge/PPE offload)."
+    echo "         Expected: unique MAC. Migration 98-xr1710g-brlan-mac-unique sets one only on conflict and keeps user values."
+  else
+    echo "VERDICT: UNIQUE — br-lan MAC is distinct from every member port (F119 OK)."
+  fi
+  uci -q get network.@device[0].macaddr 2>/dev/null | sed "s/^/  uci network.@device[0].macaddr = /" || true
+  uci -q show network 2>/dev/null | grep -E "\.macaddr=|\.name=.br-lan|\.ports=" | sed "s/^/  uci: /" || true
+fi
+echo "--- E4 lan2 DHCP reachability precondition (which port is bridged) ---"
+ip -br link show lan2 2>/dev/null || true
+echo "  br-lan members (sysfs):"
+ls /sys/class/net/br-lan/brif 2>/dev/null | sed "s/^/    /" || echo "    <br-lan absent or no brif>"
+echo "--- E5 LAN L2 reachability probe (opt-in; pings the default gateway from each port) ---"
+if [ "${LAN_MAC_PING:-0}" = "1" ]; then
+  for i in lan1 lan2; do
+    echo "$i: $(ping -I "$i" -c 3 -W 1 192.168.123.1 2>&1 | tail -2 | tr "\n" " ")"
+  done
+else
+  echo "skipped (set LAN_MAC_PING=1 to enable; pings 192.168.123.1 via lan1/lan2)"
+fi
+echo "--- E6 ethtool link/MAC (best effort) ---"
+if command -v ethtool >/dev/null 2>&1; then
+  for i in lan1 lan2 br-lan; do
+    echo "== $i =="
+    ethtool "$i" 2>/dev/null | grep -E "Speed|Duplex|Link detected|Permanent address|Current message level" | sed "s/^/  /" || true
+  done
+else
+  echo "ethtool not installed"
+fi
+echo "--- E7 MAC byte map (human diff aid) ---"
+for i in br-lan lan1 lan2 lan3 wan; do
+  v=$(m "$i")
+  case "$v" in
+  "<absent>") printf "  %-7s <absent>\n" "$i" ;;
+  *) printf "  %-7s %s  (oui=%s last=%s)\n" "$i" "$v" "${v%:*:*:*}" "${v##*:}" ;;
+  esac
+done
+'
+}
+
+# 多路齐发：5 条路由同时执行（route_e 为只读 MAC 一致性检查，F119）
+for r in a b c d e; do : > "$OUT_PREFIX.route_$r.log"; done
 
 ( route_a > "$OUT_PREFIX.route_a.log" 2>&1 ) &
 pid_a=$!
@@ -308,13 +381,16 @@ pid_b=$!
 pid_c=$!
 ( route_d > "$OUT_PREFIX.route_d.log" 2>&1 ) &
 pid_d=$!
+( route_e > "$OUT_PREFIX.route_e.log" 2>&1 ) &
+pid_e=$!
 
 wait $pid_a; echo "route_a done (rc=$?)"
 wait $pid_b; echo "route_b done (rc=$?)"
 wait $pid_c; echo "route_c done (rc=$?)"
 wait $pid_d; echo "route_d done (rc=$?)"
+wait $pid_e; echo "route_e done (rc=$?)"
 
-for r in a b c d; do
+for r in a b c d e; do
   echo "===== $OUT_PREFIX.route_$r.log tail ====="
   tail -8 "$OUT_PREFIX.route_$r.log"
 done
