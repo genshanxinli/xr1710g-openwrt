@@ -66,6 +66,51 @@ COLLISION_PROBES=(
 REALTEK_MAIN_PATCH="target/linux/generic/pending-6.18/742-net-phy-realtek-add-5G-and-10G-PHY-support.patch"
 REALTEK_CE_MARKERS="RTL_8261CE|8261CE_REV_C|0x001cc899"
 
+# ── 远端 tip 守护（2026-09-12 P3-F 新增）──────────────────────────────────
+# 本仓补丁来源是多个 fork 分支（不只上游 main），分支 tip 变化时需重新对账"已覆盖/新增"。
+# 格式：<记录 tip|-> <仓库 URL> <ref> <用途/监视理由>
+# 行为：默认联网探测；**离线/超时则跳过不计**（`ⓘ`）；tip 变化计为 drift（`--fail-on-drift` 时 exit 1）。
+# 记录 tip 取自 2026-09-12（P3/P4 handoff 的对账快照）。
+REMOTE_TIPS=(
+  "c82129e734|https://github.com/YYH2913/openwrt.git|refs/heads/xr1710g-6.18-integration|YYH 补丁集真源（P3 对账对象；suntyrael 只是其重传载体）"
+  "2dd6e4c8|https://github.com/YYH2913/mt76.git|HEAD|YYH mt76 分支（MTK/YYH 专有 mt76 补丁的来源）"
+  "53b73174c|https://github.com/YYH2913/http-uboot.git|HEAD|U-Boot 锁版参考（FLASHING 升级前核对）"
+  "9631414c|https://github.com/OpenWRT-fanboy/OpenW1700k.git|refs/heads/ubi2-oc|vendor/fanboy/01..20 原料桶（P4 已重基到 9631414c）"
+  "0ddd9fbf|https://github.com/Gilly1970/Gemtek-W1700K-6.18.git|HEAD|Gilly openwrt-patches/（F90/F101 对账源）"
+  "38148509|https://github.com/naoki66/ImmortalWrt-for-Gemtek-XR1710G.git|HEAD|naoki66 分支（411/628/622/743/744/mt76-0010/0012 来源）"
+  "73c3ab308|https://github.com/hurryman2212/OpenW1700k-test.git|refs/heads/offload-oc|SOE/xfrm/EIP93 来源（F115/F122）"
+)
+REMOTE_TIMEOUT="${AUDIT_REMOTE_TIMEOUT:-20}"
+
+rskip=0
+remote_report() {
+  echo
+echo "-- 远端来源 tip 守护（分支 tip 变化 → 需重新对账）--"
+  local row want rest url rest2 ref note live
+  for row in "${REMOTE_TIPS[@]}"; do
+    want="${row%%|*}"; rest="${row#*|}"
+    url="${rest%%|*}"; rest2="${rest#*|}"
+    ref="${rest2%%|*}"; note="${rest2#*|}"
+    if ! command -v timeout >/dev/null 2>&1; then rskip=$((rskip+1)); continue; fi
+    live=$(timeout "$REMOTE_TIMEOUT" git ls-remote "$url" "$ref" 2>/dev/null | awk 'NR==1{print $1}') || live=""
+    if [[ -z "$live" ]]; then
+      echo "  ⓘ [远端] 未检查（离线/超时）：$(basename "$url") $ref"
+      rskip=$((rskip+1)); continue
+    fi
+    if [[ "$want" == "-" ]]; then
+      echo "  · [远端] $(basename "$url") $ref = ${live:0:9}（记录 tip 未固定）"
+    elif [[ "$live" == "$want"* ]]; then
+      echo "  ✓ [远端] 未变：$(basename "$url") $ref = ${live:0:9}"
+    else
+      echo "  ⚠ [远端] tip 前进：$(basename "$url") $ref"
+      echo "      记录 $want"
+      echo "      实际 ${live:0:9}"
+      echo "      → 需重新对账：$note"
+      drift=$((drift+1))
+    fi
+  done
+}
+
 drift=0; miss=0; collide=0
 # 取上游"提交"与"工作区"两个视图：
 #   · 提交视图（ls-tree）用于 CI 的干净检出 + 本仓 overlay 场景
@@ -158,8 +203,10 @@ else
   echo "  ⓘ [基线] $REALTEK_MAIN_PATCH 不在上游（已被上游改写/合并？）"
 fi
 
+remote_report
+
 echo "----"
-echo "汇总：基线漂移 $drift，路径缺失 $miss，同址冲突 $collide（基线锚点 ${BASELINE_UPSTREAM:0:9}）"
+echo "汇总：基线漂移 $drift，路径缺失 $miss，同址冲突 $collide，远端跳过 $rskip（基线锚点 ${BASELINE_UPSTREAM:0:9}）"
 if (( miss > 0 || collide > 0 || (FAIL_ON_DRIFT && drift > 0) )); then
   echo "处理（修复而非降级）：" >&2
   echo "  · 基线漂移 → 按 docs/absorptions/ 最新吸收计划重基本仓补丁" >&2
