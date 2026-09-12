@@ -1,0 +1,25 @@
+diff --git a/target/linux/airoha/patches-6.18/9999-45-airoha-ppe-setup-tc-block-cb-signature.patch b/target/linux/airoha/patches-6.18/9999-45-airoha-ppe-setup-tc-block-cb-signature.patch
+new file mode 100644
+--- /dev/null
++++ b/target/linux/airoha/patches-6.18/9999-45-airoha-ppe-setup-tc-block-cb-signature.patch
+@@ -0,0 +1,20 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: XR1710G maintainer <maintainer@xr1710g.local>
++Date: Sat, 12 Sep 2026 17:40:00 +0800
++Subject: [PATCH] net: airoha: widen airoha_ppe_setup_tc_block_cb definition
++
++The SOE series widened this callback's declaration (airoha_eth.h) and its call
++site, but not its definition, so the build failed with a conflicting-types
++error. Widen the definition to match and mark the parameter reserved until the
++autonomous-SOE path consumes it.
++
++diff --git a/drivers/net/ethernet/airoha/airoha_ppe.c b/drivers/net/ethernet/airoha/airoha_ppe.c
++--- a/drivers/net/ethernet/airoha/airoha_ppe.c
+++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
++@@ -1602,4 +1602,5 @@
++-int airoha_ppe_setup_tc_block_cb(struct airoha_ppe_dev *dev, void *type_data)
+++int airoha_ppe_setup_tc_block_cb(struct airoha_ppe_dev *dev, void *type_data,
+++				 __maybe_unused bool is_flowtable)
++ {
++ 	struct airoha_ppe *ppe = dev->priv;
++ 	struct airoha_eth *eth = ppe->eth;

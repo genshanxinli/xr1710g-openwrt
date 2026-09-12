@@ -417,6 +417,9 @@ patches/root/9056-xr1710g-dhcpv6-duplicate-guard.patch ROOT
 #EXP patches/root/9999-net-airoha-soe-14-soe-state-datapath-metadata.patch ROOT
 #EXP patches/root/9999-net-airoha-soe-15-soe-ppe-driver-interfaces.patch ROOT
 #EXP patches/root/9999-net-airoha-soe-16-integrate-soe-eth-datapath.patch ROOT
+# SOE-14 加宽了 airoha_ppe_setup_tc_block_cb 声明、SOE-16 改了调用点，但定义那半在 SOE-25（#DISABLED）
+#   —— 导致 conflicting types 构建失败；本补丁补齐定义。台账见 FIXES 的 F134 行。
+#EXP patches/root/9999-45-airoha-ppe-setup-tc-block-cb-signature.patch ROOT
 #DISABLED patches/root/9999-net-airoha-soe-17-flow-offload-xfrm-actions.patch ROOT   # 待重基：依赖更新上游内核的 nft_flow_route_routing（本仓基线为 nft_flow_route）
 #DISABLED patches/root/9999-net-airoha-soe-18-flowtable-xfrm-route-metadata.patch ROOT   # 待重基：依赖更新上游内核的 nft_flow_route_routing（本仓基线为 nft_flow_route）
 #DISABLED patches/root/9999-net-airoha-soe-19-flowtable-retain-xfrm-input.patch ROOT   # 待重基：依赖更新上游内核的 nft_flow_route_routing（本仓基线为 nft_flow_route）
