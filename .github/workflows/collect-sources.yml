@@ -63,6 +63,15 @@ jobs:
           for f in \
             net/netfilter/nft_flow_offload.c \
             net/netfilter/nf_flow_table_path.c \
+            net/netfilter/nf_flow_table_core.c \
+            net/netfilter/nf_flow_table_inet.c \
+            net/netfilter/nf_flow_table_offload.c \
+            net/netfilter/nf_flow_table_ip.c \
+            include/net/flow_offload.h \
+            include/net/netfilter/nf_flow_table.h \
+            include/net/xfrm.h \
+            net/xfrm/xfrm_policy.c \
+            net/xfrm/xfrm_state.c \
             drivers/net/ethernet/airoha/airoha_eth.h \
             drivers/net/ethernet/airoha/airoha_soe.h \
             drivers/net/phy/mediatek/mtk-ge-soc.c \
