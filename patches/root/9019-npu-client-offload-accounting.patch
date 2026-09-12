@@ -1,10 +1,10 @@
 diff --git a/package/luci-app-airoha-flowsense/root/usr/libexec/rpcd/luci.airoha_flowsense b/package/luci-app-airoha-flowsense/root/usr/libexec/rpcd/luci.airoha_flowsense
-index 2f19d07..32bb219 100755
+index 746d8a4..182918e 100755
 --- a/package/luci-app-airoha-flowsense/root/usr/libexec/rpcd/luci.airoha_flowsense
 +++ b/package/luci-app-airoha-flowsense/root/usr/libexec/rpcd/luci.airoha_flowsense
-@@ -181,21 +181,46 @@ get_ppe_entries() {
- 		iw dev "$iface" station dump 2>/dev/null | awk '/^Station/{print $2}'
- 	done | tr '\n' '|' | sed 's/|$//')
+@@ -203,23 +203,48 @@ ${mmac}"
+ 	macs1=$(printf '%s\n' "$macs1" | grep -v '^[[:space:]]*$' | tr '\n' '|' | sed 's/|$//')
+ 	macs2=$(printf '%s\n' "$macs2" | grep -v '^[[:space:]]*$' | tr '\n' '|' | sed 's/|$//')
  
 +	local neigh
 +	neigh=$(ip neigh show 2>/dev/null | grep ' lladdr ')
@@ -42,19 +42,21 @@ index 2f19d07..32bb219 100755
 +		}
  		/^[0-9a-fA-F]+ BND / {
  			eth=""; match($0,/eth=[^ \t]+/); if (RSTART>0) eth=substr($0,RSTART+4,RLENGTH-4)
--			if (has(m0,eth)) c0++
--			else if (has(m1,eth)) c1++
--			else if (has(m2,eth)) c2++
 +			orig=""; match($0,/orig=[^ \t]+/); if (RSTART>0) orig=substr($0,RSTART+5,RLENGTH-5)
 +			new_flow=""; match($0,/new=[^ \t]+/); if (RSTART>0) new_flow=substr($0,RSTART+4,RLENGTH-4)
 +			tuple = orig " " new_flow
-+			if      (has_mac(m0,eth) || has_ip(i0,tuple)) c0++
-+			else if (has_mac(m1,eth) || has_ip(i1,tuple)) c1++
-+			else if (has_mac(m2,eth) || has_ip(i2,tuple)) c2++
+ 			# an MLD client is listed on EVERY band it has a link on, so
+ 			# count its flows on each (else-if starved the higher bands)
+-			if (has(m0,eth)) c0++
+-			if (has(m1,eth)) c1++
+-			if (has(m2,eth)) c2++
++			if (has_mac(m0,eth) || has_ip(i0,tuple)) c0++
++			if (has_mac(m1,eth) || has_ip(i1,tuple)) c1++
++			if (has_mac(m2,eth) || has_ip(i2,tuple)) c2++
  		}
  		END { printf "[%d,%d,%d]", c0+0, c1+0, c2+0 }
  		' "$bind_file" 2>/dev/null || printf "[0,0,0]")
-@@ -203,21 +228,6 @@ get_ppe_entries() {
+@@ -227,21 +252,6 @@ ${mmac}"
  	bnd_json=$(printf '%s' "$bnd_json" | sed 's/}$/,"band_bnd":'"$band_bnd"'}/')
  
  	# Per-band UNB counts: IP-based matching (UNB flows lack eth= MAC info)
@@ -76,7 +78,7 @@ index 2f19d07..32bb219 100755
  	local band_unb="[0,0,0]"
  	if [ -f "$entries_file" ]; then
  		band_unb=$(awk -v i0="$ips0" -v i1="$ips1" -v i2="$ips2" '
-@@ -274,15 +284,17 @@ get_ppe_entries() {
+@@ -298,15 +308,17 @@ ${mmac}"
  	fi
  	bnd_json=$(printf '%s' "$bnd_json" | sed 's/}$/,"port_bnd":'"$port_bnd"'}/')
  
@@ -103,7 +105,7 @@ index 2f19d07..32bb219 100755
  	local client_bnd="[]"
  	if [ -f "$bind_file" ]; then
  		client_bnd=$(
-@@ -290,27 +302,50 @@ get_ppe_entries() {
+@@ -314,27 +326,50 @@ ${mmac}"
  			printf '%s\n' "$neigh" | sed 's/^/@NEIGH /'
  			sed 's/^/@LEASE /' /tmp/dhcp.leases 2>/dev/null
  			cat "$bind_file"

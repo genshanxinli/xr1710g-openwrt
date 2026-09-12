@@ -64,9 +64,9 @@ grep -q "CONFIG_TARGET_airoha_an7581_DEVICE_gemtek_xr1710g-ubi=y" .config \
   && echo "✓ XR1710G 目标已选中" \
   || { echo "⚠ .config 中未选中 gemtek_xr1710g-ubi——检查 seed-config.diff 与 #22397 补丁" >&2; }
 if [[ "$TIER" == "experimental" ]]; then
-  grep -q '^CONFIG_PACKAGE_bridge-flow-offload=y$' .config \
-    && echo "✓ 实验档 bridge-flow-offload 已选入 .config（issue #1 E1）" \
-    || { echo "✗ 实验档 bridge-flow-offload 未选入 .config（issue #1 E1）" >&2; exit 1; }
+  grep -q '^CONFIG_PACKAGE_bridge-hw-offload=y$' .config \
+    && echo "✓ 实验档 bridge-hw-offload 已选入 .config（issue #1 E1）" \
+    || { echo "✗ 实验档 bridge-hw-offload 未选入 .config（issue #1 E1）" >&2; exit 1; }
 fi
 # seed 符号审计（F15 教训：kconfig 静默忽略未知符号——所有 seed 符号必须逐一进 .config）
 "$ROOT/scripts/audit-config.sh" "$ROOT/config/seed-config.diff" .config

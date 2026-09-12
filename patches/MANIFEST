@@ -80,20 +80,23 @@ patches/root/9002-xr1710g-uboot.patch ROOT
 patches/vendor/fanboy/03-cpufreq-pmdomain-22029-e5d23549.patch ROOT
 # #22473 kernel 侧 ramoops（uboot 侧仍待上游，F09）
 patches/vendor/fanboy/10-pstore-ramoops-22473-2f7d2d02.patch ROOT
-# 应用包：npu/flowsense/mlo/fancontrol/wifi7 五包（19-core，2026-08-17 从 19 号切片去 fastfetch/netspeedtest，F13）
+# 应用包：npu/flowsense/mlo/fancontrol/wifi7 五包（19-core，2026-08-17 从 19 号切片去 fastfetch/netspeedtest，F13；
+#   2026-09-12 P4 重基到 apps pack 0a4f2632de + flowsense 8bf1c9253c：flowsense 1.1.7→1.1.9-r5（含原 9030 的
+#   1.1.8-r5 内容 → 9030 删除）、fancontrol 保持无 root/etc/init.d/fan（F67/A4）、jitter target 223.5.5.5、
+#   F88 RXHWF_FAST 重放）
 patches/root/9017-w1700k-apps-pack-core.patch ROOT
-# 9030：FlowSense 1.1.8-r5 bump（IP08/A7）——必须在 9018-9023 前应用，9018-9023 已在 9030 基线上重放（9022 重建）
-patches/root/9030-flowsense-bump-1.1.8-r5.patch ROOT
 # 9017 的 FlowSense/NPU RPC 后端在无 br_netfilter 的新 offload 架构下修复 VLAN/PPPoE 开关（F29）
 patches/root/9018-flowsense-offload-new-arch.patch ROOT
 # 9017 的 CLIENTS offload 计数修正（F39）：BND eth= 对路由型 Wi-Fi 客户端不含 station MAC，
 # 增补 BND orig/new IP 匹配 + conntrack [HW_OFFLOAD] 兜底；band_bnd 同步修复
+# 2026-09-12 P4：按新 pack 基线重基（保留 pack 的 MLD 多频段 if/if/if 语义）
 patches/root/9019-npu-client-offload-accounting.patch ROOT
 # 9020：9017 的 getStatus memory_regions 从易失 dmesg 改为 /proc/device-tree/reserved-memory/npu-*（F35/#3/#8）
 patches/root/9020-npu-memory-regions-dt.patch ROOT
 # 9021：9017 的 getWanHealth/getBridgeStats 不再使用 BusyBox 不支持的 ip -s，改读 sysfs（F36/#9）
 patches/root/9021-flowsense-sysfs-stats.patch ROOT
 # 9022：9019 的 IPv6 客户端 offload 计数规范化 + UDP HW_OFFLOAD 以 conntrack 判读（F40/#19/#20）
+# 2026-09-12 P4：按新 pack 基线重基；并修正原版 band_unb awk 多出的 `}`（awk 语法错误——F123）
 patches/root/9022-npu-ipv6-udp-visibility.patch ROOT
 # 9023：NPU RPC 诊断工具缺失或 devmem 读失败时优雅降级（getFrameEngine available:false / pll_freq_mhz:null / 前端不可用）（#2）
 patches/root/9023-npu-rpc-graceful-tools.patch ROOT
@@ -134,15 +137,15 @@ patches/root/9016-xr1710g-silence-phy-led-error.patch ROOT
 
 # ── 原实验档毕业段 / 剩余实验档（--experimental；毕业并入默认档后取消 #EXP）──
 # 以下 05/06/9024/9026/07/09/17/18 已于 2026-08-31 毕业为默认（ci-74 实机 E1/E2/E3、wifi down/up、NPU 探针通过）。
-# 05 的 target.mk 在文件末尾追加 DEFAULT_PACKAGES，与 02 顺序无关。
-patches/vendor/fanboy/05-bridge-offload-22533-33ac9c66.patch ROOT
-# 06 已替换为 ubi2-oc 2ed1af79c7 版（2026-09-07 WP-675：675-01/02/03 精简 -28%、删 650/KEEP_HW；9026 复核通过未动）
-patches/vendor/fanboy/06-nft-flow-offload-l2-22533-2ed1af79c7.patch ROOT
-# 9024：bridge-flow-offload 依赖改为 kmod-nft-offload，规则表名避开用户 fw4 桥表（issue #1 E1/E3）
-patches/root/9024-bridge-flow-offload-deps-table.patch ROOT
-# 9043：bridge-flow-offload 规则注入两防护（hw offload 守门 + 清陈旧 ruleset-post include；
-#   对照 yahuisme/w1700k-openwrt 实践，2026-09-10。表名/reload 重入已由 9024 处理，此处不重复）
-patches/root/9043-xr1710g-bridge-offload-guard.patch ROOT
+# 05 于 2026-09-12 重基到 ubi2-oc 2f4fccb1（包改名 bridge-flow-offload→bridge-hw-offload、新增 init.d/procd
+#   reload trigger；上游 target.mk hunk 以内嵌 eip93 行为上下文，与本仓 02(#EXP) 顺序耦合——已改写为
+#   「文件末尾追加 DEFAULT_PACKAGES」保持与 02 顺序无关）。apply-rules.sh 上游已内置 hw-offload 守门，
+#   原 root/9043 遂整条删除（F123）。
+patches/vendor/fanboy/05-bridge-offload-22533-2f4fccb1.patch ROOT
+# 06 已替换为 ubi2-oc 3c8d3e6664 版（2026-09-12 P4：675-02 VLAN/PPPoE encap 改为追加 + 越界检查；9026 复核通过未动）
+patches/vendor/fanboy/06-nft-flow-offload-l2-22533-3c8d3e6664.patch ROOT
+# 9024：bridge-hw-offload 依赖改为 kmod-nft-offload，规则表名避开用户 fw4 桥表（issue #1 E1/E3）
+patches/root/9024-bridge-hw-offload-deps-table.patch ROOT
 # 9026：bridge 族 nft_flow_offload_init/destroy 复用 inet conntrack 语义（issue #1 E2）
 patches/root/9026-bridge-flow-offload-init-conntrack.patch ROOT
 # 9035：FLOW_STATS=y 与 NPU offload 共存（内核 patch 9995 生成 wrapper）——2026-08-31 ci-88 experimental fresh flash 验证后转 default。
@@ -302,7 +305,8 @@ patches/root/9056-xr1710g-dhcpv6-duplicate-guard.patch ROOT
 #   已切为 patches/root/9011-9016 入 default（上方活动行）；feeds.conf.default 与 w1700k dts LED 改动否决
 #   （ADR-0001 master 保真 + 非目标设备）。原料桶保留 08 原 patch 供对照（不再应用）。
 # 19-w1700k-apps-pack：2026-08-17 精简为 19-core（patches/root/9017，去 fastfetch/netspeedtest 两包，
-#   保留 npu/flowsense/mlo/fancontrol/wifi7）；原料桶保留原 19 供对照。
+#   保留 npu/flowsense/mlo/fancontrol/wifi7）；2026-09-12 P4 更新原料为 0a4f2632de（配套 flowsense
+#   增量 commit 8bf1c9253c，已并入 9017）。
 # 12-lorenzo-airoha-patches：调试脚本 + NPU ser + usb-pcie 杂项 → 维持实验档候选，不默认。
 # 13-mt76-plus-firmware：否决（PKG_SOURCE_URL 指向个人 fork 且 PKG_MIRROR_HASH=skip，违反锁源/可复现铁律）
 # 15-txpower-control：与默认 mt76/0006-0007 功能重复（fanboy 旧谱系）→ 仅备选对比，不启用

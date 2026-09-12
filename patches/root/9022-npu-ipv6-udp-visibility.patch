@@ -1,8 +1,8 @@
 diff --git a/package/luci-app-airoha-flowsense/root/usr/libexec/rpcd/luci.airoha_flowsense b/package/luci-app-airoha-flowsense/root/usr/libexec/rpcd/luci.airoha_flowsense
-index 87a6e9d..c339456 100755
+index 2d3e8c3..64ff301 100755
 --- a/package/luci-app-airoha-flowsense/root/usr/libexec/rpcd/luci.airoha_flowsense
 +++ b/package/luci-app-airoha-flowsense/root/usr/libexec/rpcd/luci.airoha_flowsense
-@@ -219,7 +219,9 @@ get_ppe_entries() {
+@@ -236,7 +236,9 @@ ${mmac}"
  
  	local neigh
  	neigh=$(ip neigh show 2>/dev/null | grep ' lladdr ')
@@ -13,7 +13,7 @@ index 87a6e9d..c339456 100755
  	ips0=$(printf '%s\n' "$neigh" | awk -v macs="$macs0" '
  		BEGIN{n=split(macs,a,"|");for(i=1;i<=n;i++)if(a[i]!="")m[tolower(a[i])]=1}
  		m[tolower($5)]{printf "%s|",$1}' | sed 's/|$//')
-@@ -229,13 +231,22 @@ get_ppe_entries() {
+@@ -246,13 +248,22 @@ ${mmac}"
  	ips2=$(printf '%s\n' "$neigh" | awk -v macs="$macs2" '
  		BEGIN{n=split(macs,a,"|");for(i=1;i<=n;i++)if(a[i]!="")m[tolower(a[i])]=1}
  		m[tolower($5)]{printf "%s|",$1}' | sed 's/|$//')
@@ -37,7 +37,7 @@ index 87a6e9d..c339456 100755
  		function has_mac(macs, eth,    n,arr,i,low) {
  			if (macs == "") return 0
  			low = tolower(eth)
-@@ -249,14 +260,43 @@ get_ppe_entries() {
+@@ -266,6 +277,35 @@ ${mmac}"
  			for (i=1; i<=n; i++) if (arr[i] != "" && index(tuple, arr[i] ":") > 0) return 1
  			return 0
  		}
@@ -73,18 +73,20 @@ index 87a6e9d..c339456 100755
  		/^[0-9a-fA-F]+ BND / {
  			eth=""; match($0,/eth=[^ \t]+/); if (RSTART>0) eth=substr($0,RSTART+4,RLENGTH-4)
  			orig=""; match($0,/orig=[^ \t]+/); if (RSTART>0) orig=substr($0,RSTART+5,RLENGTH-5)
- 			new_flow=""; match($0,/new=[^ \t]+/); if (RSTART>0) new_flow=substr($0,RSTART+4,RLENGTH-4)
+@@ -273,9 +313,9 @@ ${mmac}"
  			tuple = orig " " new_flow
--			if      (has_mac(m0,eth) || has_ip(i0,tuple)) c0++
--			else if (has_mac(m1,eth) || has_ip(i1,tuple)) c1++
--			else if (has_mac(m2,eth) || has_ip(i2,tuple)) c2++
-+			if      (has_mac(m0,eth) || has_ip(i0,tuple) || has_ip6(j0,tuple)) c0++
-+			else if (has_mac(m1,eth) || has_ip(i1,tuple) || has_ip6(j1,tuple)) c1++
-+			else if (has_mac(m2,eth) || has_ip(i2,tuple) || has_ip6(j2,tuple)) c2++
+ 			# an MLD client is listed on EVERY band it has a link on, so
+ 			# count its flows on each (else-if starved the higher bands)
+-			if (has_mac(m0,eth) || has_ip(i0,tuple)) c0++
+-			if (has_mac(m1,eth) || has_ip(i1,tuple)) c1++
+-			if (has_mac(m2,eth) || has_ip(i2,tuple)) c2++
++			if (has_mac(m0,eth) || has_ip(i0,tuple) || has_ip6(j0,tuple)) c0++
++			if (has_mac(m1,eth) || has_ip(i1,tuple) || has_ip6(j1,tuple)) c1++
++			if (has_mac(m2,eth) || has_ip(i2,tuple) || has_ip6(j2,tuple)) c2++
  		}
  		END { printf "[%d,%d,%d]", c0+0, c1+0, c2+0 }
  		' "$bind_file" 2>/dev/null || printf "[0,0,0]")
-@@ -266,24 +306,76 @@ get_ppe_entries() {
+@@ -285,24 +325,75 @@ ${mmac}"
  	# Per-band UNB counts: IP-based matching (UNB flows lack eth= MAC info)
  	local band_unb="[0,0,0]"
  	if [ -f "$entries_file" ]; then
@@ -150,23 +152,22 @@ index 87a6e9d..c339456 100755
 +				}
  			}
  			if (src != "") {
--				if      (has(i0,src)) c0++
--				else if (has(i1,src)) c1++
--				else if (has(i2,src)) c2++
+-				if (has(i0,src)) c0++
+-				if (has(i1,src)) c1++
+-				if (has(i2,src)) c2++
 +				if (index(src, ":") > 0) {
-+					if      (has6(j0,src)) c0++
-+					else if (has6(j1,src)) c1++
-+					else if (has6(j2,src)) c2++
++					if (has6(j0,src)) c0++
++					if (has6(j1,src)) c1++
++					if (has6(j2,src)) c2++
 +				} else {
-+					if      (has(i0,src)) c0++
-+					else if (has(i1,src)) c1++
-+					else if (has(i2,src)) c2++
++					if (has(i0,src)) c0++
++					if (has(i1,src)) c1++
++					if (has(i2,src)) c2++
 +				}
-+			}
  			}
  		}
  		END { printf "[%d,%d,%d]", c0+0, c1+0, c2+0 }
-@@ -336,6 +428,7 @@ get_ppe_entries() {
+@@ -355,6 +446,7 @@ ${mmac}"
  		client_bnd=$(
  		{
  			printf '%s\n' "$neigh" | sed 's/^/@NEIGH /'
@@ -174,7 +175,7 @@ index 87a6e9d..c339456 100755
  			sed 's/^/@LEASE /' /tmp/dhcp.leases 2>/dev/null
  			cat "$bind_file"
  			grep -E '\[HW_OFFLOAD\]|\[OFFLOAD\]' /proc/net/nf_conntrack 2>/dev/null | sed 's/^/@CT /'
-@@ -346,7 +439,31 @@ get_ppe_entries() {
+@@ -365,7 +457,31 @@ ${mmac}"
  			c=split(m1,a,"|"); for(i=1;i<=c;i++) if(a[i]!=""){ mac[++ntot]=tolower(a[i]); bnd_band[ntot]=1; cnt_eth[ntot]=0; cnt_bnd[ntot]=0; cnt_hw[ntot]=0; cnt_sw[ntot]=0 }
  			c=split(m2,a,"|"); for(i=1;i<=c;i++) if(a[i]!=""){ mac[++ntot]=tolower(a[i]); bnd_band[ntot]=2; cnt_eth[ntot]=0; cnt_bnd[ntot]=0; cnt_hw[ntot]=0; cnt_sw[ntot]=0 }
  		}
@@ -206,7 +207,7 @@ index 87a6e9d..c339456 100755
  		$1=="@LEASE" { lm=tolower($3); lh=$5; ipx=$4; gsub(/["\\]/,"",lh); if(lm!="" && lh!="" && lh!="*") mac2host[lm]=lh; if(lm!="" && ipx!="" && !(lm in mac2ip)) mac2ip[lm]=ipx; next }
  		$1=="@CT" {
  			is_hw = index($0,"[HW_OFFLOAD]") > 0
-@@ -356,8 +473,9 @@ get_ppe_entries() {
+@@ -375,8 +491,9 @@ ${mmac}"
  			match(line,/dst=[^ ]+/); if(RSTART>0) dst=substr(line,RSTART+4,RLENGTH-4)
  			for(i=1;i<=ntot;i++){
  				ip = (mac[i] in mac2ip) ? mac2ip[mac[i]] : ""
@@ -218,7 +219,7 @@ index 87a6e9d..c339456 100755
  			}
  			next
  		}
-@@ -368,20 +486,23 @@ get_ppe_entries() {
+@@ -387,20 +504,23 @@ ${mmac}"
  			tuple = orig " " new_flow
  			for(i=1;i<=ntot;i++){
  				ip = (mac[i] in mac2ip) ? mac2ip[mac[i]] : ""
@@ -243,7 +244,7 @@ index 87a6e9d..c339456 100755
  			}
  			printf "]"
  		}
-@@ -389,6 +510,15 @@ get_ppe_entries() {
+@@ -408,6 +528,15 @@ ${mmac}"
  	fi
  	bnd_json=$(printf '%s' "$bnd_json" | sed 's/}$/,"client_bnd":'"$client_bnd"'}/')
  

@@ -12,13 +12,12 @@ default root/9001-xr1710g-dts.patch
 default root/9002-xr1710g-uboot.patch
 default vendor/fanboy/03-cpufreq-pmdomain-22029-e5d23549.patch
 default vendor/fanboy/10-pstore-ramoops-22473-2f7d2d02.patch
-default root/9017-w1700k-apps-pack-core.patch   # 19 号精简（npu/flowsense/mlo/fancontrol/wifi7；去 fastfetch/netspeedtest）
-default root/9030-flowsense-bump-1.1.8-r5.patch   # A7/IP08：FlowSense 1.1.8-r5（9018-9023 已重放至 9030 基线）
+default root/9017-w1700k-apps-pack-core.patch   # 19 号精简（npu/flowsense/mlo/fancontrol/wifi7；去 fastfetch/netspeedtest）；2026-09-12 P4 重基到 apps pack 0a4f2632de + flowsense 8bf1c9253c（1.1.9-r5，吸收原 9030）
 default root/9018-flowsense-offload-new-arch.patch   # F29：无 br_netfilter 时 VLAN/PPPoE offload 开关改走 nft flowtable/HW Flow Offload
-default root/9019-npu-client-offload-accounting.patch   # F39：CLIENTS offload 计数修正（BND orig/new IP + conntrack HW_OFFLOAD 兜底；band_bnd 同步）
+default root/9019-npu-client-offload-accounting.patch   # F39：CLIENTS offload 计数修正（BND orig/new IP + conntrack HW_OFFLOAD 兜底；band_bnd 同步）；P4 按新 pack 重基
 default root/9020-npu-memory-regions-dt.patch   # F35/#3/#8：getStatus.memory_regions 改设备树数据源，补 npu-ba 第 5 区
 default root/9021-flowsense-sysfs-stats.patch   # F36/#9：getWanHealth/getBridgeStats 改读 /sys/class/net/*/statistics
-default root/9022-npu-ipv6-udp-visibility.patch   # F40/#19/#20：IPv6 地址规范化 + UDP HW_OFFLOAD conntrack 判读
+default root/9022-npu-ipv6-udp-visibility.patch   # F40/#19/#20：IPv6 地址规范化 + UDP HW_OFFLOAD conntrack 判读；P4 重基并修正 band_unb awk 多出的 `}`
 default root/9023-npu-rpc-graceful-tools.patch   # #2：缺 devmem/devmem 读失败时 getFrameEngine/pll_freq_mhz/前端优雅降级
 default root/9032-npu-ppe-per-flow-conntrack-stats.patch   # #5：PPE debugfs packets/bytes 恒 0；getPpeFlowStats 用 conntrack 双向 tuple 补每流 packets/bytes
 default root/9025-xr1710g-airoha-no-carrier-rx-stats.patch   # F38/#15：无 carrier 只清 MIB，rx_errors/rx_dropped 不虚增
@@ -47,9 +46,9 @@ oc regdb/0555-w1700k-unii4-6g-30.patch   # 仅 6G 29->30；5G UNII-3/4@160 已�
 # OC 本体（OPP/PLL/governor）由 scripts/prepare-oc.sh 树编辑实现（不占 MANIFEST）
 
 # ── 原实验档：已毕业项转 default（2026-08-31 ci-74 实机）；剩余 experimental 见下 ──
-default vendor/fanboy/05-bridge-offload-22533-33ac9c66.patch
-default vendor/fanboy/06-nft-flow-offload-l2-22533-2ed1af79c7.patch   # 2026-09-07 替换为 ubi2-oc 2ed1af79c7 版：675-01/02/03 精简 -28%、删 650/KEEP_HW（WP-675）；9026 复核未动
-default root/9024-bridge-flow-offload-deps-table.patch   # issue #1 E1/E3：DEPENDS 改 kmod-nft-offload + 独立表名 flow_offload
+default vendor/fanboy/05-bridge-offload-22533-2f4fccb1.patch   # 2026-09-12 P4：改名 bridge-hw-offload + init.d/procd trigger；target.mk 改写为末尾追加（与 02 顺序无关）
+default vendor/fanboy/06-nft-flow-offload-l2-22533-3c8d3e6664.patch   # 2026-09-12 P4：675-02 VLAN/PPPoE encap 改追加 + 越界检查（原 2ed1af79c7 版已含 675-01/03）
+default root/9024-bridge-hw-offload-deps-table.patch   # issue #1 E1/E3：DEPENDS 改 kmod-nft-offload + 独立表名 flow_offload
 default root/9026-bridge-flow-offload-init-conntrack.patch   # issue #1 E2：bridge 族 flow 表达式 init/destroy 复用 inet conntrack
 default root/9035-airoha-ppe-flow-stats-coexist.patch   # 2026-08-31 ci-88 验证后转 default：FLOW_STATS=y 与 NPU offload 共存（9995 wrapper；须在 04 前应用）
 experimental root/9036-xr1710g-airoha-npu-dirty-lazy-clean.patch   # issue #7 防御（首选生效）：UNBIND 只置脏，重绑后首个命令统一 drain FOE（9996；待 CI 构建验证）
@@ -79,7 +78,7 @@ disabled regdb/0530-us-6ghz-lab-indoor-sp-override-DISABLED.patch   # MANIFEST #
 pending vendor/fanboy/01-vermagic-inject-85005e10.patch   # F14 评估后接 CI
 pending vendor/fanboy/08-reliability-compat-36da8e02.patch   # 切片完成（root/9011-9016 入 default）；本文件保留供对照
 pending vendor/fanboy/12-lorenzo-airoha-patches-8d1947c0.patch   # 实验档候选（调试脚本/npu ser/usb-pcie 杂项）
-pending vendor/fanboy/19-w1700k-apps-pack-fd705cd9.patch   # 已精简为 root/9017（19-core）；本文件保留供对照
+pending vendor/fanboy/19-w1700k-apps-pack-0a4f2632de.patch   # 已精简为 root/9017（19-core）；2026-09-12 P4 更新原料（配套 flowsense 8bf1c9253c 已并入 9017）；本文件保留供对照
 pending vendor/fanboy/13-mt76-plus-firmware-612255dd.patch   # 否决（fork+hash=skip，锁源违反）
 pending vendor/fanboy/15-txpower-control-d7aa0235.patch   # 备选对比（与默认 0006/0007 重复）
 pending vendor/fanboy/16-wifi-scripts-txpower-ucode-41b9e3ac.patch   # 原版参考；重建版=root/9010（default）

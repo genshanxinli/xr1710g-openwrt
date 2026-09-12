@@ -1,4 +1,4 @@
-From 2ed1af79c7dbecb9477b12d9b499ccc62182e567 Mon Sep 17 00:00:00 2001
+From 3c8d3e66649479a075fe4b0261ef613dd50cce82 Mon Sep 17 00:00:00 2001
 From: fanboy <fanboy@openwrt.org>
 Date: Sat, 18 Jul 2026 02:25:20 -1000
 Subject: [PATCH] generic: standalone nft_flow_offload L2 bridge offload
@@ -27,8 +27,9 @@ null-dst guard and dst cleanup on error paths).
 nft_dev_fill_forward_path() takes the caller ctx and skips the neigh
 lookup for already-resolved MACs. nft_dev_forward_path() copies MACs
 from the packet header direction-aware and resolves VLAN context
-(reply encap, skb tag, or PVID via the 675-01 helper) into ctx.vlan[]
-and info.encap[]. Also: indev tracked for all path types,
+(skb tag or PVID via the 675-01 helper; tag-only passthrough records
+encap without ctx, both NF_FLOW_TABLE_ENCAP_MAX-guarded) into
+ctx.vlan[] and info.encap[]. Also: indev tracked for all path types,
 DEV_PATH_BR_VLAN_UNTAG underflow guard, DEV_PATH_MTK_WDMA handling,
 NFPROTO_BRIDGE validation, and L3 protocol from the conntrack tuple.
 Registers the NFPROTO_BRIDGE flowtable type by copying flowtable_inet
@@ -49,9 +50,9 @@ Assisted-by: Codex:gpt-5.5
 Signed-off-by: Jihong Min <hurryman2212@gmail.com>
 ---
  ...exports-bridge-helper-and-vlan-modes.patch | 121 ++++++++
- ...ad-bridge-offload-and-flowtable-type.patch | 277 ++++++++++++++++++
+ ...ad-bridge-offload-and-flowtable-type.patch | 274 ++++++++++++++++++
  ...e-conntrack-vlan-pppoe-encapsulation.patch | 235 +++++++++++++++
- 3 files changed, 633 insertions(+)
+ 3 files changed, 630 insertions(+)
  create mode 100644 target/linux/generic/pending-6.18/675-01-net-forward-path-exports-bridge-helper-and-vlan-modes.patch
  create mode 100644 target/linux/generic/pending-6.18/675-02-nft_flow_offload-bridge-offload-and-flowtable-type.patch
  create mode 100644 target/linux/generic/pending-6.18/675-03-netfilter-bridge-conntrack-vlan-pppoe-encapsulation.patch
@@ -185,10 +186,10 @@ index 0000000000..8f65031e83
 + /* must be called under rcu_read_lock(), as we dont take a reference */
 diff --git a/target/linux/generic/pending-6.18/675-02-nft_flow_offload-bridge-offload-and-flowtable-type.patch b/target/linux/generic/pending-6.18/675-02-nft_flow_offload-bridge-offload-and-flowtable-type.patch
 new file mode 100644
-index 0000000000..7afef6977a
+index 0000000000..6e3ea3b8dc
 --- /dev/null
 +++ b/target/linux/generic/pending-6.18/675-02-nft_flow_offload-bridge-offload-and-flowtable-type.patch
-@@ -0,0 +1,277 @@
+@@ -0,0 +1,274 @@
 +--- a/net/netfilter/nf_flow_table_inet.c
 ++++ b/net/netfilter/nf_flow_table_inet.c
 +@@ -75,6 +75,8 @@
@@ -317,7 +318,7 @@ index 0000000000..7afef6977a
 + 			break;
 + 		}
 + 	}
-+@@ -189,22 +200,61 @@
++@@ -189,22 +200,58 @@
 + 	return found;
 + }
 + 
@@ -346,32 +347,29 @@ index 0000000000..7afef6977a
 ++		__be16 vlan_proto;
 ++		u16 vlan_id;
 ++
-++		if (skb_dir != dir) {
-++			memcpy(ha, eth->h_source, ETH_ALEN);
-++			memcpy(info.h_source, eth->h_dest, ETH_ALEN);
-++		} else {
-++			memcpy(ha, eth->h_dest, ETH_ALEN);
-++			memcpy(info.h_source, eth->h_source, ETH_ALEN);
-++		}
+++		memcpy(ha, skb_dir != dir ? eth->h_source : eth->h_dest, ETH_ALEN);
+++		memcpy(info.h_source, skb_dir != dir ? eth->h_dest : eth->h_source, ETH_ALEN);
 ++
 ++		rcu_read_lock();
-++		if (skb_dir != dir) {
-++			vlan_id = route->tuple[dir].in.num_encaps ?
-++				  route->tuple[dir].in.encap[0].id : 0;
-++			vlan_proto = route->tuple[dir].in.encap[0].proto;
-++		} else if (skb_vlan_tag_present(pkt->skb)) {
-++			vlan_id = skb_vlan_tag_get_id(pkt->skb);
-++			vlan_proto = pkt->skb->vlan_proto;
-++		} else {
-++			vlan_id = br_vlan_get_offload_info_rcu(pkt->skb->dev, pkt->skb, &vlan_proto);
-++		}
+++		vlan_id = br_vlan_get_offload_info_rcu(pkt->skb->dev,
+++							pkt->skb, &vlan_proto);
 ++		if (vlan_id) {
 ++			ctx.num_vlans = 1;
 ++			ctx.vlan[0].id = vlan_id;
 ++			ctx.vlan[0].proto = vlan_proto;
-++			info.encap[0].id = vlan_id;
-++			info.encap[0].proto = vlan_proto;
-++			info.num_encaps = 1;
+++			if (info.num_encaps < NF_FLOW_TABLE_ENCAP_MAX) {
+++				info.encap[info.num_encaps].id = vlan_id;
+++				info.encap[info.num_encaps].proto = vlan_proto;
+++				info.num_encaps++;
+++			}
+++		} else if (skb_vlan_tag_present(pkt->skb)) {
+++			if (info.num_encaps < NF_FLOW_TABLE_ENCAP_MAX) {
+++				info.encap[info.num_encaps].id =
+++					skb_vlan_tag_get_id(pkt->skb);
+++				info.encap[info.num_encaps].proto =
+++					pkt->skb->vlan_proto;
+++				info.num_encaps++;
+++			}
 ++		}
 ++		rcu_read_unlock();
 ++	}
