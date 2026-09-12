@@ -45,8 +45,8 @@ new file mode 100644
 +#   避免 odhcp6c 的 ubus 对象 `odhcp6c.<设备>`（src/ubus.c ubus_init()）注册 EEXIST → 反复重启。
 +#   绝不杀没有 INTERFACE= 的第三方 odhcp6c。
 +# 上下文按目标树 f0d3e332 真源重算：插入点 = `local iface="$2"`（真源 74 行）之后。
-+--- a/package/network/ipv6/odhcp6c/files/dhcpv6.sh
-++++ b/package/network/ipv6/odhcp6c/files/dhcpv6.sh
++--- a/files/dhcpv6.sh
+++++ b/files/dhcpv6.sh
 +@@ -72,6 +72,16 @@
 + proto_dhcpv6_setup() {
 + 	local config="$1"
@@ -77,8 +77,8 @@ new file mode 100644
 +# 目的：让内层 001（dhcpv6.sh 去重）带上本层特性标识——否则同版本号下 opkg 不重装。
 +# 基线核对（目标树 f0d3e332 实测 grep）：PKG_RELEASE:=3 → 4
 +#   （与缓存 0104 基线一致；上游 bump 版本号时接受漂移，届时按真源重对齐本内层）。
-+--- a/package/network/ipv6/odhcp6c/Makefile
-++++ b/package/network/ipv6/odhcp6c/Makefile
++--- a/Makefile
+++++ b/Makefile
 +@@ -8,7 +8,7 @@
 + include $(TOPDIR)/rules.mk
 + 
@@ -102,8 +102,8 @@ new file mode 100644
 +#   接口（wan6 device @wan 链）时清空 AUTOIPV6，不再 add_dynamic 第二个客户端。
 +# guard：/lib/netifd/xr1710g-dhcpv6-guard.sh（overlay files/ 落盘，非本补丁）。
 +# 上下文按目标树 f0d3e332 真源重算：插入点 = 真源 19 行 `if [ -n "$AUTOIPV6" ]` 之前。
-+--- a/package/network/services/ppp/files/lib/netifd/ppp6-up
-++++ b/package/network/services/ppp/files/lib/netifd/ppp6-up
++--- a/files/lib/netifd/ppp6-up
+++++ b/files/lib/netifd/ppp6-up
 +@@ -15,6 +15,13 @@
 + 		[ -x "$SCRIPT" ] && "$SCRIPT" "$@"
 + 	done
@@ -131,8 +131,8 @@ new file mode 100644
 +# 目的：让内层 001（ppp6-up guard 调用）带上本层特性标识——否则同版本号下 opkg 不重装。
 +# 基线核对（目标树 f0d3e332 实测 grep）：PKG_VERSION:=2.5.3 / PKG_RELEASE:=2 → 3
 +#   （与缓存 0104 基线一致；上游 bump 版本号时接受漂移，届时按真源重对齐本内层）。
-+--- a/package/network/services/ppp/Makefile
-++++ b/package/network/services/ppp/Makefile
++--- a/Makefile
+++++ b/Makefile
 +@@ -10,7 +10,7 @@
 + 
 + PKG_NAME:=ppp
