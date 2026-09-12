@@ -2,7 +2,15 @@ diff --git a/target/linux/airoha/patches-6.18/9997-net-airoha-ppe-bind-rate.patc
 new file mode 100644
 --- /dev/null
 +++ b/target/linux/airoha/patches-6.18/9997-net-airoha-ppe-bind-rate.patch
-@@ -0,0 +1,151 @@
+@@ -0,0 +1,160 @@
++# Source: openwrt forum t/222776 #3890 (NoTengoBattery / Oever González), 2026-09-04
++# Upstream: n/a（作者自持；未提上游 PR）
++# Reason: PPE 仅在流超过 REG_PPE_BIND_RATE 包后才加速；vendor 默认 0x1e(30) 高于交互流包速率
++#   → 游戏/VoIP/延迟探针永不绑定，与批量卸载并存时该流吃 60-250ms 周期尖峰。
++#   实测（150ms 探针 vs 已卸载传输）：阈值 32 → loaded p90 157ms（30% >40ms）；8 → 15ms（0%）。
++#   本补丁把默认降到 8 并加 debugfs bind_rate 旋钮（1..10 实测同值，8 = 仍放过 DNS/NTP 类偶发流）。
++# 顺序：置于 9039 之后（同 airoha_ppe.c，9039 改 853/1046/1057 区，本项改 136/223 区，互不相交）。
++++ b/target/linux/airoha/patches-6.18/9997-net-airoha-ppe-bind-rate.patch
 +# Source: openwrt forum t/222776 #3890 (NoTengoBattery / Oever González), 2026-09-04
 +# Upstream: n/a（作者自持；未提上游 PR）
 +# Reason: PPE 仅在流超过 REG_PPE_BIND_RATE 包后才加速；vendor 默认 0x1e(30) 高于交互流包速率
@@ -48,10 +56,11 @@ new file mode 100644
 +---
 +--- a/drivers/net/ethernet/airoha/airoha_ppe.c
 ++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-+@@ -97,6 +97,35 @@
-+ 		      __field_prep(DFT_CPORT_MASK(fport), fe_cpu_port));
++@@ -134,8 +134,36 @@
++ 	airoha_fe_rmw(eth, REG_PPE_MTU(ppe_id, index),
++ 		      FP_EGRESS_MTU_MASK(index),
++ 		      __field_prep(FP_EGRESS_MTU_MASK(index), len));
 + }
-+ 
 ++/* Flows below this packet rate are never bound and stay on the CPU for life. */
 ++#define AIROHA_PPE_BIND_RATE_DEFAULT	8
 ++
@@ -80,10 +89,11 @@ new file mode 100644
 ++			 airoha_fe_rr(eth, REG_PPE_BIND_RATE(0)));
 ++}
 ++#endif
-++
++ 
 + static void airoha_ppe_hw_init(struct airoha_ppe *ppe)
 + {
 + 	u32 sram_ppe_num_data_entries = PPE_SRAM_NUM_ENTRIES, sram_num_entries;
++
 +@@ -157,11 +186,8 @@
 + 			      FIELD_PREP(PPE_DRAM_TB_NUM_ENTRY_MASK,
 + 					 dram_num_entries));
@@ -153,4 +163,3 @@ new file mode 100644
 + int airoha_ppe_debugfs_init(struct airoha_ppe *ppe);
 + #else
 + static inline int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
-+

@@ -51,6 +51,13 @@ patches/packages/mt76-0011-wifi-mt76-npu-fix-rx-descriptor-ownership.patch      
 # 0014：NPU 复位 + panic/竞态/越界加固（Gilly 047/034/035/036/042/026/044）——047 修整机复位后
 #   host TX 永死与 NAPI NULL oops；034 reg_lock irqsave 防 AP panic；其余为 wcid 竞态与事件越界校验
 #EXP patches/packages/mt76-0014-wifi-mt76-npu-reset-panic-race-hardening.patch    package/kernel/mt76/patches/
+# 0015（= Gilly 039+046 合并，2026-09-12 吸收）：mt7996_mac_work() 的 ADM_STAT/MSDU_COUNT
+#   轮询门只判 WED → 扩到 `|| mt76_npu_device_active()`（NPU 板每站 tx/rx bytes/packets 恒 0，
+#   因 0003 改了同一 hunk 上面两行却没动这个门）；mt7996_sta_statistics() 同步在 NPU 上报固件
+#   计数器（NPU 绕过 mac80211：30s/5GHz 固件 8937 包 vs 软件 161 包），固件计数为 0 时留给 mac80211。
+#   二者必须同档（046 的计数器由 039 扩开的轮询喂给）→ 合一个补丁。实机判据：NPU 板
+#   `iw station dump` 每站 bytes/packets 非 0 且随流量增长。
+#EXP patches/packages/mt76-0015-wifi-mt76-mt7996-npu-firmware-sta-counters.patch    package/kernel/mt76/patches/
 patches/packages/mt76-9990-wifi-mt76-mt7996-advertise-eht-to-firmware-rate-control.patch    package/kernel/mt76/patches/
 patches/packages/mt76-9991-wifi-mt76-mt7996-fill-160mhz-bf-fallback-for-eht-320.patch       package/kernel/mt76/patches/
 patches/packages/mt76-9993-wifi-mt76-mt7996-pass-operating-mode-to-rate-control.patch       package/kernel/mt76/patches/
@@ -181,6 +188,23 @@ patches/vendor/fanboy/18-smartrg-stability-b45d5117.patch ROOT
 #   default/stock 档源码仍是 0x7fe00000，原先无条件应用会把内层 992-20 的上下文改坏，
 #   导致 stock 构建在 kernel prepare 阶段 Hunk #3 FAILED（run 34658979893/34658934256 实证）。
 #EXP patches/root/9046-xr1710g-fix-992-20-context.patch ROOT
+# 9048：airoha_ppe_flush_sram_entries() 内层 `int err;` 遮蔽 → 恒返回 0（Gilly 949，
+#   2026-09-12 吸收；B2 逐行核对推翻"已覆盖"的假阳性）。default 档：1 行级零风险真 bug，
+#   与本文件其它补丁（9035/9036/9037）区段不相交，内层对 6.18.44 真源实证可应用。
+#   实机判据：SRAM FOE 刷写失败时 airoha_ppe_init 能拿到真实 errno（而非静默成功）。
+patches/root/9048-xr1710g-airoha-ppe-flush-sram-err.patch ROOT
+# 9049：mt76 per-STA debugfs 被编译掉的根因修复（2026-09-12 吸收；B2 发现，上游无此映射）。
+#   mt76 走 backports 构建，autoconf 只有 CPTCFG_MAC80211_DEBUGFS，而源码用 #ifdef
+#   CONFIG_MAC80211_DEBUGFS（pin be5ce791 共 6 处）→ 全部被编译掉。补上 NOSTDINC_FLAGS 映射，
+#   与同文件 MESH/TESTMODE 写法一致，**按 CONFIG_PACKAGE_MAC80211_DEBUGFS 条件开**：
+#   默认档不改变镜像（该包默认未开），需要 per-STA debugfs 诊断时在 seed-config 打开即可。
+#   同时是 Gilly 038（per-link sta stats debugfs）的前置——不修映射，038 是死代码。
+patches/root/9049-xr1710g-mt76-mac80211-debugfs.patch ROOT
+# 9050（#EXP）：airoha GDM MIB 采集无损化（Gilly 963，2026-09-12 吸收）。64 位计数器被 `+=` 累加
+#   （硬件已累计 → 统计虚增）、32 位计数器无绕回处理（绕回后倒退）、RUNT/E64 混桶；另加 port->lock。
+#   影响 F38 的 rx_errors 判定口径。改的是对外可见统计语义 → #EXP，实机验证后毕业。
+#   顺序：9025（内层 9991）之后，全序实测可应用。
+#EXP patches/root/9050-xr1710g-airoha-mib-stats-lossless.patch ROOT
 # 9047：PPE flow bind rate 30→8 + debugfs 旋钮（2026-09-12 调研吸收；来源 openwrt 论坛 t/222776 #3890
 #   NoTengoBattery/Oever González，2026-09-04，与本仓 F79=mt76-0011 同一作者同帖的 Patch 2）。
 #   vendor 默认 0x1e(30) 高于交互流包速率 → 游戏/VoIP/延迟探针永不绑定，与批量卸载并存时吃 60-250ms 尖峰；
