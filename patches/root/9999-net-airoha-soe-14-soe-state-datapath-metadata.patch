@@ -2,7 +2,7 @@ diff --git a/target/linux/airoha/patches-6.18/9999-net-airoha-soe-14-soe-state-d
 new file mode 100644
 --- /dev/null
 +++ b/target/linux/airoha/patches-6.18/9999-net-airoha-soe-14-soe-state-datapath-metadata.patch
-@@ -0,0 +1,147 @@
+@@ -0,0 +1,146 @@
 +# Source: hurryman2212/OpenW1700k-test @offload-oc 9999-14（2026-09-12 P2 SOE 主体吸收，按本仓真源重基）
 +# 完整说明（依赖链/重基依据/判据）见 patches/MANIFEST 与 research-20260912/inner/soe-head.txt
 +From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
@@ -33,10 +33,9 @@ new file mode 100644
 + #define AIROHA_MAX_NUM_GDM_PORTS	4
 + #define AIROHA_MAX_NUM_GDM_DEVS		2
 + #define AIROHA_MAX_NUM_QDMA		2
-+@@ -218,10 +222,18 @@ struct airoha_queue {
++@@ -218,9 +222,17 @@ struct airoha_queue {
 + 	int buf_size;
 + 	bool txq_stopped;
-+ 	bool flushing;
 ++	bool rx_coherent;
 ++	bool rx_drop_chain;
 ++	void *rx_coherent_buf;

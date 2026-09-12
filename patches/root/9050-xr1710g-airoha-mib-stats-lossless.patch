@@ -1,8 +1,8 @@
-diff --git a/target/linux/airoha/patches-6.18/9999-net-airoha-mib-stats-lossless.patch b/target/linux/airoha/patches-6.18/9999-net-airoha-mib-stats-lossless.patch
+diff --git a/target/linux/airoha/patches-6.18/9999-net-airoha-z-mib-stats-lossless.patch b/target/linux/airoha/patches-6.18/9999-net-airoha-z-mib-stats-lossless.patch
 new file mode 100644
 --- /dev/null
-+++ b/target/linux/airoha/patches-6.18/9999-net-airoha-mib-stats-lossless.patch
-@@ -0,0 +1,279 @@
++++ b/target/linux/airoha/patches-6.18/9999-net-airoha-z-mib-stats-lossless.patch
+@@ -0,0 +1,282 @@
 +# Source: Gilly1970/Gemtek-W1700K-6.18 openwrt-patches/963（2026-09-12 吸收；B2 全量对账发现）
 +# Upstream: n/a（作者自持）
 +# Reason: airoha GDM MIB 采集三处缺陷（B2 实测本仓 grep mib_prev|runt64 = 0 命中）：
@@ -16,7 +16,10 @@ new file mode 100644
 +# 影响：本仓 F38 的 rx_errors 判定口径依赖该统计——修好后不再虚增/倒退。
 +# 档位 #EXP：改的是**对外可见的统计语义**（累加→绝对），需实机确认 sysfs/ethtool/FlowSense
 +#   读数与既有判据仍自洽后再毕业 default。
-+# 顺序：置于 9025 之后（9025 内层 9991 亦改 airoha_eth.c 的 MIB clear 区，实测 9025→本项全序可应用）。
++# 顺序：置于 9025 之后，且内层名改 `z-mib-` 以**排在并发 SOE 系列（9999-net-airoha-soe-*）之后**——
++#   两者都改 airoha_eth.h（SOE 改 struct airoha_queue 218 区、本项改 struct airoha_hw_stats 245 区，
++#   结构体不同、语义不重叠），但本项插入 27 行会推移后文行号 → 若本项在前，SOE-14 hunk#2 失配
++#   （CI run 34675640335 实证）。改名后 SOE 先应用、本项最后，行号干净。
 +diff --git a/drivers/net/ethernet/airoha/airoha_eth.c b/drivers/net/ethernet/airoha/airoha_eth.c
 +index 59001fd4b6f7..e009266fd268 100644
 +--- a/drivers/net/ethernet/airoha/airoha_eth.c
