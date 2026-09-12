@@ -176,8 +176,11 @@ patches/vendor/fanboy/18-smartrg-stability-b45d5117.patch ROOT
 # 9046（必须在 18 之后）：修 992-20 内层 hunk#3 的上下文——它写死 `RX_IRQ1_BANK_PIN_MASK 0x7fe00000`，
 #   而实验档的 9045 内层 976 已把该值改为 0xffe00000 → 严格上下文失配，992-20 整份 patch 失败
 #   （ci experimental run 34625416045 实测：Hunk #3 FAILED at 526，kernel prepare 阶段 Error 1）。
-#   本补丁仅同步该上下文值（**语义不变**：992-20 仍改 RX_IRQ0 0x839f→0xbb9f），对 default 档无影响。
-patches/root/9046-xr1710g-fix-992-20-context.patch ROOT
+#   本补丁仅同步该上下文值（**语义不变**：992-20 仍改 RX_IRQ0 0x839f→0xbb9f）。
+#   ⚠ 2026-09-12 修正：必须为 #EXP —— 该上下文**只在实验档**被 976 改成 0xffe00000；
+#   default/stock 档源码仍是 0x7fe00000，原先无条件应用会把内层 992-20 的上下文改坏，
+#   导致 stock 构建在 kernel prepare 阶段 Hunk #3 FAILED（run 34658979893/34658934256 实证）。
+#EXP patches/root/9046-xr1710g-fix-992-20-context.patch ROOT
 # 9047：PPE flow bind rate 30→8 + debugfs 旋钮（2026-09-12 调研吸收；来源 openwrt 论坛 t/222776 #3890
 #   NoTengoBattery/Oever González，2026-09-04，与本仓 F79=mt76-0011 同一作者同帖的 Patch 2）。
 #   vendor 默认 0x1e(30) 高于交互流包速率 → 游戏/VoIP/延迟探针永不绑定，与批量卸载并存时吃 60-250ms 尖峰；
