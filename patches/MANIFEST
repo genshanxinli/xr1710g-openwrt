@@ -348,16 +348,16 @@ patches/root/9056-xr1710g-dhcpv6-duplicate-guard.patch ROOT
 #EXP patches/root/9999-net-airoha-soe-13-soe-ppe-ipsec-registers.patch ROOT
 #EXP patches/root/9999-net-airoha-soe-14-soe-state-datapath-metadata.patch ROOT
 #EXP patches/root/9999-net-airoha-soe-15-soe-ppe-driver-interfaces.patch ROOT
-#DISABLED patches/root/9999-net-airoha-soe-16-integrate-soe-eth-datapath.patch ROOT   # 暂时停用：待按权威真源重基（SOE-16 hunk#1/8/9/10/17/25 失配，F124）
-#DISABLED patches/root/9999-net-airoha-soe-17-flow-offload-xfrm-actions.patch ROOT   # 暂时停用：待按权威真源重基（SOE-16 hunk#1/8/9/10/17/25 失配，F124）
-#DISABLED patches/root/9999-net-airoha-soe-18-flowtable-xfrm-route-metadata.patch ROOT   # 暂时停用：待按权威真源重基（SOE-16 hunk#1/8/9/10/17/25 失配，F124）
-#DISABLED patches/root/9999-net-airoha-soe-19-flowtable-retain-xfrm-input.patch ROOT   # 暂时停用：待按权威真源重基（SOE-16 hunk#1/8/9/10/17/25 失配，F124）
-#DISABLED patches/root/9999-net-airoha-soe-20-flowtable-discover-xfrm-state.patch ROOT   # 暂时停用：待按权威真源重基（SOE-16 hunk#1/8/9/10/17/25 失配，F124）
-#DISABLED patches/root/9999-net-airoha-soe-21-flowtable-xfrm-hw-actions.patch ROOT   # 暂时停用：待按权威真源重基（SOE-16 hunk#1/8/9/10/17/25 失配，F124）
-#DISABLED patches/root/9999-net-airoha-soe-22-flowtable-keep-xfrm-off-sw-path.patch ROOT   # 暂时停用：待按权威真源重基（SOE-16 hunk#1/8/9/10/17/25 失配，F124）
-#DISABLED patches/root/9999-net-airoha-soe-23-flowtable-admit-authed-xfrm.patch ROOT   # 暂时停用：待按权威真源重基（SOE-16 hunk#1/8/9/10/17/25 失配，F124）
-#DISABLED patches/root/9999-net-airoha-soe-24-flowtable-ctx-offload-api.patch ROOT   # 暂时停用：待按权威真源重基（SOE-16 hunk#1/8/9/10/17/25 失配，F124）
-#DISABLED patches/root/9999-net-airoha-soe-25-autonomous-soe-xfrm-offload.patch ROOT   # 暂时停用：待按权威真源重基（SOE-16 hunk#1/8/9/10/17/25 失配，F124）
-#DISABLED patches/root/9999-net-airoha-soe-26-soe-xfrm-packet-offload.patch ROOT   # 暂时停用：待按权威真源重基（SOE-16 hunk#1/8/9/10/17/25 失配，F124）
-#DISABLED patches/root/9999-net-airoha-soe-27-build-soe-provider.patch ROOT   # 暂时停用：待按权威真源重基（SOE-16 hunk#1/8/9/10/17/25 失配，F124）
-#DISABLED patches/root/9999-net-airoha-soe-28-soe-offload-kconfig.patch ROOT   # 暂时停用：待按权威真源重基（SOE-16 hunk#1/8/9/10/17/25 失配，F124）
+#EXP patches/root/9999-net-airoha-soe-16-integrate-soe-eth-datapath.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-17-flow-offload-xfrm-actions.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-18-flowtable-xfrm-route-metadata.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-19-flowtable-retain-xfrm-input.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-20-flowtable-discover-xfrm-state.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-21-flowtable-xfrm-hw-actions.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-22-flowtable-keep-xfrm-off-sw-path.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-23-flowtable-admit-authed-xfrm.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-24-flowtable-ctx-offload-api.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-25-autonomous-soe-xfrm-offload.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-26-soe-xfrm-packet-offload.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-27-build-soe-provider.patch ROOT
+#EXP patches/root/9999-net-airoha-soe-28-soe-offload-kconfig.patch ROOT
