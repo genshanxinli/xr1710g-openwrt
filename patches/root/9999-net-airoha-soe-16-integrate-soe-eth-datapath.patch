@@ -120,7 +120,7 @@ new file mode 100644
 ++	}
 ++}
 ++
-++static void airoha_qdma_set_rx_irq(struct airoha_qdma *qdma, int qid,
+++static void __maybe_unused airoha_qdma_set_rx_irq(struct airoha_qdma *qdma, int qid,
 ++				   bool enable)
 ++{
 ++	int i, intr_reg;
@@ -383,7 +383,7 @@ new file mode 100644
 + 		WRITE_ONCE(desc->tcp_ts_reply, 0);
 + 		val = FIELD_PREP(QDMA_DESC_LEN_MASK, e->dma_len);
 + 		WRITE_ONCE(desc->ctrl, cpu_to_le32(val));
-+@@ -920,105 +1207,287 @@
++@@ -920,105 +1207,294 @@
 + 	q->stall_dma_idx = dma_idx;
 + }
 + 
@@ -432,10 +432,10 @@ new file mode 100644
 + 
 + 		desc_ctrl = le32_to_cpu(READ_ONCE(desc->ctrl));
 +-		if (!(desc_ctrl & QDMA_DESC_DONE_MASK)) {
-+-			airoha_qdma_rx_check_stall(q);
-++		if (!(desc_ctrl & QDMA_DESC_DONE_MASK))
++ 			airoha_qdma_rx_check_stall(q);
+++		if (!(desc_ctrl & QDMA_DESC_DONE_MASK)) {
 + 			break;
-+-		}
++ 		}
 + 
 + 		dma_rmb();
 ++		(*desc_budget)--;
@@ -657,15 +657,15 @@ new file mode 100644
 ++#endif
 + 		}
 + 
-+-		msg1 = le32_to_cpu(READ_ONCE(desc->msg1));
++ 		msg1 = le32_to_cpu(READ_ONCE(desc->msg1));
 + 		hash = FIELD_GET(AIROHA_RXD4_FOE_ENTRY, msg1);
 + 		if (hash != AIROHA_RXD4_FOE_ENTRY)
 + 			skb_set_hash(q->skb, jhash_1word(hash, 0),
-+-				     PKT_HASH_TYPE_L4);
++ 				     PKT_HASH_TYPE_L4);
 +-
-+-		reason = FIELD_GET(AIROHA_RXD4_PPE_CPU_REASON, msg1);
-+-		if (reason == PPE_CPU_REASON_HIT_UNBIND_RATE_REACHED)
-+-			airoha_ppe_check_skb(&eth->ppe->dev, q->skb, hash,
++ 		reason = FIELD_GET(AIROHA_RXD4_PPE_CPU_REASON, msg1);
++ 		if (reason == PPE_CPU_REASON_HIT_UNBIND_RATE_REACHED)
++ 			airoha_ppe_check_skb(&eth->ppe->dev, q->skb, hash,
 + 					     false);
 + 
 + 		done++;
@@ -710,7 +710,7 @@ new file mode 100644
 + 	}
 + 	airoha_qdma_fill_rx_queue(q);
 + 
-+@@ -1028,12 +1497,19 @@
++@@ -1028,12 +1504,19 @@
 + static int airoha_qdma_rx_napi_poll(struct napi_struct *napi, int budget)
 + {
 + 	struct airoha_queue *q = container_of(napi, struct airoha_queue, napi);
@@ -732,7 +732,7 @@ new file mode 100644
 + 
 + 	if (done < budget && napi_complete(napi)) {
 + 		struct airoha_qdma *qdma = q->qdma;
-+@@ -1074,6 +1550,17 @@
++@@ -1074,6 +1557,17 @@
 + 
 + 	q->qdma = qdma;
 + 	lro_q = airoha_qdma_is_lro_queue(q);
@@ -750,7 +750,7 @@ new file mode 100644
 + 
 + 	q->entry = devm_kzalloc(eth->dev, ndesc * sizeof(*q->entry),
 + 				GFP_KERNEL);
-+@@ -1085,18 +1572,30 @@
++@@ -1085,18 +1579,30 @@
 + 	if (!q->desc)
 + 		return -ENOMEM;
 + 
@@ -789,7 +789,7 @@ new file mode 100644
 + 	q->ndesc = ndesc;
 + 	netif_napi_add(eth->napi_dev, &q->napi, airoha_qdma_rx_napi_poll);
 + 
-+@@ -1128,14 +1627,22 @@
++@@ -1128,14 +1634,22 @@
 + 	struct airoha_eth *eth = qdma->eth;
 + 	int qid = q - &qdma->q_rx[0];
 + 
@@ -816,7 +816,7 @@ new file mode 100644
 + 		/* Reset DMA descriptor */
 + 		WRITE_ONCE(desc->tcp_ts_reply, 0);
 + 		WRITE_ONCE(desc->ctrl, 0);
-+@@ -1370,8 +1877,24 @@
++@@ -1370,8 +1884,24 @@
 + 			airoha_qdma_rmw(qdma, REG_IRQ_CLEAR_LEN(id),
 + 					IRQ_CLEAR_LEN_MASK, 0x80);
 + 		airoha_qdma_rmw(qdma, REG_IRQ_CLEAR_LEN(id),
@@ -842,7 +842,7 @@ new file mode 100644
 + 
 + 	if (done < budget && napi_complete(napi))
 + 		airoha_qdma_irq_enable(&qdma->irq_banks[0], QDMA_INT_REG_IDX0,
-+@@ -1410,9 +1933,17 @@
++@@ -1410,9 +1940,17 @@
 + 	}
 + 	q->ndesc = size;
 + 
@@ -863,7 +863,7 @@ new file mode 100644
 + 
 + 	airoha_qdma_wr(qdma, REG_TX_RING_BASE(qid), dma_addr);
 + 	airoha_qdma_rmw(qdma, REG_TX_CPU_IDX(qid), TX_RING_CPU_IDX_MASK,
-+@@ -1677,16 +2208,12 @@
++@@ -1677,16 +2215,12 @@
 + 	for (i = 0; i < ARRAY_SIZE(qdma->irq_banks); i++) {
 + 		/* clear pending irqs */
 + 		airoha_qdma_wr(qdma, REG_INT_STATUS(i), 0xffffffff);
@@ -885,7 +885,7 @@ new file mode 100644
 + 	/* setup tx irqs */
 + 	airoha_qdma_irq_enable(&qdma->irq_banks[0], QDMA_INT_REG_IDX0,
 + 			       TX_COHERENT_LOW_INT_MASK | INT_TX_MASK);
-+@@ -2666,6 +3193,11 @@
++@@ -2666,6 +3200,11 @@
 + 	struct airoha_gdm_dev *dev = netdev_priv(netdev);
 + 	struct airoha_qdma *qdma = airoha_qdma_deref(dev);
 + 	int qdma_id = qdma - &dev->eth->qdma[0];
@@ -897,7 +897,7 @@ new file mode 100644
 + 
 + 	if (!(diff & NETIF_F_GRO_HW) || qdma->syncing_gro_features)
 + 		return 0;
-+@@ -2683,6 +3215,115 @@
++@@ -2683,6 +3222,115 @@
 + 	return 0;
 + }
 + 
@@ -1013,7 +1013,7 @@ new file mode 100644
 + static netdev_tx_t airoha_dev_xmit(struct sk_buff *skb,
 + 				   struct net_device *netdev)
 + {
-+@@ -3487,8 +4128,9 @@
++@@ -3487,8 +4135,9 @@
 + 	}
 + }
 + 
@@ -1025,7 +1025,7 @@ new file mode 100644
 + {
 + 	struct net_device *netdev = cb_priv;
 + 	struct airoha_gdm_dev *dev = netdev_priv(netdev);
-+@@ -3499,7 +4141,8 @@
++@@ -3499,7 +4148,8 @@
 + 
 + 	switch (type) {
 + 	case TC_SETUP_CLSFLOWER:
@@ -1035,7 +1035,7 @@ new file mode 100644
 + 	case TC_SETUP_CLSMATCHALL:
 + 		return airoha_dev_tc_matchall(netdev, type_data);
 + 	default:
-+@@ -3507,10 +4150,25 @@
++@@ -3507,10 +4157,25 @@
 + 	}
 + }
 + 
@@ -1063,7 +1063,7 @@ new file mode 100644
 + 	static LIST_HEAD(block_cb_list);
 + 	struct flow_block_cb *block_cb;
 + 
-+@@ -3752,8 +4410,9 @@
++@@ -3752,8 +4417,9 @@
 + 	case TC_SETUP_QDISC_HTB:
 + 		return airoha_tc_setup_qdisc_htb(dev, type_data);
 + 	case TC_SETUP_BLOCK:
@@ -1074,7 +1074,7 @@ new file mode 100644
 + 	default:
 + 		return -EOPNOTSUPP;
 + 	}
-+@@ -4042,6 +4701,7 @@
++@@ -4042,6 +4708,7 @@
 + 	dev->eth = eth;
 + 	dev->nbq = nbq;
 + 	port->devs[index] = dev;
@@ -1082,7 +1082,7 @@ new file mode 100644
 + 
 + 	return airoha_setup_phylink(netdev);
 + }
-+@@ -4220,11 +4880,16 @@
++@@ -4220,11 +4887,16 @@
 + 	eth->napi_dev->threaded = true;
 + 	strscpy(eth->napi_dev->name, "qdma_eth", sizeof(eth->napi_dev->name));
 + 	platform_set_drvdata(pdev, eth);
@@ -1099,7 +1099,7 @@ new file mode 100644
 + 	for (i = 0; i < ARRAY_SIZE(eth->qdma); i++)
 + 		airoha_qdma_start_napi(&eth->qdma[i]);
 + 
-+@@ -4275,6 +4940,24 @@
++@@ -4275,6 +4947,24 @@
 + 		}
 + 		airoha_metadata_dst_free(port);
 + 	}
@@ -1124,7 +1124,7 @@ new file mode 100644
 + 	airoha_hw_cleanup(eth);
 + error_netdev_free:
 + 	free_netdev(eth->napi_dev);
-+@@ -4312,6 +4995,23 @@
++@@ -4312,7 +5002,24 @@
 + 		}
 + 		airoha_metadata_dst_free(port);
 + 	}
