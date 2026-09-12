@@ -109,7 +109,19 @@ patches/packages/mt76-0101-wifi-mt76-mt7996-validate-default-eeprom-size.patch  
 patches/packages/mt76-9990-wifi-mt76-mt7996-advertise-eht-to-firmware-rate-control.patch    package/kernel/mt76/patches/
 patches/packages/mt76-9991-wifi-mt76-mt7996-fill-160mhz-bf-fallback-for-eht-320.patch       package/kernel/mt76/patches/
 patches/packages/mt76-9993-wifi-mt76-mt7996-pass-operating-mode-to-rate-control.patch       package/kernel/mt76/patches/
-# 9993 的编译依赖（F25 二次构建暴露）：mac80211 backport 未导出 cap_bw/cap_nss helper，
+# ── P3-D：mac80211 subsys 精选（YYH 397/399/400/405/406/407/409/410，2026-09-12 吸收；全部 #EXP）──
+#   装到 package/kernel/mac80211/patches/subsys/（与上游 20 个 subsys 补丁 + 本仓 411 同目录，
+#   glob 序排在 392 之后、411 之前）。全部先 #EXP（MAC80211/CSA 类改动需实机三频+MLO 回归）。
+#   实证：裁剪后的 backports-7.2（上游 subsys 20 + 411）之上逐条应用（410 已按 7.2 重基为 fuzz=0）。
+#EXP patches/packages/mac80211-397-wifi-mac80211-fix-csa-punct-bitmap-sta-mode.patch package/kernel/mac80211/patches/subsys/
+#EXP patches/packages/mac80211-399-wifi-mac80211-fix-cac-event-call-trace.patch package/kernel/mac80211/patches/subsys/
+#EXP patches/packages/mac80211-400-wifi-mac80211-fix-non-tx-bss-checking.patch package/kernel/mac80211/patches/subsys/
+#EXP patches/packages/mac80211-405-wifi-mac80211-handle-csa-finalize-non-tx-bss.patch package/kernel/mac80211/patches/subsys/
+#EXP patches/packages/mac80211-406-wifi-mac80211-do-not-update-channel-if-csa-ie.patch package/kernel/mac80211/patches/subsys/
+#EXP patches/packages/mac80211-407-wifi-mac80211-fix-direct-csa-issues.patch package/kernel/mac80211/patches/subsys/
+#EXP patches/packages/mac80211-409-wifi-mac80211-fix-aql-bmc-mld.patch package/kernel/mac80211/patches/subsys/
+#EXP patches/packages/mac80211-410-wifi-mac80211-prevent-rts-unexpectedly-set.patch package/kernel/mac80211/patches/subsys/
+# ── 9993 的编译依赖（F25 二次构建暴露）：mac80211 backport 未导出 cap_bw/cap_nss helper，
 #   integration 树以 mac80211 包 subsys 补丁补充——随 9993 毕业为默认。
 patches/packages/mac80211-411-export-link-sta-capability-limits.patch package/kernel/mac80211/patches/subsys/
 

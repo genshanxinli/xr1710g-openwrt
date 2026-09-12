@@ -86,6 +86,14 @@ default mt76/9990-wifi-mt76-mt7996-advertise-eht-to-firmware-rate-control.patch 
 default mt76/9991-wifi-mt76-mt7996-fill-160mhz-bf-fallback-for-eht-320.patch
 default mt76/9993-wifi-mt76-mt7996-pass-operating-mode-to-rate-control.patch
 default packages/mac80211-411-export-link-sta-capability-limits.patch   # 9993 编译依赖：mac80211 backport 导出 cap_bw/cap_nss（integration subsys 411）
+experimental packages/mac80211-397-wifi-mac80211-fix-csa-punct-bitmap-sta-mode.patch   # 2026-09-12 P3-D：STA 模式 CSA punct bitmap
+experimental packages/mac80211-399-wifi-mac80211-fix-cac-event-call-trace.patch   # 2026-09-12 P3-D：bootup CAC 删接口 call trace
+experimental packages/mac80211-400-wifi-mac80211-fix-non-tx-bss-checking.patch   # 2026-09-12 P3-D：parse non-TX BSS 判定
+experimental packages/mac80211-405-wifi-mac80211-handle-csa-finalize-non-tx-bss.patch   # 2026-09-12 P3-D：partner link CSA finalize
+experimental packages/mac80211-406-wifi-mac80211-do-not-update-channel-if-csa-ie.patch   # 2026-09-12 P3-D：CSA 期间不按旧信道 beacon 更新信道
+experimental packages/mac80211-407-wifi-mac80211-fix-direct-csa-issues.patch   # 2026-09-12 P3-D：direct CSA（count=0）mbss finalize
+experimental packages/mac80211-409-wifi-mac80211-fix-aql-bmc-mld.patch   # 2026-09-12 P3-D：MLD 下 AQL BMC 选 link
+experimental packages/mac80211-410-wifi-mac80211-prevent-rts-unexpectedly-set.patch   # 2026-09-12 P3-D：nl80211_set_wiphy_radio RTS 误置 0
 disabled regdb/0530-us-6ghz-lab-indoor-sp-override-DISABLED.patch   # MANIFEST #DISABLED；启用前按 0510→0520→0521 后状态过 verify
 
 # ── pending（原料已入库，待评审定档/拆分后解锁，对应 FIXES F13/F14）──
