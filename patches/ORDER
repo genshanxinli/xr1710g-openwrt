@@ -26,6 +26,7 @@ default root/9031-base-files-led-skip-interval-hw-offload.patch   # #14：hw-off
 default root/9033-openwrt-24034-rtl826x-led.patch   # issue #13：RTL826x 10G PHY LED class 支持（carry openwrt/openwrt #24034）
 default root/9010-wifi-scripts-txpower-ucode.patch   # 16 号重建（pr-23990 按 radio 独立 txpower）
 default vendor/fanboy/11-airoha-lro-default-0e90a420.patch   # HW GRO/LRO 默认
+default vendor/fanboy/21-hsuart-baud-calculations-4e2b80ff.patch   # HSUART 波特率修正（21 号；父=11 号同主题）
 default mt76/0001-wifi-mt76-mt7996-add-token-and-NPU-debugfs-counters.patch   # fanboy14 0001 重建（issue #4）：c5a3bd91 无 token_info，非冗余
 default mt76/0003-wifi-mt76-mt7996-replace-direct-WTBL-access-with-MCU-for-station-statistics.patch   # fanboy14 0003 重建（issue #4）：c5a3bd91 mac.c 仍直接 WTBL 轮询
 default root/9011-xr1710g-spi33mhz.patch   # 08 切片：SPI 33MHz（sysupgrade 可靠性）

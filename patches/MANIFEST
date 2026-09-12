@@ -6,7 +6,8 @@
 # 前缀 #OC  = OC 档（apply-patches.sh --oc 才应用；激进档资产）
 # 前缀 #DISABLED = 停用项（默认不应用）
 # 注意：活动行不允许尾随注释（会破坏目标解析）；说明一律写成整行注释。
-# 原料桶 patches/vendor/fanboy/ = OpenW1700k ubi2-oc 全 20 commit（git format-patch，2026-08-17 抓取），
+# 原料桶 patches/vendor/fanboy/ = OpenW1700k ubi2-oc 全 21 commit（git format-patch，2026-08-17 抓取；
+#   2026-09-12 P6 因上游 force-push 补入 21 号 HSUART，见 FIXES F133），
 #   供评审/拆分后移入正式桶；patches/ORDER 是档位视图（评审用），本文件是实际应用清单。
 
 # ── packages：regdb（决策=默认 510/520；500 world 去 NO-IR 已上游自带 500-world-regd-5GHz.patch；
@@ -175,6 +176,12 @@ patches/root/9042-xr1710g-airoha-rx-ring-grow.patch ROOT
 patches/root/9010-wifi-scripts-txpower-ucode.patch ROOT
 # HW GRO/LRO 默认开启（11 号定档 default——README 声明的 HW-GRO/LRO 能力载体；kernel 6.18 编译期验证中）
 patches/vendor/fanboy/11-airoha-lro-default-0e90a420.patch ROOT
+# HSUART 波特率修正（21 号，default；2026-09-12 P6 吸收 fanboy 重基后新增 commit 4e2b80ff）：
+#   父提交与 11 号同主题（net: airoha: enable LRO by default），故紧随其后应用。
+#   内容：an7581/an7583 dtsi 的 hsuart 时钟 7372800→20000000、uart3 compatible 改 en7523-hsuart，
+#   并同步改写 patches-6.18/886-uart-add-en7523-support.patch。缺此修复则 HSUART/GPS 串口波特率错乱
+#   （commit message 实测表：修前 ttyS2 请求 460800 实得 921600）。见 FIXES F133。
+patches/vendor/fanboy/21-hsuart-baud-calculations-4e2b80ff.patch ROOT
 # mt76 token/NPU debugfs 计数器（14 号定档 default——F13 评审基于旧 mt76；F21 复查 2026-08-17：
 #   相对 pin 版 mt76 59676919 已完全上游化——0001 与 debugfs.c:908 逐字一致、0003 的功能性改动
 #   （MCU 采集调用）mac.c:2895-2896 已存在，剩余 diff 只是删除上游已无调用者的死代码 mt7996_mac_sta_poll。
