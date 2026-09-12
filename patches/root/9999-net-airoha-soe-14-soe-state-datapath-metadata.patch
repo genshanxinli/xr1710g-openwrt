@@ -2,7 +2,7 @@ diff --git a/target/linux/airoha/patches-6.18/9999-net-airoha-soe-14-soe-state-d
 new file mode 100644
 --- /dev/null
 +++ b/target/linux/airoha/patches-6.18/9999-net-airoha-soe-14-soe-state-datapath-metadata.patch
-@@ -0,0 +1,146 @@
+@@ -0,0 +1,145 @@
 +# Source: hurryman2212/OpenW1700k-test @offload-oc 9999-14（2026-09-12 P2 SOE 主体吸收，按本仓真源重基）
 +# 完整说明（依赖链/重基依据/判据）见 patches/MANIFEST 与 research-20260912/inner/soe-head.txt
 +From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
@@ -33,14 +33,15 @@ new file mode 100644
 + #define AIROHA_MAX_NUM_GDM_PORTS	4
 + #define AIROHA_MAX_NUM_GDM_DEVS		2
 + #define AIROHA_MAX_NUM_QDMA		2
-+@@ -218,9 +222,17 @@ struct airoha_queue {
-+ 	int buf_size;
-+ 	bool txq_stopped;
++@@ -216,8 +216,17 @@ struct airoha_queue {
++ 	u16 stall_tail;
++ 	u8 stall_count;
++ 
 ++	bool rx_coherent;
 ++	bool rx_drop_chain;
 ++	void *rx_coherent_buf;
 ++	dma_addr_t rx_coherent_dma;
-+ 
+++
 + 	struct napi_struct napi;
 + 	struct page_pool *page_pool;
 + 	struct sk_buff *skb;
@@ -50,7 +51,6 @@ new file mode 100644
 ++	u32 soe_rx_msg2;
 + 
 + 	struct list_head tx_list;
-+ };
 +@@ -490,6 +502,7 @@ enum airoha_flow_entry_type {
 + 	FLOW_TYPE_L4,
 + 	FLOW_TYPE_L2,
@@ -148,4 +148,3 @@ new file mode 100644
 ++				struct airoha_soe_ppe_flow *flow);
 + 
 + #ifdef CONFIG_DEBUG_FS
-+ int airoha_ppe_debugfs_init(struct airoha_ppe *ppe);
