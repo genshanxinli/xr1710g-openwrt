@@ -75,7 +75,7 @@ REMOTE_TIPS=(
   "c82129e734|https://github.com/YYH2913/openwrt.git|refs/heads/xr1710g-6.18-integration|YYH 补丁集真源（P3 对账对象；suntyrael 只是其重传载体）"
   "2dd6e4c8|https://github.com/YYH2913/mt76.git|HEAD|YYH mt76 分支（MTK/YYH 专有 mt76 补丁的来源）"
   "53b73174c|https://github.com/YYH2913/http-uboot.git|HEAD|U-Boot 锁版参考（FLASHING 升级前核对）"
-  "b1f669b68|https://github.com/OpenWRT-fanboy/OpenW1700k.git|refs/heads/ubi2-oc|vendor/fanboy/01..21 原料桶（P6 已重基到 b1f669b68；21=HSUART，见 F133）"
+  "1b7cacf39|https://github.com/OpenWRT-fanboy/OpenW1700k.git|refs/heads/ubi2-oc|vendor/fanboy/01..21 原料桶（P6 重基到 1b7cacf39；21=HSUART，见 F133）"
   "0ddd9fbf|https://github.com/Gilly1970/Gemtek-W1700K-6.18.git|HEAD|Gilly openwrt-patches/（F90/F101 对账源）"
   "38148509|https://github.com/naoki66/ImmortalWrt-for-Gemtek-XR1710G.git|HEAD|naoki66 分支（411/628/622/743/744/mt76-0010/0012 来源）"
   "73c3ab308|https://github.com/hurryman2212/OpenW1700k-test.git|refs/heads/offload-oc|SOE/xfrm/EIP93 来源（F115/F122）"
