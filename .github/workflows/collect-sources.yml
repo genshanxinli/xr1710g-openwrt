@@ -44,10 +44,14 @@ jobs:
           grep -q "CONFIG_TARGET_airoha_an7581_DEVICE_gemtek_xr1710g-ubi=y" .config || { echo "XR1710G 目标未选中"; exit 1; }
 
       - name: prepare 内核与 mt76 源码
+        # 允许失败：内层内核补丁失配时仍要拿到 prepare 出的真实源码片段，用于离线精确重基。
+        # make prepare 在失败处停下，故收集到的是「失败补丁之前」的真源 —— 正是重基所需基线。
+        continue-on-error: true
+        id: prepare
         run: |
           cd "$TREE"
-          make target/linux/prepare V=s
-          make package/kernel/mt76/prepare V=s
+          make target/linux/prepare V=s || echo "::warning::target/linux/prepare 失败（继续收集已有真源）"
+          make package/kernel/mt76/prepare V=s || echo "::warning::mt76 prepare 失败（继续收集已有真源）"
 
       - name: 收集源码文件
         run: |
