@@ -58,6 +58,12 @@ patches/packages/mt76-0011-wifi-mt76-npu-fix-rx-descriptor-ownership.patch      
 #   二者必须同档（046 的计数器由 039 扩开的轮询喂给）→ 合一个补丁。实机判据：NPU 板
 #   `iw station dump` 每站 bytes/packets 非 0 且随流量增长。
 #EXP patches/packages/mt76-0015-wifi-mt76-mt7996-npu-firmware-sta-counters.patch    package/kernel/mt76/patches/
+# 0016（#EXP，Gilly 020）：radar 事件用检测方 phy 的 chanctx 上报（单 wiphy 多 radio 下 NULL 会
+#   标记全部 band；本机 phy0 承载 radio0/1/2）。判据：2.4G BSS 不再出现 radar 日志。
+#EXP patches/packages/mt76-0016-wifi-mt76-mt7996-radar-detecting-chanctx.patch    package/kernel/mt76/patches/
+# 0017（#EXP，Gilly 032）：亚 64 窗口 BlockAck（Apple 站点 TID6=8/TID1=16）旁路 HW_RRO，
+#   避免片上重排环/会话状态机非法导致后续关联 RX 卸载停摆；>=64 仍走硬件。
+#EXP patches/packages/mt76-0017-wifi-mt76-mt7996-bypass-hwrro-sub64-ba.patch    package/kernel/mt76/patches/
 patches/packages/mt76-9990-wifi-mt76-mt7996-advertise-eht-to-firmware-rate-control.patch    package/kernel/mt76/patches/
 patches/packages/mt76-9991-wifi-mt76-mt7996-fill-160mhz-bf-fallback-for-eht-320.patch       package/kernel/mt76/patches/
 patches/packages/mt76-9993-wifi-mt76-mt7996-pass-operating-mode-to-rate-control.patch       package/kernel/mt76/patches/
@@ -205,6 +211,26 @@ patches/root/9049-xr1710g-mt76-mac80211-debugfs.patch ROOT
 #   影响 F38 的 rx_errors 判定口径。改的是对外可见统计语义 → #EXP，实机验证后毕业。
 #   顺序：9025（内层 9991）之后，全序实测可应用。
 #EXP patches/root/9050-xr1710g-airoha-mib-stats-lossless.patch ROOT
+# 9051（#EXP）：GRO fraglist 套 GSO 的嵌套缺陷（Gilly 993，MediaTek netdev v5，**上游未合**）。
+#   本仓 vendor/11 默认开 NETIF_F_GRO_HW + 上游 hack-600 默认开 GRO_FRAGLIST → 路径命中；
+#   修 `is_flist = !sk && !skb_is_gso(skb)`，避免 fraglist GRO 作用于 HW-GRO 包导致 Tethering
+#   转发时 IP 分片/丢包。合入上游即删。
+#EXP patches/root/9051-xr1710g-gro-fraglist-gso-nesting.patch ROOT
+# 9052（default）：iwinfo freqlist 按 radio 过滤（Gilly 700，2026-09-12 P2 吸收）。
+#   单 wiphy 多 radio 下 freqlist 返回整个 wiphy 的所有 band → LuCI 信道分析 5G/6G 页无数据。
+#   上游 iwinfo 的 100-multi_radio.patch 只加 nl80211 枚举与 radio_idx，未过滤 freqlist → 非重复。
+#   装到 package/network/utils/iwinfo/patches/200-freqlist-per-radio.patch；全序实测
+#   （100-multi_radio → 本项）干净应用。与 Gilly 998（LuCI 页面侧）互补。
+patches/root/9052-xr1710g-iwinfo-freqlist-per-radio.patch ROOT
+# 9053（#EXP）：xfrm packet-offload manager 框架（hurryman2212 @offload-oc A 系列 9 补丁，
+#   2026-09-12 P2 吸收）。为 SOE/EIP93 接管 ESP 发送路径的基础设施；对 kernel 6.18.44
+#   真源全序 9/9 实证可应用。单独落地不产生 IPsec 加速（需配 9054 + B 系列 SOE 主体）。
+#EXP patches/root/9053-xr1710g-xfrm-packet-offload.patch ROOT
+# 9054（#EXP）：EIP93 动态软件回退（hurryman2212 @offload-oc D 系列 4 补丁 + 1 backport，
+#   2026-09-12 P2 吸收）。**正面解开 F52（issue #6）**：EIP93 能加速的走硬件、不能的（如
+#   GCM/rfc4106）透明回退软件。真源全序 5/5 实证可应用（新增 eip93-fallback.{c,h} 并入 Makefile）。
+#   依赖 vendor/fanboy/02（EIP93 驱动，同为 #EXP）。
+#EXP patches/root/9054-xr1710g-crypto-eip93-dynamic-fallback.patch ROOT
 # 9047：PPE flow bind rate 30→8 + debugfs 旋钮（2026-09-12 调研吸收；来源 openwrt 论坛 t/222776 #3890
 #   NoTengoBattery/Oever González，2026-09-04，与本仓 F79=mt76-0011 同一作者同帖的 Patch 2）。
 #   vendor 默认 0x1e(30) 高于交互流包速率 → 游戏/VoIP/延迟探针永不绑定，与批量卸载并存时吃 60-250ms 尖峰；
