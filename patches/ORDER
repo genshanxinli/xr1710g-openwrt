@@ -69,6 +69,15 @@ default mt76/0005-wifi-mt76-mt7996-guard-txfree-overrun.patch   # 2026-08-22 再
 default mt76/0011-wifi-mt76-npu-fix-rx-descriptor-ownership.patch   # 2026-09-07 WP-0011：NPU RX descriptor ownership（NTB/Oever González；consume 越界 panic + refill 竞态）
 experimental mt76/0010-set-skb-device-for-npu-rx.patch   # A6/IP25/IP26：NPU RX 设 skb->dev，PPE miss 回退 bridge/FDB 上下文
 experimental mt76/0012-wifi-mt76-npu-del-sta.patch   # 2026-09-07 WP-delsta：断开→同 MAC 重连 ~1Mbps 残留（naoki66 2d3aa30/Ryan Chen）
+experimental mt76/0147-wifi-mt76-mt7996-npu-init-retry-after-recovery.patch   # 2026-09-12 P3-B：YYH 0147+0155 合并（NPU init/stop 遇超时或 recovery 竞争时 recover/wait 后重试一次）
+experimental mt76/0153-wifi-mt76-fix-npu-teardown-ordering.patch   # 2026-09-12 P3-B：NPU RX IRQ teardown 排序 + mt76_npu_deinit 的 RCU 顺序
+experimental mt76/0154-wifi-mt76-tie-npu-dma-memory-to-the-consumer.patch   # 2026-09-12 P3-B：NPU DMA 内存挂 Wi-Fi consumer（含 F127 泄漏修复）
+experimental mt76/0156-wifi-mt76-finish-npu-rx-queue-teardown.patch   # 2026-09-12 P3-B：完成 NPU RX queue teardown
+experimental mt76/0158-wifi-mt76-publish-npu-rx-buffers-after-refill.patch   # 2026-09-12 P3-B：NPU RX 满环填充 + 发布移到 refill（与 0011 共存）
+experimental mt76/0159-wifi-mt76-preserve-npu-tx-ring-headroom.patch   # 2026-09-12 P3-B：NPU TX 环 5 描述符余量 + host-owned 校验
+experimental mt76/0160-wifi-mt76-mt7996-shutdown-device-before-restart.patch   # 2026-09-12 P3-B：host 重启前 quiesce（pci_driver.shutdown）
+experimental mt76/0161-wifi-mt76-track-rx-napi-registration.patch   # 2026-09-12 P3-B：RX NAPI 注册 bitmap（上游 revert 后正确版本；F127 重基）
+experimental mt76/0162-wifi-mt76-stop-npu-before-unregistering-device.patch   # 2026-09-12 P3-B：unregister 前先 stop NPU
 default mt76/9990-wifi-mt76-mt7996-advertise-eht-to-firmware-rate-control.patch   # 2026-08-22 再同步 integration e88fbe28：EHT 广告（9990）/320 BF fallback（9991）/op_mode 传递（9993）；9992 已随 9028 bump 删除（F59）
 default mt76/9991-wifi-mt76-mt7996-fill-160mhz-bf-fallback-for-eht-320.patch
 default mt76/9993-wifi-mt76-mt7996-pass-operating-mode-to-rate-control.patch

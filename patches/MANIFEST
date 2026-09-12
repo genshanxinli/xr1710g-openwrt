@@ -64,6 +64,33 @@ patches/packages/mt76-0011-wifi-mt76-npu-fix-rx-descriptor-ownership.patch      
 # 0017（#EXP，Gilly 032）：亚 64 窗口 BlockAck（Apple 站点 TID6=8/TID1=16）旁路 HW_RRO，
 #   避免片上重排环/会话状态机非法导致后续关联 RX 卸载停摆；>=64 仍走硬件。
 #EXP patches/packages/mt76-0017-wifi-mt76-mt7996-bypass-hwrro-sub64-ba.patch    package/kernel/mt76/patches/
+# ── P3-B：mt76 NPU 生命周期（YYH2913 0147..0162，2026-09-12 吸收；全部 #EXP）──
+#   按文件名 glob 序应用（= 依赖序）：0147 < 0153 < 0154 < 0156 < 0158 < 0159 < 0160 < 0161 < 0162。
+#   硬前置 = root/9061（内核侧 airoha_npu_recover()/wait_recovery()）。
+#   0157（preflight NPU RX fragments）**不吸收**——与本仓 mt76-0011 同处且被其覆盖（0011 有实机
+#   复现证据 + clamp 容错）；0130/0151 跳过（已由 0014 覆盖）。
+# 0147（= YYH 0147+0155 合并）：NPU hw init / reserved-memory / stop 握手遇 -ETIMEDOUT/-EAGAIN 时
+#   recover 或 wait 后重试一次（mt7996_npu_prepare_retry 为唯一入口；不再二次重启核心）。
+#EXP patches/packages/mt76-0147-wifi-mt76-mt7996-npu-init-retry-after-recovery.patch    package/kernel/mt76/patches/
+# 0153：NPU RX IRQ teardown 排序（npu_irq/npu_irq_registered + mt76_npu_rx_queues_deinit；
+#   mt76_npu_deinit 改 rcu_replace_pointer → synchronize_rcu → queue cleanup → dma_dev 复位 → put）。
+#EXP patches/packages/mt76-0153-wifi-mt76-fix-npu-teardown-ordering.patch    package/kernel/mt76/patches/
+# 0154：NPU DMA 内存挂到 Wi-Fi consumer（mt76_dma_alloc_coherent；NPU offload 下 reload 不再泄漏）。
+#   **本地增补 F127**：补 devm_add_action_or_reset 失败路径的 dma_free_coherent+put_device+kfree。
+#EXP patches/packages/mt76-0154-wifi-mt76-tie-npu-dma-memory-to-the-consumer.patch    package/kernel/mt76/patches/
+# 0156：完成 NPU RX queue teardown（error path 分阶段回滚 + IRQ 门 + 单循环 deinit）。
+#EXP patches/packages/mt76-0156-wifi-mt76-finish-npu-rx-queue-teardown.patch    package/kernel/mt76/patches/
+# 0158：NPU RX 满环填充 + 索引发布移到 refill（与 mt76-0011 共存；满填充不变量需高负载实机压测）。
+#EXP patches/packages/mt76-0158-wifi-mt76-publish-npu-rx-buffers-after-refill.patch    package/kernel/mt76/patches/
+# 0159：保留 NPU TX 环 5 描述符余量 + 提交前验 host-owned（stub 配对已核对，见 F127）。
+#EXP patches/packages/mt76-0159-wifi-mt76-preserve-npu-tx-ring-headroom.patch    package/kernel/mt76/patches/
+# 0160：host 重启前 quiesce 设备（pci_driver.shutdown；本机 MT7996 → is_mt7990 分支不触发）。
+#EXP patches/packages/mt76-0160-wifi-mt76-mt7996-shutdown-device-before-restart.patch    package/kernel/mt76/patches/
+# 0161：跟踪 RX NAPI 注册（dev->napi_registered bitmap；上游 revert 后的正确版本）。
+#   **重基 F127**：dma.c mt76_dma_cleanup 按上游新形态（for + test_bit 门）重写。
+#EXP patches/packages/mt76-0161-wifi-mt76-track-rx-napi-registration.patch    package/kernel/mt76/patches/
+# 0162：unregister 前先 stop NPU（与 SER 路径同序；正常 teardown 超时不再重启核心）。
+#EXP patches/packages/mt76-0162-wifi-mt76-stop-npu-before-unregistering-device.patch    package/kernel/mt76/patches/
 patches/packages/mt76-9990-wifi-mt76-mt7996-advertise-eht-to-firmware-rate-control.patch    package/kernel/mt76/patches/
 patches/packages/mt76-9991-wifi-mt76-mt7996-fill-160mhz-bf-fallback-for-eht-320.patch       package/kernel/mt76/patches/
 patches/packages/mt76-9993-wifi-mt76-mt7996-pass-operating-mode-to-rate-control.patch       package/kernel/mt76/patches/
