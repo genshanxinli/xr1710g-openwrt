@@ -1,10 +1,16 @@
 name: build
 
-# 构建：手动触发（matrix stock/experimental）或 main push。
+# 构建：**仅手动触发**（workflow_dispatch，matrix stock/experimental/all）。
 # 上游同步不在此处——由 sync-upstream.yml 每 2h 自动校验补丁层（决策：同步越勤冲突越少）。
 # CPU 唯一档（F89，2026-09-08）：所有档位均 OPP 650–1350 + oc-auto 自动退档（1350→1300→1200）。
 # experimental 档（F25，2026-08-18）：默认档 + MANIFEST #EXP 条目，供实验补丁构建验证；
 #   'all' 聚合 release 档位（stock），experimental 单独 dispatch。
+#
+# 决策（2026-09-12）：**移除 push 自动触发**。原因：一次 push ≈ 1h 构建时长，且 workflow 未配
+#   concurrency → 连续 push 会并发堆叠多份"同一件事"的构建（旧 run 不会被自动取消），实际浪费
+#   大量 CI。改为按需手动 dispatch：
+#     gh workflow run build.yml --repo genshanxinli/xr1710g-openwrt -f profile=experimental
+#   日常流程：push（只跑 sync-upstream 的补丁层 dry-run + 守护）→ 需要固件时再手动触发构建。
 
 on:
   workflow_dispatch:
@@ -13,8 +19,6 @@ on:
         description: '构建档位（stock / experimental / all）'
         default: 'all'
         required: true
-  push:
-    branches: [main]
 
 permissions:
   contents: write
