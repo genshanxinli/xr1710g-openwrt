@@ -62,6 +62,9 @@ jobs:
           echo "KROOT=$KROOT" > "$OUT/paths.txt"
           for f in \
             net/netfilter/nft_flow_offload.c \
+            net/netfilter/nf_flow_table_path.c \
+            drivers/net/ethernet/airoha/airoha_eth.h \
+            drivers/net/ethernet/airoha/airoha_soe.h \
             drivers/net/phy/mediatek/mtk-ge-soc.c \
             drivers/net/phy/mediatek/mtk-phy-lib.c \
             drivers/net/phy/mediatek/mtk.h \
