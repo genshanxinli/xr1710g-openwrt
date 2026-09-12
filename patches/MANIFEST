@@ -299,6 +299,15 @@ patches/root/9047-xr1710g-airoha-ppe-bind-rate.patch ROOT
 #   实证：f0d3e332 真源抽取内层 `patch -p1 --fuzz=0 --dry-run` **4/4 洁净**（0003 上下文按真源重算：
 #   @@ -72,6 +72,16 @@ / @@ -15,6 +15,13 @@，修正了缓存 0103 的作者树行号）。判据见 FIXES F117。
 patches/root/9056-xr1710g-dhcpv6-duplicate-guard.patch ROOT
+# 9061（#EXP）：airoha NPU mailbox 可靠性闭环（YYH2913 xr1710g-6.18-integration 923..928，
+#   2026-09-12 P3-A 吸收；内层 9999-30..35）。六项：recover stalled cores（暴露
+#   airoha_npu_recover()）/ watchdog work lifetime（devm cancel action + airoha_npu_wait_recovery()）/
+#   recovery 同步竞争（atomic recovering）/ offload provider device link 生命周期（AUTOREMOVE_CONSUMER）/
+#   WLAN RX IRQ 只 ack 请求位（防一个 ring 清另一个 ring 的 pending）/ mailbox 命令先于门铃
+#   （先 CTRL3 再自增 CTRL2，修 probe 固件版本 0.0）。**P3-B（mt76 0147/0155）硬前置**。
+#   同族 924-use-coherent 已由上游 openwrt main 收录 → 不重复携带（F124）。
+#   实证：6.18.44 真源 + 本仓 airoha 内层全序上 6 个内层逐个 fuzz=0。
+#EXP patches/root/9061-xr1710g-airoha-npu-mailbox-recovery.patch ROOT
 
 # ── 待拆分/评审后解锁（原料桶已有，见 FIXES F13/F14）──
 # 08-reliability-compat：2026-08-17 切片完成——六项（SPI33MHz/banner/dropbear/antenna-memo/snd-off/LED-silence）
