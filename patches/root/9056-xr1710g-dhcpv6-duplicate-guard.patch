@@ -30,41 +30,6 @@
 #   上游**无 patches/ 目录**——本外层 `new file mode` 直接创建，OpenWrt 构建期按目录 glob
 #   应用，无需脚本 mkdir（对比 MANIFEST 中 mt76 的"目录由脚本 mkdir"做法，此处走补丁自带目录）。
 
-diff --git a/package/network/ipv6/odhcp6c/patches/001-xr1710g-dhcpv6-duplicate-guard.patch b/package/network/ipv6/odhcp6c/patches/001-xr1710g-dhcpv6-duplicate-guard.patch
-new file mode 100644
---- /dev/null
-+++ b/package/network/ipv6/odhcp6c/patches/001-xr1710g-dhcpv6-duplicate-guard.patch
-@@ -0,0 +1,29 @@
-+#
-+# 内层补丁（本文件由 patches/root/9056 外层包裹，构建时由包 patches/ 目录应用）。
-+#
-+# XR1710G: 显式 dhcpv6 客户端去重（F117，P2 §2.2）
-+# 机制：proto_dhcpv6_setup() 入口检测同一 L3 设备上是否已有**另一个 netifd 接口**的
-+#   odhcp6c（/proc/<pid>/cmdline 末参 = 设备名，environ INTERFACE= 归属不同逻辑接口）——
-+#   有则 logger + proto_notify_error DHCPV6_DUPLICATE_CLIENT + proto_block_restart 拒绝启动，
-+#   避免 odhcp6c 的 ubus 对象 `odhcp6c.<设备>`（src/ubus.c ubus_init()）注册 EEXIST → 反复重启。
-+#   绝不杀没有 INTERFACE= 的第三方 odhcp6c。
-+# 上下文按目标树 f0d3e332 真源重算：插入点 = `local iface="$2"`（真源 74 行）之后。
-+--- a/files/dhcpv6.sh
-++++ b/files/dhcpv6.sh
-+@@ -72,6 +72,16 @@
-+ proto_dhcpv6_setup() {
-+ 	local config="$1"
-+ 	local iface="$2"
-++	if [ -r /lib/netifd/xr1710g-dhcpv6-guard.sh ]; then
-++		. /lib/netifd/xr1710g-dhcpv6-guard.sh
-++		if xr_dhcpv6_conflict "$config" "$iface"; then
-++			logger -t dhcpv6 'Duplicate DHCPv6 client blocked; keep one IPv6 interface per device'
-++			proto_notify_error "$config" DHCPV6_DUPLICATE_CLIENT
-++			proto_block_restart "$config"
-++			return 1
-++		fi
-++	fi
-++
-+ 
-+ 	local reqaddress reqprefix clientid sendclientid reqopts defaultreqopts
-+ 	local noslaaconly forceprefix extendprefix norelease strict_rfc7550
-
 diff --git a/package/network/ipv6/odhcp6c/patches/002-xr1710g-dhcpv6-package-revision.patch b/package/network/ipv6/odhcp6c/patches/002-xr1710g-dhcpv6-package-revision.patch
 new file mode 100644
 --- /dev/null
@@ -77,8 +42,8 @@ new file mode 100644
 +# 目的：让内层 001（dhcpv6.sh 去重）带上本层特性标识——否则同版本号下 opkg 不重装。
 +# 基线核对（目标树 f0d3e332 实测 grep）：PKG_RELEASE:=3 → 4
 +#   （与缓存 0104 基线一致；上游 bump 版本号时接受漂移，届时按真源重对齐本内层）。
-+--- a/Makefile
-++++ b/Makefile
++--- a/package/network/ipv6/odhcp6c/Makefile
+++++ b/package/network/ipv6/odhcp6c/Makefile
 +@@ -8,7 +8,7 @@
 + include $(TOPDIR)/rules.mk
 + 
@@ -88,36 +53,6 @@ new file mode 100644
 + 
 + PKG_SOURCE_PROTO:=git
 + PKG_SOURCE_URL=$(PROJECT_GIT)/project/odhcp6c.git
-
-diff --git a/package/network/services/ppp/patches/001-xr1710g-dhcpv6-duplicate-guard.patch b/package/network/services/ppp/patches/001-xr1710g-dhcpv6-duplicate-guard.patch
-new file mode 100644
---- /dev/null
-+++ b/package/network/services/ppp/patches/001-xr1710g-dhcpv6-duplicate-guard.patch
-@@ -0,0 +1,24 @@
-+#
-+# 内层补丁（本文件由 patches/root/9056 外层包裹，构建时由包 patches/ 目录应用）。
-+#
-+# XR1710G: PPP 自动 IPv6 与显式 dhcpv6 的双客户端互斥（F117，P2 §2.2）
-+# 机制：ppp6-up 建 auto IPv6 之前先问 guard——同一 L3 设备上已有启用的显式 dhcpv6
-+#   接口（wan6 device @wan 链）时清空 AUTOIPV6，不再 add_dynamic 第二个客户端。
-+# guard：/lib/netifd/xr1710g-dhcpv6-guard.sh（overlay files/ 落盘，非本补丁）。
-+# 上下文按目标树 f0d3e332 真源重算：插入点 = 真源 19 行 `if [ -n "$AUTOIPV6" ]` 之前。
-+--- a/files/lib/netifd/ppp6-up
-++++ b/files/lib/netifd/ppp6-up
-+@@ -15,6 +15,13 @@
-+ 		[ -x "$SCRIPT" ] && "$SCRIPT" "$@"
-+ 	done
-+ }
-++
-++if [ -n "$AUTOIPV6" ] && [ -r /lib/netifd/xr1710g-dhcpv6-guard.sh ]; then
-++	. /lib/netifd/xr1710g-dhcpv6-guard.sh
-++	if xr_dhcpv6_has_explicit "$PPP_IPPARAM" "$IFNAME"; then
-++		AUTOIPV6=
-++	fi
-++fi
-+ 
-+ if [ -n "$AUTOIPV6" ]; then
-+ 	ZONE=$(fw3 -q network $PPP_IPPARAM 2>/dev/null)
 
 diff --git a/package/network/services/ppp/patches/002-xr1710g-dhcpv6-package-revision.patch b/package/network/services/ppp/patches/002-xr1710g-dhcpv6-package-revision.patch
 new file mode 100644
@@ -131,8 +66,8 @@ new file mode 100644
 +# 目的：让内层 001（ppp6-up guard 调用）带上本层特性标识——否则同版本号下 opkg 不重装。
 +# 基线核对（目标树 f0d3e332 实测 grep）：PKG_VERSION:=2.5.3 / PKG_RELEASE:=2 → 3
 +#   （与缓存 0104 基线一致；上游 bump 版本号时接受漂移，届时按真源重对齐本内层）。
-+--- a/Makefile
-++++ b/Makefile
++--- a/package/network/services/ppp/Makefile
+++++ b/package/network/services/ppp/Makefile
 +@@ -10,7 +10,7 @@
 + 
 + PKG_NAME:=ppp
