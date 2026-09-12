@@ -58,6 +58,7 @@ experimental root/9039-xr1710g-airoha-ppe-keep-local-flows-cpu.patch   # 2026-09
 experimental root/9040-xr1710g-airoha-pinctrl-force-gpio.patch   # 2026-09-07 WP-pinctrl：phy5/phy8 reset pad GPIO46/31 force-GPIO（9998）
 experimental root/9041-xr1710g-rtk-serdes-bundle.patch   # 2026-09-07 WP-SerDes：742 SDS-mode + 743/744 restore/reapply（9001 phy5/phy8 属性同步）
 experimental root/9061-xr1710g-airoha-npu-mailbox-recovery.patch   # 2026-09-12 P3-A：YYH 923..928 NPU mailbox 可靠性六项（内层 9999-30..35；mt76 0147/0155 硬前置）
+experimental root/9062-xr1710g-eip93-reliability.patch   # 2026-09-12 P3-E：EIP93 三处可靠性修复（内层 9999-40..42；与 vendor/02+9054 同档）
 experimental vendor/fanboy/02-eip93-f80d0507.patch
 experimental vendor/fanboy/04-dsa-kmod-netlink-22532-aa531917.patch
 experimental root/9029-xr1710g-airoha-pcs-jcpll-tclvar-recal.patch   # A8/IP10：lan2 10G JCPLL VCO TCLVAR recal——2026-09-07 按 rdmitry PR#143 机制重写（post_config hook + 0x3→0x5 脉冲 + ETH/PON 分值；旧同值重写已证无效）

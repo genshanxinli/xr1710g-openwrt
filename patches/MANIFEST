@@ -297,6 +297,13 @@ patches/root/9052-xr1710g-iwinfo-freqlist-per-radio.patch ROOT
 #   并去掉被动态回退取代的两个静态阈值 KCONFIG，crypto-test 加 +kmod-crypto-benchmark。
 #   **与 9054 必须同档**（否则内核有模块而包里没有，或反之）。
 #EXP patches/root/9060-xr1710g-crypto-eip93-package-deps.patch ROOT
+# 9062（#EXP）：EIP93 三处可靠性修复（YYH/backport-6.18 9915/9916/9918，2026-09-12 P3-E 对账残余；
+#   内层 9999-40..42）：① guard DMA cleanup on uninitialized mappings（send_req 失败路径漏 free_sa_state
+#   + 未映射基址被无条件 dma_unmap_single）；② reject HMAC requests before setkey（ipad 全 0 时仍提交硬件）；
+#   ③ order result descriptor reads after PE_READY（dma_rmb + 用已读入的 pe_ctrl_stat）。
+#   同族 9910（纯注释 email 少 `>`）/9912（ECONET 选型）/9990 hack（阈值，已被 9054 动态回退取代）均不携带。
+#   同档：vendor/02（EIP93 驱动）+ 9054（动态回退）+ 本项 均为 #EXP。
+#EXP patches/root/9062-xr1710g-eip93-reliability.patch ROOT
 # 9055（#EXP）：AN7581 PCS RX-lock **诊断**（naoki66 原作 + orangeyoo kernel/0923 v1.6.1 抑噪版，
 #   2026-09-12 P2 吸收）。F93（PHY 宣告 10G / AN 落 2.5G）与 F81（#22397 LAN2 No FBCK Lock）
 #   都卡在"PCS 无 carrier 时看不出是对端没信号还是 CDR 没锁"这一盲点；本项提供可判读证据：
