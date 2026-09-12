@@ -176,6 +176,12 @@
   但**合入后本仓 `9041` 内层 742/743 与 `9033` 必须重基**（上游改 generic `pending-6.18/742|743`
   并新增 744/745；本仓建的是 `airoha/patches-6.18/742|743|744` —— **不同目录、非文件名冲突**）
   → **加显式监控**。
+  > ⚠️ **2026-09-12 口径修正（务必并读 §14）**：上面这条**只对"本机硬件是否适用"成立**。
+  > 上游又出现 **#23644**（09-11 20:40，`mergeable_state=blocked`），把 RTL8261CE 做进**主线 realtek 驱动**，
+  > 落点是 `generic/**hack**-6.18/744|745` + VEND1 SDS/OCP/极性/EEE（**不是** pending-6.18 的 744/745）。
+  > 因此判据须从"本机是否适用"改为"**是否与上游重复**"——本仓 default 档确实背着一份**同硅片双实现**（F101）。
+  > 有利事实：本机 c45 `0x001ccaf3` **就是 `RTL_8261N`**，上游 `742` 已支持 → 私有 CE 驱动对本机 10G 链路
+  > 很可能非必需（待实机验证；详见 §14）。
 - 上游 `#24819`（phylink/phylib + DSA carry）：本机 10G PHY 走 mt7530 MDIO 平台 probe，
   非"DSA 端口晚到 PHY"场景 → 条件跟（出现 EN8811H 类固件加载 PHY 挂交换机时跟 708/709）。
 - 上游 `#25090`（AN7583 → 25.12）：其中 OPP 节点名对齐（`opp-7000000000`→`opp-700000000`）
@@ -325,3 +331,49 @@
 | `mt76-0013` TXS 判定 | **转实机流程**（§13.2）：需含补丁的新固件，本轮无法在不刷机的前提下闭环 | tracefs 不可用 + 无站点 + 设备固件早于本批 |
 | Gilly `046` | **观察（不吸收）** | 与本仓 `mt76-0003`（固件 AIR_TIME/ADM_STAT 轮询）路线重叠，需先做逐行比对；单条价值不足以单独携带 |
 | Gilly `972/973`（IPv6 UPDMEM 源 MAC） | **观察（先复现）** | 前提是"存在克隆 MAC 的 VLAN 且路径走 `airoha_gdm_dev`"；本机 WAN=`gsw_port1`，§13.2 的只读探测未能构造该条件（无第二 10G 链路在测） |
+
+---
+
+## 14. 第 5 批（2026-09-12）：上游 RTL8261CE 分叉的判据修正与守护扩面
+
+> 台账：**F101**（同硅片双实现）、**F102**（上游 #25132 config 符号，无冲突）、**F103**（守护扩面）。
+> 本轮调研报告：`../../信息更新调研-2026-09-12.md` §五；证据：`research-20260912/pr23644/`、`research-20260912/dryrun/`。
+
+### 14.1 事实（多角度核实）
+
+| 角度 | 事实 | 证据 |
+|---|---|---|
+| 上游 | PR **#23644**（hurrian，头仓 `hurrian/openwrt-w1700k@rtl8261ce`，3 提交，09-11 20:40 更新，`mergeable_state=blocked`）把 RTL8261CE 做进**主线** `drivers/net/phy/realtek/realtek_main.c`：`RTL_8261CE_REV_C 0x001cc899`、VEND1 SDS option（0x6972~0x6977）、SerDes OCP 窗口（0x7587/7588/7589/758a）、**lane polarity（DT tx/rx-polarity）**、VND2 EEE（0xd036/0xd038）、过温降速位、`rtl8261c.bin` | `gh api repos/openwrt/openwrt/pulls/23644/{files,commits}` |
+| 落点 | 上游 `generic/**hack**-6.18/744-net-phy-realtek-speedup-rtl8261x-fw-load.patch`、`.../745-net-phy-realtek-add-support-for-rtl8261d-ce-cg.patch`，另有 `pending-6.18/743-01..04`（c45 soft_reset / master_slave / RTL8261C-CG / 固件加载） | 同上 files 清单 |
+| 本仓 | `vendor/fanboy/09`（default 档）新增 `generic/files/drivers/net/phy/rtl8261ce/{Kconfig,Makefile,rtk_rtl8261ce_patch.h(623 行),rtk_rtl8261ce_phy.c(1110 行)}` + `generic/hack-6.18/999-net-phy-realtek-rtl8261ce.patch` | `grep '^+++ b/' patches/vendor/fanboy/09-*.patch` |
+| 同源性 | 两边出现**同一批寄存器常量与同一 OCP 窗口**；#23644 自述"based on a dump of the vendor driver from a **Lumen W1700K2**"，本地驱动头注释同为 "recovered from `rtk-rtl8261ce-phy.ko` module from the stock **LUMEN W1700K2** firmware" | 逐项 grep 对照（见报告 §五 5.1） |
+| 冲突面 | 本地 `PHY_ID_MATCH_MODEL(0x001cc890)` 按模型位匹配 `0x001cc89x` **全部 revision**；主线已注册 `RTL_8261C_CG 0x001cc898`，+23644 的 `0x001cc899` → **同 C45 ID 双驱动争抢 binding** | `grep RTL8261CE_PHY_ID / PHY_ID_MATCH_MODEL` |
+| 本机 | 实机 c45 `0x001ccaf3` = **`RTL_8261N`**；上游 `742` 补丁已定义 `#define RTL_8261N 0x001ccaf3` 且有 `rtl8261be_match_phy_device` / `rtl8261n_match_phy_device` → **主线本就支持本机 10G PHY** | upstream 742 补丁 grep + §13.2 实机记录 |
+
+### 14.2 判据修正（本节的核心结论）
+
+- **旧判据**（§5.3 / §13.2）："本机 10G PHY = RTL8261BE（`0x001ccaf3`）→ CE 专有路径不适用 → 不跟 744/745"。
+- **新判据**：本机适用性回答的是"**实机行为风险**"（= 0，成立）；但补丁层要回答的是"**是否与上游重复**"。
+  两个问题不同：即使 CE 路径对本机无用，仓库仍**背着一份与上游重复的同硅片驱动**，长期成本是
+  "要么永久私有 rebase、要么某天与主线争 binding"。
+- 因此本项从"**不跟**"升级为"**条件必跟 + 预置二选一决策**"，触发条件 = 上游 `#23644`（或 backport #25092）合入。
+
+### 14.3 已实施（F103，本轮）
+
+`scripts/audit-upstream-watch.sh` 重写扩面：
+- **基线表 3 → 6 个 blob**：新增 `target/linux/airoha/an7581/config-6.18`、`target/linux/airoha/image/an7581.mk`、`package/boot/uboot-airoha/Makefile`（后两者同时服务 `#24926` DT overlay 监视）。
+- **同址冲突 glob 7 条**：`generic/hack-6.18/744-*`、`744-*`(`pending`)、`745-*`(`hack`/`pending`)、`pending-6.18/743-0*`、`generic/files/drivers/net/phy/rtl8261ce/*`、`airoha/dts/*.dtso`。
+- **文本级探测**：上方 742 补丁内是否出现 `RTL_8261CE|8261CE_REV_C|0x001cc899`。
+- **正确性修复**（实证发现）：路径清单取 `ls-tree` ∪ `ls-files --cached --others`（覆盖"磁盘上有、未提交"）；文件 SHA 取工作区 `git hash-object` 且**必须先判存在性**（`git rev-parse HEAD:<path>` 在已删除文件上仍返回 blob，会误判"未变"）；输出分 `[基线]`/`[冲突]`/`[缺失]` 三类并打印"上游 HEAD vs 基线锚点"。
+- **验证**：正例（上游 `f0d3e332` 干净树）全 ✓ exit 0；反例 6 组全部正确 exit 1；端到端 CI 等价序列 dry-run **68/0/0** + 拷贝类 **4/4**。
+
+### 14.4 决策预案（#23644/#25092 合入后二选一）
+
+| 方案 | 动作 | 前提/判据 | 代价 |
+|---|---|---|---|
+| **A（首选）改跟主线** | 从 `vendor/fanboy/09` 删除 `rtl8261ce/` 4 文件与 `hack-6.18/999-*`，改为依赖上游 `744/745/743-0x` | 实机验证：**10G lan1/lan2 冷启动 ×20 link 正常**、`ethtool` 速率档正确、SDS-mode 行为不退化（本地 `9041`/F78 的 `realtek,sds-mode=0x88c6` 属板级 SerDes，理论上与 PHY 驱动选择解耦——**需实测确认**） | 一次性验证成本；省长期 rebase 债 |
+| **B 保留私有** | `hack-6.18/999-*` 改名避号（如 `998-`），MANIFEST 注明"与主线 CE 入口互斥"，必要时关闭主线 CE 匹配 | 若 A 的实机验证不通过（私有驱动含主线没有的 hwmon 温度通道 / BE 特定修正） | 长期双份维护 + 同 ID 双驱动风险仍在 |
+
+> **A 为什么可能成立**：本机 PHY 的 c45 ID `0x001ccaf3` **就是主线已支持的 `RTL_8261N`**，而本地私有驱动的匹配面是 `0x001cc89x`（RTL8261CE 家族）——**严格说本机并不落在私有驱动的目标 ID 上**，私有驱动对本机 10G 链路的必要性存疑。这同时意味着：即便今天删掉它，本机也应该仍由主线的 RTL8261BE/N 路径驱动（§13.2 的实机日志正是 `RTL8261BE 10Gbps PHY` 绑定 `mt7530-0:05/:08`）。
+> **仍需实机确认**：该结论来自 ID 与日志推断，未做"删驱动后重构建 + 实测"的闭环。
+

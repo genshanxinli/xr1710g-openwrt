@@ -178,6 +178,13 @@ patches/vendor/fanboy/18-smartrg-stability-b45d5117.patch ROOT
 #   （ci experimental run 34625416045 实测：Hunk #3 FAILED at 526，kernel prepare 阶段 Error 1）。
 #   本补丁仅同步该上下文值（**语义不变**：992-20 仍改 RX_IRQ0 0x839f→0xbb9f），对 default 档无影响。
 patches/root/9046-xr1710g-fix-992-20-context.patch ROOT
+# 9047：PPE flow bind rate 30→8 + debugfs 旋钮（2026-09-12 调研吸收；来源 openwrt 论坛 t/222776 #3890
+#   NoTengoBattery/Oever González，2026-09-04，与本仓 F79=mt76-0011 同一作者同帖的 Patch 2）。
+#   vendor 默认 0x1e(30) 高于交互流包速率 → 游戏/VoIP/延迟探针永不绑定，与批量卸载并存时吃 60-250ms 尖峰；
+#   实测 32→loaded p90 157ms(30%>40ms)、8→15ms(0%)，bufferbloat B→A+。内层 9997（置于 9039 内层 9990
+#   之后：同 airoha_ppe.c 但区段不相交——9990 改 853/1046/1057，本项改 136/223，全序真实应用已实证）。
+#   实机判据见 FIXES F104。
+patches/root/9047-xr1710g-airoha-ppe-bind-rate.patch ROOT
 
 # ── 待拆分/评审后解锁（原料桶已有，见 FIXES F13/F14）──
 # 08-reliability-compat：2026-08-17 切片完成——六项（SPI33MHz/banner/dropbear/antenna-memo/snd-off/LED-silence）
