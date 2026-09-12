@@ -70,6 +70,10 @@ default mt76/0011-wifi-mt76-npu-fix-rx-descriptor-ownership.patch   # 2026-09-07
 experimental mt76/0010-set-skb-device-for-npu-rx.patch   # A6/IP25/IP26：NPU RX 设 skb->dev，PPE miss 回退 bridge/FDB 上下文
 experimental mt76/0012-wifi-mt76-npu-del-sta.patch   # 2026-09-07 WP-delsta：断开→同 MAC 重连 ~1Mbps 残留（naoki66 2d3aa30/Ryan Chen）
 experimental mt76/0147-wifi-mt76-mt7996-npu-init-retry-after-recovery.patch   # 2026-09-12 P3-B：YYH 0147+0155 合并（NPU init/stop 遇超时或 recovery 竞争时 recover/wait 后重试一次）
+default mt76/0101-wifi-mt76-mt7996-validate-default-eeprom-size.patch   # 2026-09-12 P3-C：默认 EEPROM 固件大小校验（上游 next 线已含，pin bump 复查）
+experimental mt76/0018-wifi-mt76-mt7996-fix-dl-ofdma-after-sta-reconnect.patch   # 2026-09-12 P3-C（=YYH 0010，避号）：删 CONN_STATE_DISCONNECT mcu_add_sta → 修重连后 DL OFDMA
+experimental mt76/0021-mtk-mt76-mt7996-only-disallow-global-wcid.patch   # 2026-09-12 P3-C：mt7996_rx_get_wcid 的 global_wcid 判定
+experimental mt76/0145-wifi-mt76-mt7996-scan-dwell-time-hw-cap.patch   # 2026-09-12 P3-C：SET_SCAN_DWELL 能力位
 experimental mt76/0153-wifi-mt76-fix-npu-teardown-ordering.patch   # 2026-09-12 P3-B：NPU RX IRQ teardown 排序 + mt76_npu_deinit 的 RCU 顺序
 experimental mt76/0154-wifi-mt76-tie-npu-dma-memory-to-the-consumer.patch   # 2026-09-12 P3-B：NPU DMA 内存挂 Wi-Fi consumer（含 F127 泄漏修复）
 experimental mt76/0156-wifi-mt76-finish-npu-rx-queue-teardown.patch   # 2026-09-12 P3-B：完成 NPU RX queue teardown

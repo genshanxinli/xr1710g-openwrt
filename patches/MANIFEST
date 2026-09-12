@@ -64,6 +64,21 @@ patches/packages/mt76-0011-wifi-mt76-npu-fix-rx-descriptor-ownership.patch      
 # 0017（#EXP，Gilly 032）：亚 64 窗口 BlockAck（Apple 站点 TID6=8/TID1=16）旁路 HW_RRO，
 #   避免片上重排环/会话状态机非法导致后续关联 RX 卸载停摆；>=64 仍走硬件。
 #EXP patches/packages/mt76-0017-wifi-mt76-mt7996-bypass-hwrro-sub64-ba.patch    package/kernel/mt76/patches/
+# ── P3-C：mt76 候选（YYH 0010/0021/0047/0080/0101/0145/0038，2026-09-12 甄别）──
+#   吸收：0018（=YYH 0010，编号冲突改 0018）/0021/0101/0145；
+#   不吸收：0047（**be5ce791 已含同款**：mac80211.c mt76_rx_release_amsdu 已有
+#     `mt76_queue_is_wed_rro_data(rxq) && hwrro_mode == MT76_HWRRO_V3 → q = MT_RXQ_RRO_IND`）；
+#   0080（捕获到的补丁里 MT_QFLAG_CHECK_DDONE **从未被设置**（仅定义+dma.c 读+ mt7996/dma.c
+#     `=`→`|=`）→ 死代码；作者自述预防性；待有置位版本再收）；0038（wcid→wcid_idx 大重构，
+#     MTK 私有、牵动 RX 状态结构体，风险中-高 → 暂缓，见 F127）。
+# 0018（#EXP）：删 mt7996_mac_sta_init_link 中 CONN_STATE_DISCONNECT 的 mcu_add_sta → 修 STA 重连后 DL OFDMA。
+#EXP patches/packages/mt76-0018-wifi-mt76-mt7996-fix-dl-ofdma-after-sta-reconnect.patch    package/kernel/mt76/patches/
+# 0021（#EXP）：mt7996_rx_get_wcid 的 global_wcid 判定（vif wcid 取 TxS 场景）。
+#EXP patches/packages/mt76-0021-mtk-mt76-mt7996-only-disallow-global-wcid.patch    package/kernel/mt76/patches/
+# 0101（**default**）：默认 EEPROM 固件大小校验（防截断后越界读；上游 next 线已含，pin bump 时复查删除）。
+patches/packages/mt76-0101-wifi-mt76-mt7996-validate-default-eeprom-size.patch    package/kernel/mt76/patches/
+# 0145（#EXP）：广告 NL80211_EXT_FEATURE_SET_SCAN_DWELL（扫描驻留时间可配）。
+#EXP patches/packages/mt76-0145-wifi-mt76-mt7996-scan-dwell-time-hw-cap.patch    package/kernel/mt76/patches/
 # ── P3-B：mt76 NPU 生命周期（YYH2913 0147..0162，2026-09-12 吸收；全部 #EXP）──
 #   按文件名 glob 序应用（= 依赖序）：0147 < 0153 < 0154 < 0156 < 0158 < 0159 < 0160 < 0161 < 0162。
 #   硬前置 = root/9061（内核侧 airoha_npu_recover()/wait_recovery()）。
