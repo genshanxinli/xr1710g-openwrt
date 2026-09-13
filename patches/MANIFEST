@@ -449,3 +449,9 @@ patches/root/9047-xr1710g-airoha-ppe-bind-rate.patch ROOT
 #   `9999-xfrm-packet-offload-framework.patch` 更名为 `9999-xfrm-00-…`（仅文件名，内容零改动）。
 #   实测（research-20260912/inner/klag）：10 支在含 9053 + SOE-17..28 的真实树上 `--fuzz=0` 全绿。
 #EXP patches/root/9063-xr1710g-xfrm-lag-shared-state.patch ROOT
+# ── SOE 的配置启用半边（2026-09-13 F149）──
+#   SOE-28 的 `config NET_AIROHA_SOE`（带 prompt、select XFRM_OFFLOAD）**无人 select** ⇒
+#   不在 target 片段里置 y，27 号的 airoha_soe.o 与 14/15/16/25 的 SOE 钩子全部不编译
+#   （都在 #if IS_REACHABLE(CONFIG_NET_AIROHA_SOE) 内）——功能为零且 CI 证不到编译。
+#   同档 #EXP，与 9035 的 FLOW_STATS 同文件不同区。
+#EXP patches/root/9064-xr1710g-soe-kconfig-enable.patch ROOT
