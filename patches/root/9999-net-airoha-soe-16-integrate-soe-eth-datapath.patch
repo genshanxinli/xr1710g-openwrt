@@ -2,7 +2,16 @@ diff --git a/target/linux/airoha/patches-6.18/9999-net-airoha-soe-16-integrate-s
 new file mode 100644
 --- /dev/null
 +++ b/target/linux/airoha/patches-6.18/9999-net-airoha-soe-16-integrate-soe-eth-datapath.patch
-@@ -0,0 +1,1145 @@
+@@ -0,0 +1,1152 @@
++# Reason（2026-09-13 F150：按**本仓真源**适配；原版写于作者树，那段代码在启用 SOE 前从未编译过）：
++#   本补丁的 `airoha_qdma_xmit_skb()` 引用四处**本仓基线没有**的 API（都在 #if IS_REACHABLE 守卫内，
++#   故 SOE 未启用时永远不暴露）：① `q->flushing`（yyh2913 179 全量版引入；本仓采用 Gilly 的精简 957，
++#   无该字段，基线 airoha_dev_xmit() 亦无此守卫）⇒ 去掉守卫；②③ `e->dma_type = AIROHA_DMA_MAP_*`
++#   （yyh2913 181 的 TX 片段 DMA 映射重构）⇒ 去掉记账，基线以 `e->dma_addr` 表示已映射；
++#   ④ 片段映射用 `skb_frag_dma_map()`、错误路径用 `airoha_unmap_xmit_buf()`（同为 181）
++#   ⇒ 等价改写为基线写法：`dma_map_single(skb_frag_address(frag), …)` +
++#   `dma_unmap_single()` 循环（与基线 airoha_dev_xmit 的 error_unmap 同形）。语义等价，不引入新 API。
++# 台账见 FIXES F150。
 +From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 +From: Jihong Min <hurryman2212@gmail.com>
 +Date: Tue, 4 Aug 2026 16:29:39 +0900
@@ -897,7 +906,7 @@ new file mode 100644
 + 
 + 	if (!(diff & NETIF_F_GRO_HW) || qdma->syncing_gro_features)
 + 		return 0;
-+@@ -2683,6 +3222,115 @@
++@@ -2683,6 +3222,113 @@
 + 	return 0;
 + }
 + 
@@ -908,6 +917,7 @@ new file mode 100644
 ++	struct net_device *netdev = netdev_from_priv(dev);
 ++	struct airoha_qdma *qdma = dev->qdma;
 ++	u32 nr_frags, len;
+++	void *data;
 ++	struct airoha_queue_entry *e;
 ++	struct netdev_queue *txq;
 ++	struct airoha_queue *q;
@@ -922,11 +932,6 @@ new file mode 100644
 ++		return -ENODEV;
 ++
 ++	spin_lock_bh(&q->lock);
-++	if (q->flushing) {
-++		spin_unlock_bh(&q->lock);
-++		return -EBUSY;
-++	}
-++
 ++	txq = skb_get_tx_queue(netdev, skb);
 ++	nr_frags = 1 + skb_shinfo(skb)->nr_frags;
 ++	if (q->queued + nr_frags >= q->ndesc) {
@@ -944,7 +949,6 @@ new file mode 100644
 ++	if (unlikely(dma_mapping_error(netdev->dev.parent, addr)))
 ++		goto error_unlock;
 ++
-++	e->dma_type = AIROHA_DMA_MAP_SINGLE;
 ++	index = e - q->entry;
 ++
 ++	while (true) {
@@ -975,13 +979,13 @@ new file mode 100644
 ++		if (++i == nr_frags)
 ++			break;
 ++
+++		data = skb_frag_address(frag);
 ++		len = skb_frag_size(frag);
-++		addr = skb_frag_dma_map(netdev->dev.parent, frag, 0, len,
-++					DMA_TO_DEVICE);
+++		addr = dma_map_single(netdev->dev.parent, data, len,
+++				      DMA_TO_DEVICE);
 ++		if (unlikely(dma_mapping_error(netdev->dev.parent, addr)))
 ++			goto error_unmap;
 ++
-++		e->dma_type = AIROHA_DMA_MAP_PAGE;
 ++	}
 ++	q->queued += i;
 ++
@@ -1000,8 +1004,11 @@ new file mode 100644
 ++	return 0;
 ++
 ++error_unmap:
-++	list_for_each_entry(e, &tx_list, list)
-++		airoha_unmap_xmit_buf(dev->eth, e);
+++	list_for_each_entry(e, &tx_list, list) {
+++		dma_unmap_single(netdev->dev.parent, e->dma_addr, e->dma_len,
+++				 DMA_TO_DEVICE);
+++		e->dma_addr = 0;
+++	}
 ++	list_splice(&tx_list, &q->tx_list);
 ++error_unlock:
 ++	spin_unlock_bh(&q->lock);
@@ -1124,7 +1131,7 @@ new file mode 100644
 + 	airoha_hw_cleanup(eth);
 + error_netdev_free:
 + 	free_netdev(eth->napi_dev);
-+@@ -4312,7 +5002,24 @@
++@@ -4312,6 +5002,23 @@
 + 		}
 + 		airoha_metadata_dst_free(port);
 + 	}
