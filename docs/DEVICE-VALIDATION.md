@@ -61,6 +61,15 @@ F143（LAG 共享状态 29..38）。全部 `E`。
       现在**不携带**（缺该池会让 `of_reserved_mem_device_init_by_name(dev, node, "mbox")` 直接失败）。
       复现检查：`find /proc/device-tree -name "mbox"`（当前应为空）。〔F125 备注/F146〕
 
+- [ ] **V2.9 `wtbl_lmac_addr` RX 路径 WARN 抓取**（p2 §2.7 尾注/§6.3，本仓**未修**，先抓判据）：
+      持续流量 + 多次 STA 断连/重连（含 MLO 站点）时 `logread -f | grep -i "mt7996_mac_wtbl_lmac_addr"`；
+      命中则记录完整 `WARNING:` 行 + `RIP:`/`Call Trace`（应见 `mt7996_queue_rx_skb` ← `mt76_npu_rx_poll`），
+      并同时抓 `iw dev <if> station dump | grep -E "addr|link"` 以定位 MLO/MLD link 索引。若命中即单开重基/
+      修复项（判 `WARN_ON` 条件是"索引越界"还是"未授权 wcid"）。关联：Gilly `048` 修的是**同域 TX 侧**
+      NULL sta（已吸收，F153），本条是 RX 侧。〔F155〕
+- [ ] **V2.10 EAPOL 竞态无 oops**：4 次握手重传与 disconnect 交叉（快速反复断连/重连、`wifi reload`）
+      时 `dmesg` 无 TX worker oops / 无 `NULL pointer dereference`（Gilly `048`/mt76-0022 的收益判据）。〔F153〕
+
 ## 3. PPPoE / DHCPv6 与 rootfs overlay
 
 - [ ] **V3.1 overlay 进镜像**：`cmp` 设备上 `/lib/netifd/ppp6-up`（1457 B）、
