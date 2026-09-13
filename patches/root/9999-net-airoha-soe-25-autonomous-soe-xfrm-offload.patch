@@ -395,7 +395,7 @@ new file mode 100644
 + static int airoha_ppe_foe_commit_sram_entry(struct airoha_ppe *ppe, u32 hash)
 + {
 + 	struct airoha_foe_entry *hwe = ppe->foe + hash * sizeof(*hwe);
-+@@ -764,154 +1089,388 @@
++@@ -764,154 +1089,418 @@
 + 		     PPE_SRAM_CTRL_WR_MASK | PPE_SRAM_CTRL_REQ_MASK);
 + 
 + 	return read_poll_timeout_atomic(airoha_fe_rr, val,
@@ -787,28 +787,28 @@ new file mode 100644
 + 
 + 	hwe_p = airoha_ppe_foe_get_entry_locked(ppe, hash);
 + 	if (!hwe_p)
-+-		return -EINVAL;
-+-
-+-	memcpy(&hwe, hwe_p, sizeof(*hwe_p));
-+-	hwe.ib1 = (hwe.ib1 & mask) | (bridge->ib1 & ~mask);
-+-
-+-	type = FIELD_GET(AIROHA_FOE_IB1_BIND_PACKET_TYPE, hwe.ib1);
-+-	if (type >= PPE_PKT_TYPE_IPV6_ROUTE_3T) {
-+-		memcpy(&hwe.ipv6.l2, &bridge->bridge.l2,
-+-		       sizeof(hwe.ipv6.l2));
-+-		hwe.ipv6.ib2 = bridge->bridge.ib2;
-+-		/* setting smac_id to 0xf instruct the hw to keep original
-+-		 * source mac address
-+-		 */
-+-		hwe.ipv6.l2.src_mac_hi = FIELD_PREP(AIROHA_FOE_MAC_SMAC_ID,
-+-						    0xf);
-+-	} else {
-+-		memcpy(&hwe.bridge.l2, &bridge->bridge.l2,
-+-		       sizeof(hwe.bridge.l2));
-+-		hwe.bridge.ib2 = bridge->bridge.ib2;
-+-		if (type == PPE_PKT_TYPE_IPV4_HNAPT)
-+-			memcpy(&hwe.ipv4.new_tuple, &hwe.ipv4.orig_tuple,
-+-			       sizeof(hwe.ipv4.new_tuple));
++ 		return -EINVAL;
++ 
++ 	memcpy(&hwe, hwe_p, sizeof(*hwe_p));
++ 	hwe.ib1 = (hwe.ib1 & mask) | (bridge->ib1 & ~mask);
++ 
++ 	type = FIELD_GET(AIROHA_FOE_IB1_BIND_PACKET_TYPE, hwe.ib1);
++ 	if (type >= PPE_PKT_TYPE_IPV6_ROUTE_3T) {
++ 		memcpy(&hwe.ipv6.l2, &bridge->bridge.l2,
++ 		       sizeof(hwe.ipv6.l2));
++ 		hwe.ipv6.ib2 = bridge->bridge.ib2;
++ 		/* setting smac_id to 0xf instruct the hw to keep original
++ 		 * source mac address
++ 		 */
++ 		hwe.ipv6.l2.src_mac_hi = FIELD_PREP(AIROHA_FOE_MAC_SMAC_ID,
++ 						    0xf);
++ 	} else {
++ 		memcpy(&hwe.bridge.l2, &bridge->bridge.l2,
++ 		       sizeof(hwe.bridge.l2));
++ 		hwe.bridge.ib2 = bridge->bridge.ib2;
++ 		if (type == PPE_PKT_TYPE_IPV4_HNAPT)
++ 			memcpy(&hwe.ipv4.new_tuple, &hwe.ipv4.orig_tuple,
++ 			       sizeof(hwe.ipv4.new_tuple));
 + 	}
 + 
 + 	hwe.bridge.data = bridge->bridge.data;
@@ -821,14 +821,14 @@ new file mode 100644
 + }
 + 
 + static int
-+-airoha_ppe_foe_commit_subflow_entry(struct airoha_ppe *ppe,
-+-				    struct airoha_flow_table_entry *e,
-+-				    u32 hash, bool rx_wlan)
-+-{
-+-	struct airoha_flow_table_entry *f;
-+-	int err;
-+-
-+-	f = kzalloc(sizeof(*f), GFP_ATOMIC);
++ airoha_ppe_foe_commit_subflow_entry(struct airoha_ppe *ppe,
++ 				    struct airoha_flow_table_entry *e,
++ 				    u32 hash, bool rx_wlan)
++ {
++ 	struct airoha_flow_table_entry *f;
++ 	int err;
++ 
++ 	f = kzalloc(sizeof(*f), GFP_ATOMIC);
 + 	if (!f)
 + 		return -ENOMEM;
 + 
