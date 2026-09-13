@@ -76,6 +76,11 @@ patches/packages/mt76-0011-wifi-mt76-npu-fix-rx-descriptor-ownership.patch      
 #EXP patches/packages/mt76-0018-wifi-mt76-mt7996-fix-dl-ofdma-after-sta-reconnect.patch    package/kernel/mt76/patches/
 # 0021（#EXP）：mt7996_rx_get_wcid 的 global_wcid 判定（vif wcid 取 TxS 场景）。
 #EXP patches/packages/mt76-0021-mtk-mt76-mt7996-only-disallow-global-wcid.patch    package/kernel/mt76/patches/
+# 0022（**default**，Gilly 048，2026-09-13 F153）：EAPOL TX 路径 NULL sta 守卫——hostapd 可能把已删除站点的
+#   EAPOL 控制帧交给驱动，mt7996_tx_prepare_skb() 的软件 MLD 翻译无条件解引用 sta->mlo → TX worker oops。
+#   同函数 data-QoS MLO link 选择已检查 sta（pin 源 mt7996/mac.c:1057），本条补剩余半边。
+#   纯防御性守卫：sta!=NULL 语义逐字节不变；对 pin 真源 be5ce791 `--fuzz=0` rc=0。
+patches/packages/mt76-0022-wifi-mt76-mt7996-guard-null-sta-on-eapol-tx.patch    package/kernel/mt76/patches/
 # 0101（**default**）：默认 EEPROM 固件大小校验（防截断后越界读；上游 next 线已含，pin bump 时复查删除）。
 patches/packages/mt76-0101-wifi-mt76-mt7996-validate-default-eeprom-size.patch    package/kernel/mt76/patches/
 # 0145（#EXP）：广告 NL80211_EXT_FEATURE_SET_SCAN_DWELL（扫描驻留时间可配）。
