@@ -10,10 +10,10 @@ on:
   push:
     paths:
       - 'patches/**'
-      - 'scripts/apply-patches.sh'
-      - 'scripts/audit-patches.sh'
-      - 'scripts/verify-copy-patches.sh'
-      - 'scripts/prepare-oc.sh'
+      # F151：守护脚本自身/工作流改动也要触发——改完守卫必须立刻自证（原来逐条列脚本名，
+      # 改 audit-upstream-watch.sh 不触发，等于改了守卫不跑守卫）
+      - 'scripts/**'
+      - '.github/workflows/sync-upstream.yml'
       - 'config/**'
       - 'files/**'
 
