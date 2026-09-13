@@ -215,7 +215,14 @@ patches/root/9016-xr1710g-silence-phy-led-error.patch ROOT
 #   reload trigger；上游 target.mk hunk 以内嵌 eip93 行为上下文，与本仓 02(#EXP) 顺序耦合——已改写为
 #   「文件末尾追加 DEFAULT_PACKAGES」保持与 02 顺序无关）。apply-rules.sh 上游已内置 hw-offload 守门，
 #   原 root/9043 遂整条删除（F123）。
-patches/vendor/fanboy/05-bridge-offload-22533-2f4fccb1.patch ROOT
+# 2026-09-14 F157：重取 ubi2-oc 新线 9604ab5a（该文件最后一次变更；第三次 force-push 后 F154 判定的
+#   "5 项内容有差"之一）。新版**只改** hotplug 51-bridge-hw-offload：固定 `sleep 10` → 等 br-lan 端口集
+#   稳定（每 5 s 采一次、连续 3 次一致、上限 120 s）再 apply，注释明写无线 AP 口可能在 lan ifup 之后
+#   很久才入桥（hostapd 启动 / DFS CAC）——旧版 10 s 后端口集未定型就会把 flowtable 生成在残缺成员上
+#   （bridge/offload 场景，F46/F91/9024/9026 同域）。其余 4 文件与旧版**逐字节相同**（`+` 行集合比对，
+#   含 rebase 后的 target.mk hunk 原样保留），仅文件头描述按新版语义更新（"10-second settle time" 已不成立）。
+#   中间态 b397598d（同内容、`sleep 2`）被 9604ab5a 取代，不作为原料。
+patches/vendor/fanboy/05-bridge-offload-22533-9604ab5a.patch ROOT
 # 06 已替换为 ubi2-oc 3c8d3e6664 版（2026-09-12 P4：675-02 VLAN/PPPoE encap 改为追加 + 越界检查；9026 复核通过未动）
 patches/vendor/fanboy/06-nft-flow-offload-l2-22533-3c8d3e6664.patch ROOT
 # 9024：bridge-hw-offload 依赖改为 kmod-nft-offload，规则表名避开用户 fw4 桥表（issue #1 E1/E3）

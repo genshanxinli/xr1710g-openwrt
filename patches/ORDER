@@ -47,7 +47,7 @@ oc regdb/0555-w1700k-unii4-6g-30.patch   # 仅 6G 29->30；5G UNII-3/4@160 已�
 # OC 本体（OPP/PLL/governor）由 scripts/prepare-oc.sh 树编辑实现（不占 MANIFEST）
 
 # ── 原实验档：已毕业项转 default（2026-08-31 ci-74 实机）；剩余 experimental 见下 ──
-default vendor/fanboy/05-bridge-offload-22533-2f4fccb1.patch   # 2026-09-12 P4：改名 bridge-hw-offload + init.d/procd trigger；target.mk 改写为末尾追加（与 02 顺序无关）
+default vendor/fanboy/05-bridge-offload-22533-9604ab5a.patch   # 2026-09-14 F157：重取新线 9604ab5a（hotplug 改为等 br-lan 端口集稳定：每 5s 采样/连续 3 次一致/上限 120s）；改名 bridge-hw-offload + init.d/procd trigger；target.mk 改写为末尾追加（与 02 顺序无关）
 default vendor/fanboy/06-nft-flow-offload-l2-22533-3c8d3e6664.patch   # 2026-09-12 P4：675-02 VLAN/PPPoE encap 改追加 + 越界检查（原 2ed1af79c7 版已含 675-01/03）
 default root/9024-bridge-hw-offload-deps-table.patch   # issue #1 E1/E3：DEPENDS 改 kmod-nft-offload + 独立表名 flow_offload
 default root/9026-bridge-flow-offload-init-conntrack.patch   # issue #1 E2：bridge 族 flow 表达式 init/destroy 复用 inet conntrack
