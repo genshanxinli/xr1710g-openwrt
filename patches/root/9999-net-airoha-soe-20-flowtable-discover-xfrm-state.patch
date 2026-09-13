@@ -2,9 +2,19 @@ diff --git a/target/linux/airoha/patches-6.18/9999-net-airoha-soe-20-flowtable-d
 new file mode 100644
 --- /dev/null
 +++ b/target/linux/airoha/patches-6.18/9999-net-airoha-soe-20-flowtable-discover-xfrm-state.patch
-@@ -0,0 +1,170 @@
+@@ -0,0 +1,167 @@
 +# Source: hurryman2212/OpenW1700k-test @offload-oc 9999-20（2026-09-12 P2 SOE 主体吸收，按本仓真源重基）
 +# 完整说明（依赖链/重基依据/判据）见 patches/MANIFEST 与 research-20260912/inner/soe-head.txt
++# Reason（重基目标 = **本仓真实 prepare 内容**：上游 6.18 内核补丁 + vendor/fanboy/06 内层 675-01..03
++#         + 本仓 airoha 内层全序；对照文件 research-20260912/inner/path-post675.c，365 行）：
++#   - 2026-09-13（F142）二次重基：初版按 kernel-base（**不含** 675）重写上下文，故在真实树上
++#     hunk #1/#3/#6 FAILED —— 675 改了 include 区、把 nft_flow_route() 重写为带 `is_bridging`
++#     的形态、且 nft_dev_forward_path() 是 7 参 int 返回。本版整份内层由 git diff 机器生成。
++#   - 原作者基线的 `nft_flow_route_routing()` 不存在于本仓（那是作者侧的上游重构）；原 hunk #4/#5
++#     的 fl4 proto/sport/dport 三行按真源落到 nft_flow_route() 的 IPv4/IPv6 分支。
++#   - XFRM 发现块置于 `skip_l3:` 之前 ⇒ 只对路由流生效；675 的桥接快路径（is_bridging）不受影响。
++#   - 675 的 `nft_dev_forward_path()` 形态（7 参/int/错误处理）原样保留为上下文；本补丁新增的
++#     err_dst_release 块只服务本补丁自己的 XFRM 判定分支（初版按 void 返回改写的那段已作废）。
 +From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 +From: Jihong Min <hurryman2212@gmail.com>
 +Date: Tue, 4 Aug 2026 16:29:39 +0900
@@ -16,26 +26,10 @@ new file mode 100644
 +Assisted-by: Codex:gpt-5.6
 +Signed-off-by: Jihong Min <hurryman2212@gmail.com>
 +---
-+ net/netfilter/nf_flow_table_path.c | 94 ++++++++++++++++++++++++++++--
-+ 1 file changed, 90 insertions(+), 4 deletions(-)
-+
-+# Reason（适配本仓真源 = OpenWrt 真实 prepare 树，kernel-base commit 058cfa7；
-+#        对照树 tmp/soe-adapt4/real；不是 soe-basetree.sh --fuzz=2 重放的近似树 kvanilla）：
-+#   - 原 hunk #1（include 区）：真源 include 列表里没有 `#include <linux/if_bridge.h>`（hurryman 基线更新），
-+#     按真源重写上下文；`+#include <net/xfrm.h>` 位置不变。
-+#   - 原 hunk #3：真源该函数名为 nft_flow_route()（真源 226 行），不是 hurryman 的 nft_flow_route_routing()；
-+#     变量声明块在真源 230-232 行，按真源重写上下文，新增的 xo/sp 声明不变。
-+#   - 原 hunk #6：真源 nft_flow_route() 尾部有两处形态差异，按真源等价改写：
-+#       (a) 真源 nft_dev_forward_path() 返回 void（真源 192 行定义），没有原 hunk 假定的 <0 错误返回，
-+#           故保留真源的 `if (xmit_type == NEIGH && xmit_type == NEIGH) { nft_dev_forward_path(route, ct, dir, ft);
-+#           ... }` 原样，不再改成 `if (... < 0) goto err_dst_release;`（语义等价：真源无从取错误码）；
-+#       (b) 其余 XFRM 语义（skb_sec_path/xfrm_input_offload 发现块、nft_flow_route_needs_xfrm_input/
-+#           xfrm_policy_flowtable_eligible 校验块、err_dst_release 释放块）逐字保留，仅按真源重写上下文。
-+#   - 原 hunk #2/#4/#5：真源上下文原样匹配，未改动。
-+#   - 无整体重复：真源 nf_flow_table_path.c 无 xfrm_input/policy_flowtable 相关代码；
-+#     A 系列（9053 内层）不触碰 net/netfilter/，与本补丁无重叠。
++ net/netfilter/nf_flow_table_path.c | 85 ++++++++++++++++++++++++++++++++++++++
++ 1 file changed, 85 insertions(+)
 +diff --git a/net/netfilter/nf_flow_table_path.c b/net/netfilter/nf_flow_table_path.c
-+index 10ef70c..5469be6 100644
++index fc8abab..c72c25a 100644
 +--- a/net/netfilter/nf_flow_table_path.c
 ++++ b/net/netfilter/nf_flow_table_path.c
 +@@ -14,6 +14,7 @@
@@ -43,10 +37,10 @@ new file mode 100644
 + #include <net/netfilter/nf_conntrack_extend.h>
 + #include <net/netfilter/nf_flow_table.h>
 ++#include <net/xfrm.h>
-+ 
-+ static enum flow_offload_xmit_type nft_xmit_type(struct dst_entry *dst)
-+ {
-+@@ -28,6 +29,24 @@ static enum flow_offload_xmit_type nft_xmit_type(struct dst_entry *dst)
++ #include <linux/if_bridge.h>
++ #include <net/route.h>
++ #include <net/ip6_route.h>
++@@ -26,6 +27,24 @@ static enum flow_offload_xmit_type nft_xmit_type(struct dst_entry *dst)
 + 	return FLOW_OFFLOAD_XMIT_NEIGH;
 + }
 + 
@@ -71,18 +65,18 @@ new file mode 100644
 + static void nft_default_forward_path(struct nf_flow_route *route,
 + 				     struct dst_entry *dst_cache,
 + 				     enum ip_conntrack_dir dir)
-+@@ -230,6 +230,10 @@ int nft_flow_route(const struct nft_pktinfo *pkt, const struct nf_conn *ct,
-+ 	struct dst_entry *this_dst = skb_dst(pkt->skb);
-+ 	struct dst_entry *other_dst = NULL;
-+ 	struct flowi fl;
++@@ -281,6 +300,10 @@ int nft_flow_route(const struct nft_pktinfo *pkt, const struct nf_conn *ct,
++ 	bool is_bridging = false;
++ 	struct net_device *br_dev;
++ 	struct flowi fl = {};
 ++#if IS_ENABLED(CONFIG_XFRM)
 ++	struct xfrm_offload *xo;
 ++	struct sec_path *sp;
 ++#endif
 + 
-+ 	memset(&fl, 0, sizeof(fl));
-+ 	switch (nft_pf(pkt)) {
-+@@ -367,6 +390,10 @@ int nft_flow_route_routing(const struct nft_pktinfo *pkt,
++ 	if (netif_is_bridge_port(pkt->skb->dev)) {
++ 		rcu_read_lock();
++@@ -324,6 +347,10 @@ int nft_flow_route(const struct nft_pktinfo *pkt, const struct nf_conn *ct,
 + 		fl.u.ip4.flowi4_dscp = ip4h_dscp(ip_hdr(pkt->skb));
 + 		fl.u.ip4.flowi4_mark = pkt->skb->mark;
 + 		fl.u.ip4.flowi4_flags = FLOWI_FLAG_ANYSRC;
@@ -93,7 +87,7 @@ new file mode 100644
 + 		break;
 + 	case NFPROTO_IPV6:
 + 		fl.u.ip6.daddr = ct->tuplehash[dir].tuple.src.u3.in6;
-+@@ -376,6 +403,10 @@ int nft_flow_route_routing(const struct nft_pktinfo *pkt,
++@@ -333,6 +360,10 @@ int nft_flow_route(const struct nft_pktinfo *pkt, const struct nf_conn *ct,
 + 		fl.u.ip6.flowlabel = ip6_flowinfo(ipv6_hdr(pkt->skb));
 + 		fl.u.ip6.flowi6_mark = pkt->skb->mark;
 + 		fl.u.ip6.flowi6_flags = FLOWI_FLAG_ANYSRC;
@@ -104,7 +98,8 @@ new file mode 100644
 + 		break;
 + 	}
 + 
-+@@ -263,14 +263,68 @@ int nft_flow_route(const struct nft_pktinfo *pkt, const struct nf_conn *ct,
++@@ -345,11 +376,54 @@ int nft_flow_route(const struct nft_pktinfo *pkt, const struct nf_conn *ct,
++ 		return -ENOENT;
 + 	}
 + 
 ++#if IS_ENABLED(CONFIG_XFRM)
@@ -127,6 +122,8 @@ new file mode 100644
 ++	}
 ++#endif
 ++
++ skip_l3:
++ 
 + 	nft_default_forward_path(route, this_dst, dir);
 + 	nft_default_forward_path(route, other_dst, !dir);
 + 
@@ -155,8 +152,8 @@ new file mode 100644
 ++
 + 	if (route->tuple[dir].xmit_type	== FLOW_OFFLOAD_XMIT_NEIGH &&
 + 	    route->tuple[!dir].xmit_type == FLOW_OFFLOAD_XMIT_NEIGH) {
-+ 		nft_dev_forward_path(route, ct, dir, ft);
-+ 		nft_dev_forward_path(route, ct, !dir, ft);
++ 		if ((nft_dev_forward_path(pkt, is_bridging, route, ct, dir, dir, ft) ||
++@@ -361,5 +435,16 @@ skip_l3:
 + 	}
 + 
 + 	return 0;
