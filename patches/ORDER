@@ -60,6 +60,7 @@ experimental root/9040-xr1710g-airoha-pinctrl-force-gpio.patch   # 2026-09-07 WP
 experimental root/9041-xr1710g-rtk-serdes-bundle.patch   # 2026-09-07 WP-SerDes：742 SDS-mode + 743/744 restore/reapply（9001 phy5/phy8 属性同步）
 experimental root/9061-xr1710g-airoha-npu-mailbox-recovery.patch   # 2026-09-12 P3-A：YYH 923..928 NPU mailbox 可靠性六项（内层 9999-30..35；mt76 0147/0155 硬前置）
 experimental root/9062-xr1710g-eip93-reliability.patch   # 2026-09-12 P3-E：EIP93 三处可靠性修复（内层 9999-40..42；与 vendor/02+9054 同档）
+experimental root/9063-xr1710g-xfrm-lag-shared-state.patch   # 2026-09-13 F143：作者 LAG 系列 9999-29..38（内层 9999-xfrm-lag-NN-*，需 9053+SOE-25/26 在前）
 experimental vendor/fanboy/02-eip93-f80d0507.patch
 experimental vendor/fanboy/04-dsa-kmod-netlink-22532-aa531917.patch
 experimental root/9029-xr1710g-airoha-pcs-jcpll-tclvar-recal.patch   # A8/IP10：lan2 10G JCPLL VCO TCLVAR recal——2026-09-07 按 rdmitry PR#143 机制重写（post_config hook + 0x3→0x5 脉冲 + ETH/PON 分值；旧同值重写已证无效）
@@ -96,6 +97,7 @@ experimental packages/mac80211-406-wifi-mac80211-do-not-update-channel-if-csa-ie
 experimental packages/mac80211-407-wifi-mac80211-fix-direct-csa-issues.patch   # 2026-09-12 P3-D：direct CSA（count=0）mbss finalize
 experimental packages/mac80211-409-wifi-mac80211-fix-aql-bmc-mld.patch   # 2026-09-12 P3-D：MLD 下 AQL BMC 选 link
 experimental packages/mac80211-410-wifi-mac80211-prevent-rts-unexpectedly-set.patch   # 2026-09-12 P3-D：nl80211_set_wiphy_radio RTS 误置 0
+experimental packages/mac80211-412-mac80211-defer-ap-side-ft-key-upload.patch   # 2026-09-13 F144：Gilly 400 改号（AP 侧 FT key 上传竞态；PR openwrt#23181 未合）
 disabled regdb/0530-us-6ghz-lab-indoor-sp-override-DISABLED.patch   # MANIFEST #DISABLED；启用前按 0510→0520→0521 后状态过 verify
 
 # ── pending（原料已入库，待评审定档/拆分后解锁，对应 FIXES F13/F14）──
