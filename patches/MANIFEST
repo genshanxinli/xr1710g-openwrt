@@ -361,11 +361,16 @@ patches/root/9047-xr1710g-airoha-ppe-bind-rate.patch ROOT
 #   proto_block_restart。**绝不杀**没有 INTERFACE= 的第三方 odhcp6c（手工调试不受影响）；
 #   config_load/config_get_* 全包在子 shell，不污染 PPP hook 的 JSON/env。
 #   档位 **default**：无冲突时两条路径与现状逐字等价（不改变默认行为），只在真冲突时生效。
-#   内层 4 份（外层包裹，构建期由包 patches/ 目录应用）：ppp/patches/001（ppp6-up）+ 002（PKG_RELEASE
-#   2→3）、odhcp6c/patches/001（dhcpv6.sh）+ 002（PKG_RELEASE 3→4）。**odhcp6c 上游无 patches/ 目录**
-#   ——由本外层 new file mode 直接创建，构建期按目录 glob 应用，无需脚本 mkdir（对比 mt76 需 mkdir）。
-#   实证：f0d3e332 真源抽取内层 `patch -p1 --fuzz=0 --dry-run` **4/4 洁净**（0003 上下文按真源重算：
-#   @@ -72,6 +72,16 @@ / @@ -15,6 +15,13 @@，修正了缓存 0103 的作者树行号）。判据见 FIXES F117。
+#   投递形态（F135 修正 + F136 路径修正）：**内层 2 份 + 本仓 rootfs overlay 2 份**——
+#   ① 内层（外层包裹，构建期由包 patches/ 目录应用，`patch -f -p1 -d PKG_BUILD_DIR`）：ppp/patches/002
+#      （PKG_RELEASE 2→3）、odhcp6c/patches/002（PKG_RELEASE 3→4）；**odhcp6c 上游无 patches/ 目录**
+#      ——由本外层 new file mode 直接创建，构建期按目录 glob 应用，无需脚本 mkdir（对比 mt76 需 mkdir）。
+#   ② ppp6-up / dhcpv6.sh 的 guard 插入段**只能**走整文件 overlay（包补丁机制上打不到包 `files/`，
+#      见 F135 机制实证）：`files/lib/netifd/ppp6-up`、`files/lib/netifd/proto/dhcpv6.sh`（目标路径
+#      必须逐字符等于 rootfs 绝对路径去掉前导 `/`——F136 修复了少 `proto/` 的错）。树 `files/` 由
+#      `prepare_rootfs`（image.mk:431）在 opkg 安装**之后**覆盖 rootfs。
+#   实证：f0d3e332 真源抽取内层 `patch -p1 --fuzz=0 --dry-run` 洁净；两份 overlay 对上游版 diff =
+#   仅 guard 插入段且 `sh -n` 通过；audit-patches 115/115、dry-run 全绿（F136）。判据见 FIXES F118/F136。
 patches/root/9056-xr1710g-dhcpv6-duplicate-guard.patch ROOT
 # 9061（#EXP）：airoha NPU mailbox 可靠性闭环（YYH2913 xr1710g-6.18-integration 923..928，
 #   2026-09-12 P3-A 吸收；内层 9999-30..35）。六项：recover stalled cores（暴露
