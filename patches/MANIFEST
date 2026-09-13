@@ -225,6 +225,17 @@ patches/root/9016-xr1710g-silence-phy-led-error.patch ROOT
 patches/packages/firewall4-9990-resolve-bonding-lower-devices.patch   package/network/config/firewall4/patches/
 patches/packages/rpcd-0001-exec-observe-EOF-before-invalidating-pipe-fds.patch   package/system/rpcd/patches/
 
+# ── packages：iwinfo txpowerlist（2026-09-14 F159；handoff_p7 §2.2 第 4 项）──
+# iwinfo `nl80211_get_txpwrlist()` 用 `NL80211_CMD_GET_WIPHY`（非 split dump）+ 按**信道**匹配
+# 频率表：多 wiphy/多 band 设备上 txpower 列表会取错 band（freq2channel 跨 band 撞号）。
+# 修法：请求 split wiphy dump，优先按**当前频率**精确匹配，取不到频率才回落到信道匹配；
+# 顺带把 conveyor 所有权理清（nl80211_send 消耗 msg，本地失败路径先 free）。
+# 与 `9052`（freqlist 按 radio 过滤）**同名文件不同函数/行区**（本项 2529-2650、9052 在 3192+），
+# 已**同树合测**：`--fuzz=0` 两个补丁先后应用全过。档位 default（stock 同样受益：txpower 列表错误
+# 与 wiphy 数量无关，单 wiphy 多 band 亦会错）。
+# 来源：YYH2913 `101-nl80211-fix-txpowerlist-wiphy-dump.patch`（2026-09-14 从 tmp/yyh2913-openwrt 取）。
+patches/packages/iwinfo-0101-nl80211-fix-txpowerlist-wiphy-dump.patch   package/network/utils/iwinfo/patches/
+
 # ── 原实验档毕业段 / 剩余实验档（--experimental；毕业并入默认档后取消 #EXP）──
 # 以下 05/06/9024/9026/07/09/17/18 已于 2026-08-31 毕业为默认（ci-74 实机 E1/E2/E3、wifi down/up、NPU 探针通过）。
 # 05 于 2026-09-12 重基到 ubi2-oc 2f4fccb1（包改名 bridge-flow-offload→bridge-hw-offload、新增 init.d/procd
