@@ -18,9 +18,11 @@
 来源：F115（A=xfrm packet-offload 9053、D=EIP93 动态回退 9054）、F122/F142（B=SOE 主体 17..28）、
 F143（LAG 共享状态 29..38）。全部 `E`。
 
-- [ ] **V1.1 构建**：experimental 镜像产出且 `NET_AIROHA_SOE` 生效——
-      `zcat /proc/config.gz | grep -E "NET_AIROHA_SOE|CRYPTO_DYNAMIC_FALLBACK|CRYPTO_DEV_EIP93"` 均为 `=y`/`=m`；
-      `ls /lib/modules/*/airoha_soe.ko` 或 `lsmod | grep -E "airoha|eip93"` 有对应项。〔F142/F143〕
+- [ ] **V1.1 构建与符号**：experimental 镜像产出且符号生效——
+      `zcat /proc/config.gz | grep -E "NET_AIROHA_SOE|XFRM_OFFLOAD|CRYPTO_DYNAMIC_FALLBACK|CRYPTO_DEV_EIP93|BONDING"`：
+      前四者 `=y`（`CRYPTO_DEV_EIP93` 可为 `=m`）、`CONFIG_BONDING=m`。
+      注意 SOE 不产出独立 ko：`airoha-eth-$(CONFIG_NET_AIROHA_SOE) += airoha_soe.o` ⇒ 代码在 **`airoha-eth.ko`** 内，
+      故检查 `lsmod | grep -E "airoha|eip93|bonding"` 与 `modinfo airoha-eth`。〔F142/F143/F149〕
 - [ ] **V1.2 SOE 节点**：`dmesg | grep -i soe` 无 probe 失败；`/sys/firmware/devicetree/base/...`（或
       `find /proc/device-tree -name "*soe*"`）存在 SOE 节点。〔F122；dtsi 12 号补丁〕
 - [ ] **V1.3 IPsec 卸载生效**：配 `ip xfrm state add ... offload dev <10G口> ...` +
