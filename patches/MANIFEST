@@ -169,13 +169,17 @@ patches/root/9027-ledtrig-netdev-link-mode-mutex.patch ROOT
 patches/root/9031-base-files-led-skip-interval-hw-offload.patch ROOT
 # 9033：RTL826x 10G PHY LED class 支持（carry openwrt/openwrt #24034；RTL8261BE lan1/lan2，issue #13）
 patches/root/9033-openwrt-24034-rtl826x-led.patch ROOT
-# 9042：airoha small RX rings 增长（上游 PR #24872，Vitaliy Sochnev，2026-09-10 抓取；backport kernel 7.4
-#   e84b89f17a12）。ring 4 = force-to-CPU 共享环（DHCP/PPPoE/PPP/LCP/ISAKMP/LLDP…），16 描述符只占
-#   512B/4096B page，硬件越过环尾把"描述符形状"数据写进内核内存 → DHCP/PPPoE 握手期 panic 或协商卡死。
-#   修法：fallback 16→32 + ring4→128。**必须置于 vendor/11 之前**：本补丁同时把 916-02 内层上下文
-#   16→32 与 310-10/920-12/920-13 的内层 hunk 行号同步，vendor/11 的 @@ -553,8 段依赖该新基线
-#   （顺序实证：9042 → vendor/11 连续可应用）。合入上游后删除，见 FIXES F92。
-patches/root/9042-xr1710g-airoha-rx-ring-grow.patch ROOT
+# 9042：airoha small RX rings 增长（上游 PR #24872，Vitaliy Sochnev；backport kernel 7.4 e84b89f17a12）。
+#   ring 4 = force-to-CPU 共享环（DHCP/PPPoE/PPP/LCP/ISAKMP/LLDP…），16 描述符只占 512B/4096B page，
+#   硬件越过环尾把"描述符形状"数据写进内核内存 → DHCP/PPPoE 握手期 panic 或协商卡死。
+#   修法：fallback 16→32 + ring4→128。
+#   **2026-09-13 上游已合入 PR #24872（F151）：#24872 的五段全部被上游吸收（上游自带
+#   182-v7.4-net-airoha-grow-the-small-RX-rings.patch，与本层内嵌 182 逐字节相同；310-10/916-02/
+#   920-12/920-13 的内层 hunk 行号与 16→32 上下文亦已上游化——五段对本层基线 `git apply -R --check`
+#   全部干净通过）。故整条 #DISABLED（文件留着作 F92 决策留痕），能力由上游 182 承载，非降级：
+#   上游 182 与 9042 内嵌 182 逐字节一致（sha 比对见 FIXES F151）；vendor/11 依赖的 916-02 新基线
+#   现由上游提供。见 FIXES F92/F151。
+#DISABLED patches/root/9042-xr1710g-airoha-rx-ring-grow.patch ROOT
 # wifi-scripts 按 radio 独立 txpower（pr-23990/YYH2913；2026-08-17 对 master 重建，源于 fanboy 16 号 41b9e3ac，F13）
 patches/root/9010-wifi-scripts-txpower-ucode.patch ROOT
 # HW GRO/LRO 默认开启（11 号定档 default——README 声明的 HW-GRO/LRO 能力载体；kernel 6.18 编译期验证中）

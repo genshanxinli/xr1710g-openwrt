@@ -38,9 +38,13 @@ jobs:
           # generic/pending-6.18/742|743 的旧版上下文）。上游改这些文件不会立刻让 dry-run 红，
           # 却会在构建期才失败（典型：PR #25092 改 742/743 并新增 744/745）。用 blob SHA
           # 精确比对 → 漂移即预警，并点出需重基的本仓补丁。
+          # F151：新增「本仓新增文件 × 上游同址」自动扫描（9042/182 实证），并把远端 fork
+          # tip 前进降为 ⚠ 不计失败——它长期常红，反倒让下面的 dry-run 硬门被跳过。
           ./scripts/audit-upstream-watch.sh . --fail-on-drift
 
       - name: 补丁层 dry-run（默认 + OC + 实验档）
+        # F151：`!cancelled()` —— 守护步骤即使红，这一条也必须跑：它才是拦住补丁链的硬门。
+        if: ${{ !cancelled() }}
         run: |
           cd openwrt
           # F25（2026-08-18）：加 --experimental——实验档补丁同样需要 2h 漂移检测，

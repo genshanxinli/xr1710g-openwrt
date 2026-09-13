@@ -23,6 +23,12 @@
 #   [缺失]   基线路径在上游消失（改名/删除）→ 需重定位
 #
 # 行为：默认只报告（exit 0）；`--fail-on-drift` 时 缺失/冲突/漂移 任一即 exit 1（CI 用）。
+#   例外（F151）：**远端来源 tip 前进不计入失败**——fork 分支 tip 前进是常态（来源对账是
+#   择机事项，不影响构建），把它当硬失败会让守护步骤长期常红；而 CI 里守护步骤在 dry-run
+#   之前，一旦它红，**真正能拦住补丁链的 dry-run 根本不会执行**。实证：2026-09-13
+#   11:49Z 的定时运行（34755445119）就死在两个 fork tip 前进上，同一小时后上游合入
+#   PR #24872 造成的 9042 同址冲突（182-v7.4-…patch 已上游自带）遂无人看见，直到手动构建
+#   才红。故远端 tip 只报 ⚠（输出里保留 tip 记录/对账提示），不再左右退出码。
 set -euo pipefail
 
 TREE=""; FAIL_ON_DRIFT=0
@@ -35,8 +41,8 @@ done
 [[ -n "$TREE" && -d "$TREE/.git" ]] || { echo "用法：audit-upstream-watch.sh <openwrt树目录> [--fail-on-drift]" >&2; exit 1; }
 
 # 基线锚点：本表建立时所依据的上游 main。仅用于报告可读性（判断"是上游真改了还是基线该刷新"）。
-BASELINE_UPSTREAM="f0d3e332e5f839508f77fba8c7420ceeb079ab86"   # openwrt main @ 2026-09-11 19:25Z
-BASELINE_DATE="2026-09-12"
+BASELINE_UPSTREAM="12fa348112fe66b1d326e5c3ba2be7d7ecf95881"   # openwrt main @ 2026-09-13 11:14Z
+BASELINE_DATE="2026-09-13"
 # 上游 bump 时**有意**更新上面两行 + 下表 SHA（生成方式：`git rev-parse HEAD:<path>`）。
 
 # [基线] <blob-sha|-> <上游路径> <受影响的本仓补丁>
@@ -105,13 +111,13 @@ echo "-- 远端来源 tip 守护（分支 tip 变化 → 需重新对账）--"
       echo "  ⚠ [远端] tip 前进：$(basename "$url") $ref"
       echo "      记录 $want"
       echo "      实际 ${live:0:9}"
-      echo "      → 需重新对账：$note"
-      drift=$((drift+1))
+      echo "      → 需重新对账（非失败项，F151）：$note"
+      rdrift=$((rdrift+1))
     fi
   done
 }
 
-drift=0; miss=0; collide=0
+drift=0; miss=0; collide=0; rdrift=0; samefile=0
 # 取上游"提交"与"工作区"两个视图：
 #   · 提交视图（ls-tree）用于 CI 的干净检出 + 本仓 overlay 场景
 #   · 工作区视图（ls-files --cached --others）用于本地树/被 rsync 修改过的树
@@ -186,6 +192,40 @@ for row in "${COLLISION_PROBES[@]}"; do
   fi
 done
 
+# ── 本仓新增文件 × 上游同址探测（自动生成，F151）──────────────────────────
+# 9042 实证：上游合入 PR #24872 后自带 target/linux/airoha/patches-6.18/182-v7.4-…patch，
+# 与本仓 9042 内嵌的新文件同址 → 补丁链在 9042 处 `already exists in working directory` 断链。
+# 该类的另一面更隐蔽：拷贝类条目（`<src> <dest>/`）用 `cp -f` 落位，上游同名文件被**静默覆盖**，
+# 只有语义重复、不报错。此处不手写清单——直接扫 MANIFEST 全部启用条目的 `new file mode`
+# 段并取其 `+++ b/<path>`，逐一比对上游树，命中即报 [冲突]（硬失败）。
+echo
+echo "-- 本仓新增文件 × 上游同址探测（自动扫描 MANIFEST 的 new file mode 段）--"
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+newfile_hits=0; newfile_scanned=0
+while IFS= read -r line || [[ -n "$line" ]]; do
+  line="${line%$'\r'}"
+  [[ -z "$line" ]] && continue
+  line="${line#"${line%%[![:space:]]*}"}"           # ltrim
+  [[ "${line:0:4}" == "#OC " ]] && line="${line:4}"
+  [[ "${line:0:5}" == "#EXP " ]] && line="${line:5}"
+  [[ "${line:0:1}" == "#" ]] && continue
+  src="${line%%[[:space:]]*}"
+  pf="$ROOT_DIR/$src"
+  [[ -f "$pf" ]] || continue
+  while IFS= read -r path; do
+    [[ -z "$path" ]] && continue
+    newfile_scanned=$((newfile_scanned+1))
+    if [[ -e "$TREE/$path" ]]; then
+      echo "  ⚠ [冲突] 上游已有同名文件：$path"
+      echo "      本仓新增者：$src"
+      echo "      处置：判'删除本地/改号/改为修改型 hunk'——同址新增必然断链或静默覆盖"
+      newfile_hits=$((newfile_hits+1)); collide=$((collide+1))
+    fi
+  done < <(awk '/^new file mode/{f=1;next} f&&/^\+\+\+ /{sub(/^\+\+\+ b\//,"");print;f=0} /^diff --git/{f=0}' "$pf")
+done < "$ROOT_DIR/patches/MANIFEST"
+(( newfile_hits == 0 )) && echo "  ✓ [冲突] 扫描 $newfile_scanned 个新增文件：上游均无同址"
+samefile=$newfile_hits
+
 # 文本级：主线 realtek 驱动是否已含 RTL8261CE（#23644 实质）
 echo
 echo "-- 主线 realtek 驱动 CE 支持探测（文本级）--"
@@ -206,7 +246,7 @@ fi
 remote_report
 
 echo "----"
-echo "汇总：基线漂移 $drift，路径缺失 $miss，同址冲突 $collide，远端跳过 $rskip（基线锚点 ${BASELINE_UPSTREAM:0:9}）"
+echo "汇总：基线漂移 $drift，路径缺失 $miss，同址冲突 $collide（含新增文件同址 $samefile），远端 tip 前进 $rdrift（不计失败），远端跳过 $rskip（基线锚点 ${BASELINE_UPSTREAM:0:9}）"
 if (( miss > 0 || collide > 0 || (FAIL_ON_DRIFT && drift > 0) )); then
   echo "处理（修复而非降级）：" >&2
   echo "  · 基线漂移 → 按 docs/absorptions/ 最新吸收计划重基本仓补丁" >&2
@@ -214,4 +254,5 @@ if (( miss > 0 || collide > 0 || (FAIL_ON_DRIFT && drift > 0) )); then
   echo "  · 复跑验证：./scripts/apply-patches.sh . --dry-run --oc --experimental" >&2
   exit 1
 fi
+(( rdrift > 0 )) && echo "ⓘ 远端 tip 前进 $rdrift 处：择机对账来源（不阻塞构建，F151）"
 exit 0
