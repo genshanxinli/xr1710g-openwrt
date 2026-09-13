@@ -14,8 +14,8 @@
 #
 # 实机现状（stock r0-f36067d，2026-09-12 只读复核，见 docs/FIXES.md F119）：
 #   `ip -br link`：br-lan == lan1 == 00:58:28:d7:44:5d；br-lan/brif = lan1 lan2 lan3 phy0.{0,1,2}-ap*
-#   （lan1 为第一成员口）；板级 DTS `9001` 的 `&gdm2`(lan1) 与 `&gdm4`(lan2) **都写 `<&lan_mac 0>`**
-#   （不是 `<&lan_mac 1>`/`<&lan_mac 2>`）→ 由此还导致 eth0/lan2/lan3/wan 同为 `...:5e`（另一项，本脚本不处理）。
+#   （lan1 为第一成员口）；板级 DTS `9001` 里 **`&gdm1`(lan1) 与 `&gdm4`(lan2) 都取 `<&lan_mac 0>`**
+#   （gdm2 取 `<&wan_mac 0>`，Wi-Fi 三频取 `<&lan_mac 1/2/3>`；2026-09-13 F145 逐行复核更正）
 #
 # ⚠ 本脚本是"检测到冲突才迁移"的安全网，**不是无条件改写**，且默认 MAC 与 DTS 一律不动
 #   （避免影响所有镜像）。实机判据见 docs/FIXES.md F119：
