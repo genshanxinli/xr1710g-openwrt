@@ -79,10 +79,12 @@ F143（LAG 共享状态 29..38）。全部 `E`。
       `bash scripts/device-hw-probe.sh` 的 E3 判 `VERDICT: UNIQUE`。〔F117/F119〕
       ⚠ 首次应用会改 br-lan MAC → 桥重建，管理面 ssh 会断一次（属预期，重连即可）。
       ⚠ 根因（F119 实机 + 2026-09-13 F145 对 `9001` 逐行复核）：`&gdm1`(lan1) 与 `&gdm4`(lan2)
-      **都取 `<&lan_mac 0>`**（`&gdm2` 取 `<&wan_mac 0>`、Wi-Fi 三频取 `<&lan_mac 1/2/3>`）⇒
-      nvmem 索引未按有线口区分是重复 MAC 的直接来源。**按用户决策未改 DTS**；若要从根上修，
-      改 `patches/root/9001-xr1710g-dts.patch` 给两个口不同 `lan_mac` 索引，但会改变
-      lan1/lan2 的 MAC（影响 DHCP 静态租约/交换机 MAC 表）——须先实机确认再动。
+      **都取 `<&lan_mac 0>`**（`&gdm2` 取 `<&wan_mac 0>`、Wi-Fi 三频取 `<&lan_mac 1/2/3>`；`lan_mac` 是
+      `compatible = "mac-base"`、`#nvmem-cell-cells = <1>` 的 6 字节基址，参数即地址增量）。
+      ⇒ **`lan_mac` 的 1/2/3 已被三频占用，没有空闲的有线口索引**，DTS 侧改索引不是干净修法
+      （会改 lan1/lan2 的 MAC，波及 DHCP 静态租约/交换机 MAC 表，且需先实机摸清 "base+N" 的映射）。
+      因此**配置层派生唯一 MAC（本仓 `98-xr1710g-brlan-mac-unique`，已交付）就是该问题的正解**，不是临时绕道；
+      剩下的 DTS 观测（gdm1/gdm4 同索引）单列为"待实机确认 MAC 映射"的观察项，不阻塞本项。
 - [ ] **V4.2 bridge-hw-offload**：开关 `flow_offloading_hw` 后
       `nft list table bridge flow_offload` 随之出现/清空、**无需 reboot**；
       flowsense 页面为 gauge（无 `◄BND`）、无 VLAN/PPPoE 徽章、`air_eff=80` 生效；
