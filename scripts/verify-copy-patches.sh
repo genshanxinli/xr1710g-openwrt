@@ -139,6 +139,18 @@ prep_src() {
       url_fb="https://ftp.denx.de/pub/u-boot/$file"   # 包 Makefile PKG_SOURCE_URL 镜像列表
       subdir="u-boot-$v"
       ;;
+    */firewall4/patches|*/rpcd/patches)
+      # F158（2026-09-14）：上游** git 型**包（PKG_SOURCE_URL=$(PROJECT_GIT)/project/<n>.git），
+      # 源码版本只在包 Makefile 的 PKG_SOURCE_VERSION（无 PKG_VERSION 可拼 tarball）⇒ 用
+      # codeload 归档；归档顶层目录 = <pkg>-<full sha>，与 mt76 同型，`patch -p1` 应用点 = 包根。
+      pkgdir="${dest%/patches}"
+      local sv; sv="$(awk -F':=' '/^PKG_SOURCE_VERSION:=/{print $2; exit}' "$TREE/$pkgdir/Makefile")"
+      if [[ -z "$sv" ]]; then echo "⚠ [verify] $pkgdir 缺 PKG_SOURCE_VERSION——跳过 $dest" >&2; SKIPPED[$dest]=1; unverified=$((unverified+1)); return 1; fi
+      local pn; pn="$(basename "$pkgdir")"
+      file="$pn-$sv.tar.gz"
+      url="https://github.com/openwrt/$pn/archive/$sv.tar.gz"   # 包 Makefile PKG_SOURCE_URL 的 GitHub 镜像
+      subdir="$pn-$sv"
+      ;;
     *)
       echo "⚠ [verify] 未知拷贝目标 $dest——跳过（如需校验，请在本脚本登记包源映射）" >&2
       SKIPPED[$dest]=1; unverified=$((unverified+1)); return 1

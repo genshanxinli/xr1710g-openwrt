@@ -209,6 +209,22 @@ patches/root/9014-xr1710g-wifi-antenna-memo.patch ROOT
 patches/root/9015-xr1710g-snd-soc-off.patch ROOT
 patches/root/9016-xr1710g-silence-phy-led-error.patch ROOT
 
+# ── packages：firewall4 / rpcd 缺口（2026-09-14 F158；#EXP 审计 §2.2 第 2–3 项）──
+# 两项都是 **userland 包补丁**（拷进 package/<pkg>/patches/ 由构建期 `patch -f -p1` 应用）：
+#   ① firewall4：`resolve_lower_devices()` 只处理 vlan/bridge，**不管 bonding** ⇒ 桥成员是 bond master 时
+#      `bond0` 会留在硬件 offload flowtable 的 device 集里，per-port offload 驱动看不到真实物理口
+#      （与 SOE LAG/桥卸载同域）。修法：devtype 为 `bonding`（或 `/sys/class/net/<dev>/bonding` 存在）时
+#      沿 `lower_*` 递归展开（作者 Jihong Min）。
+#   ② rpcd：上游 `26dba5206e17`（exec: prevent double close of exec pipe descriptors）把 fd 置 -1 挪到了
+#      `ustream_poll()` 之前 ⇒ poll 看不到 EOF，exec 插件请求一直挂到超时（脚本 `ubus call`/LuCI 命令超时）。
+#      修法：先 poll 再置 -1（保持双 close 保护，作者 Yanghan Ye）。
+# 两项对 pin 真源 `--fuzz=0` rc=0（本仓 tmp/pkgtest 克隆；**且上游 openwrt main 当前 pin 同 SHA**：
+#   firewall4 `b6e5157`、rpcd `e37ed9d`），本仓此前**无载体**（F152 判定的真缺口）。
+# 档位 **default**：① 对无 bond 的 stock 是 no-op（devtype 匹配不到 bonding）；② rpcd 是回归修复，
+#   两档都需要（用户态，不涉内核符号）。
+patches/packages/firewall4-9990-resolve-bonding-lower-devices.patch   package/network/config/firewall4/patches/
+patches/packages/rpcd-0001-exec-observe-EOF-before-invalidating-pipe-fds.patch   package/system/rpcd/patches/
+
 # ── 原实验档毕业段 / 剩余实验档（--experimental；毕业并入默认档后取消 #EXP）──
 # 以下 05/06/9024/9026/07/09/17/18 已于 2026-08-31 毕业为默认（ci-74 实机 E1/E2/E3、wifi down/up、NPU 探针通过）。
 # 05 于 2026-09-12 重基到 ubi2-oc 2f4fccb1（包改名 bridge-flow-offload→bridge-hw-offload、新增 init.d/procd
