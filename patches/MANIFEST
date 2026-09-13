@@ -125,6 +125,10 @@ patches/packages/mt76-9993-wifi-mt76-mt7996-pass-operating-mode-to-rate-control.
 # ── 9993 的编译依赖（F25 二次构建暴露）：mac80211 backport 未导出 cap_bw/cap_nss helper，
 #   integration 树以 mac80211 包 subsys 补丁补充——随 9993 毕业为默认。
 patches/packages/mac80211-411-export-link-sta-capability-limits.patch package/kernel/mac80211/patches/subsys/
+# ── 802.11r / FT 配套（2026-09-13 P2 §2.8，F144）──
+#   AP 侧 FT 的 key 上传竞态修复（Gilly `400` 改号 412，避本仓 YYH 400 撞号；PR #23181 未合、
+#   pin backports-7.2 无此改动）。与 files/etc/uci-defaults/98-xr1710g-ft-over-ds 配套。
+#EXP patches/packages/mac80211-412-mac80211-defer-ap-side-ft-key-upload.patch package/kernel/mac80211/patches/subsys/
 
 # ── root：跨目录 git apply（默认档）──
 # XR1710G 板级支持（2026-08-17 对 master 重建三件套，替代 PR 原 diff——PR 对 master 5 文件冲突，见 FIXES F01）

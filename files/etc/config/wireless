@@ -18,6 +18,9 @@ config wifi-iface 'default_radio0'
 	option device 'radio0'
 	option network 'lan'
 	option mode 'ap'
+	option ieee80211r '1'                  # F144：802.11r（FT）——同 SSID 多频漫游不重认证
+	option mobility_domain '6616'          # 社区默认 MD；多 AP 需一致（本机单 AP 无害）
+	option ft_over_ds '1'                  # Apple 惯用 FT-over-DS；仅 OTA 会退回全量 SAE（66 次认证失败实证）
 	option ssid 'K2P'
 	option encryption 'sae-mixed'          # WPA2/WPA3 混合
 	option key '123456789'                 # TODO 建议改强
@@ -38,6 +41,9 @@ config wifi-iface 'default_radio1'
 	option device 'radio1'
 	option network 'lan'
 	option mode 'ap'
+	option ieee80211r '1'                  # F144：802.11r（FT）
+	option mobility_domain '6616'
+	option ft_over_ds '1'
 	option ssid 'K2P'
 	option encryption 'sae-mixed'
 	option max_inactivity '86400'          # 07 天线报告：5G 防周期清退（恩山 tid-8484444）
@@ -51,6 +57,9 @@ config wifi-iface 'default_radio1_5g'
 	option device 'radio1'
 	option network 'lan'
 	option mode 'ap'
+	option ieee80211r '1'                  # F144：802.11r（FT）
+	option mobility_domain '6616'
+	option ft_over_ds '1'
 	option ssid 'K2P-5G'
 	option encryption 'sae-mixed'
 	option max_inactivity '86400'
@@ -119,6 +128,9 @@ config wifi-iface 'default_radio2'
 	option device 'radio2'
 	option network 'lan'
 	option mode 'ap'
+	option ieee80211r '1'                  # F144：802.11r（FT）
+	option mobility_domain '6616'
+	option ft_over_ds '1'
 	option ssid 'K2P'
 	option encryption 'sae-mixed'
 	option key '123456789'                 # TODO 建议改强
