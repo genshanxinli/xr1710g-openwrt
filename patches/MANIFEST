@@ -437,3 +437,11 @@ patches/root/9047-xr1710g-airoha-ppe-bind-rate.patch ROOT
 #EXP patches/root/9999-net-airoha-soe-26-soe-xfrm-packet-offload.patch ROOT
 #EXP patches/root/9999-net-airoha-soe-27-build-soe-provider.patch ROOT
 #EXP patches/root/9999-net-airoha-soe-28-soe-offload-kconfig.patch ROOT
+# ── SOE LAG（bonding 多口共享 XFRM 硬件状态）——作者 LAG 系列 9999-29..38（2026-09-13 F142 第二批）──
+#   内层安装名统一为 `9999-xfrm-lag-NN-*`，前缀保证整块排在 9053 内层
+#   `9999-xfrm-00-packet-offload-framework.patch` 之后（29/30 的 hunk 上下文用到 A 系列新增的
+#   `xdo_dev_packet_xmit` / `struct xfrmdev_ops.flags`）且排在 `9999-net-airoha-soe-25/26` 之后
+#   （36..38 改 `airoha_soe.{c,h}` 与 `airoha_ppe.c`）。为此 9053 内层由
+#   `9999-xfrm-packet-offload-framework.patch` 更名为 `9999-xfrm-00-…`（仅文件名，内容零改动）。
+#   实测（research-20260912/inner/klag）：10 支在含 9053 + SOE-17..28 的真实树上 `--fuzz=0` 全绿。
+#EXP patches/root/9063-xr1710g-xfrm-lag-shared-state.patch ROOT

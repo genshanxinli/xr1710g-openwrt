@@ -26,7 +26,7 @@ new file mode 100644
 +#     按真源重写上下文，`+#include <net/xfrm.h>` 仍插在最后一个 include 之后，语义不变。
 +#   - 原 hunk #2..#5：真源仅行号偏移，上下文原样匹配，未改动。
 +#   - 无整体重复：真源 nf_flow_table_core.c 无任何 xfrm_input 相关代码；
-+#     A 系列（9053 内层 9999-xfrm-packet-offload-framework.patch）只改 include/{linux/netdevice.h,
++#     A 系列（9053 内层 9999-xfrm-00-packet-offload-framework.patch）只改 include/{linux/netdevice.h,
 +#     net/netns/xfrm.h,net/xfrm.h} 与 net/xfrm/*.c，不触碰任何 net/netfilter/ 文件，与本补丁无重叠。
 +diff --git a/net/netfilter/nf_flow_table_core.c b/net/netfilter/nf_flow_table_core.c
 +index 2bb0339..624867b 100644

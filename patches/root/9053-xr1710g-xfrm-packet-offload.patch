@@ -1,7 +1,7 @@
-diff --git a/target/linux/airoha/patches-6.18/9999-xfrm-packet-offload-framework.patch b/target/linux/airoha/patches-6.18/9999-xfrm-packet-offload-framework.patch
+diff --git a/target/linux/airoha/patches-6.18/9999-xfrm-00-packet-offload-framework.patch b/target/linux/airoha/patches-6.18/9999-xfrm-00-packet-offload-framework.patch
 new file mode 100644
 --- /dev/null
-+++ b/target/linux/airoha/patches-6.18/9999-xfrm-packet-offload-framework.patch
++++ b/target/linux/airoha/patches-6.18/9999-xfrm-00-packet-offload-framework.patch
 @@ -0,0 +1,1816 @@
 +# Source: hurryman2212/OpenW1700k-test @offload-oc（2026-09-12 P2 吸收，父代理独立复核）
 +# Upstream: n/a（作者自持；未提上游 PR——A 系列是 xfrm packet-offload 框架的私有一版）
