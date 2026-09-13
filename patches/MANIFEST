@@ -347,31 +347,20 @@ patches/root/9057-xr1710g-mlo-hide-mesh.patch ROOT
 #   之后：同 airoha_ppe.c 但区段不相交——9990 改 853/1046/1057，本项改 136/223，全序真实应用已实证）。
 #   实机判据见 FIXES F104。
 patches/root/9047-xr1710g-airoha-ppe-bind-rate.patch ROOT
-# 9056（default）：PPPoE 自动 IPv6 与显式 DHCPv6 双客户端互斥（orangeyoo 0103+0104，2026-09-12 P2 §2.2）。
-#   本仓 files/etc/config/network 预置 `config interface 'wan6' { proto 'dhcpv6' }`，注释写"PPPoE 在
-#   LuCI 面板改"；用户切 PPPoE 后 PPP 的 ipv6=auto 再建一个动态 DHCPv6（ppp6-up 的 AUTOIPV6 路径）
-#   → 两个 odhcp6c 跑同一 L3 设备，而 odhcp6c 的 ubus 对象名固定 `odhcp6c.<设备>`（真源 src/ubus.c
-#   ubus_init()，ifname = proto_run_command 末参）→ 第二个 ubus_add_object EEXIST → 退出 → netifd
-#   重启 → IPv6 间歇不可用（**本仓已文档化的操作路径**，非边角场景）。
-#   机制：guard 脚本（overlay files/lib/netifd/xr1710g-dhcpv6-guard.sh）双向查冲突，**只让后到的
-#   netifd 客户端不启动**：① ppp6-up 建 auto IPv6 前查"同设备已有启用的显式 dhcpv6 接口"（支持
-#   @parent 间接引用、深度上限 16 防环）→ 清空 AUTOIPV6；② dhcpv6.sh 的 proto_dhcpv6_setup() 入口
-#   查同设备已有**另一 netifd 接口**的 odhcp6c（/proc/<pid>/cmdline 末参比对设备 + environ
-#   INTERFACE= 归属不同接口）→ logger + proto_notify_error DHCPV6_DUPLICATE_CLIENT +
-#   proto_block_restart。**绝不杀**没有 INTERFACE= 的第三方 odhcp6c（手工调试不受影响）；
-#   config_load/config_get_* 全包在子 shell，不污染 PPP hook 的 JSON/env。
-#   档位 **default**：无冲突时两条路径与现状逐字等价（不改变默认行为），只在真冲突时生效。
-#   投递形态（F135 修正 + F136 路径修正）：**内层 2 份 + 本仓 rootfs overlay 2 份**——
-#   ① 内层（外层包裹，构建期由包 patches/ 目录应用，`patch -f -p1 -d PKG_BUILD_DIR`）：ppp/patches/002
-#      （PKG_RELEASE 2→3）、odhcp6c/patches/002（PKG_RELEASE 3→4）；**odhcp6c 上游无 patches/ 目录**
-#      ——由本外层 new file mode 直接创建，构建期按目录 glob 应用，无需脚本 mkdir（对比 mt76 需 mkdir）。
-#   ② ppp6-up / dhcpv6.sh 的 guard 插入段**只能**走整文件 overlay（包补丁机制上打不到包 `files/`，
-#      见 F135 机制实证）：`files/lib/netifd/ppp6-up`、`files/lib/netifd/proto/dhcpv6.sh`（目标路径
-#      必须逐字符等于 rootfs 绝对路径去掉前导 `/`——F136 修复了少 `proto/` 的错）。树 `files/` 由
-#      `prepare_rootfs`（image.mk:431）在 opkg 安装**之后**覆盖 rootfs。
-#   实证：f0d3e332 真源抽取内层 `patch -p1 --fuzz=0 --dry-run` 洁净；两份 overlay 对上游版 diff =
-#   仅 guard 插入段且 `sh -n` 通过；audit-patches 115/115、dry-run 全绿（F136）。判据见 FIXES F118/F136。
-patches/root/9056-xr1710g-dhcpv6-duplicate-guard.patch ROOT
+# 「dhcpv6 双客户端互斥」（F118，orangeyoo 0103+0104）：**无补丁载体，纯 rootfs overlay**（9056 已于
+#   2026-09-13 F139 整条删除）。问题：本仓 files/etc/config/network 预置 `config interface 'wan6'
+#   { proto 'dhcpv6' }`；用户切 PPPoE 后 PPP 的 ipv6=auto 再建一个动态 DHCPv6（ppp6-up 的 AUTOIPV6
+#   路径）→ 两个 odhcp6c 跑同一 L3 设备，而 ubus 对象名固定 `odhcp6c.<设备>` → 第二个
+#   ubus_add_object EEXIST → 退出 → netifd 重启 → IPv6 间歇不可用（**已文档化的操作路径**）。
+#   载体全部在 overlay：`files/lib/netifd/xr1710g-dhcpv6-guard.sh`（双向查冲突，只让后到的 netifd
+#   客户端不启动；绝不杀无 INTERFACE= 的第三方 odhcp6c）+ `files/lib/netifd/ppp6-up`（AUTOIPV6 前
+#   查显式 dhcpv6）+ `files/lib/netifd/proto/dhcpv6.sh`（proto_dhcpv6_setup 入口去重）。目标路径必须
+#   逐字符等于 rootfs 绝对路径去掉前导 `/`（F136 修过少 `proto/` 的错）。
+#   为什么不能做成包补丁：`patch -f -p1 -d PKG_BUILD_DIR` 的目标是**解包后的上游源码**，既看不到包
+#   `files/`，也看不到 OpenWrt 包定义 Makefile —— 原 9056 的 4 份内层（001 guard 段 + 002
+#   PKG_RELEASE bump）全部无效，F135/F136 两次修补仍未脱出该机制（见 F139）。若确实要 opkg 版本号
+#   bump，正确形态是 root 档补丁直接改 `package/.../Makefile`（同 9017 的做法）；本项由镜像 overlay
+#   投递、不依赖包重装，故不需要。判据见 FIXES F118/F139。
 # 9061（#EXP）：airoha NPU mailbox 可靠性闭环（YYH2913 xr1710g-6.18-integration 923..928，
 #   2026-09-12 P3-A 吸收；内层 9999-30..35）。六项：recover stalled cores（暴露
 #   airoha_npu_recover()）/ watchdog work lifetime（devm cancel action + airoha_npu_wait_recovery()）/
