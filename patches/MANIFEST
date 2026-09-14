@@ -322,6 +322,20 @@ patches/root/9048-xr1710g-airoha-ppe-flush-sram-err.patch ROOT
 #   默认档不改变镜像（该包默认未开），需要 per-STA debugfs 诊断时在 seed-config 打开即可。
 #   同时是 Gilly 038（per-link sta stats debugfs）的前置——不修映射，038 是死代码。
 patches/root/9049-xr1710g-mt76-mac80211-debugfs.patch ROOT
+# 9067：mt76 **主源换代** —— 改指 fanboy fork 的固件提交 01367e60（2026-09-14 F161 落地，default 档）。
+#   快进式：be5ce791 + **恰好 1 个提交**（`01367e6 new mt7996 family firmware`），`22 files changed,
+#   0 insertions(+), 0 deletions(-)`、全是 firmware/mt7996/*.bin ⇒ 换代不改一行驱动源码。
+#   生产固件净 −65 124 B；新增 ≈8.8 MB 是驱动 MT7996/92/90_FIRMWARE_* 常量**不引用**的
+#   *_wm_tm*.bin（产线测试模式，全树 `grep '_tm\.bin'` 零引用）⇒ 不进运行时路径。
+#   关键：`PKG_MIRROR_HASH` 填 **官方 dl_github_archive.py 算出的真实 sha256**（983ba810…），
+#   **不是** fanboy 原样的 `skip` —— 后者正是本仓此前否决 vendor/fanboy/13 的理由
+#   （ORDER pending：「# 否决（fork + PKG_MIRROR_HASH=skip，违反锁源铁律）」）；F161 决策点①
+#   以「已知答案自检（现行 pin 复现 d1d0f758…）+ 负对照 exit 1」解除，并顺带把下载路径从
+#   rawgit（clone-then-pack、无校验）切回 github_archive（双向 sha256 校验）。
+#   `PKG_SOURCE_DATE` 保持 2026-09-01（hash 经 SUBDIR 依赖它，改 DATE 必须重算）。
+#   前置 = F163（mt76 校验 URL 改为从包 Makefile 派生，否则换代后 404 且静默降级）。
+#   判据：两档 CI（stock + experimental）+ 实机 docs/DEVICE-VALIDATION.md V7.0–V7.6（CI 绿不能代替）。
+patches/root/9067-xr1710g-mt76-source-01367e60.patch ROOT
 # 9050（#EXP）：airoha GDM MIB 采集无损化（Gilly 963，2026-09-12 吸收）。64 位计数器被 `+=` 累加
 #   （硬件已累计 → 统计虚增）、32 位计数器无绕回处理（绕回后倒退）、RUNT/E64 混桶；另加 port->lock。
 #   影响 F38 的 rx_errors 判定口径。改的是对外可见统计语义 → #EXP，实机验证后毕业。

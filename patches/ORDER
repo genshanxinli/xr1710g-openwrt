@@ -86,6 +86,7 @@ default vendor/fanboy/17-cmonroe-stability-8c530f05.patch
 default vendor/fanboy/18-smartrg-stability-b45d5117.patch   # 2026-09-07 F77 收口：992-21 74→83 行版（mbox DONE 轮询超时 1000→500ms，e352c48673 源）
 default root/9048-xr1710g-airoha-ppe-flush-sram-err.patch   # 1 行级真 bug：SRAM FOE 刷写失败时 airoha_ppe_init 拿到真实 errno（而非静默成功）；与 9035/9036/9037 区段不相交
 default root/9049-xr1710g-mt76-mac80211-debugfs.patch   # per-STA debugfs 的 NOSTDINC_FLAGS 映射；按 CONFIG_PACKAGE_MAC80211_DEBUGFS 条件开（默认档不改镜像）；Gilly 038 的前置
+default root/9067-xr1710g-mt76-source-01367e60.patch   # F161 mt76 主源换代 → fanboy fork 01367e60（= be5ce791 + 1 个纯固件提交，22 文件全 firmware/*.bin、0 行源码增删）；PKG_MIRROR_HASH 填官方工具算出的真实 sha256 而非 fanboy 原样的 skip ⇒ 解除 F13 的「fork + skip」否决（锁源铁律）；DoD = 两档 CI + 实机 V7.0–V7.6
 default root/9052-xr1710g-iwinfo-freqlist-per-radio.patch   # iwinfo freqlist 按 radio 过滤（装为 200-freqlist-per-radio.patch；与上游 100-multi_radio 同树实证，与 Gilly 998 互补）
 default root/9057-xr1710g-mlo-hide-mesh.patch   # luci-app-mlo 前端只读过滤+提示（本仓当前无 mesh 接口 → 现网零影响）
 default root/9047-xr1710g-airoha-ppe-bind-rate.patch   # F104：PPE bind 速率（实测 p90 157ms→15ms，bufferbloat B→A+）；内层 9997 置于 9039 内层 9990 之后（同文件不同区段）

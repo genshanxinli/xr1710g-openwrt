@@ -84,7 +84,12 @@ PENDING = [
 ]
 
 # MANIFEST 新增条目若 ORDER 里没有同名注释，用这里补齐（可选；留空则只写 tier+路径）
-NEW_COMMENTS: dict = {}
+NEW_COMMENTS: dict = {
+    "root/9067-xr1710g-mt76-source-01367e60.patch":
+        "# F161 mt76 主源换代 → fanboy fork 01367e60（= be5ce791 + 1 个纯固件提交，22 文件全 "
+        "firmware/*.bin、0 行源码增删）；PKG_MIRROR_HASH 填官方工具算出的真实 sha256 而非 fanboy "
+        "原样的 skip ⇒ 解除 F13 的「fork + skip」否决（锁源铁律）；DoD = 两档 CI + 实机 V7.0–V7.6",
+}
 
 
 def short(full):
