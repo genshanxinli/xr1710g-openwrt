@@ -41,6 +41,12 @@ OC_FLAG_AUDIT=""; (( OC )) && OC_FLAG_AUDIT="--oc"
 EXP_FLAG_AUDIT=""; (( EXP )) && EXP_FLAG_AUDIT="--experimental"
 "$ROOT/scripts/audit-patches.sh" $OC_FLAG_AUDIT $EXP_FLAG_AUDIT
 
+# F164（2026-09-14）制度化：档位视图一致性审计（ORDER ↔ MANIFEST）。dry 与真实模式都先审计。
+# 背景：ORDER 曾长期不同步（实测 96 条 vs MANIFEST 136 条，MANIFEST-only 49 条），且 `#` 前缀
+#   同时被当作"注释"与"未启用条目"（双重语义，旧写法 `# experimental 9037`）。现在 ORDER 被定义
+#   为 MANIFEST 的**投影**，每次应用前逐条对账（集合 + 档位）；不一致即红 —— 改 MANIFEST 必须同步 ORDER。
+"$ROOT/scripts/audit-order.sh" "$ROOT"
+
 applied=0; skipped=0; missing=0
 while IFS= read -r line || [[ -n "$line" ]]; do
   line="${line%"${line##*[![:space:]]}"}"   # rtrim

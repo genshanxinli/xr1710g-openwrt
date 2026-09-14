@@ -7,19 +7,25 @@
 
 | 桶 | 内容 | 落点（相对 openwrt 树根） |
 |---|---|---|
-| `patches/kernel/` | 内核类补丁 | `target/linux/airoha/patches-6.18/`（OpenWrt 构建时自动应用） |
-| `patches/uboot/` | U-Boot 类补丁 | `package/boot/uboot-airoha/patches/` |
-| `patches/packages/` | 包级补丁（regdb / mt76 / kmod…） | 按 `MANIFEST` 指定目录拷贝 |
-| `patches/root/` | 跨目录补丁（如 #22397 板级支持，13 文件） | 树根 `git apply` |
+| `patches/packages/` | 包级补丁（regdb / mt76 / mac80211 / iwinfo / firewall4 / rpcd / uboot…） | 按 `MANIFEST` 指定目录拷贝 |
+| `patches/root/` | 跨目录补丁（#22397 板级、内层内核补丁包裹、OC 相关等） | 树根 `git apply`（包裹补丁装内层到 `target/linux/airoha/patches-6.18/` 等） |
 | `patches/specs/` | 补丁**说明书**（来源 URL/上游状态/待取源）或暂存参考补丁 | 不自动应用 |
-| `patches/vendor/fanboy/` | **原料桶**：OpenW1700k `ubi2-oc` 全 20 commit（git format-patch，2026-08-17 抓取） | 评审/拆分后移入正式桶或按 MANIFEST 引用 |
+| `patches/vendor/fanboy/` | **原料桶**：OpenW1700k `ubi2-oc` 全 21 commit（git format-patch，2026-08-17 抓取，2026-09-12 补入 21 号 HSUART） | 评审/拆分后移入正式桶或按 MANIFEST 引用 |
+
+> ⚠ 不存在 `patches/kernel/` 与 `patches/uboot/` 两个桶（2026-09-14 F164 更正旧表格）：内核类改动一律以
+> **包裹补丁**形态放在 `patches/root/`（外层 new-file hunk 把内层补丁装进 `target/linux/airoha/patches-6.18/`），
+> U-Boot 类同理装进 `package/boot/uboot-airoha/patches/`。
 
 ## MANIFEST（应用清单）
 
 `patches/MANIFEST` 每行一条：`<补丁相对路径> <目标目录|ROOT>`。
 
-- `#` 开头 = 注释/停用；`#EXP ` 开头 = 实验档（`apply-patches.sh --experimental` 才应用）；`#OC ` 开头 = OC 档（`apply-patches.sh --oc` 才应用）。
-- `patches/ORDER` 是档位视图（tier: 文件，评审用）；**MANIFEST 是实际应用清单**。
+- `#` 开头 = 注释/停用；`#EXP ` 开头 = 实验档（`apply-patches.sh --experimental` 才应用）；`#OC ` 开头 = OC 档（`apply-patches.sh --oc` 才应用）；`#DISABLED ` 开头 = 停用（文件保留留痕，任何档位都不应用）。
+- `patches/ORDER` 是**档位评审视图**，被定义为 MANIFEST 的**投影**（2026-09-14 F164 起）：
+  - 档位词汇 `default | oc | experimental | disabled | pending`，与 MANIFEST 前缀一一对应；`pending` = **不在 MANIFEST** 的原料/备选。
+  - **`#` 开头的行只作说明，不再承担「禁用」语义**（旧写法 `# experimental root/9037-...` 双重语义已废止）。
+  - `scripts/audit-order.sh` 逐条对账（集合 + 档位），由 `apply-patches.sh` 在每次应用前（含 `--dry-run`）自动调用 ⇒ **改 MANIFEST 必须同步 ORDER，否则构建/CI 直接红**。
+  - 重生成：`scripts/gen-order.py [仓库根]`（行尾评审注释按路径从旧表继承；`--check` 只校验不改写）。
 - **实验档构建/校验（F25，2026-08-18）**：`./scripts/build.sh experimental` 或 CI dispatch `profile=experimental` 可完整构建实验档；本地 `apply-patches.sh --dry-run --experimental` 与 2h sync-upstream cron 均覆盖实验档（audit-patches/verify-copy-patches 已感知 `#EXP` 行，拷贝类实验补丁同样真实应用校验）。**实验档 → 默认档毕业条件**：在 known-good 周期内跑通 `docs/ACCEPTANCE.md` 全项 → 取消 `#EXP` 注释并入默认，并在 `docs/FIXES.md` 对应条目改状态。
 
 ## 补丁文件元数据头约定
