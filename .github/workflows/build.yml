@@ -68,6 +68,13 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: openwrt-${{ env.PROFILE }}
+          # F166：append-timestamp=true（默认）只给**保存**键加时间戳，恢复时用的是裸前缀
+          #   `ccache-<key>-`；不显式给 restore-keys 就永远 miss —— 实证：ci-166（stock，09-13）
+          #   在 09-11 存档后仍报 "No cache found."，且该存档 last_accessed_at == created_at。
+          restore-keys: openwrt-${{ env.PROFILE }}
+          # 默认 500MB 装不下 toolchain+kernel+packages 的对象集（旧配置全程 Cache size 0.0/0.5GB）；
+          #   3G 仍远低于仓库 10GB 缓存额度
+          max-size: 3G
 
       - name: 应用补丁层（实验档补丁）+ files overlay
         run: |
@@ -109,6 +116,16 @@ jobs:
           if [[ "$PROFILE" == "experimental" ]]; then
             "${GITHUB_WORKSPACE}/overlay/scripts/audit-config.sh" "${GITHUB_WORKSPACE}/overlay/config/seed-config.experimental.diff" .config
           fi
+          # F166（2026-09-14，构建缓存）：启用 ccache，**必须追加在最后一次 defconfig 之后** ——
+          #   CONFIG_CCACHE 的 prompt 是 `if DEVEL`（config/Config-devel.in:135），DEVEL=n 时 kconfig
+          #   会把它解析回 n；而后续 make 只读 .config 文本（rules.mk:347 `ifneq ($(CONFIG_CCACHE),)`），
+          #   追加即生效（上游同款：openwrt/actions-shared-workflows → reusable_build.yml:566）。
+          # CONFIG_CCACHE_DIR 必须指到 cache action 的目录：action 固定用 $GITHUB_WORKSPACE/.ccache，
+          #   而 OpenWrt 默认是 $TREE/.ccache（rules.mk:354）—— 不指则 ccache 写进树内、快照里恒空
+          #   （旧配置实证：构建 72 min 后 `ccache -s` 仍为 Cache size 0.0/0.5GB）。
+          echo 'CONFIG_CCACHE=y' >> .config
+          echo "CONFIG_CCACHE_DIR=\"$GITHUB_WORKSPACE/.ccache\"" >> .config
+          grep -q '^CONFIG_CCACHE=y$' .config || { echo "CONFIG_CCACHE 未进 .config —— 构建缓存会静默失效（F166）"; exit 1; }
 
       - name: 构建
         # F19：显式 pipefail——make 失败必须红（默认 bash 无 pipefail，`make | tee` 会把失败吞成假绿；
