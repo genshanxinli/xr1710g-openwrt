@@ -59,6 +59,7 @@
 - [x] 构建退出码硬化（F19：pipefail + no-files-found=error，2026-08-17）
 - [x] 拷贝类补丁 dry-run 真实应用校验（F20 制度化，2026-08-17：新增 `scripts/verify-copy-patches.sh` 接入 `apply-patches.sh --dry-run`——按构建语义解包包源码 + glob 排序真实 `patch -p1`，regdb 附 dbparse 校验；2h sync cron 尽早暴露而非等构建）
 - [x] 实验档可构建化（F25，2026-08-18）：build.sh 加 `experimental` 档 + build.yml dispatch 支持 + sync-upstream cron 的 dry-run 加 `--experimental`（实验档享受 2h 漂移检测）；audit-patches/verify-copy-patches 感知 `#EXP` 行（apply-patches.sh 透传）；apply-patches.sh dry-run 的 set -e 缺陷修复（verify 失败不再跳过 git reset）
+- [x] **守卫自证来源 + 配置错误不静默降级**（F163，2026-09-14）：`verify-copy-patches.sh` 的 git 型包源码 URL 改为**从包 Makefile 的 `PKG_SOURCE_URL` 派生**（不硬编码上游——F161 实证：硬编码在换代到 fork 源后 404，32 个 mt76 补丁会静默失去校验而 2h cron 仍全绿）；**HTTP 404/410（源不存在 = 配置错误）报红**，仅瞬时网络故障仍按 F19 保持 ⚠ 不红
 - [ ] 实验档毕业的自动化：experimental 构建通过 + ACCEPTANCE 子集 → PR 式合并到默认 MANIFEST（2026-08-31 已手工毕业一批：`mt76-0005`、`9990/9991/9993`+`411`、`05/06/9024/9026`、`07/09/17/18`；自动化仍未实现）
 - [ ] vermagic 注入接入 CI（F14，让自建 kmod 兼容官方 opkg）
 - [ ] 2h 同步工作流稳定后，把"冲突出现 → 修复 → 回归"流程沉淀为 CI 注释/文档（sync-upstream.yml 已就位）

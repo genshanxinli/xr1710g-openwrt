@@ -48,6 +48,11 @@ OC 变体的**默认限频 1300MHz** 由 `files/etc/init.d/oc-limit` 实现（1.
      按构建语义真实校验：树内包 Makefile 派生源码 tarball（缓存于 `$COPY_PATCH_CACHE` 或 /tmp）→ 解包 →
      「树内已有补丁 + 本层补丁」同目录 → 构建同款 `patch-kernel.sh` glob 排序 `patch -f -p1` → regdb 附
      dbparse.py 校验；**应用失败=红（2h sync cron 尽早暴露），下载失败=⚠ 不红（构建兜底）**；
+     **例外（F163）**：**HTTP 404/410 = 源不存在 = 配置错误 ⇒ 红**（源写错是可复现的确定性故障，不是
+     瞬时网络问题；旧行为会把它当「未校验」静默降级 ⇒ 该 dest 的补丁长期失去校验而 cron 仍全绿）；
    - 包补丁命名注意 **glob 字节序**（F21 教训）：`1000-` 排在 `100-` 与 `101-` 之间，`9990-` 才在 `999-` 后；
    - 新增拷贝类补丁目标（新包）时需在 verify-copy-patches.sh 登记包源映射，否则 ⚠ 跳过不校验；
+     **git 型包（`PKG_SOURCE_PROTO:=git`）的归档 URL 从包 Makefile 的 `PKG_SOURCE_URL` +
+     `PKG_SOURCE_VERSION` 派生，不硬编码上游**（F163；归档顶层目录 = **源 URL 的 repo 名**-<全 sha>，
+     不是 PKG_NAME/包目录名）；源 URL 不可推导时**报红**而非跳过；
 3. 首次构建验证；构建/启动问题 → 修本层补丁（修复不是降级），并记 `docs/FIXES.md`。

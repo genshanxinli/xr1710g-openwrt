@@ -10,8 +10,9 @@
 #   外层 hunk 行数未同步）在构建时应用失败——本脚本同样按构建语义真实校验派生包补丁。
 #
 # 做法：对每个拷贝目标，**完全复刻构建语义**——
-#   1) 从树内包 Makefile 派生源码 tarball（单一事实源：PKG_VERSION / PKG_SOURCE_VERSION
-#      随上游版本漂移自动跟进，不另设手工 pin，杜绝第二真相源）；
+#   1) 从树内包 Makefile 派生源码 tarball（单一事实源：PKG_SOURCE_URL / PKG_VERSION /
+#      PKG_SOURCE_VERSION 随上游版本漂移自动跟进，不另设手工 pin，杜绝第二真相源）；
+#      git 型包（mt76 等）的归档 URL 由 PKG_SOURCE_URL + PKG_SOURCE_VERSION 拼出（F161）；
 #   2) 下载（缓存于 $COPY_PATCH_CACHE，缺省 ${TMPDIR:-/tmp}/copy-patch-verify）并解包；
 #   3) 组装临时补丁目录 = 树内该包已有补丁（如 regdb 的 500-world-regd-5GHz.patch / uboot 的
 #      100-999 系列，构建时与本层拷贝共存）+ 本层 MANIFEST 补丁（同名拷贝）——应用顺序与
@@ -26,7 +27,12 @@
 # 策略：
 #   - 应用/校验失败 = 退出非零（红）：sync-upstream 2h cron 尽早暴露，而不是等构建；
 #   - 下载失败 = ⚠ 未校验（警告不红）：F19 教训——瞬时网络问题不应假红，构建对下载失败
-#     有重试语义，拷贝补丁最终由真实构建兜底（构建应用失败即红，天然成立）。
+#     有重试语义，拷贝补丁最终由真实构建兜底（构建应用失败即红，天然成立）；
+#   - **例外（F161，2026-09-14）：HTTP 404/410 = 源不存在 = 配置错误，必须红**——源写错是
+#     可复现的确定性故障，不属于 F19 说的瞬时网络问题；若按「未校验」静默降级，该 dest 的
+#     补丁会**长期不被校验而 cron 仍全绿**（F161 实证：mt76 换代到 fork 源后硬编码 URL 404）。
+#   - **源码 URL 一律从被检对象自身派生**（包 Makefile 的 PKG_SOURCE_URL/PKG_SOURCE_VERSION），
+#     不得硬编码上游——硬编码 + 下载失败静默降级 = 长期假绿（F161 反面教材）。
 set -euo pipefail
 
 TREE=""; OC=0; NODL=0; EXP=0
@@ -113,9 +119,25 @@ prep_src() {
       pkgdir="package/kernel/mt76"
       local sv; sv="$(awk -F':=' '/^PKG_SOURCE_VERSION:=/{print $2; exit}' "$TREE/$pkgdir/Makefile")"
       if [[ -z "$sv" ]]; then echo "⚠ [verify] $pkgdir 缺 PKG_SOURCE_VERSION——跳过 $dest" >&2; SKIPPED[$dest]=1; unverified=$((unverified+1)); return 1; fi
-      file="mt76-$sv.tar.gz"
-      url="https://github.com/openwrt/mt76/archive/$sv.tar.gz"
-      subdir="mt76-$sv"
+      # F161（2026-09-14）：源 URL **从包 Makefile 的 PKG_SOURCE_URL 派生**，不硬编码上游。
+      # 原硬编码 `github.com/openwrt/mt76` 在换代到 fork 源（01367e60 @ OpenWRT-fanboy/
+      # mt76-firmware）后必 404，脚本按「下载失败=未校验」静默降级 ⇒ 32 个 mt76 补丁从此
+      # 长期不被校验而 2h cron 仍全绿。
+      # codeload 归档顶层目录 = **<源 URL 的 repo 名>-<全 sha>**（不是 PKG_NAME/包目录名：
+      # fanboy fork 的仓库名是 mt76-firmware，其归档顶层 = mt76-firmware-<sha>，已实测）。
+      local surl repo
+      surl="$(awk -F':=' '/^PKG_SOURCE_URL:=/{print $2; exit}' "$TREE/$pkgdir/Makefile")"
+      surl="${surl%/}"; surl="${surl%.git}"
+      if [[ ! "$surl" =~ ^https://github\.com/[^/]+/[^/]+$ ]]; then
+        echo "✗ [verify] $pkgdir 的 PKG_SOURCE_URL 不是可推导 codeload 归档的 GitHub git 源：${surl:-（缺 PKG_SOURCE_URL）}" >&2
+        echo "            无法校验必须报红（F161：静默降级 = 该 dest 的补丁长期不被校验而 cron 全绿）。" >&2
+        echo "            如需支持新源型，请在 prep_src 登记其归档映射。" >&2
+        fail=1; return 1
+      fi
+      repo="${surl##*/}"
+      file="$repo-$sv.tar.gz"
+      url="$surl/archive/$sv.tar.gz"
+      subdir="$repo-$sv"
       ;;
     */mac80211/patches/subsys)
       # mac80211 包补丁分目录（subsys/ath/ath10k…）各应用于 backports 树不同层次；
@@ -171,13 +193,23 @@ prep_src() {
       echo "⚠ [verify] --no-download 且无缓存 $file——跳过 $dest（未校验）" >&2
       SKIPPED[$dest]=1; unverified=$((unverified+1)); return 1
     fi
+    # HTTP 状态码经 curl -w 取出（-f 下 4xx/5xx 不写正文、退出码 22）——用于把
+    # 「源不存在」（404/410，确定性配置错误 → 红）与「瞬时网络故障」（→ ⚠ 未校验，F19）分开。
+    local code="000" code_fb=""
     echo "  ⤓ 下载 $url" >&2
-    if ! curl -fsSL --retry 3 -o "$tarball" "$url"; then
+    if ! code="$(curl -fsSL --retry 3 -o "$tarball" -w '%{http_code}' "$url" 2>/dev/null)"; then
       # 后备镜像（uboot 等有多镜像包）
-      if [[ -n "${url_fb:-}" ]] && curl -fsSL --retry 3 -o "$tarball" "$url_fb"; then
+      if [[ -n "${url_fb:-}" ]] && code_fb="$(curl -fsSL --retry 3 -o "$tarball" -w '%{http_code}' "$url_fb" 2>/dev/null)"; then
         :
       else
         rm -f "$tarball"
+        if [[ "$code" == 404 || "$code" == 410 || "$code_fb" == 404 || "$code_fb" == 410 ]]; then
+          echo "✗ [verify] 源不存在（HTTP $code${code_fb:+/$code_fb}）：$url${url_fb:+ / $url_fb}" >&2
+          echo "            源 URL/版本与实际真源不符 = 配置错误（非瞬时网络故障），无法校验必须红。" >&2
+          echo "            F161 教训：此处若按「未校验」降级，该 dest 的补丁会长期静默失去校验。" >&2
+          fail=1
+          return 1
+        fi
         echo "⚠ [verify] 下载失败：$url${url_fb:+ / $url_fb}——跳过 $dest（未校验；构建时会真实应用，下载失败有重试语义）" >&2
         SKIPPED[$dest]=1; unverified=$((unverified+1)); return 1
       fi
