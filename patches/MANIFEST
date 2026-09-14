@@ -51,7 +51,12 @@ patches/packages/mt76-0011-wifi-mt76-npu-fix-rx-descriptor-ownership.patch      
 #EXP patches/packages/mt76-0013-wifi-mt76-mt7996-refresh-tx-agg-timer-under-npu-offload.patch    package/kernel/mt76/patches/
 # 0014：NPU 复位 + panic/竞态/越界加固（Gilly 047/034/035/036/042/026/044）——047 修整机复位后
 #   host TX 永死与 NAPI NULL oops；034 reg_lock irqsave 防 AP panic；其余为 wcid 竞态与事件越界校验
-#EXP patches/packages/mt76-0014-wifi-mt76-npu-reset-panic-race-hardening.patch    package/kernel/mt76/patches/
+#   ⚠ 本补丁是**包裹补丁**（动作 = 在树内新建 package/kernel/mt76/patches/0{26,34,35,36,42,44,47}-*.patch，
+#   内嵌 7 个内层补丁）⇒ dest 必须是 ROOT。2026-09-14 F165 修：原先写拷贝目录，包裹补丁被拷进
+#   mt76/patches/ 后由构建施加于 **mt76 源码树**，内层文件落在 <mt76 源码>/package/kernel/mt76/patches/
+#   而永不被 glob 应用 ⇒ 7 项加固（NPU 复位后 host TX 永死 / reg_lock irqsave / wcid 竞态 / 事件越界）静默失效。
+#   判据与守卫见同轮 F165 行（audit-patches.sh 新增「包裹补丁 dest 必须 ROOT」检查）。
+#EXP patches/packages/mt76-0014-wifi-mt76-npu-reset-panic-race-hardening.patch    ROOT
 # 0015（= Gilly 039+046 合并，2026-09-12 吸收）：mt7996_mac_work() 的 ADM_STAT/MSDU_COUNT
 #   轮询门只判 WED → 扩到 `|| mt76_npu_device_active()`（NPU 板每站 tx/rx bytes/packets 恒 0，
 #   因 0003 改了同一 hunk 上面两行却没动这个门）；mt7996_sta_statistics() 同步在 NPU 上报固件
