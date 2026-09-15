@@ -95,9 +95,9 @@ new file mode 100644
 + 	dev->recovery.hw_full_reset = true;
 + 
 ++	/* Quiesce the NPU before the chip is reset, as the L1 recovery path
-++	 * does. mt7996_mac_restart() hands it the new rings afterwards.
-++	 */
-++	mt7996_npu_hw_stop(dev);
+++	 * does, but with the non-recovering teardown variant: never reboot NPU
+++	 * core 0 mid-reset (F170). mt7996_mac_restart() re-hands it the rings. */
+++	mt7996_npu_hw_stop_teardown(dev);
 ++
 + 	set_bit(MT76_MCU_RESET, &dev->mphy.state);
 + 	wake_up(&dev->mt76.mcu.wait);

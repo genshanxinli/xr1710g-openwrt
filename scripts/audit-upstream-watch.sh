@@ -41,8 +41,8 @@ done
 [[ -n "$TREE" && -d "$TREE/.git" ]] || { echo "用法：audit-upstream-watch.sh <openwrt树目录> [--fail-on-drift]" >&2; exit 1; }
 
 # 基线锚点：本表建立时所依据的上游 main。仅用于报告可读性（判断"是上游真改了还是基线该刷新"）。
-BASELINE_UPSTREAM="0d7bfcb7e31eb4aaa4bdf574019d0cacf6604a29"   # openwrt main @ 2026-09-14 13:11Z（F167 刷新：12fa34811 → 0d7bfcb7e）
-BASELINE_DATE="2026-09-14"
+BASELINE_UPSTREAM="7f4f824691fb2258afe9eb9a37da46d3557c4043"   # openwrt main @ 2026-09-15（P17/F171 刷新：0d7bfcb7e → 7f4f82469；8 个监视 blob 全未变，仅新增 hack-6.18/710 不涉监视面）
+BASELINE_DATE="2026-09-15"
 # 上游 bump 时**有意**更新上面两行 + 下表 SHA（生成方式：`git rev-parse HEAD:<path>`）。
 
 # [基线] <blob-sha|-> <上游路径> <受影响的本仓补丁>
@@ -87,8 +87,8 @@ REMOTE_TIPS=(
   "2dd6e4c8|https://github.com/YYH2913/mt76.git|HEAD|YYH mt76 分支（MTK/YYH 专有 mt76 补丁的来源）"
   "53b73174c|https://github.com/YYH2913/http-uboot.git|HEAD|U-Boot 锁版参考（FLASHING 升级前核对）"
   "37aa0bcd3b|https://github.com/OpenWRT-fanboy/OpenW1700k.git|refs/heads/ubi2-oc|vendor/fanboy/01..21 原料桶（F154 对账第三次 force-push 49d20d02e；F157 重锚至 ac975aa94 并按最后一次变更 9604ab5a 重取 05；F168 复核 ac975aa94→37aa0bcd3b：22 个自有提交 patch-id 全等、零内容变化 = 纯重基，21 份原料仍有效）"
-  "a57615652|https://github.com/Gilly1970/Gemtek-W1700K-6.18.git|HEAD|Gilly openwrt-patches/（F90/F101 对账源；a57615652=Bump Kernel-6.18.51 and rebase + 新补丁 048，048 已吸收为 mt76-0022/F153）"
-  "bb34bbe6e|https://github.com/naoki66/ImmortalWrt-for-Gemtek-XR1710G.git|HEAD|naoki66 分支（411/628/622/743/744/mt76-0010/0012 来源；F168 复核 38148509→bb34bbe6e：快进 19 提交/29 文件，全为自有 LuCI 应用 + 自有内核补丁副本 + config.seed，本仓所取的 622/625/743/744 源文件未变且仍在 ⇒ 无重取）"
+  "3d4ff76d3|https://github.com/Gilly1970/Gemtek-W1700K-6.18.git|HEAD|Gilly openwrt-patches/（F90/F101 对账源；a57615652=Bump Kernel-6.18.51 and rebase + 新补丁 048，048 已吸收为 mt76-0022/F153；F171/P17 复核 a57615652→3d4ff76d3：快进 1 提交「Bump Kernel-6.18.52 and rebase」，960/961/982 三个 patch 从 openwrt-patches/ **移除**（随 6.18.52 上游化），本仓 9045 内层 960/961、9042 内层 982 因 pin 仍 6.18.44 不受影响（内核 bump ≥6.18.52 时须删这三份内层）⇒ 无 Gilly 来料重取）"
+  "c31b73423|https://github.com/naoki66/ImmortalWrt-for-Gemtek-XR1710G.git|HEAD|naoki66 分支（411/628/622/743/744/mt76-0010/0012 来源；F168 复核 38148509→bb34bbe6e：快进 19 提交/29 文件，全为自有 LuCI 应用 + 自有内核补丁副本 + config.seed，本仓所取的 622/625/743/744 源文件未变且仍在 ⇒ 无重取；F171/P17 复核 bb34bbe6e→c31b73423：快进 1 提交/4 文件（仅 package/luci-app-mesh-conf，本仓不携带），8 个来料源文件 blob 全等且仍在 ⇒ 无重取）"
   "73c3ab308|https://github.com/hurryman2212/OpenW1700k-test.git|refs/heads/offload-oc|SOE/xfrm/EIP93 来源（F115/F122）"
 )
 REMOTE_TIMEOUT="${AUDIT_REMOTE_TIMEOUT:-20}"
