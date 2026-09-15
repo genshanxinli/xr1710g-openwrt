@@ -86,9 +86,9 @@ REMOTE_TIPS=(
   "c82129e734|https://github.com/YYH2913/openwrt.git|refs/heads/xr1710g-6.18-integration|YYH 补丁集真源（P3 对账对象；suntyrael 只是其重传载体）"
   "2dd6e4c8|https://github.com/YYH2913/mt76.git|HEAD|YYH mt76 分支（MTK/YYH 专有 mt76 补丁的来源）"
   "53b73174c|https://github.com/YYH2913/http-uboot.git|HEAD|U-Boot 锁版参考（FLASHING 升级前核对）"
-  "ac975aa94|https://github.com/OpenWRT-fanboy/OpenW1700k.git|refs/heads/ubi2-oc|vendor/fanboy/01..21 原料桶（F154 对账第三次 force-push 49d20d02e；F157 重锚至 ac975aa94 —— 该线 49d20d02e→ac975aa94 共 41 提交，其中 19 条 patch-id 命中上游 openwrt 最近 200；自有提交里 05 已按该文件最后一次变更 9604ab5a 重取吸收，其余自有源文件经逐个路径历史核对未见新变更）"
+  "37aa0bcd3b|https://github.com/OpenWRT-fanboy/OpenW1700k.git|refs/heads/ubi2-oc|vendor/fanboy/01..21 原料桶（F154 对账第三次 force-push 49d20d02e；F157 重锚至 ac975aa94 并按最后一次变更 9604ab5a 重取 05；F168 复核 ac975aa94→37aa0bcd3b：22 个自有提交 patch-id 全等、零内容变化 = 纯重基，21 份原料仍有效）"
   "a57615652|https://github.com/Gilly1970/Gemtek-W1700K-6.18.git|HEAD|Gilly openwrt-patches/（F90/F101 对账源；a57615652=Bump Kernel-6.18.51 and rebase + 新补丁 048，048 已吸收为 mt76-0022/F153）"
-  "38148509|https://github.com/naoki66/ImmortalWrt-for-Gemtek-XR1710G.git|HEAD|naoki66 分支（411/628/622/743/744/mt76-0010/0012 来源）"
+  "bb34bbe6e|https://github.com/naoki66/ImmortalWrt-for-Gemtek-XR1710G.git|HEAD|naoki66 分支（411/628/622/743/744/mt76-0010/0012 来源；F168 复核 38148509→bb34bbe6e：快进 19 提交/29 文件，全为自有 LuCI 应用 + 自有内核补丁副本 + config.seed，本仓所取的 622/625/743/744 源文件未变且仍在 ⇒ 无重取）"
   "73c3ab308|https://github.com/hurryman2212/OpenW1700k-test.git|refs/heads/offload-oc|SOE/xfrm/EIP93 来源（F115/F122）"
 )
 REMOTE_TIMEOUT="${AUDIT_REMOTE_TIMEOUT:-20}"
