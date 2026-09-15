@@ -26,7 +26,7 @@ Gemtek XR1710G（Airoha AN7581 + MT7996 三频 Wi-Fi7、2×10G + 2×1G）的**�
 - 铁律：**修复而不是降级**；上游已吸收能力的冗余补丁应撤下（非降级）。
 - `patches/MANIFEST` 是实际应用清单；`patches/ORDER` 是档位评审视图，二者必须一致。
 - 构建：`scripts/build.sh <stock|experimental> [树]`（唯一 CPU 档 OPP 650–1350 + oc-auto 自动退档，见 FIXES F89；容器缺构建工具，实际构建以 GitHub Actions 为准）；CI：`.github/workflows/build.yml`（workflow_dispatch：profile=all/stock/experimental）、`sync-upstream.yml`（2h dry-run）、`collect-sources.yml`。
-- 实机：`root@192.168.123.1`，优先免密（`.ssh/id_ed25519`，新宿主已重建），否则密码 `password`。
+- 实机：`root@192.168.123.1`，**密码 `password`**（2026-09-16 P23 实测：设备**无 `/etc/dropbear/authorized_keys`** ⇒ 免密**不可用**；仓库 `.ssh/ssh-device`（`-i .ssh/id_ed25519`）与 `~/.ssh/id_ed25519_xr1710g` 两把均被拒。要恢复免密须先在设备上落 `authorized_keys`；设备凭据若被改，先与用户确认再试，避免 dropbear 限速）。
 
 ## 2. 近期会话成果（别重复做）
 
