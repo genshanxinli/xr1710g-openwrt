@@ -89,6 +89,12 @@ NEW_COMMENTS: dict = {
         "# F161 mt76 主源换代 → fanboy fork 01367e60（= be5ce791 + 1 个纯固件提交，22 文件全 "
         "firmware/*.bin、0 行源码增删）；PKG_MIRROR_HASH 填官方工具算出的真实 sha256 而非 fanboy "
         "原样的 skip ⇒ 解除 F13 的「fork + skip」否决（锁源铁律）；DoD = 两档 CI + 实机 V7.0–V7.6",
+    "mt76/0023-wifi-mt76-mt7996-add-pcie-aer-error-handling.patch":
+        "# F172（#EXP）：mt7996 PCIe AER error handling——实机 [14] CmpltTO（Uncorrectable Non-Fatal）"
+        "+ mt7996e 缺 error_detected 回调 ⇒ `AER: can't recover`、恢复被放弃；补 err_handler"
+        "（perm_failure⇒DISCONNECT，其余含 Non-Fatal⇒NEED_RESET 走 aer_root_reset 的 bus reset）"
+        "+ slot_reset 交 reset_work 做 full chip reset；**不**照抄 mt7921 的 uncorrectable⇒DISCONNECT；"
+        "同文件 glob 序 0023<0153<0160（已验逐 hunk 全过）",
 }
 
 

@@ -105,6 +105,7 @@ experimental mt76/0016-wifi-mt76-mt7996-radar-detecting-chanctx.patch   # Gilly 
 experimental mt76/0017-wifi-mt76-mt7996-bypass-hwrro-sub64-ba.patch   # Gilly 032：亚 64 窗口 BlockAck（Apple TID6=8/TID1=16）旁路 HW_RRO，避免 RX 卸载停摆
 experimental mt76/0018-wifi-mt76-mt7996-fix-dl-ofdma-after-sta-reconnect.patch   # 2026-09-12 P3-C（=YYH 0010，避号）：删 CONN_STATE_DISCONNECT mcu_add_sta → 修重连后 DL OFDMA
 experimental mt76/0021-mtk-mt76-mt7996-only-disallow-global-wcid.patch   # 2026-09-12 P3-C：mt7996_rx_get_wcid 的 global_wcid 判定
+experimental mt76/0023-wifi-mt76-mt7996-add-pcie-aer-error-handling.patch   # F172（#EXP）：mt7996 PCIe AER error handling——实机 [14] CmpltTO（Uncorrectable Non-Fatal）+ mt7996e 缺 error_detected 回调 ⇒ `AER: can't recover`、恢复被放弃；补 err_handler（perm_failure⇒DISCONNECT，其余含 Non-Fatal⇒NEED_RESET 走 aer_root_reset 的 bus reset）+ slot_reset 交 reset_work 做 full chip reset；**不**照抄 mt7921 的 uncorrectable⇒DISCONNECT；同文件 glob 序 0023<0153<0160（已验逐 hunk 全过）
 experimental mt76/0145-wifi-mt76-mt7996-scan-dwell-time-hw-cap.patch   # 2026-09-12 P3-C：SET_SCAN_DWELL 能力位
 experimental mt76/0147-wifi-mt76-mt7996-npu-init-retry-after-recovery.patch   # 2026-09-12 P3-B：YYH 0147+0155 合并（NPU init/stop 遇超时或 recovery 竞争时 recover/wait 后重试一次）
 experimental mt76/0153-wifi-mt76-fix-npu-teardown-ordering.patch   # 2026-09-12 P3-B：NPU RX IRQ teardown 排序 + mt76_npu_deinit 的 RCU 顺序

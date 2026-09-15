@@ -1,0 +1,101 @@
+# Source: 本仓（F172；2026-09-16 P19）—— 实机取证与根因见 docs/FIXES.md F170/F172
+# Upstream: open（mt7921/pci.c 有现成 pci_error_handlers 模板；pin be5ce791 的 mt7996 无，pin bump 时复查可否删）
+# Reason: 实机 MT7996（0000:01:00.0）在 PCIe 事务层报 [14] CmpltTO（Uncorrectable **Non-Fatal**）时，
+#   内核 AER 核在 mt7996e 上找不到 error_detected 回调 ⇒ 打印 `AER: can't recover (no error_detected
+#   callback)`、恢复被放弃（设备仍在 /sys/bus/pci/devices、无 Root Port link reset），随后
+#   firmware/NPU 全部超时、`chip full reset failed`、Wi-Fi 死到必须 reboot（F170 实机否证 A 后的真根因）。
+#   修法（用户裁定「选 2 真修」）：
+#   ① error_detected：pci_channel_io_perm_failure ⇒ DISCONNECT；其余（含 Non-Fatal CmpltTO 的
+#      pci_channel_io_normal）⇒ PCI_ERS_RESULT_NEED_RESET，让 PCI 核走 aer_root_reset() 的
+#      secondary bus reset。**不照抄 mt7921**（它对任何非 0 uncorrectable 一律 DISCONNECT，正好
+#      命中我们的 0x4000，等于摘设备不恢复）。
+#   ② slot_reset：pci_enable_device_mem + pci_set_master + pci_restore_state/pci_save_state 后，
+#      把 full chip reset 交给驱动自己的 reset_work（mt7996_mac_full_reset：WFSYS reset + 重下固件 +
+#      NPU 重入）；不在 AER device_lock 里内联跑 mac80211 teardown / NPU 重入。
+#   不改 047（F170-A 的非 recover teardown 仍在 full-reset 路径里），本补丁只补 PCIe 层回调。
+# 排序：本补丁排在 mt76-0153 / mt76-0160（同文件 mt7996/pci.c）之前；三补丁按 glob 序逐条干净。
+# 实证（本地，可复跑）：对 mt76 pin 真源 be5ce791 `patch -p1 --fuzz=0` rc=0；其后应用 mt76-0153、
+#   mt76-0160 仍逐 hunk 成功（本补丁的 .err_handler 插入点避开 0160 的 hunk 上下文）。
+# 未验证：无本地编译/无实机。实机判据见 docs/FIXES.md F172 行（未过滤 dmesg 无 CmpltTO 悬死、
+#   出现 `Root Port link has been reset` + `device recovery successful`、无 `chip full reset failed`）。
+
+diff --git a/mt7996/pci.c b/mt7996/pci.c
+index b7d9193..55141e9 100644
+--- a/mt7996/pci.c
++++ b/mt7996/pci.c
+@@ -29,6 +29,67 @@ static const struct pci_device_id mt7996_hif_device_table[] = {
+ 	{ },
+ };
+ 
++static pci_ers_result_t mt7996_error_detected(struct pci_dev *pdev,
++					      pci_channel_state_t state)
++{
++	struct mt76_dev *mdev = pci_get_drvdata(pdev);
++	u32 aer_unc = 0, aer_co = 0;
++
++	dev_err(mdev->dev, "PCIE error detected, state: %d\n", state);
++
++	/* Stop the IRQ tasklet from touching the device during recovery. */
++	tasklet_kill(&mdev->irq_tasklet);
++
++	if (state == pci_channel_io_perm_failure)
++		return PCI_ERS_RESULT_DISCONNECT;
++
++	pci_read_config_dword(pdev, PCIE_AER_UNC_STATUS_OFFSET, &aer_unc);
++	pci_read_config_dword(pdev, PCIE_AER_CO_STATUS_OFFSET, &aer_co);
++	dev_warn(mdev->dev, "AER uncorrectable 0x%08x, correctable 0x%08x\n",
++		 aer_unc, aer_co);
++
++	/* A CmpltTO is an uncorrectable but non-fatal error, which the core
++	 * delivers as pci_channel_io_normal.  The endpoint stays on the bus and
++	 * only the on-chip firmware state is lost, so ask for a slot reset
++	 * rather than disconnecting.  Never reboot the NPU core here (F170).
++	 */
++	return PCI_ERS_RESULT_NEED_RESET;
++}
++
++static pci_ers_result_t mt7996_slot_reset(struct pci_dev *pdev)
++{
++	struct mt76_dev *mdev = pci_get_drvdata(pdev);
++	struct mt7996_dev *dev = container_of(mdev, struct mt7996_dev, mt76);
++	int ret;
++
++	ret = pci_enable_device_mem(pdev);
++	if (ret) {
++		dev_err(mdev->dev, "pci_enable_device_mem failed: %d\n", ret);
++		return PCI_ERS_RESULT_DISCONNECT;
++	}
++
++	pci_set_master(pdev);
++	pci_restore_state(pdev);
++	pci_save_state(pdev);
++
++	/* The bus reset reverted the endpoint, so firmware and NPU rings are
++	 * gone.  Re-run the full chip reset through the driver's own workqueue:
++	 * doing it inline would run mac80211 teardown and the NPU re-init under
++	 * the AER device lock (F172).
++	 */
++	if (dev->recovery.hw_init_done) {
++		dev->recovery.restart = true;
++		queue_work(dev->mt76.wq, &dev->reset_work);
++	}
++
++	return PCI_ERS_RESULT_RECOVERED;
++}
++
++static const struct pci_error_handlers mt7996_err_handler = {
++	.error_detected = mt7996_error_detected,
++	.slot_reset	= mt7996_slot_reset,
++};
++
+ static struct mt7996_hif *mt7996_pci_get_hif2(u32 idx)
+ {
+ 	struct mt7996_hif *hif;
+@@ -250,6 +311,7 @@ struct pci_driver mt7996_hif_driver = {
+ 
+ struct pci_driver mt7996_pci_driver = {
+ 	.name		= KBUILD_MODNAME,
++	.err_handler	= &mt7996_err_handler,
+ 	.id_table	= mt7996_pci_device_table,
+ 	.probe		= mt7996_pci_probe,
+ 	.remove		= mt7996_pci_remove,

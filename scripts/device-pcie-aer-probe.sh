@@ -11,7 +11,9 @@
 #
 # 用法：
 #   ./scripts/device-pcie-aer-probe.sh                       # 默认只读，输出 /tmp/device-pcie-aer-probe.log
-#   AER_BDF=0002:00:00.0 ./scripts/device-pcie-aer-probe.sh  # 指定 BDF（缺省 = MT7996 hif）
+#   AER_BDF=0000:01:00.0 ./scripts/device-pcie-aer-probe.sh  # 指定 BDF（缺省 = 按 driver=mt7996e 自动探测）
+#   本机有两个 PCI domain（0000:01:00.0 = mt7996e 主；0002:01:00.0 = hif2）⇒ 不要硬编码旧值
+#   0002:00:00.0；先 `ls /sys/bus/pci/devices` 或用本脚本默认的自动探测（F116/坑 42）。
 #   AER_DEMOTE=1 ./scripts/device-pcie-aer-probe.sh          # 【写】把 SDES 由 Fatal 降为 Non-Fatal
 #   DEVICE_HOST=root@192.168.123.1 OUT_PREFIX=/tmp/aer ./scripts/device-pcie-aer-probe.sh
 #
@@ -22,12 +24,12 @@
 #   bit5 = SDES（Surprise Down）↔ 内核日志 `[ 5] SDES (First)`；severity 基线 0x00462030
 #   降级写：printf '\x10\x20\x46\x00' | dd of=<config> bs=4 seek=131 count=1（清 bit5，必须显式开关）
 #
-# 退出码：0=正常；2=SSH 不可达（预检失败）；3=目标 BDF 不在 /sys/bus/pci/devices（已被 AER 摘除）
+# 退出码：0=正常；2=SSH 不可达（预检失败）；3=目标 BDF 不在 /sys/bus/pci/devices（已被 AER 摘除）；4=自动探测未找到 mt7996e
 set -eu
 
 REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
 HOST=${DEVICE_HOST:-root@192.168.123.1}
-TARGET=${AER_BDF:-0002:00:00.0}
+TARGET=${AER_BDF:-auto}
 DEMOTE=${AER_DEMOTE:-0}
 OUT=${OUT_PREFIX:-/tmp/device-pcie-aer-probe}.log
 SSH_CMD=""
@@ -54,9 +56,29 @@ fi
 rc=0
 $SSH_CMD "AER_DEMOTE=$DEMOTE TARGET=$TARGET sh -s" >"$OUT" 2>&1 <<'REMOTE' || rc=$?
 set -eu
-TARGET=${TARGET:-0002:00:00.0}
+TARGET=${TARGET:-auto}
 DEMOTE=${AER_DEMOTE:-0}
 SYS=/sys/bus/pci/devices
+
+# F116/坑 42：本机 mt7996e = 0000:01:00.0（两个 PCI domain：0000:01:00.0 主 + 0002:01:00.0 hif2），
+# 旧默认 0002:00:00.0 不是目标。默认按 driver 名自动探测；AER_BDF=<BDF> 可显式覆盖。
+if [ "$TARGET" = "auto" ] || [ -z "$TARGET" ]; then
+    TARGET=""
+    for d in "$SYS"/*; do
+        drv=$(basename "$(readlink "$d/driver" 2>/dev/null)" 2>/dev/null) || drv=""
+        if [ "$drv" = "mt7996e" ]; then TARGET=$(basename "$d"); break; fi
+    done
+    if [ -z "$TARGET" ] || [ ! -d "$SYS/$TARGET" ]; then
+        echo "ERROR: 自动探测未找到 driver=mt7996e 的设备；请用 AER_BDF=<BDF> 显式指定。" >&2
+        echo "  现存 PCI 设备（BDF driver）：" >&2
+        for d in "$SYS"/*; do
+            drv=$(basename "$(readlink "$d/driver" 2>/dev/null)" 2>/dev/null) || drv="-"
+            echo "    $(basename "$d")  $drv" >&2
+        done
+        exit 4
+    fi
+    echo "== 自动探测：TARGET=$TARGET（driver=mt7996e）=="
+fi
 CFG="$SYS/$TARGET/config"
 
 echo "===== XR1710G PCIe AER 只读诊断探针（FIXES F116）====="
