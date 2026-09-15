@@ -13,14 +13,17 @@
 #   （026/044 偏移 237 行系 Gilly 基线前进，命中成功；034 偏移 26 行；047 与 mt76-0010/0013 同文件
 #   顺序共存实证通过）。内层对本仓 mt76 包为新增文件，构建时由 patch-kernel.sh glob 应用。
 # 未验证：无运行时验证；047 的判据 = 整机复位后 host TX 恢复（dmesg 无 NAPI NULL oops）。
+# !!! 2026-09-15 P19/B 隔离实验（F172 实机失败后）：删除内层 047 的 full-reset 停 NPU hunk
+#   （13 行；外层 @@ -0,0 +1,85 @@ -> +1,72）。只保留 NAPI 跳过与复位后 __mt7996_npu_hw_init() 重入。
+#   目的 = 隔离「NPU stop 是否触发 CmpltTO / 固件 patch semaphore 卡死」；**不是修法**，无效即回退。
 #EXP diff --git a/package/kernel/mt76/patches/047-wifi-mt76-mt7996-restart-npu-on-full-chip-reset.patch b/package/kernel/mt76/patches/047-wifi-mt76-mt7996-restart-npu-on-full-chip-reset.patch
 new file mode 100644
 --- /dev/null
 +++ b/package/kernel/mt76/patches/047-wifi-mt76-mt7996-restart-npu-on-full-chip-reset.patch
-@@ -0,0 +1,85 @@
+@@ -0,0 +1,72 @@
 +From: Gilly <gilroyscott1970@gmail.com>
 +Date: Thu, 10 Sep 2026 00:00:00 +0000
-+Subject: [PATCH] wifi: mt76: mt7996: restart the NPU on a full chip reset
++Subject: [PATCH] wifi: mt76: mt7996: re-init the NPU after a full chip reset
 +
 +The L1 SER path stops the NPU, re-hands it the new rings once DMA is back, 
 +and keeps NAPI off the NPU-owned RRO and TX-free queues. A full chip reset 
@@ -32,8 +35,8 @@ new file mode 100644
 +under NPU napi_disable() runs on queues that were allocated but never had 
 +NAPI added, and the dereference of their NULL device pointer oopses. 
 +
-+Mirror the L1 path: stop the NPU at the start of the full reset, apply the 
-+same queue skips to both NAPI loops, and re-initialise the NPU right after 
++Re-apply the L1 path's queue skips to both NAPI loops, and re-initialise the 
++NPU right after 
 +the WED restart, failing the restart on error so it is retried rather than 
 +left with host TX dead. Found by auditing the WED-only paths for missing 
 +NPU handling; not yet exercised on-device, as full chip resets are rare.
@@ -90,19 +93,6 @@ new file mode 100644
 + 	/* set the necessary init items */
 + 	ret = mt7996_mcu_set_eeprom(dev);
 + 	if (ret)
-+@@ -2472,6 +2497,11 @@ mt7996_mac_full_reset(struct mt7996_dev *dev)
-+ 
-+ 	dev->recovery.hw_full_reset = true;
-+ 
-++	/* Quiesce the NPU before the chip is reset, as the L1 recovery path
-++	 * does, but with the non-recovering teardown variant: never reboot NPU
-++	 * core 0 mid-reset (F170). mt7996_mac_restart() re-hands it the rings. */
-++	mt7996_npu_hw_stop_teardown(dev);
-++
-+ 	set_bit(MT76_MCU_RESET, &dev->mphy.state);
-+ 	wake_up(&dev->mt76.mcu.wait);
-+ 	ieee80211_stop_queues(hw);
-+
 diff --git a/package/kernel/mt76/patches/034-wifi-mt76-mt7996-reg_lock-irqsave-prevent-AP-panic.patch b/package/kernel/mt76/patches/034-wifi-mt76-mt7996-reg_lock-irqsave-prevent-AP-panic.patch
 new file mode 100644
 --- /dev/null
