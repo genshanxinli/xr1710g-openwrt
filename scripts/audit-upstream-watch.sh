@@ -41,8 +41,8 @@ done
 [[ -n "$TREE" && -d "$TREE/.git" ]] || { echo "用法：audit-upstream-watch.sh <openwrt树目录> [--fail-on-drift]" >&2; exit 1; }
 
 # 基线锚点：本表建立时所依据的上游 main。仅用于报告可读性（判断"是上游真改了还是基线该刷新"）。
-BASELINE_UPSTREAM="12fa348112fe66b1d326e5c3ba2be7d7ecf95881"   # openwrt main @ 2026-09-13 11:14Z
-BASELINE_DATE="2026-09-13"
+BASELINE_UPSTREAM="0d7bfcb7e31eb4aaa4bdf574019d0cacf6604a29"   # openwrt main @ 2026-09-14 13:11Z（F167 刷新：12fa34811 → 0d7bfcb7e）
+BASELINE_DATE="2026-09-14"
 # 上游 bump 时**有意**更新上面两行 + 下表 SHA（生成方式：`git rev-parse HEAD:<path>`）。
 
 # [基线] <blob-sha|-> <上游路径> <受影响的本仓补丁>
@@ -52,7 +52,12 @@ BASELINE=(
   "379da970e4c8b6c5329c9f0e1c8fe30ff9a784f3 target/linux/generic/pending-6.18/743-net-phy-realtek-reset-RTL8261N-USXGMII-SerDes-on-lin.patch  root/9041(内层742/743/744)"
   "b379ad09a5740990b3722cfbe6b20232db970767 package/kernel/mt76/Makefile    mt76 包补丁族（0001-0014/9990-9993）与 pin 跟踪"
   "a154aa9b7c8ecd6345476a0c08e11dcc44ec0b09 target/linux/airoha/an7581/config-6.18    root/9001、root/602-04 系列（airoha 目标 Kconfig/config 联动）"
-  "14e28682fd40fc7ac9bb87fcbe59617fd8a9ff78  target/linux/airoha/image/an7581.mk    root/9001(DTS/image)、上游 #24926(DT overlay)"
+  "efc1b44a58e61fe10891ea6fe604ac057706ce77  target/linux/airoha/image/an7581.mk    root/9001(DTS/image)、root/9000(device 段)、上游 #24926(DT overlay)"
+  # F167（2026-09-14）：下面两条本不在监视面内，而 9000 的 platform.sh hunk 恰因上游
+  #   `0d7bfcb7e（airoha: add support for Quantum Fiber Q1000K）`改动其上下文而**真冲突**——
+  #   漂移守护没预警，是 dry-run 硬门才拦住的。凡被本仓补丁修改的 airoha base-files 文件都应登记。
+  "d8cf5e2586159a2ea49381051c1abb1807dc36c1  target/linux/airoha/an7581/base-files/lib/upgrade/platform.sh    root/9000(platform_do_upgrade 的 board case)"
+  "b0d0fd85907ba7e22593cf8eb60e00061809d0af  target/linux/airoha/an7581/base-files/etc/board.d/02_network    root/9000(an7581_setup_interfaces 的 board case)"
   "5db35c03e2d08d634eeebf963d2cbdc1dcde15b4 package/boot/uboot-airoha/Makefile    root/9002(U-Boot 锁版)、上游 #24926"
 )
 

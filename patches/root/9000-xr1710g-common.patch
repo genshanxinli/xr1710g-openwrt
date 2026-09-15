@@ -84,17 +84,17 @@ index 107ca37..fe4a0ba 100644
  		ucidef_set_interfaces_lan_wan "lan1 lan2 lan3 10g" "wan"
  		;;
 diff --git a/target/linux/airoha/an7581/base-files/lib/upgrade/platform.sh b/target/linux/airoha/an7581/base-files/lib/upgrade/platform.sh
-index 8584b84..cd0b5e3 100644
+index d8cf5e2..9b64787 100644
 --- a/target/linux/airoha/an7581/base-files/lib/upgrade/platform.sh
 +++ b/target/linux/airoha/an7581/base-files/lib/upgrade/platform.sh
-@@ -33,6 +33,7 @@ platform_do_upgrade() {
+@@ -34,6 +34,7 @@ platform_do_upgrade() {
  
  	case "$board" in
  		gemtek,w1700k-ubi|\
 +		gemtek,xr1710g-ubi|\
- 		nokia,xg-040g-md-ubi)
+ 		nokia,xg-040g-md-ubi|\
+ 		quantum,q1000k-ubi)
  			fit_do_upgrade "$1"
- 			;;
 diff --git a/target/linux/airoha/image/an7581.mk b/target/linux/airoha/image/an7581.mk
 index eb77df6..d1be04d 100644
 --- a/target/linux/airoha/image/an7581.mk
