@@ -255,8 +255,12 @@ patches/packages/iwinfo-0101-nl80211-fix-txpowerlist-wiphy-dump.patch   package/
 #   含 rebase 后的 target.mk hunk 原样保留），仅文件头描述按新版语义更新（"10-second settle time" 已不成立）。
 #   中间态 b397598d（同内容、`sleep 2`）被 9604ab5a 取代，不作为原料。
 patches/vendor/fanboy/05-bridge-offload-22533-9604ab5a.patch ROOT
-# 06 已替换为 ubi2-oc 3c8d3e6664 版（2026-09-12 P4：675-02 VLAN/PPPoE encap 改为追加 + 越界检查；9026 复核通过未动）
-patches/vendor/fanboy/06-nft-flow-offload-l2-22533-3c8d3e6664.patch ROOT
+# 06 已重取为 ubi2-oc ceffe6acb5 版（2026-09-15 F169）：修掉 3c8d3e6664 版在 nf_ct_bridge_in 的 drop
+#   分支多写的 kfree_skb —— 该 hook 返回 NF_DROP 时由 nf_hook_slow 统一释放（core.c），再 free 一次是
+#   双重释放（全 net/ 树零例）。另两处差异为等价形式：675-02 encap 由"追加+越界检查"回到覆写 encap[0]
+#   （info = {} 且写在 nft_dev_path_info 之前 ⇒ num_encaps 恒 0，结果相同）、ipv6 offset 守卫两层合并
+#   为一行（语义同）。9026 复核通过未动。
+patches/vendor/fanboy/06-nft-flow-offload-l2-22533-ceffe6acb5.patch ROOT
 # 9024：bridge-hw-offload 依赖改为 kmod-nft-offload，规则表名避开用户 fw4 桥表（issue #1 E1/E3）
 patches/root/9024-bridge-hw-offload-deps-table.patch ROOT
 # 9026：bridge 族 nft_flow_offload_init/destroy 复用 inet conntrack 语义（issue #1 E2）

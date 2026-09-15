@@ -1,4 +1,4 @@
-From 3c8d3e66649479a075fe4b0261ef613dd50cce82 Mon Sep 17 00:00:00 2001
+From ceffe6acb571a5da303d3b3335cefbbea215e868 Mon Sep 17 00:00:00 2001
 From: fanboy <fanboy@openwrt.org>
 Date: Sat, 18 Jul 2026 02:25:20 -1000
 Subject: [PATCH] generic: standalone nft_flow_offload L2 bridge offload
@@ -50,9 +50,9 @@ Assisted-by: Codex:gpt-5.5
 Signed-off-by: Jihong Min <hurryman2212@gmail.com>
 ---
  ...exports-bridge-helper-and-vlan-modes.patch | 121 ++++++++
- ...ad-bridge-offload-and-flowtable-type.patch | 274 ++++++++++++++++++
- ...e-conntrack-vlan-pppoe-encapsulation.patch | 235 +++++++++++++++
- 3 files changed, 630 insertions(+)
+ ...ad-bridge-offload-and-flowtable-type.patch | 268 ++++++++++++++++++
+ ...e-conntrack-vlan-pppoe-encapsulation.patch | 232 +++++++++++++++
+ 3 files changed, 621 insertions(+)
  create mode 100644 target/linux/generic/pending-6.18/675-01-net-forward-path-exports-bridge-helper-and-vlan-modes.patch
  create mode 100644 target/linux/generic/pending-6.18/675-02-nft_flow_offload-bridge-offload-and-flowtable-type.patch
  create mode 100644 target/linux/generic/pending-6.18/675-03-netfilter-bridge-conntrack-vlan-pppoe-encapsulation.patch
@@ -186,10 +186,10 @@ index 0000000000..8f65031e83
 + /* must be called under rcu_read_lock(), as we dont take a reference */
 diff --git a/target/linux/generic/pending-6.18/675-02-nft_flow_offload-bridge-offload-and-flowtable-type.patch b/target/linux/generic/pending-6.18/675-02-nft_flow_offload-bridge-offload-and-flowtable-type.patch
 new file mode 100644
-index 0000000000..6e3ea3b8dc
+index 0000000000..15c8049821
 --- /dev/null
 +++ b/target/linux/generic/pending-6.18/675-02-nft_flow_offload-bridge-offload-and-flowtable-type.patch
-@@ -0,0 +1,274 @@
+@@ -0,0 +1,268 @@
 +--- a/net/netfilter/nf_flow_table_inet.c
 ++++ b/net/netfilter/nf_flow_table_inet.c
 +@@ -75,6 +75,8 @@
@@ -318,7 +318,7 @@ index 0000000000..6e3ea3b8dc
 + 			break;
 + 		}
 + 	}
-+@@ -189,22 +200,58 @@
++@@ -189,22 +200,52 @@
 + 	return found;
 + }
 + 
@@ -357,19 +357,13 @@ index 0000000000..6e3ea3b8dc
 ++			ctx.num_vlans = 1;
 ++			ctx.vlan[0].id = vlan_id;
 ++			ctx.vlan[0].proto = vlan_proto;
-++			if (info.num_encaps < NF_FLOW_TABLE_ENCAP_MAX) {
-++				info.encap[info.num_encaps].id = vlan_id;
-++				info.encap[info.num_encaps].proto = vlan_proto;
-++				info.num_encaps++;
-++			}
+++			info.encap[0].id = vlan_id;
+++			info.encap[0].proto = vlan_proto;
+++			info.num_encaps = 1;
 ++		} else if (skb_vlan_tag_present(pkt->skb)) {
-++			if (info.num_encaps < NF_FLOW_TABLE_ENCAP_MAX) {
-++				info.encap[info.num_encaps].id =
-++					skb_vlan_tag_get_id(pkt->skb);
-++				info.encap[info.num_encaps].proto =
-++					pkt->skb->vlan_proto;
-++				info.num_encaps++;
-++			}
+++			info.encap[0].id = skb_vlan_tag_get_id(pkt->skb);
+++			info.encap[0].proto = pkt->skb->vlan_proto;
+++			info.num_encaps = 1;
 ++		}
 ++		rcu_read_unlock();
 ++	}
@@ -466,10 +460,10 @@ index 0000000000..6e3ea3b8dc
 + 	return 0;
 diff --git a/target/linux/generic/pending-6.18/675-03-netfilter-bridge-conntrack-vlan-pppoe-encapsulation.patch b/target/linux/generic/pending-6.18/675-03-netfilter-bridge-conntrack-vlan-pppoe-encapsulation.patch
 new file mode 100644
-index 0000000000..e0d36c7b6e
+index 0000000000..6ac8821741
 --- /dev/null
 +++ b/target/linux/generic/pending-6.18/675-03-netfilter-bridge-conntrack-vlan-pppoe-encapsulation.patch
-@@ -0,0 +1,235 @@
+@@ -0,0 +1,232 @@
 +--- a/include/linux/netfilter_bridge.h
 ++++ b/include/linux/netfilter_bridge.h
 +@@ -10,6 +10,12 @@
@@ -498,7 +492,7 @@ index 0000000000..e0d36c7b6e
 + #include <linux/netfilter/nf_tables.h>
 + #include <net/netfilter/nf_tables.h>
 + 
-+@@ -237,58 +241,117 @@
++@@ -237,58 +241,115 @@
 + 	return 0;
 + }
 + 
@@ -600,10 +594,8 @@ index 0000000000..e0d36c7b6e
 +-			return NF_ACCEPT;
 ++			goto notrack;
 + 
-++		if (offset) {
-++			if (ipv6_find_hdr(skb, &(unsigned int){0}, NEXTHDR_FRAGMENT, NULL, NULL) >= 0)
-++				goto notrack;
-++		}
+++		if (offset && ipv6_find_hdr(skb, &(unsigned int){0}, NEXTHDR_FRAGMENT, NULL, NULL) >= 0)
+++			goto notrack;
 + 		bridge_state.pf = NFPROTO_IPV6;
 + 		ret = nf_ct_br_defrag6(skb, &bridge_state);
 + 		break;
@@ -626,7 +618,7 @@ index 0000000000..e0d36c7b6e
 + }
 + 
 + static unsigned int nf_ct_bridge_in(void *priv, struct sk_buff *skb,
-+@@ -341,37 +404,68 @@
++@@ -341,37 +404,67 @@
 + 				  struct sk_buff *))
 + {
 + 	struct nf_bridge_frag_data data;
@@ -661,7 +653,6 @@ index 0000000000..e0d36c7b6e
 +-	return NF_STOLEN;
 ++	WARN_ON_ONCE(1);
 ++drop:
-++	kfree_skb(skb);
 ++	return NF_DROP;
 + }
 + 

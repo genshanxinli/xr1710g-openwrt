@@ -76,7 +76,7 @@ default packages/firewall4-9990-resolve-bonding-lower-devices.patch   # 2026-09-
 default packages/rpcd-0001-exec-observe-EOF-before-invalidating-pipe-fds.patch   # 2026-09-14 F158：先 ustream_poll 再置 fd=-1（修 exec 请求挂到超时）；用户态回归修复，两档都需要
 default packages/iwinfo-0101-nl80211-fix-txpowerlist-wiphy-dump.patch   # 2026-09-14 F159：txpowerlist 改 split wiphy dump + 按当前频率匹配（5G/6G 不再互换上限）；与 9052 同树合测通过
 default vendor/fanboy/05-bridge-offload-22533-9604ab5a.patch   # 2026-09-14 F157：重取新线 9604ab5a（hotplug 改为等 br-lan 端口集稳定：每 5s 采样/连续 3 次一致/上限 120s）；改名 bridge-hw-offload + init.d/procd trigger；target.mk 改写为末尾追加（与 02 顺序无关）
-default vendor/fanboy/06-nft-flow-offload-l2-22533-3c8d3e6664.patch   # 2026-09-12 P4：675-02 VLAN/PPPoE encap 改追加 + 越界检查（原 2ed1af79c7 版已含 675-01/03）
+default vendor/fanboy/06-nft-flow-offload-l2-22533-ceffe6acb5.patch   # 2026-09-15 F169：重取 ceffe6acb5 —— 修 nf_ct_bridge_in drop 分支双重释放（NF_DROP 由 nf_hook_slow 释放）；encap 覆写/ipv6 守卫合并两处为等价形式；原 2ed1af79c7 版已含 675-01/03
 default root/9024-bridge-hw-offload-deps-table.patch   # issue #1 E1/E3：DEPENDS 改 kmod-nft-offload + 独立表名 flow_offload
 default root/9026-bridge-flow-offload-init-conntrack.patch   # issue #1 E2：bridge 族 flow 表达式 init/destroy 复用 inet conntrack
 default root/9035-airoha-ppe-flow-stats-coexist.patch   # 2026-08-31 ci-88 验证后转 default：FLOW_STATS=y 与 NPU offload 共存（9995 wrapper；须在 04 前应用）
