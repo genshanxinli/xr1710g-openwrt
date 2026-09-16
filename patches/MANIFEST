@@ -530,7 +530,8 @@ patches/root/9047-xr1710g-airoha-ppe-bind-rate.patch ROOT
 #   补齐定义 + ops 字段 + inline 助手 + #else 桩。台账见 FIXES 的 F134 行。
 # 2026-09-13（F142）：SOE-17..28 转 #EXP 后，SOE-24/25 已自带本补丁的全部四处改动（24 = airoha_offload.h
 #   的 ops 字段/inline 助手 + ft 助手/#else 桩；25 = airoha_ppe.c 的定义加宽 + is_flowtable 透传），
-#   2026-09-13 F150：24/25 已随 17..28 回退 gate ⇒ **本项恢复 #EXP**（签名定义半边又只能由它补）。
+#   2026-09-13 F150：24/25 曾随 17..28 回退 gate ⇒ 本项当时恢复 #EXP（签名定义半边又只能由它补）。
+#   同日 F150 续：24/25 修复并重新启用后，本项交回 #DISABLED（其四处改动已全数由 24/25 自带，见 F150）。
 #DISABLED patches/root/9999-45-airoha-ppe-setup-tc-block-cb-signature.patch ROOT
 # ── SOE B 系列 17..28（2026-09-13 F142 由 #DISABLED 转 #EXP）──
 #   原 gate 理由（"依赖更新上游内核的 nft_flow_route_routing"）经复查不成立：作者基线的
@@ -547,6 +548,11 @@ patches/root/9047-xr1710g-airoha-ppe-bind-rate.patch ROOT
 #     修复清单与复现方法见 FIXES F150 与 research-20260912/inner/MODEL-CHECK-F150.md。
 #     16/25 的**低成本修点已落地**（16 按基线等价改写 4 处、25 补 include 并删掉 3 处残缺），
 #     剩下的 25 号 `airoha_ppe_foe_*` 段需要一次**正经重基**（对真源逐 hunk 重锚）后才能再启用。
+#   ✅ 2026-09-13 F150 续（同日修复）：25 号 `airoha_ppe_foe_commit_subflow*` 段误删的真源上下文逐行改回后，
+#     模型结构体检 `airoha_ppe.c`/`airoha_eth.c`/`airoha_soe.c` 花括号深度均 0、异常 0 ⇒ 17..28/9063/9064
+#     **重新转 #EXP**、9999-45 交回 #DISABLED；run `34752142233`（`f09ca19`）experimental 全绿、release `ci-159`
+#     （`airoha_soe.o` 编入、`: error:` 0）。仍留：25 号 `airoha_ppe.c` 为保留作者 TX 语义的逐 hunk 正经重基
+#     = 未来可选工作，非当前阻塞。
 #EXP patches/root/9999-net-airoha-soe-17-flow-offload-xfrm-actions.patch ROOT
 #EXP patches/root/9999-net-airoha-soe-18-flowtable-xfrm-route-metadata.patch ROOT
 #EXP patches/root/9999-net-airoha-soe-19-flowtable-retain-xfrm-input.patch ROOT
@@ -566,12 +572,14 @@ patches/root/9047-xr1710g-airoha-ppe-bind-rate.patch ROOT
 #   （36..38 改 `airoha_soe.{c,h}` 与 `airoha_ppe.c`）。为此 9053 内层由
 #   `9999-xfrm-packet-offload-framework.patch` 更名为 `9999-xfrm-00-…`（仅文件名，内容零改动）。
 #   实测（research-20260912/inner/klag）：10 支在含 9053 + SOE-17..28 的真实树上 `--fuzz=0` 全绿。
-#   ⚠ F150：LAG 的 36..38 依赖 SOE 主体（airoha_soe.{c,h} 由 26 提供）⇒ 随 17..28 一并回退 gate。
+#   ⚠ F150：LAG 的 36..38 依赖 SOE 主体（airoha_soe.{c,h} 由 26 提供）⇒ 曾随 17..28 一并回退 gate；
+#   同日修复后随 17..28 重新启用（当前 #EXP）。
 #EXP patches/root/9063-xr1710g-xfrm-lag-shared-state.patch ROOT
 # ── SOE 的配置启用半边（2026-09-13 F149）──
 #   SOE-28 的 `config NET_AIROHA_SOE`（带 prompt、select XFRM_OFFLOAD）**无人 select** ⇒
 #   不在 target 片段里置 y，27 号的 airoha_soe.o 与 14/15/16/25 的 SOE 钩子全部不编译
 #   （都在 #if IS_REACHABLE(CONFIG_NET_AIROHA_SOE) 内）——功能为零且 CI 证不到编译。
 #   同档 #EXP，与 9035 的 FLOW_STATS 同文件不同区。
-#   ⚠ F150：本项只为启用 17..28 的编译；SOE 回退 gate 后本项一并回退（否则指向不存在的符号）。
+#   ⚠ F150：本项只为启用 17..28 的编译；SOE 曾回退 gate 时本项一并回退（否则指向不存在的符号）；
+#   同日修复后随 17..28 重新启用（当前 #EXP）。
 #EXP patches/root/9064-xr1710g-soe-kconfig-enable.patch ROOT
