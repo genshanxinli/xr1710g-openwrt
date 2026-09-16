@@ -41,7 +41,7 @@ else
 fi
 
 # 预检：设备不可达时清晰报错退出（ConnectTimeout + BatchMode 保证不挂死、不等密码）
-if ! $SSH_CMD 'true' >/dev/null 2>&1; then
+if ! $SSH_CMD 'echo __reach__' 2>/dev/null | grep -q __reach__; then
     echo "ERROR: 设备不可达（SSH 预检失败）：$HOST" >&2
     echo "  排查：ping 192.168.123.1；确认 $REPO_DIR/.ssh/id_ed25519 已授权；或用 DEVICE_HOST=<user@host> 覆盖。" >&2
     exit 2
