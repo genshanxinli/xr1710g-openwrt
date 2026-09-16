@@ -312,6 +312,11 @@ patches/root/9035-airoha-ppe-flow-stats-coexist.patch ROOT
 #       post_config hook（仅 an7581_pcs_eth）+ TCLVAR 0x3→0x5 脉冲 + ETH/PON 分值 0x5/0x3；
 #       旧版（bringup 内同值重写=HW no-op，devmem 0x1fa7a030 证据）已失效；实机 10G 对端验证后毕业 default）
 #EXP patches/root/9029-xr1710g-airoha-pcs-jcpll-tclvar-recal.patch ROOT
+# 07：mt7996 HW_RRO 会话释放（BA teardown 发 UNI_RRO_DEL_BA_SESSION）——**fanboy 新线已无此料、本仓 default 保留**（F175）：
+#     fanboy 新线 mt76 pin 与本仓**同一提交** `01367e60`（= `patches/root/9067-…`），而该 pin 的 `mt7996/mcu.c` 与
+#     `openwrt/mt76` master **逐字节相同**（sha256 17d19d23…）⇒ 既非「上游已修」也非「换法」；新线无等价补丁、07 的
+#     patch-id 零命中。删除门槛（可核，二者任一出现才可删）：① BA teardown 路径释放 RRO 会话（RX_STOP 带会话 id +
+#     UNI_RRO_DEL_BA_SESSION）；② 亚 64 窗口不再启用 HW_RRO（`ba_rdd_rro` 带 `buf_size >= 64`）。详见 F175 行。
 patches/vendor/fanboy/07-mt76-release-hw-rro-session-5b917d4b.patch ROOT
 patches/vendor/fanboy/09-hw11-hw21-compat-afc6dc93.patch ROOT
 patches/vendor/fanboy/17-cmonroe-stability-8c530f05.patch ROOT

@@ -80,7 +80,7 @@ default vendor/fanboy/06-nft-flow-offload-l2-22533-ceffe6acb5.patch   # 2026-09-
 default root/9024-bridge-hw-offload-deps-table.patch   # issue #1 E1/E3：DEPENDS 改 kmod-nft-offload + 独立表名 flow_offload
 default root/9026-bridge-flow-offload-init-conntrack.patch   # issue #1 E2：bridge 族 flow 表达式 init/destroy 复用 inet conntrack
 default root/9035-airoha-ppe-flow-stats-coexist.patch   # 2026-08-31 ci-88 验证后转 default：FLOW_STATS=y 与 NPU offload 共存（9995 wrapper；须在 04 前应用）
-default vendor/fanboy/07-mt76-release-hw-rro-session-5b917d4b.patch   # 2026-09-07 内层 0014 按 be5ce791 重生成（wed_rro_event 1043→779/791；语义零变化）
+default vendor/fanboy/07-mt76-release-hw-rro-session-5b917d4b.patch   # 2026-09-07 内层 0014 按 be5ce791 重生成（wed_rro_event 1043→779/791；语义零变化）；F175：fanboy 新线无此料 = 其丢弃（pin 与本仓同提交且与 openwrt/master 逐字节同 ⇒ 上游未修、无换法）⇒ 保留，删除门槛见 F175 行
 default vendor/fanboy/09-hw11-hw21-compat-afc6dc93.patch
 default vendor/fanboy/17-cmonroe-stability-8c530f05.patch
 default vendor/fanboy/18-smartrg-stability-b45d5117.patch   # 2026-09-07 F77 收口：992-21 74→83 行版（mbox DONE 轮询超时 1000→500ms，e352c48673 源）
