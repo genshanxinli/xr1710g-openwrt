@@ -4,14 +4,13 @@
 #   airoha_soe_present() 找不到 compatible ⇒ SOE 全族（F122）空转。作者树 73c3ab3 的
 #   target/linux/airoha/dts/an7581.dtsi L922 即此节点（eth 之前、同形）。本补丁对目标树落地同形节点。
 #   内核侧 9999-10/11/12..28 补丁全部保留不变（驱动/绑定照旧挂内核树）。
-# 实证：GNU patch -p1 --fuzz=0 对「owrt-master + 9059a 应用后」基线干净应用（fuzz=0 offset=0，
-#   hunk 头行号按 9059a 后状态生成）；反向序也验证过仅 offset 12（真实链序 9059a 在前，无 offset）。
+# 实证：GNU patch -p1 --fuzz=0 干净应用（链序 9059a→9059b 双向验证）+ 本地 cpp/dtc 复刻 CI 命令行编译 DTB，strings 判据命中（详见 tmp/dtc-check/）。修正版：scu_clk_gat 移到 airoha,chip-scu 属性之后（dtc: Properties must precede subnodes）。
 # 档位 #EXP：与 SOE 族（9999-10..28）同档；实机判据见 FIXES F122（fdt 应含 en7581-soe 字符串）。
 diff --git a/target/linux/airoha/dts/an7581.dtsi b/target/linux/airoha/dts/an7581.dtsi
-index 3c26714b..456c4df2 100644
+index 8be12355..4ce34586 100644
 --- a/target/linux/airoha/dts/an7581.dtsi
 +++ b/target/linux/airoha/dts/an7581.dtsi
-@@ -902,6 +902,12 @@
+@@ -903,6 +903,12 @@
  			status = "disabled";
  		};
  
