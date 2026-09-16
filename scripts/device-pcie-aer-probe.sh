@@ -86,7 +86,7 @@ echo "host=$(hostname 2>/dev/null || echo '?')  kernel=$(uname -r 2>/dev/null ||
 echo
 
 # ---------- helpers ----------
-le32() { dd if="$1" bs=4 skip="$2" count=1 2>/dev/null | od -An -tu1 | awk 'NF>=4{printf "%u", $1+$2*256+$3*65536+$4*16777216}'; }
+le32() { dd if="$1" bs=4 skip="$2" count=1 2>/dev/null | hexdump -v -e '1/4 "%u"' | awk '{printf "%u", $1}'; }
 dump4() { out=$(if command -v hexdump >/dev/null 2>&1; then dd if="$1" bs=4 skip="$2" count=1 2>/dev/null | hexdump -C; else dd if="$1" bs=4 skip="$2" count=1 2>/dev/null | od -An -tx1; fi)
     if [ -n "$out" ]; then echo "$out"; else echo "(读取失败：无扩展配置空间，或设备已被摘除)"; fi; }
 readable() { [ "$(dd if="$1" bs=4 skip="$2" count=1 2>/dev/null | wc -c | tr -d ' ')" = "4" ] && echo 1 || echo 0; }
