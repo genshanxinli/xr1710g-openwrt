@@ -19,12 +19,21 @@
 F143（LAG 共享状态 29..38）。全部 `E`。
 
 - [ ] **V1.1 构建与符号**：experimental 镜像产出且符号生效——
-      `zcat /proc/config.gz | grep -E "NET_AIROHA_SOE|XFRM_OFFLOAD|CRYPTO_DYNAMIC_FALLBACK|CRYPTO_DEV_EIP93|BONDING"`：
-      前四者 `=y`（`CRYPTO_DEV_EIP93` 可为 `=m`）、`CONFIG_BONDING=m`。
-      注意 SOE 不产出独立 ko：`airoha-eth-$(CONFIG_NET_AIROHA_SOE) += airoha_soe.o` ⇒ 代码在 **`airoha-eth.ko`** 内，
-      故检查 `lsmod | grep -E "airoha|eip93|bonding"` 与 `modinfo airoha-eth`。〔F142/F143/F149〕
+      ⚠ 设备侧**无 `/proc/config.gz`**（内核未开 `IKCONFIG_PROC`，P27 实测坑 72），
+      改用三重旁证（2026-09-16 ci-176 实测通过）：
+      ① `grep -E "airoha|eip93|bonding" /lib/modules/$(uname -r)/modules.builtin` + `lsmod`：
+      `bonding` / `crypto_hw_eip93` / `airoha_eth` / `airoha_npu` 均在；
+      ② `modinfo airoha-eth`（SOE 不产出独立 ko：`airoha-eth-$(CONFIG_NET_AIROHA_SOE) += airoha_soe.o`
+      ⇒ 代码在 **`airoha-eth.ko`** 内）；
+      ③ `strings /lib/modules/$(uname -r)/airoha-eth.ko | grep -c airoha_soe_` = **56**（P27 实测）。
+      注意 `zcat /proc/config.gz | grep -E "NET_AIROHA_SOE|..."` 在本镜像**不可执行**。〔F142/F143/F149；P27 坑 72〕
 - [ ] **V1.2 SOE 节点**：`dmesg | grep -i soe` 无 probe 失败；`/sys/firmware/devicetree/base/...`（或
       `find /proc/device-tree -name "*soe*"`）存在 SOE 节点。〔F122；dtsi 12 号补丁〕
+      ⚠ **P27 实测不通过（坑 71）**：SOE-12 补丁目标是内核树 `arch/arm64/boot/dts/airoha/en7581.dtsi`，
+      而本板固件编译的是目标树 `target/linux/airoha/dts/an7581.dtsi`（`9001` 生成板级 dts 的 include
+      按同目录优先解析）⇒ 设备 fdt `en7581-soe` 命中 **0**、eth 兄弟节点无 soe ⇒ SOE 全族空转。
+      **该修复落地前，V1.2/V1.3/V1.4/V1.6 全部不可能通过**；判据以设备 fdt 独有字符串为准
+      （`strings /sys/firmware/fdt | grep -F -c en7581-soe`，修复后期望 ≥1）。
 - [ ] **V1.3 IPsec 卸载生效**：配 `ip xfrm state add ... offload dev <10G口> ...` +
       `ip xfrm policy add ... offload`；`ip -s xfrm state` 的计数增长，且
       `dmesg` 无 `offload` 失败；对照两种算法：
@@ -50,8 +59,9 @@ F143（LAG 共享状态 29..38）。全部 `E`。
 - [ ] **V2.3 reload 20 轮**：NPU 活跃下 `rmmod/insmod mt7996e` 20 轮，
       **无** `NAPI instance ... already registered` / `not been added`。〔F127〕
 - [ ] **V2.4 reboot 20 次**：每次 Wi-Fi 都枚举（三频 SSID 可见 + 可连）。〔F127〕
-- [ ] **V2.5 coherent 泄漏**：反复 reload 后 `slabtop`/`/proc/meminfo` 无单调增长；
-      `dmesg` 无 `coherent` 分配失败。〔F127〕
+- [ ] **V2.5 coherent 泄漏**：反复 reload 后 `/proc/meminfo` 的 `Slab`/`SUnreclaim` 无单调增长
+      （⚠ `slabtop` 本镜像**不可用**，P27 实测；基线 2026-09-16 ci-176：Slab 48388 / SUnreclaim 40612 kB）；
+      `dmesg` 无 `coherent` 分配失败。〔F127；P27 坑 72〕
 - [ ] **V2.6 长压 12h**：>1Gbps + 6GHz 320MHz 持续 12h，`HOSTADPT_API_Q_FULL` 不增长、
       NPU RX 环 head/tail 不漂移。〔F127〕
 - [ ] **V2.7 NPU offload 计数**：`luci-app-airoha-npu` / flowsense 页面 NPU 已加载、
@@ -76,8 +86,12 @@ F143（LAG 共享状态 29..38）。全部 `E`。
       `/lib/netifd/proto/dhcpv6.sh`（8056 B）、`/lib/netifd/xr1710g-dhcpv6-guard.sh`（4542 B）
       与仓库 `files/...` 逐字节一致；`grep -c xr_dhcpv6_has_explicit /lib/netifd/ppp6-up` = 1。
       本地复核：F140/F141 的 FIT 解包 recipe（`tail -c +$((OFF+1))` + `unsquashfs -cat`）。〔F140/F141〕
-- [ ] **V3.2 去重生效**：PPP 模式与显式 dhcpv6 接口并存时 `pidof odhcp6c | wc -w` = **1**、
-      `logread` 无重复 ubus 注册失败；`/tmp` 下无多余 odhcp6c 实例。〔F118/F136〕
+- [ ] **V3.2 去重生效**：⚠ **P27 修正口径（坑 74）**：`pidof odhcp6c | wc -w` 在分层设备上
+      正确态就是 **2**（现网 `wan6` dev `wan` 与 PPP 动态 `wan_6` dev `pppoe-wan` 是**两个 L3 设备**，
+      各跑一个 odhcp6c，ubus 对象 `odhcp6c.wan` / `odhcp6c.pppoe-wan` 互不冲突）。
+      判据改为：**同一 L3 设备**不得有两个 odhcp6c 实例；
+      `logread` 无 `ubus_add_object` 失败 / `EEXIST`；
+      `ubus list | grep odhcp6c` 的对象按接口一一对应。〔F118/F136〕
 - [ ] **V3.3 不回归**：普通 PPP 自动 IPv6、仅独立 dhcpv6 接口两种场景各自单独存在时仍正常起。〔F118〕
 
 ## 4. 网络与桥（管理面）
@@ -126,14 +140,24 @@ F143（LAG 共享状态 29..38）。全部 `E`。
       诊断接口（debugfs/`ethtool -S`）能区分"无信号"与"CDR 未锁"；服务 F81/F93 的判读。〔handoff_p2 §2.1〕
 - [ ] **V6.3 PCIe AER 探针**：`bash scripts/device-pcie-aer-probe.sh` 只读采集，
       记录 AER 计数基线（社区已有两台硬件死亡案例，需长期对照）。〔handoff_p2 §2.6〕
-- [ ] **V6.4 hwrng（9058/9059）**：`cat /dev/hwrng | head -c 32 | xxd` 有输出、
-      `dmesg` 无 SCU 时钟顺序告警、熵池增长（`cat /proc/sys/kernel/random/entropy_avail`）。
+- [ ] **V6.4 hwrng（9058/9059）**：`head -c 32 /dev/hwrng | hexdump -C` 有输出
+      （⚠ 设备**无 `od`/`xxd`**，P27 实测坑 72，统一用 `hexdump`）、
+      `dmesg` 无 SCU 时钟顺序告警、熵池增长（`cat /proc/sys/kernel/random/entropy_avail`，P27 实测 256）、
+      `cat /sys/devices/virtual/misc/hw_random/rng_current` = `1faa1000.rng`（驱动绑定判据）。
+      ⚠ 9059 的 `airoha,scu` 修复因坑 71（DTS 载体错位）尚未进 DTB——TRNG 注册成功属"竞态非必现"，
+      该修复落地前本项**不能作为 9059 生效证据**，只证 9058/驱动绑定。
 - [ ] **V6.5 CPU/OC 与温控（`#OC` 档 + `files/etc/init.d/oc-auto`）**：OPP 650–1350 生效
       （`cat /sys/.../cpufreq/scaling_available_frequencies`）、1350 不稳定时自动退档日志、
       长压不触发热关机。〔F89〕
+      （P27 基线：avail 650000…1350000、level=1300 已自动退档一次、governor performance、
+      风扇 nct7802 pwm=74。）
 - [ ] **V6.6 MTU/RX ring/GRO 类（9042/9037/9047/9048/9035/9050）**：
       10G 口 MTU 9000 往返、`ethtool -S` 的 RX ring 无丢包、PPE BND 计数随流量增长、
       flow stats 与 NPU 并存无 `-22`。〔各 F 行〕
+      ⚠ **9047 bind_rate 待定性（P27 坑 71 同轮新发现）**：设备
+      `cat /sys/kernel/debug/ppe/bind_rate` 实测 **30**（连读一致），而 9047 应设
+      `AIROHA_PPE_BIND_RATE_DEFAULT(8)` 且 CI 干净应用、符号齐备——读数与补丁意图矛盾，机制未定。
+      允许写的定性实验（**须用户确认后做**）：`echo 8 > /sys/kernel/debug/ppe/bind_rate` 后回读。
 - [ ] **V6.7 992-20/992-21 稳定性**：长时间跑 Wi-Fi + PPE 卸载无 `WARNING: CPU` / call trace
       （含 issue #17 的 `mt7996_mac_wtbl_lmac_addr` RX 路径告警——**本仓未修**，若复现需单开）。〔handoff_p2 §2.x 备注〕
 
