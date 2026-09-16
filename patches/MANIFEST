@@ -69,6 +69,9 @@ patches/packages/mt76-0011-wifi-mt76-npu-fix-rx-descriptor-ownership.patch      
 #EXP patches/packages/mt76-0016-wifi-mt76-mt7996-radar-detecting-chanctx.patch    package/kernel/mt76/patches/
 # 0017（#EXP，Gilly 032）：亚 64 窗口 BlockAck（Apple 站点 TID6=8/TID1=16）旁路 HW_RRO，
 #   避免片上重排环/会话状态机非法导致后续关联 RX 卸载停摆；>=64 仍走硬件。
+#   与 07 互补（F175/F176）：07 释放固件 RRO 会话，本补丁对亚 64 会话禁用 HW_RRO；
+#   archive-260818 的 0015-…avoid-stale-npu-wcid-reuse 是第三条思路，P25 评估为互补不替代
+#   但因「NPU 何时冲掉陈旧上下文」不可核、位图副作用不可控 ⇒ 不吸收（F176）。
 #EXP patches/packages/mt76-0017-wifi-mt76-mt7996-bypass-hwrro-sub64-ba.patch    package/kernel/mt76/patches/
 # ── P3-C：mt76 候选（YYH 0010/0021/0047/0080/0101/0145/0038，2026-09-12 甄别）──
 #   吸收：0018（=YYH 0010，编号冲突改 0018）/0021/0101/0145；
