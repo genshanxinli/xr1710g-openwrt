@@ -147,6 +147,8 @@ experimental root/9066-xr1710g-eip93-request-local-sa-records.patch   # F162（Y
 experimental root/9055-xr1710g-pcs-rxlock-diagnostics.patch   # PCS RX-lock 诊断（no-signal/AN down 每周期只打一次，cdr-reset 仍每次）；与 9029/9038/9044 同域互补
 experimental root/9058-xr1710g-hwrng-scu-clock-order.patch   # F120：hwrng SCU 时钟顺序（按真源重写为自洽补丁）；收益概率低故 #EXP
 experimental root/9059-xr1710g-hwrng-scu-dts.patch   # F120：hwrng SCU dts（与 9058 同档同批）
+experimental root/9059a-xr1710g-hwrng-scu-dts-target.patch   # F120/P28坑71：9059 的 target 树载体版（scu_clk_gat + rng airoha,scu 挂 an7581.dtsi）
+experimental root/9059b-xr1710g-soe-dtsi-target.patch   # F122/P27坑71：SOE 节点挂 target an7581.dtsi（作者树 73c3ab3 同形，eth 前）
 experimental root/9061-xr1710g-airoha-npu-mailbox-recovery.patch   # 2026-09-12 P3-A：YYH 923..928 NPU mailbox 可靠性六项（内层 9999-30..35；mt76 0147/0155 硬前置）
 experimental root/9999-net-airoha-soe-10-dt-bindings-en7581-soe.patch   # SOE B 系列 10..28（作者 hurryman2212 @offload-oc）：SOE 主体 + flowtable xfrm 接线；判据见 FIXES F122
 experimental root/9999-net-airoha-soe-11-maintainers-soe-binding.patch

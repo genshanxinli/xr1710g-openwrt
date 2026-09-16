@@ -1,0 +1,39 @@
+# Source: XR1710G self-held kernel patch -- 9059 的 target 树载体版（F120 续）
+# Reason: 9059 原补丁目标是内核树 arch/arm64/boot/dts/airoha/en7581.dtsi，而本板固件编译的是
+#   target/linux/airoha/dts/an7581.dtsi（9001 生成板级 dts 的 include 按同目录优先解析，
+#   P27 坑 71）⇒ scu_clk_gat/airoha,scu 从未进 DTB。本补丁把同构改动挂到目标树 an7581.dtsi：
+#   SCU 节点内加"只覆盖时钟门寄存器段"的 syscon 子节点 + TRNG 节点加 airoha,scu 句柄。
+#   与原 9059 的差异仅载体（目标树 vs 内核树）；绑定 YAML/驱动侧 9058/9059 内核补丁不变。
+# 实证：GNU patch -p1 --fuzz=0 对 owrt-master 原树干净应用（fuzz=0 offset=0）；
+#   与 9999-soe-12 载体版（9059b）按 ORDER 顺序（9059a 先）双向验证 offset=0。
+# 档位 #EXP：与 9059 同档同批；实机判据见 FIXES F120（fdt 中 rng 节点应出现 airoha,scu 属性）。
+diff --git a/target/linux/airoha/dts/an7581.dtsi b/target/linux/airoha/dts/an7581.dtsi
+index af5a5f4d..3c26714b 100644
+--- a/target/linux/airoha/dts/an7581.dtsi
++++ b/target/linux/airoha/dts/an7581.dtsi
+@@ -559,6 +559,15 @@
+ 			#clock-cells = <1>;
+ 			#reset-cells = <1>;
+ 
++			/* Bus/peripheral clock gates (0x1e4/0x1ec/0x200) for
++			 * drivers that must ungate their own block before the
++			 * first register access (e.g. the TRNG).
++			 */
++			scu_clk_gat: syscon@1e4 {
++				compatible = "airoha,en7581-scu-clk-gat", "syscon";
++				reg = <0x1e4 0x20>;
++			};
++
+ 			airoha,chip-scu = <&chip_scu>;
+ 		};
+ 
+@@ -566,6 +575,9 @@
+ 			compatible = "airoha,en7581-trng";
+ 			reg = <0x0 0x1faa1000 0x0 0xc04>;
+ 			interrupts = <GIC_SPI 35 IRQ_TYPE_LEVEL_HIGH>;
++
++			/* Open the SCU clock gates before the first TRNG access. */
++			airoha,scu = <&scu_clk_gat>;
+ 		};
+ 
+ 		usb0: usb@1fab0000 {

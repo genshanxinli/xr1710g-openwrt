@@ -453,6 +453,8 @@ patches/root/9057-xr1710g-mlo-hide-mesh.patch ROOT
 #   反复冷启动），故 #EXP；判据见 FIXES F120。
 #EXP patches/root/9058-xr1710g-hwrng-scu-clock-order.patch ROOT
 #EXP patches/root/9059-xr1710g-hwrng-scu-dts.patch ROOT
+#EXP patches/root/9059a-xr1710g-hwrng-scu-dts-target.patch ROOT
+#EXP patches/root/9059b-xr1710g-soe-dtsi-target.patch ROOT
 # 9047：PPE flow bind rate 30→8 + debugfs 旋钮（2026-09-12 调研吸收；来源 openwrt 论坛 t/222776 #3890
 #   NoTengoBattery/Oever González，2026-09-04，与本仓 F79=mt76-0011 同一作者同帖的 Patch 2）。
 #   vendor 默认 0x1e(30) 高于交互流包速率 → 游戏/VoIP/延迟探针永不绑定，与批量卸载并存时吃 60-250ms 尖峰；
