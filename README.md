@@ -1,108 +1,58 @@
-![OpenWrt logo](include/logo.png)
+# OpenWrt for Gemtek XR1710G
 
-OpenWrt Project is a Linux operating system targeting embedded devices. Instead
-of trying to create a single, static firmware, OpenWrt provides a fully
-writable filesystem with package management. This frees you from the
-application selection and configuration provided by the vendor and allows you
-to customize the device through the use of packages to suit any application.
-For developers, OpenWrt is the framework to build an application without having
-to build a complete firmware around it; for users this means the ability for
-full customization, to use the device in ways never envisioned.
+OpenWrt support for the **Gemtek XR1710G** (sold as the *Brightspeed XR1710G*
+Wi-Fi 7 gateway). This is a fork of
+[`OpenWRT-fanboy/OpenW1700k`](https://github.com/OpenWRT-fanboy/OpenW1700k)
+(branch `kernel73`); all device work lives on branch **`xr1710g`**.
 
-Sunshine!
+The XR1710G shares the AN7581 platform with the W1700K but is **not** a clone:
+it uses an RTL8261BE 10G PHY instead of the RTL8261N, drives the 1G port LEDs
+through the MT7530 LED controller instead of GPIOs, has no Zigbee/GPS radio,
+and ships a different factory bootloader. W1700K images must not be flashed.
 
-## Download
+## Hardware
 
-Built firmware images are available for many architectures and come with a
-package selection to be used as WiFi home router. To quickly find a factory
-image usable to migrate from a vendor stock firmware to OpenWrt, try the
-*Firmware Selector*.
+| | |
+|---|---|
+| SoC | Airoha AN7581GT (4× Cortex-A53) |
+| RAM / flash | 1 GiB DDR4 / 256 MiB SPI-NAND |
+| Wired | 1× 10G WAN (RTL8261BE), 1× 10G LAN, 3× 1G LAN (MT7530), 1× 2.5G |
+| Wireless | MediaTek MT7996, Wi-Fi 7, 2.4/5/6 GHz |
+| Other | Nuvoton NCT7802 hwmon, Airoha NPU offload engine |
 
-* [OpenWrt Firmware Selector](https://firmware-selector.openwrt.org/)
+## Flashing
 
-If your device is supported, please follow the **Info** link to see install
-instructions or consult the support resources listed below.
+Two images are produced:
 
-##
+- `...-ubi-initramfs-recovery.itb` — boot from the U-Boot recovery console
+  (needs the third-party U-Boot; stock AXON 1.6 cannot load it).
+- `...-ubi-sysupgrade.itb` — written by `sysupgrade` from a running system.
 
-An advanced user may require additional or specific package. (Toolchain, SDK, ...) For everything else than simple firmware download, try the wiki download page:
+The flash layout is `vendor` + `chainloader` + `ubi` + `reserved_bmt`. The
+device reports `compat_version 2.0`; images built from this tree upgrade in
+place. Upgrading from a `1.x` layout, or cross-flashing a W1700K image,
+soft-bricks the device and needs serial/TTL recovery.
 
-* [OpenWrt Wiki Download](https://openwrt.org/downloads)
+## What is included
 
-## Development
+- Full Cone NAT (`nft-fullcone`) with hardware and software flow offloading
+  enabled by default.
+- NPU offload for wired and wireless traffic, plus MT7996 NPU firmware.
+- CPU frequency scaling up to 1350 MHz (`performance` governor default).
+- Status LEDs, fan control, and the hardware LuCI pages: Airoha NPU, flow
+  sense, fan control, Wi-Fi 7/MLO.
 
-To build your own firmware you need a GNU/Linux, BSD or macOS system (case
-sensitive filesystem required). Cygwin is unsupported because of the lack of a
-case sensitive file system.
+## Building
 
-### Requirements
+Use the CI in [`genshanxinli/xr1710g-builds`](https://github.com/genshanxinli/xr1710g-builds),
+which also publishes images to releases. To build by hand:
 
-You need the following tools to compile OpenWrt, the package names vary between
-distributions. A complete list with distribution specific packages is found in
-the [Build System Setup](https://openwrt.org/docs/guide-developer/build-system/install-buildsystem)
-documentation.
-
+```sh
+git clone -b xr1710g https://github.com/genshanxinli/xr1710g-openwrt.git openwrt
+cd openwrt
+./scripts/feeds update -a && ./scripts/feeds install -a
+make menuconfig   # Target: Airoha -> AN7581 -> Gemtek XR1710G
+make -j$(nproc)
 ```
-binutils bzip2 diff find flex gawk gcc-6+ getopt grep install libc-dev libz-dev
-make4.1+ perl python3.8+ rsync subversion unzip which
-```
 
-### Quickstart
-
-1. Run `./scripts/feeds update -a` to obtain all the latest package definitions
-   defined in feeds.conf / feeds.conf.default
-
-2. Run `./scripts/feeds install -a` to install symlinks for all obtained
-   packages into package/feeds/
-
-3. Run `make menuconfig` to select your preferred configuration for the
-   toolchain, target system & firmware packages.
-
-4. Run `make` to build your firmware. This will download all sources, build the
-   cross-compile toolchain and then cross-compile the GNU/Linux kernel & all chosen
-   applications for your target system.
-
-### Related Repositories
-
-The main repository uses multiple sub-repositories to manage packages of
-different categories. All packages are installed via the OpenWrt package
-manager called `opkg`. If you're looking to develop the web interface or port
-packages to OpenWrt, please find the fitting repository below.
-
-* [LuCI Web Interface](https://github.com/openwrt/luci): Modern and modular
-  interface to control the device via a web browser.
-
-* [OpenWrt Packages](https://github.com/openwrt/packages): Community repository
-  of ported packages.
-
-* [OpenWrt Routing](https://github.com/openwrt/routing): Packages specifically
-  focused on (mesh) routing.
-
-* [OpenWrt Video](https://github.com/openwrt/video): Packages specifically
-  focused on display servers and clients (Xorg and Wayland).
-
-## Support Information
-
-For a list of supported devices see the [OpenWrt Hardware Database](https://openwrt.org/supported_devices)
-
-### Documentation
-
-* [Quick Start Guide](https://openwrt.org/docs/guide-quick-start/start)
-* [User Guide](https://openwrt.org/docs/guide-user/start)
-* [Developer Documentation](https://openwrt.org/docs/guide-developer/start)
-* [Technical Reference](https://openwrt.org/docs/techref/start)
-
-### Support Community
-
-* [Forum](https://forum.openwrt.org): For usage, projects, discussions and hardware advise.
-* [Support Chat](https://webchat.oftc.net/#openwrt): Channel `#openwrt` on **oftc.net**.
-
-### Developer Community
-
-* [Bug Reports](https://bugs.openwrt.org): Report bugs in OpenWrt
-* [Dev Mailing List](https://lists.openwrt.org/mailman/listinfo/openwrt-devel): Send patches
-* [Dev Chat](https://webchat.oftc.net/#openwrt-devel): Channel `#openwrt-devel` on **oftc.net**.
-
-## License
-
-OpenWrt is licensed under GPL-2.0
+Output is under `bin/targets/airoha/an7581/`.
