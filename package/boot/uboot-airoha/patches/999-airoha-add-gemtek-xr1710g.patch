@@ -11,11 +11,11 @@ which manages any remapping needed in the UBI layer.
 
 Signed-off-by: Kenneth Kasilag <kenneth@kasilag.me>
 ---
- configs/an7581_xr1710g_defconfig                     |  106 ++++
- defenvs/an7581_xr1710g_env                           |   26 ++++
- dts/upstream/src/arm64/airoha/an7581-xr1710g-ubi.dts |  130 ++++
+ configs/an7581_xr1710g_defconfig                     |  107 ++++
+ defenvs/an7581_xr1710g_env                           |   27 ++++
+ dts/upstream/src/arm64/airoha/an7581-xr1710g-ubi.dts |  131 ++++
  arch/arm/dts/an7581-xr1710g-ubi-u-boot.dtsi          |    7 ++++
- 4 files changed, 269 insertions(+), 0 deletions(-)
+ 4 files changed, 272 insertions(+), 0 deletions(-)
  create mode 100644 configs/an7581_xr1710g_defconfig
  create mode 100644 defenvs/an7581_xr1710g_env
  create mode 100644 dts/upstream/src/arm64/airoha/an7581-xr1710g-ubi.dts
@@ -26,7 +26,8 @@ new file mode 100644
 index 11111111111111..22222222222222
 --- /dev/null
 +++ b/configs/an7581_xr1710g_defconfig
-@@ -0,0 +1,106 @@
+@@ -0,0 +1,107 @@
++CONFIG_ARM=y
 +CONFIG_ARCH_AIROHA=y
 +CONFIG_AUTOBOOT_KEYED=y
 +CONFIG_AUTOBOOT_MENU_SHOW=y
@@ -138,7 +139,8 @@ new file mode 100644
 index 11111111111111..22222222222222
 --- /dev/null
 +++ b/defenvs/an7581_xr1710g_env
-@@ -0,0 +1,26 @@
+@@ -0,0 +1,27 @@
++loadaddr=0x81800000
 +initaddr=0x89000000
 +ipaddr=192.168.1.1
 +serverip=192.168.1.10
@@ -170,7 +172,8 @@ new file mode 100644
 index 11111111111111..22222222222222
 --- /dev/null
 +++ b/dts/upstream/src/arm64/airoha/an7581-xr1710g-ubi.dts
-@@ -0,0 +1,130 @@
+@@ -0,0 +1,131 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 +/dts-v1/;
 +
 +/* Bootloader installs ATF here */
