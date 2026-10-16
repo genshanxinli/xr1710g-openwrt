@@ -22,11 +22,14 @@ and ships a different factory bootloader. W1700K images must not be flashed.
 
 ## Flashing
 
-Two images are produced:
+Three images are produced:
 
 - `...-ubi-initramfs-recovery.itb` — boot from the U-Boot recovery console
-  (needs the third-party U-Boot; stock AXON 1.6 cannot load it).
-- `...-ubi-sysupgrade.itb` — written by `sysupgrade` from a running system.
+  (needs the third-party U-Boot; stock AXON 1.6 cannot load it). This is the
+  unbrick image; it runs entirely from RAM.
+- `...-ubi-squashfs-sysupgrade.itb` — written by `sysupgrade` from a running
+  system.
+- `...-ubi-chainload-uboot.itb` — a FIT that chain-loads OpenWrt's U-Boot.
 
 The flash layout is `vendor` + `chainloader` + `ubi` + `reserved_bmt`. The
 device reports `compat_version 2.0`; images built from this tree upgrade in
