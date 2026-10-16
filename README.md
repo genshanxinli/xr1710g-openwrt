@@ -14,9 +14,9 @@ and ships a different factory bootloader. W1700K images must not be flashed.
 
 | | |
 |---|---|
-| SoC | Airoha AN7581GT (4× Cortex-A53) |
-| RAM / flash | 1 GiB DDR4 / 256 MiB SPI-NAND |
-| Wired | 1× 10G WAN (RTL8261BE), 1× 10G LAN, 3× 1G LAN (MT7530), 1× 2.5G |
+| SoC | Airoha AN7581 (4× Cortex-A53, 1.3 GHz) |
+| RAM / flash | 2 GiB DDR4 / 512 MiB SPI-NAND |
+| Wired | 4 ports: 2× 10G (RTL8261BE — `wan` + `lan2`), 2× 1G LAN (`lan3` + `lan4`, AN7581 internal switch) |
 | Wireless | MediaTek MT7996, Wi-Fi 7, 2.4/5/6 GHz |
 | Other | Nuvoton NCT7802 hwmon, Airoha NPU offload engine |
 
