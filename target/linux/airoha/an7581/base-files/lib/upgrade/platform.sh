@@ -1,4 +1,4 @@
-RAMFS_COPY_BIN='fitblk fit_check_sign'
+RAMFS_COPY_BIN='dumpimage fitblk fit_check_sign'
 
 REQUIRE_IMAGE_METADATA=1
 
@@ -23,6 +23,34 @@ platform_check_image() {
 	quantum,q1000k-ubi)
 		fit_check_image "$1"
 		return $?
+		;;
+	gemtek,xr1710g-ubi|\
+	gemtek,w1700k-ubi)
+		# The bootloader boots whatever FDT the FIT carries, so an image for
+		# the other Gemtek board flashes fine and then comes up with a device
+		# tree whose MAC cells, PHY wiring and LED map do not exist there.
+		# fwtool_check_image() already matches the image metadata against
+		# board_name on the normal path, but it is skipped with -F, so also
+		# look at the FDT description inside the FIT.
+		local devname desc
+
+		fit_check_image "$1" || return $?
+
+		# mkits.sh names the FDT node "<ARCH> OpenWrt <DEVICE_NAME> device
+		# tree blob", where DEVICE_NAME is the underscore form of
+		# board_name. Only reject on a positive mismatch: if the FIT cannot
+		# be listed, keep the previous behaviour instead of blocking valid
+		# upgrades.
+		devname="$(echo "$board" | tr ',' '_')"
+		desc="$(dumpimage -l "$1" 2>/dev/null | \
+			sed -n 's/^ *Description: .* OpenWrt \(.*\) device tree blob$/\1/p' | \
+			head -n 1)"
+		if [ -n "$desc" ] && [ "$desc" != "$devname" ]; then
+			echo "Invalid image: built for '$desc', this device is '$devname'."
+			return 74
+		fi
+
+		return 0
 		;;
 	esac
 
