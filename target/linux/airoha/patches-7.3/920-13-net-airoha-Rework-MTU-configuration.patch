@@ -16,8 +16,8 @@ Signed-off-by: Lorenzo Bianconi <lorenzo@kernel.org>
 
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -2222,6 +2222,17 @@ static void airoha_qdma_stop(struct airo
- 		dev_warn(qdma->eth->dev, "QDMA RX DMA engine busy timeout\n");
+@@ -2178,6 +2178,17 @@ static void airoha_dev_set_xmit_frame_si
+ 					 VLAN_ETH_HLEN + netdev->mtu));
  }
  
 +static void airoha_dev_set_mtu(struct net_device *netdev)
@@ -34,25 +34,25 @@ Signed-off-by: Lorenzo Bianconi <lorenzo@kernel.org>
  static int airoha_dev_open(struct net_device *netdev)
  {
  	struct airoha_gdm_dev *dev = netdev_priv(netdev);
-@@ -2271,7 +2282,7 @@ static int airoha_dev_open(struct net_de
- 		airoha_fe_clear(eth, REG_GDM_INGRESS_CFG(port->id),
+@@ -2222,7 +2233,7 @@ static int airoha_dev_open(struct net_de
+ 		airoha_fe_clear(qdma->eth, REG_GDM_INGRESS_CFG(port->id),
  				GDM_STAG_EN_MASK);
  
 -	airoha_dev_set_xmit_frame_size(netdev);
 +	airoha_dev_set_mtu(netdev);
  	port->users++;
  
- 	airoha_qdma_start(qdma);
-@@ -2301,7 +2312,7 @@ static int airoha_dev_stop(struct net_de
+ 	if (!airoha_is_lan_gdm_dev(dev) &&
+@@ -2246,7 +2257,7 @@ static int airoha_dev_stop(struct net_de
+ 	airoha_set_vip_for_gdm_port(dev, false);
  
- 	qdma = airoha_qdma_deref(dev);
  	if (--port->users)
 -		airoha_ppe_set_xmit_frame_size(dev);
 +		airoha_ppe_set_mtu(dev);
  	else
  		airoha_set_gdm_port_fwd_cfg(dev->eth,
  					    REG_GDM_FWD_CFG(port->id),
-@@ -2566,7 +2577,7 @@ static int airoha_dev_change_mtu(struct
+@@ -2516,7 +2527,7 @@ static int airoha_dev_change_mtu(struct
  
  	WRITE_ONCE(netdev->mtu, mtu);
  	if (port->users)
@@ -61,7 +61,7 @@ Signed-off-by: Lorenzo Bianconi <lorenzo@kernel.org>
  
  	return 0;
  }
-@@ -3596,6 +3607,7 @@ static void airoha_disable_qos_for_gdm34
+@@ -3560,6 +3571,7 @@ static void airoha_disable_qos_for_gdm34
  
  	clear_bit(AIROHA_DEV_F_WAN, &dev->flags);
  	airoha_dev_set_qdma(dev);
@@ -69,7 +69,7 @@ Signed-off-by: Lorenzo Bianconi <lorenzo@kernel.org>
  
  	airoha_set_macaddr(dev, netdev->dev_addr);
  	airoha_ppe_set_xmit_frame_size(dev);
-@@ -3647,6 +3659,7 @@ static int airoha_enable_qos_for_gdm34(s
+@@ -3612,6 +3624,7 @@ static int airoha_enable_qos_for_gdm34(s
  		goto error_disable_loopback;
  
  	airoha_dev_set_xmit_frame_size(netdev);
@@ -77,6 +77,16 @@ Signed-off-by: Lorenzo Bianconi <lorenzo@kernel.org>
  	if (netif_running(netdev)) {
  		u32 pse_port;
  
+--- a/drivers/net/ethernet/airoha/airoha_eth.h
++++ b/drivers/net/ethernet/airoha/airoha_eth.h
+@@ -763,6 +763,7 @@ airoha_qdma_deref(struct airoha_gdm_dev
+ void airoha_ppe_set_xmit_frame_size(struct airoha_gdm_dev *dev);
+ void airoha_ppe_set_cpu_port(struct airoha_gdm_dev *dev, u8 ppe_id, u8 fport);
+ bool airoha_ppe_is_enabled(struct airoha_eth *eth, int index);
++void airoha_ppe_set_mtu(struct airoha_gdm_dev *dev);
+ void airoha_ppe_check_skb(struct airoha_ppe_dev *dev, struct sk_buff *skb,
+ 			  u16 hash, bool rx_wlan);
+ int airoha_ppe_setup_tc_block_cb(struct airoha_ppe_dev *dev, void *type_data);
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
 @@ -128,6 +128,39 @@ void airoha_ppe_set_xmit_frame_size(stru

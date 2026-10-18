@@ -1,6 +1,6 @@
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -534,6 +534,9 @@ struct airoha_flow_table_entry {
+@@ -536,6 +536,9 @@ struct airoha_flow_table_entry {
  
  	struct airoha_foe_stats64 stats;
  	enum airoha_flow_entry_type type;
