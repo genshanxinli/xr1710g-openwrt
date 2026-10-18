@@ -699,7 +699,7 @@ Signed-off-by: Balázs Triszka <info@balika011.hu>
  static struct phy_driver realtek_drvs[] = {
  	{
  		PHY_ID_MATCH_EXACT(0x00008201),
-@@ -3522,7 +4143,111 @@ static struct phy_driver realtek_drvs[]
+@@ -3522,7 +4143,116 @@ static struct phy_driver realtek_drvs[]
  		.resume		= genphy_resume,
  		.read_page	= rtl821x_read_page,
  		.write_page	= rtl821x_write_page,
@@ -751,6 +751,11 @@ Signed-off-by: Balázs Triszka <info@balika011.hu>
 +		.config_intr    = rtl826x_config_intr,
 +		.handle_interrupt = rtl826x_handle_interrupt,
 +		.match_phy_device = rtl8261be_match_phy_device,
++		.led_brightness_set	= rtl8261x_led_brightness_set,
++		.led_hw_is_supported	= rtl8261x_led_hw_is_supported,
++		.led_hw_control_get	= rtl8261x_led_hw_control_get,
++		.led_hw_control_set	= rtl8261x_led_hw_control_set,
++		.led_polarity_set	= rtl8261x_led_polarity_set,
 +		.set_wol        = rtl826x_set_wol,
 +		.get_wol        = rtl826x_get_wol,
 +		.get_tunable    = rtl826x_get_tunable,
