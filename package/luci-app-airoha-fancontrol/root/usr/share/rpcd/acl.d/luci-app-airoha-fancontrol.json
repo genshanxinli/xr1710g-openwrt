@@ -1,6 +1,6 @@
 {
-	"luci-app-w1700k-fancontrol": {
-		"description": "Grant access to W1700K fan control",
+	"luci-app-airoha-fancontrol": {
+		"description": "Grant access to Airoha fan control",
 		"read": {
 			"ubus": {
 				"luci.fan": [ "getStatus", "getCurve", "getAllCurves" ]

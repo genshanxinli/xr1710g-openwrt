@@ -1,6 +1,7 @@
-# luci-app-w1700k-fancontrol
+# luci-app-airoha-fancontrol
 
-LuCI application for fan control and thermal monitoring on W1700K router (Airoha AN7581 + MT7996 BE19000).
+LuCI application for fan control and thermal monitoring on Airoha AN7581
+routers (Gemtek W1700K, Gemtek/Brightspeed XR1710G).
 
 ## Features
 
@@ -32,7 +33,7 @@ LuCI application for fan control and thermal monitoring on W1700K router (Airoha
 
 ```
 +-------------------------------------------------------------------+
-|                           W1700K Router                            |
+|                        AN7581 Router                             |
 |                                                                    |
 |  +----------------+    +------------------+    +--------------+    |
 |  |   AN7581 SoC   |    |   NCT7802Y Fan   |    |   MT7996     |    |
@@ -79,18 +80,18 @@ Add this package to your OpenWrt build:
 
 ```bash
 # Copy to feeds/luci/applications/
-cp -r luci-app-w1700k-fancontrol feeds/luci/applications/
+cp -r luci-app-airoha-fancontrol feeds/luci/applications/
 
 # Update and install
 ./scripts/feeds update luci
-./scripts/feeds install luci-app-w1700k-fancontrol
+./scripts/feeds install luci-app-airoha-fancontrol
 
 # Enable in menuconfig
 make menuconfig
-# Navigate to: LuCI -> Applications -> luci-app-w1700k-fancontrol
+# Navigate to: LuCI -> Applications -> luci-app-airoha-fancontrol
 
 # Build
-make package/feeds/luci/luci-app-w1700k-fancontrol/compile
+make package/feeds/luci/luci-app-airoha-fancontrol/compile
 ```
 
 ### Manual Installation
@@ -107,8 +108,8 @@ mkdir -p /etc/init.d
 mkdir -p /etc/config
 
 # Copy files
-cp root/usr/share/luci/menu.d/luci-app-w1700k-fancontrol.json /usr/share/luci/menu.d/
-cp root/usr/share/rpcd/acl.d/luci-app-w1700k-fancontrol.json /usr/share/rpcd/acl.d/
+cp root/usr/share/luci/menu.d/luci-app-airoha-fancontrol.json /usr/share/luci/menu.d/
+cp root/usr/share/rpcd/acl.d/luci-app-airoha-fancontrol.json /usr/share/rpcd/acl.d/
 cp root/usr/libexec/rpcd/luci.fan /usr/libexec/rpcd/
 cp htdocs/luci-static/resources/view/fan/status.js /www/luci-static/resources/view/fan/
 cp htdocs/luci-static/resources/view/fan/settings.js /www/luci-static/resources/view/fan/
@@ -135,7 +136,7 @@ chmod +x /etc/init.d/fan
 ## Files
 
 ```
-luci-app-w1700k-fancontrol/
+luci-app-airoha-fancontrol/
 ├── Makefile                                          # OpenWrt package makefile
 ├── LICENSE                                           # Apache 2.0 license
 ├── README.md                                         # This file
@@ -157,9 +158,9 @@ luci-app-w1700k-fancontrol/
         │   └── luci.fan                              # RPC backend script
         └── share/
             ├── luci/menu.d/
-            │   └── luci-app-w1700k-fancontrol.json   # Menu configuration
+            │   └── luci-app-airoha-fancontrol.json   # Menu configuration
             └── rpcd/acl.d/
-                └── luci-app-w1700k-fancontrol.json   # ACL permissions
+                └── luci-app-airoha-fancontrol.json   # ACL permissions
 ```
 
 ## Configuration
@@ -219,4 +220,4 @@ Apache-2.0
 
 ## Author
 
-Created for W1700K router (Airoha AN7581 + MT7996 BE19000)
+Created for Airoha AN7581 routers (Gemtek W1700K and XR1710G).
