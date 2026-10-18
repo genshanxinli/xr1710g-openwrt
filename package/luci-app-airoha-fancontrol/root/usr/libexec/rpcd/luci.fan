@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# W1700K Fan Control RPC backend for LuCI
+# Airoha fan control RPC backend for LuCI
 
 # Dynamically find NCT7802 fan controller hwmon device
 find_nct7802() {

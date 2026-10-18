@@ -1,49 +1,95 @@
 #!/bin/sh /etc/rc.common
-#
-# Copyright (C) 2025 openwrt.org
-#
 
 START=99
 
+# board_name() lives in lib/functions.sh.
 . "$IPKG_INSTROOT/lib/functions.sh"
 
-find_nct7802()
-{
+# NCT7802 fan curve.
+#
+# This used to be duplicated: this script wrote the pwm1_* sysfs attributes
+# directly, while luci-app-airoha-fancontrol ships /etc/init.d/fan which
+# applies the UCI curve selected in LuCI. Both ran at START=99 and wrote the
+# same attributes, so whichever ran last won and a preset picked in the UI
+# could be silently overwritten on boot.
+#
+# Now /etc/init.d/fan is authoritative whenever it is installed and this
+# script only seeds the UCI config. Without the LuCI app (minimal images) the
+# stock curve is still applied from here, so the fan is never left unmanaged.
+
+CONFIG=/etc/config/fan
+
+# Stock curve: 40/50/60/70/80 degC -> PWM 54/69/95/199 (idle 770 rpm,
+# 1000/1400/2700 rpm at the higher points), matching "balanced" in LuCI.
+STOCK_TEMP="40000 50000 60000 70000 80000"
+STOCK_PWM="54 69 95 199"
+
+find_nct7802() {
 	for hwmon in /sys/class/hwmon/hwmon*; do
 		if [ -f "$hwmon/name" ] && [ "$(cat "$hwmon/name" 2>/dev/null)" = "nct7802" ]; then
 			echo "$hwmon"
 			return
 		fi
 	done
-	echo "/sys/class/hwmon/hwmon5" # fallback
 }
 
-boot()
-{
-	case $(board_name) in
-	gemtek,w1700k-ubi|\
-	gemtek,xr1710g-ubi)
-		hwmon=$(find_nct7802)
+seed_config() {
+	[ -f "$CONFIG" ] && return 0
 
-		# Temporarily disable automatic fan control to configure curve
-		echo 1 > $hwmon/pwm1_enable
+	mkdir -p "${CONFIG%/*}" || return 0
+	cat > "$CONFIG" <<-EOF
+		config fancontrol 'settings'
+			option mode 'auto'
+			option manual_pwm '127'
+			option curve_preset 'balanced'
 
-		# Match trigger points from vendor firmware
-		echo 40000 > $hwmon/pwm1_auto_point1_temp
-		echo 50000 > $hwmon/pwm1_auto_point2_temp
-		echo 60000 > $hwmon/pwm1_auto_point3_temp
-		echo 70000 > $hwmon/pwm1_auto_point4_temp
-		echo 80000 > $hwmon/pwm1_auto_point5_temp
+		config curve 'balanced'
+			option point1_temp '40'
+			option point1_pwm '54'
+			option point2_temp '50'
+			option point2_pwm '69'
+			option point3_temp '60'
+			option point3_pwm '95'
+			option point4_temp '70'
+			option point4_pwm '199'
+			option point5_temp '80'
+			option point5_pwm '255'
+	EOF
+}
 
-		# Match fan speed from vendor firmware
-		echo 54  > $hwmon/pwm1_auto_point1_pwm
-		echo 69  > $hwmon/pwm1_auto_point2_pwm
-		echo 95  > $hwmon/pwm1_auto_point3_pwm
-		echo 199 > $hwmon/pwm1_auto_point4_pwm
+apply_stock_curve() {
+	local hwmon="$1" i=1 temp pwm
 
-		# Re-enable automatic fan control
-		echo 2 > $hwmon/pwm1_enable
-		;;
+	echo 1 > "$hwmon/pwm1_enable" 2>/dev/null
+
+	for temp in $STOCK_TEMP; do
+		echo "$temp" > "$hwmon/pwm1_auto_point${i}_temp" 2>/dev/null
+		i=$((i + 1))
+	done
+
+	i=1
+	for pwm in $STOCK_PWM; do
+		echo "$pwm" > "$hwmon/pwm1_auto_point${i}_pwm" 2>/dev/null
+		i=$((i + 1))
+	done
+
+	echo 2 > "$hwmon/pwm1_enable" 2>/dev/null
+}
+
+boot() {
+	case "$(board_name)" in
+	gemtek,w1700k-ubi|gemtek,xr1710g-ubi) ;;
+	*) return 0 ;;
 	esac
-}
 
+	seed_config
+
+	# luci-app-airoha-fancontrol owns the hardware once installed.
+	[ -x /etc/init.d/fan ] && return 0
+
+	local hwmon
+	hwmon="$(find_nct7802)"
+	[ -n "$hwmon" ] || return 0
+
+	apply_stock_curve "$hwmon"
+}

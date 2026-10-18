@@ -6,7 +6,7 @@
 			"type": "firstchild"
 		},
 		"depends": {
-			"acl": [ "luci-app-w1700k-fancontrol" ],
+			"acl": [ "luci-app-airoha-fancontrol" ],
 			"uci": { "fan": true }
 		}
 	},
