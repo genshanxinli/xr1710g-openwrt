@@ -1,0 +1,27 @@
+#!/bin/sh
+
+# Hardware LRO is compiled in but it is not part of the default feature set
+# (netdev->hw_features carries NETIF_F_LRO, netdev->features does not), so
+# out of the box every device runs with plain GRO. On this SoC LRO is worth
+# the trouble: the driver pads the RX rings used by LRO to order-2 pages and
+# aggregates TCP streams in the CDM block, and the vendor measured ~2.7 Gbps
+# with GRO against ~8.2 Gbps with LRO on a 10G link.
+#
+# Enable it on the WAN device when it comes up, and turn it off again when it
+# goes down so the aggregation state does not outlive the interface.
+
+[ "$ACTION" = ifup ] || [ "$ACTION" = ifdown ] || exit 0
+[ "$INTERFACE" = wan ] || exit 0
+
+DEV="${DEVICE:-wan}"
+
+case "$ACTION" in
+	ifup)
+		ethtool -K "$DEV" rx-lro on >/dev/null 2>&1
+		;;
+	ifdown)
+		ethtool -K "$DEV" rx-lro off >/dev/null 2>&1
+		;;
+esac
+
+exit 0
