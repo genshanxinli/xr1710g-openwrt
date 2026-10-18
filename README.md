@@ -33,17 +33,29 @@ Three images are produced:
 
 The flash layout is `vendor` + `chainloader` + `ubi` + `reserved_bmt`. The
 device reports `compat_version 2.0`; images built from this tree upgrade in
-place. Upgrading from a `1.x` layout, or cross-flashing a W1700K image,
-soft-bricks the device and needs serial/TTL recovery.
+place. Upgrading from a `1.x` layout soft-bricks the device and needs
+serial/TTL recovery. Cross-flashing a W1700K image is rejected by
+`sysupgrade`: besides the signing check, the FIT device tree name is compared
+against the running board, because the bootloader would otherwise happily
+boot the other board's device tree.
 
 ## What is included
 
 - Full Cone NAT (`nft-fullcone`) with hardware and software flow offloading
-  enabled by default.
+  enabled by default. Note that the shipped `nft-fullcone` module only
+  implements true full-cone behaviour for UDP; for other protocols the rule is
+  equivalent to MASQUERADE. `fw4` probes the module once at startup and falls
+  back to plain NAT with a warning in `logread` if it cannot be loaded.
 - NPU offload for wired and wireless traffic, plus MT7996 NPU firmware.
-- CPU frequency scaling up to 1350 MHz (`performance` governor default).
-- Status LEDs, fan control, and the hardware LuCI pages: Airoha NPU, flow
-  sense, fan control, Wi-Fi 7/MLO.
+- CPU frequency scaling up to 1350 MHz (`performance` governor default), with
+  a tickless idle kernel (`CONFIG_NO_HZ_IDLE`), so the periodic tick is
+  stopped while the CPU is idle instead of firing at a fixed 100 Hz.
+- Status LEDs, including the 10G port LEDs, which are driven by the RTL8261BE
+  LED engine rather than by GPIOs.
+- A single fan owner: `/etc/init.d/airoha_fan` only seeds `/etc/config/fan` and
+  stays out of the way once `luci-app-airoha-fancontrol` is installed.
+- The hardware LuCI pages are part of the image: Airoha NPU, flow sense, fan
+  control, Wi-Fi 7 and MLO.
 
 ## Building
 
