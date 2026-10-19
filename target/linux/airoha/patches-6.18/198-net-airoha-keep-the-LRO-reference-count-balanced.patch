@@ -1,0 +1,67 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: keep the LRO reference count balanced
+
+The per-QDMA LRO reference count is taken in airoha_dev_lro_enable() and
+dropped in airoha_dev_lro_disable(), but the two are not called in
+matching pairs: airoha_dev_set_qdma() drops the device off its current
+QDMA unconditionally while it only re-enables LRO on the destination
+when NETIF_F_LRO is set, and airoha_dev_open()/airoha_dev_stop() call the
+pair once per up/down transition.  Enabling twice without an intervening
+disable therefore leaked a reference, and a disable without a preceding
+enable decremented a reference held by another device on the same QDMA.
+
+Track the reference on the device instead: remember in a device flag
+whether this device currently holds one, so enable and disable become
+idempotent and cannot disturb the other devices sharing the QDMA.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+
+--- a/drivers/net/ethernet/airoha/airoha_eth.h
++++ b/drivers/net/ethernet/airoha/airoha_eth.h
+@@ -610,6 +610,12 @@
+ enum airoha_dev_flags {
+ 	AIROHA_DEV_F_WAN,
+ 	AIROHA_DEV_F_TX_QOS,
++	/* This device currently holds an LRO reference on its QDMA.  Kept so
++	 * enable/disable stay balanced even though the callers are not: a
++	 * device is dropped off its QDMA unconditionally but only re-enabled
++	 * on the new one when NETIF_F_LRO is set.
++	 */
++	AIROHA_DEV_F_LRO,
+ };
+ 
+ struct airoha_gdm_dev {
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -563,8 +563,14 @@
+ 	int qdma_id = qdma - &eth->qdma[0];
+ 	int i, lro_queue_index = 0;
+ 
+-	/* Counted per net_device: the block itself is shared by every
+-	 * device on this QDMA, so only the first one has to program it.
++	/* Already holding a reference: the block is programmed already and
++	 * counting again would leak a reference.
++	 */
++	if (test_and_set_bit(AIROHA_DEV_F_LRO, &dev->flags))
++		return;
++
++	/* Counted per net_device: the block itself is shared by every device
++	 * on this QDMA, so only the first one has to program it.
+ 	 */
+ 	qdma->lro_users++;
+ 
+@@ -595,6 +601,13 @@
+ 	struct airoha_eth *eth = qdma->eth;
+ 	int qdma_id = qdma - &eth->qdma[0];
+ 
++	/* Not holding a reference (e.g. the device was moved between QDMAs
++	 * while LRO was off): nothing to undo, and decrementing here would
++	 * steal the reference of another device on this QDMA.
++	 */
++	if (!test_and_clear_bit(AIROHA_DEV_F_LRO, &dev->flags))
++		return;
++
+ 	if (qdma->lro_users > 0)
+ 		qdma->lro_users--;
+ 
