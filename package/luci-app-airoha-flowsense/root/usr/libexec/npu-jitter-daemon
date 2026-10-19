@@ -9,8 +9,67 @@ RESULT_FILE="/tmp/npu-jitter.json"
 WINDOW=10
 INTERVAL=2  # seconds between pings
 
+# Optional throughput shaping driven by the measured jitter.
+#
+# The PPE is congestion unaware: when a downstream port is slower than the
+# incoming burst it drops instead of pushing back, so a 10G ingress aimed at a
+# 1G LAN port or at a Wi-Fi client loses packets well before the link itself is
+# saturated.  Capping the WAN egress at slightly less than the rate the link
+# can actually sustain keeps the PPE queues short and removes that loss.
+#
+# Only wan (GDM2) is shaped.  The driver treats any other GDM as the WAN role
+# when HTB is configured on it (airoha_enable_qos_for_gdm34 converts the port
+# to WAN and refuses if another device already holds the role), so touching
+# lan2 would silently re-route the WAN role.
+SHAPE_ENABLE="${SHAPE_ENABLE:-0}"
+SHAPE_IFACE="${SHAPE_IFACE:-wan}"
+SHAPE_MIN_MBPS="${SHAPE_MIN_MBPS:-100}"
+SHAPE_MAX_MBPS="${SHAPE_MAX_MBPS:-9500}"
+SHAPE_JITTER_MS="${SHAPE_JITTER_MS:-25}"
+shaped_mbps=0
+
 ping_values=""
 count=0
+
+# Install, raise or remove the wan egress cap. Called only when SHAPE_ENABLE is
+# set, so an unconfigured box never touches the qdisc tree.
+apply_shaper() {
+	local jitter="$1" link_mbps new_mbps
+
+	# Below the threshold the link is keeping up: drop any cap we added so the
+	# full rate stays available.
+	if [ "$jitter" -lt "$SHAPE_JITTER_MS" ] 2>/dev/null; then
+		if [ "$shaped_mbps" -gt 0 ]; then
+			tc qdisc del dev "$SHAPE_IFACE" root 2>/dev/null
+			shaped_mbps=0
+			logger -t npu-jitter "jitter ${jitter}ms below ${SHAPE_JITTER_MS}ms, cap removed" 2>/dev/null
+		fi
+		return 0
+	fi
+
+	# Jitter is above the threshold. Start from half of what the link
+	# negotiated and halve again on each further sample until it settles; a
+	# small first step would take minutes to matter.
+	if [ "$shaped_mbps" -eq 0 ]; then
+		link_mbps=$(ethtool "$SHAPE_IFACE" 2>/dev/null |
+			    sed -n 's/.*Speed: \([0-9]*\)Mb\/s.*/\1/p')
+		[ -n "$link_mbps" ] && [ "$link_mbps" -gt 0 ] 2>/dev/null || link_mbps="$SHAPE_MAX_MBPS"
+		new_mbps=$((link_mbps / 2))
+	else
+		new_mbps=$((shaped_mbps / 2))
+	fi
+	[ "$new_mbps" -gt "$SHAPE_MAX_MBPS" ] && new_mbps="$SHAPE_MAX_MBPS"
+	[ "$new_mbps" -lt "$SHAPE_MIN_MBPS" ] && new_mbps="$SHAPE_MIN_MBPS"
+	[ "$new_mbps" -eq "$shaped_mbps" ] && return 0
+
+	tc qdisc del dev "$SHAPE_IFACE" root 2>/dev/null
+	if tc qdisc add dev "$SHAPE_IFACE" root \
+		tbf rate "${new_mbps}mbit" burst 32k latency 20ms 2>/dev/null; then
+		shaped_mbps="$new_mbps"
+		logger -t npu-jitter "jitter ${jitter}ms, wan capped to ${new_mbps}mbit" 2>/dev/null
+	fi
+}
+
 cpu_prev=""
 
 while true; do
@@ -68,6 +127,11 @@ while true; do
 
 		# Write atomically so a reader never sees a half-written file
 		echo "$result" > "$RESULT_FILE.tmp" && mv "$RESULT_FILE.tmp" "$RESULT_FILE"
+
+		if [ "$SHAPE_ENABLE" = "1" ]; then
+			_jit=$(echo "$result" | sed -n 's/.*"jitter":\([0-9.]*\).*/\1/p')
+			[ -n "$_jit" ] && apply_shaper "$_jit"
+		fi
 	else
 		# Unreachable — preserve sample count but mark unreachable
 		printf '{"jitter":0,"last_ping":0,"samples":%d,"target":"%s","reachable":false,"available":true,"cpu_pct":%d}\n' \
