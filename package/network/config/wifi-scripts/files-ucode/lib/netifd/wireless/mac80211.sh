@@ -87,9 +87,16 @@ function setup_phy(phy, config, data) {
 	config.channel = +config.channel;
 	config.frequency = get_channel_frequency(config.band, config.channel);
 
-	if (config.country_code) {
+	if (config.country_code && match(config.country_code, /^[A-Za-z][A-Za-z]$/)) {
 		log(`Setting country code to ${config.country_code}`);
 		system(`iw reg set ${config.country_code}`);
+	}
+	else if (config.country_code) {
+		/* '00' is what /lib/wifi/mac80211.uc writes for an unprovisioned
+		 * 6 GHz radio as a hint for the user. `iw reg set 00` would put
+		 * the whole system in world regdomain, relaxing the limits for
+		 * the radios that do have a proper country configured. */
+		log(`Ignoring invalid country code '${config.country_code}'`);
 	}
 
 	set_default(config, 'rxantenna', 0xffffffff);

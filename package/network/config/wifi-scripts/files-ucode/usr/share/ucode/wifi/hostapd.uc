@@ -17,8 +17,46 @@ const NL80211_EXT_FEATURE_RADAR_BACKGROUND = 61;
 let phy_features = {};
 let phy_capabilities = {};
 
+/* Derive a band when the configuration does not carry one.
+ *
+ * Older and hand-edited configurations often only have htmode and channel.
+ * hw_mode alone cannot express 6 GHz -- a 6 GHz radio with hw_mode=g and
+ * channel=0 is rejected by hostapd with:
+ *
+ *   Could not select hw_mode and channel. (-3) invalid HW mode/channel
+ *
+ * so pick a band the phy actually reports and that no other radio has
+ * claimed yet, instead of silently defaulting everything to 2.4 GHz.
+ */
+function infer_band(config) {
+	let info = wiphy_info(config.phy);
+
+	if (!info)
+		return null;
+
+	let used = {};
+	let status = global.ubus.call('network.wireless', 'status');
+
+	for (let name, radio in status)
+		if (radio.config.band)
+			used[radio.config.band] = true;
+
+	/* Prefer the highest band the phy supports: the lower ones are more
+	 * likely to have been configured explicitly already. */
+	for (let band in [ '6g', '5g', '2g', '60g' ])
+		if (wiphy_band(info, band) && !used[band])
+			return band;
+
+	return null;
+}
+
 /* make sure old style UCI and hwmode and newer band properties are correctly resolved */
 function set_device_defaults(config) {
+	/* A missing band cannot be reconstructed from hw_mode, so resolve it
+	 * from the phy first. */
+	if (!config.band)
+		config.band = infer_band(config);
+
 	/* validate the hw mode */
 	if (config.hw_mode in [ '11a', '11b', '11g', '11ad' ])
 		config.hw_mode = substr(config.hw_mode, 2);
@@ -68,14 +106,36 @@ function device_log_append(config) {
 /* setup country code */
 function device_country_code(config) {
 	let status = global.ubus.call('network.wireless', 'status');
+	let country, fallback;
 	for (let name, radio in status) {
-		if (!radio.config.country)
+		let cc = radio.config.country;
+
+		/* hostapd rejects anything that is not a two letter ISO code and
+		 * refuses the whole phy when it does. '00' is what
+		 * /lib/wifi/mac80211.uc writes for a 6 GHz radio when no board
+		 * default exists, so it has to be filtered out here rather than
+		 * handed to the driver. */
+		if (!cc || !match(cc, /^[A-Za-z][A-Za-z]$/))
 			continue;
-		config.country_code = radio.config.country;
+
+		/* Prefer the radio that belongs to the phy being configured; keep
+		 * the first usable one as a fallback for phys with no radio of
+		 * their own. */
+		if (config.radio != null && radio.config.radio != null &&
+		    radio.config.radio == config.radio) {
+			country = cc;
+			break;
+		}
+
+		fallback ??= cc;
 	}
 
-	if (!exists(config, 'country_code'))
+	country ??= fallback;
+
+	if (country == null)
 		return;
+
+	config.country_code = uc(country);
 
 	if (config.hw_mode != 'a')
 		delete config.ieee80211h;

@@ -1197,6 +1197,18 @@ drv_mac80211_setup() {
 	[ "$auto_channel" -gt 0 ] || freq="$(get_freq "$phy" "$channel" "$band")"
 
 	[ -n "$country" ] && {
+		# '00' is what /lib/wifi/mac80211.uc writes for an unprovisioned
+		# 6 GHz radio, as a hint for the user to pick a real country.
+		# It is not a valid ISO code, so refuse to push it into the
+		# global regulatory domain -- `iw reg set 00` would set the whole
+		# system to world regdomain and relax the limits for the 2.4 and
+		# 5 GHz radios that do have a proper country configured.
+		case "$country" in
+		[0-9][0-9]|'') country= ;;
+		esac
+	}
+
+	[ -n "$country" ] && {
 		iw reg get | grep -q "^country $country:" || {
 			iw reg set "$country"
 			sleep 1
