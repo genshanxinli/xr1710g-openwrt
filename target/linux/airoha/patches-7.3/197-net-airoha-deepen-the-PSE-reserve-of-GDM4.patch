@@ -1,0 +1,71 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: deepen the PSE reserve of the second 10G port
+
+The PSE hands each egress queue a guaranteed reserve of
+PSE_QUEUE_RSV_PAGES (64) pages, and everything above that is shared.  The
+port/queue table gives GDM4 only two queues, so the reserve for that port
+is 2 * 64 * 128 B = 16 KiB.
+
+On the AN7581 GDM4 is the second 10G port.  At 10G, 16 KiB is about 13 us
+of traffic - less than the time it takes the CPU to get scheduled on a
+busy system, so a burst aimed at GDM4 is dropped although the shared pool
+is mostly idle.
+
+The queue count is a hardware property and is left alone; instead each of
+GDM4's queues is given a deeper reserve, capped by what the shared pool
+can actually give away.  The pool thresholds are derived as
+fq_limit - all_rsv - <headroom>, so the reserve is only raised while that
+subtraction stays positive; otherwise the thresholds would wrap.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -340,11 +340,10 @@
+ 		[FE_PSE_PORT_GDM4] = 2,
+ 		[FE_PSE_PORT_CDM5] = 2,
+ 	};
++	u32 all_rsv, fq_limit, gdm4_rsv;
+ 	int q;
+ 
+ 	if (airoha_ppe_is_enabled(eth, 1)) {
+-		u32 all_rsv;
+-
+ 		/* hw misses PPE2 oq rsv */
+ 		all_rsv = airoha_fe_get_pse_all_rsv(eth);
+ 		all_rsv += PSE_RSV_PAGES *
+@@ -399,10 +398,30 @@
+ 							 q, 0);
+ 		}
+ 	}
+-	/* GDM4 */
++	/* GDM4. On the AN7581 this is the second 10G port, but the table above
++	 * only gives it two queues, so the stock per-queue reserve leaves it
++	 * with 16 KiB of guaranteed buffer for a port that can deliver at
++	 * 10G. Keep the queue count (it is a hardware property) and give those
++	 * queues a deeper reserve instead.
++	 *
++	 * The reserve feeds the shared-pool thresholds, which are computed as
++	 * fq_limit - all_rsv - <headroom>: reserving more than the pool holds
++	 * would underflow them, so raise the reserve only as far as the pool
++	 * actually allows.
++	 */
++	fq_limit = airoha_fe_get(eth, PSE_FQ_CFG, PSE_FQ_LIMIT_MASK);
++	all_rsv = airoha_fe_get_pse_all_rsv(eth);
++	gdm4_rsv = PSE_QUEUE_RSV_PAGES;
++	if (fq_limit > all_rsv + 0x400) {
++		u32 extra = (fq_limit - all_rsv - 0x400) /
++			    pse_port_num_queues[FE_PSE_PORT_GDM4];
++
++		if (extra > PSE_QUEUE_RSV_PAGES * 3)
++			extra = PSE_QUEUE_RSV_PAGES * 3;
++		gdm4_rsv += extra;
++	}
+ 	for (q = 0; q < pse_port_num_queues[FE_PSE_PORT_GDM4]; q++)
+-		airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_GDM4, q,
+-					 PSE_QUEUE_RSV_PAGES);
++		airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_GDM4, q, gdm4_rsv);
+ 	/* CDM5 */
+ 	for (q = 0; q < pse_port_num_queues[FE_PSE_PORT_CDM5]; q++)
+ 		airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_CDM5, q,
