@@ -24,6 +24,18 @@ var callExec = rpc.declare({
     expect: {}
 });
 
+// Read a sysfs/debugfs file through file.read instead of forking /bin/cat.
+//
+// Using callExec('/bin/cat', ...) for this needed an ACL exec grant on
+// /bin/cat, and when that grant is missing the call fails and every caller
+// silently kept its fallback value. For sku_disable the fallback was '1',
+// which the UI renders as "SKU regulation inactive -- transmitting without
+// country power limits", on a driver that does not export sku_disable at all.
+// file.read needs only the per-path read permission the ACL already carries.
+function readSysfs(path) {
+    return fs.read(path).then(function(v) { return { stdout: v || '' }; });
+}
+
 // network.wireless status via exec (rpcd ACL for network.wireless is session-restricted)
 function callWirelessStatusExec() {
     return L.resolveDefault(callExec('/bin/sh', [
@@ -71,20 +83,29 @@ function badge(text, bg, fg) {
         'border-radius:3px;background:' + bg + ';color:' + fg }, text);
 }
 
-function skuBanner(skuOff, skuIdx) {
-    // SKU is truly active only when sku_disable=0 AND sku_idx is set (non-empty, non-zero)
+function skuBanner(skuRaw, skuIdx) {
+    // sku_disable is an mtk-openwrt-feeds debugfs knob. The upstream mt76 in
+    // this tree does not export it at all, so "absent" has to be its own
+    // state -- treating it like '1' claimed the device was transmitting
+    // without power limits, which was simply not true: the limits come from
+    // the country code, and iw reg get showed them applied.
+    var known     = skuRaw === '0' || skuRaw === '1';
+    var skuOff    = skuRaw === '1';
     var skuIdxSet = skuIdx && skuIdx !== '' && skuIdx !== '0';
-    var active    = !skuOff && skuIdxSet;
-    var partial   = !skuOff && !skuIdxSet;
-    var style = skuOff   ? 'background:#3a0a0a;border:1px solid #e24b4a;color:#f4a0a0'
+    var active    = known && !skuOff && skuIdxSet;
+    var partial   = known && !skuOff && !skuIdxSet;
+    var style = !known   ? 'background:#20242a;border:1px solid #4a5560;color:#9aa5b1'
+              : skuOff   ? 'background:#3a0a0a;border:1px solid #e24b4a;color:#f4a0a0'
               : partial  ? 'background:#2a1a00;border:1px solid #f5a623;color:#fac775'
               :            'background:#0a2a0a;border:1px solid #1d9e75;color:#7fff7f';
-    var label = skuOff  ? 'SKU regulation inactive -- '
-              : partial ? 'SKU partially configured -- '
-              :           'SKU regulation active -- ';
-    var msg   = skuOff  ? 'Transmitting without country power limits (up to 27 dBm). Set country + sku_idx on the Radio tab.'
-              : partial ? 'sku_disable=0 but sku_idx not set. TX power limits may not be applied. Set sku_idx on the Radio tab.'
-              :           'TX power limited by country + sku_idx=' + skuIdx + ' regulatory table.';
+    var label = !known    ? 'SKU regulation: n/a -- '
+              : skuOff    ? 'SKU regulation inactive -- '
+              : partial   ? 'SKU partially configured -- '
+              :             'SKU regulation active -- ';
+    var msg   = !known    ? 'this kernel/driver exposes no sku_disable debugfs node, so TX power is governed by the country code alone.'
+              : skuOff    ? 'Transmitting without country power limits. Set country + sku_idx on the Radio tab.'
+              : partial   ? 'sku_disable=0 but sku_idx not set. TX power limits may not be applied. Set sku_idx on the Radio tab.'
+              :             'TX power limited by country + sku_idx=' + skuIdx + ' regulatory table.';
     return E('div', { 'style': 'border-radius:6px;padding:9px 13px;margin-bottom:14px;' + style }, [
         E('strong', {}, label), msg
     ]);
@@ -315,9 +336,9 @@ return view.extend({
         var calls = [
             Promise.resolve(uciData),                          // [0] UCI
             L.resolveDefault(callHostapdStatus(), {}),         // [1] hostapd status
-            L.resolveDefault(callExec('/bin/cat', [            // [2] sku_disable
+            L.resolveDefault(readSysfs(                             // [2] sku_disable
                 '/sys/kernel/debug/ieee80211/phy0/mt76/sku_disable'
-            ]), { stdout: '1' }),
+            ), { stdout: '' }),
         ];
 
         // [3..] MLD hostapd stat per link (0,1,2) per MLD network
@@ -354,22 +375,33 @@ return view.extend({
         // Fixed diagnostics calls at the end
         var diagBase = legacyStaBase + legacySIDs.length;
         [
-            ['/bin/cat', ['/sys/kernel/debug/ieee80211/phy0/mt76/fw_version']],
-            ['/bin/cat', ['/sys/kernel/debug/ieee80211/phy0/mt76/band0/txpower_info']],
-            ['/bin/cat', ['/sys/kernel/debug/ieee80211/phy0/mt76/band1/txpower_info']],
-            ['/bin/cat', ['/sys/kernel/debug/ieee80211/phy0/mt76/band2/txpower_info']],
-            ['/bin/cat', ['/sys/kernel/debug/ieee80211/phy0/mt76/mat_table']],
-            ['/bin/cat', ['/sys/kernel/debug/ieee80211/phy0/mt76/dfs_status']],
-            ['/bin/cat', ['/sys/kernel/debug/ieee80211/phy0/netdev:ap-mld-1/link-0/txpower']],
-            ['/bin/cat', ['/sys/kernel/debug/ieee80211/phy0/netdev:ap-mld-1/link-1/txpower']],
-            ['/bin/cat', ['/sys/kernel/debug/ieee80211/phy0/netdev:ap-mld-1/link-2/txpower']],
-            ['/bin/cat', ['/proc/version']],
-            ['/bin/sh',  ['-c', 'for d in /sys/class/thermal/thermal_zone*; do t=$(cat $d/temp 2>/dev/null); n=$(cat $d/type 2>/dev/null); [ -n "$t" ] && [ -n "$n" ] && echo "$n $((t/1000))"; done']],
-            ['/bin/cat', ['/sys/kernel/debug/ieee80211/phy0/netdev:ap-mld-1/mt76_links_info']],
-            ['/bin/sh',  ['-c', 'ubus call network.wireless status 2>/dev/null']],
-        ].forEach(function(c) {
-            calls.push(L.resolveDefault(callExec(c[0], c[1]), { stdout: '' }));
+            '/sys/kernel/debug/ieee80211/phy0/mt76/fw_version',
+            '/sys/kernel/debug/ieee80211/phy0/mt76/band0/txpower_info',
+            '/sys/kernel/debug/ieee80211/phy0/mt76/band1/txpower_info',
+            '/sys/kernel/debug/ieee80211/phy0/mt76/band2/txpower_info',
+            '/sys/kernel/debug/ieee80211/phy0/mt76/mat_table',
+            '/sys/kernel/debug/ieee80211/phy0/mt76/dfs_status',
+            '/sys/kernel/debug/ieee80211/phy0/netdev:ap-mld-1/link-0/txpower',
+            '/sys/kernel/debug/ieee80211/phy0/netdev:ap-mld-1/link-1/txpower',
+            '/sys/kernel/debug/ieee80211/phy0/netdev:ap-mld-1/link-2/txpower',
+            '/proc/version',
+        ].forEach(function(path) {
+            calls.push(L.resolveDefault(readSysfs(path), { stdout: '' }));
         });
+
+        // Thermal zones and the wireless status blob need more than a single
+        // file read, so they keep using exec; both are granted in the ACL.
+        calls.push(L.resolveDefault(callExec('/bin/sh', [
+            '-c', 'for d in /sys/class/thermal/thermal_zone*; do ' +
+                  't=$(cat $d/temp 2>/dev/null); n=$(cat $d/type 2>/dev/null); ' +
+                  '[ -n "$t" ] && [ -n "$n" ] && echo "$n $((t/1000))"; done'
+        ]), { stdout: '' }));
+        calls.push(L.resolveDefault(readSysfs(
+            '/sys/kernel/debug/ieee80211/phy0/netdev:ap-mld-1/mt76_links_info'
+        ), { stdout: '' }));
+        calls.push(L.resolveDefault(callExec('/bin/sh', [
+            '-c', 'ubus call network.wireless status 2>/dev/null'
+        ]), { stdout: '' }));
 
         return Promise.all(calls).then(function(data) {
             // Attach index metadata for render functions
@@ -478,7 +510,7 @@ return view.extend({
     renderOverview: function(data) {
         var uciData   = data[0];
         var hapdSt    = data[1];
-        var skuRaw    = data[2].stdout ? data[2].stdout.trim() : '1';
+        var skuRaw    = data[2].stdout ? data[2].stdout.trim() : '';
         var mldSIDs   = data._mldSIDs || ['ap_mld_1'];
         var diagBase  = data._diagBase || 10;
         var wlStatus  = data[diagBase + 12] || {};
@@ -490,6 +522,7 @@ return view.extend({
         var stat2 = parseStat(data[statBase + 2] ? (data[statBase + 2].stdout || '') : '');
 
         var skuOff  = skuRaw === '1';
+        var skuKnown = skuRaw === '0' || skuRaw === '1';
         // Extract sku_idx from radio0 UCI (applies to all radios)
         var skuIdx  = (uciData['radio0'] && uciData['radio0']['sku_idx']) || '';
         var hapdOK  = hapdSt && hapdSt.status === 'ENABLED';
@@ -517,8 +550,8 @@ return view.extend({
 
         function linkCard(label, bg, fg, stat, radioName) {
             var txp     = stat['max_txpower'];
-            var txpCol  = skuOff ? '#e24b4a' : '#1d9e75';
-            var txpNote = skuOff ? ' (no SKU limit)' : ' (regulated)';
+            var txpCol  = !skuKnown ? '#9aa5b1' : skuOff ? '#e24b4a' : '#1d9e75';
+            var txpNote = !skuKnown ? '' : skuOff ? ' (no SKU limit)' : ' (regulated)';
             var up      = radioName ? radioUp[radioName] : null;
             var upEl    = up === null ? null :
                 E('span', { 'style':
@@ -602,7 +635,7 @@ return view.extend({
         });
 
         var overviewItems = [
-            skuBanner(skuOff, skuIdx),
+            skuBanner(skuRaw, skuIdx),
             E('div', { 'style': 'font-size:12px;margin-bottom:14px;color:#aaa' }, [
                 'hostapd ap-mld-1: ',
                 E('strong', { 'style': 'color:' + (hapdOK ? '#1d9e75' : '#e24b4a') },
@@ -1877,7 +1910,7 @@ return view.extend({
         renderDiagnostics: function(data) {
         var uciData  = data[0] || {};
         var diagBase = data._diagBase || 10;
-        var skuRaw   = data[2].stdout  ? data[2].stdout.trim()  : '?';
+        var skuRaw   = data[2].stdout  ? data[2].stdout.trim()  : '';
         var fwRaw    = data[diagBase + 0] ? (data[diagBase + 0].stdout || '').trim() : '?';
         var tp0      = data[diagBase + 1] ? (data[diagBase + 1].stdout || '') : '';
         var tp1      = data[diagBase + 2] ? (data[diagBase + 2].stdout || '') : '';
@@ -1895,6 +1928,7 @@ return view.extend({
         var driverStr = 'mt7996 / kernel ' + kernStr;
 
         var skuBad   = skuRaw === '1';
+        var skuKnown = skuRaw === '0' || skuRaw === '1';
         var thermalRaw   = data[diagBase+10] ? (data[diagBase+10].stdout || '').trim() : '';
         var linksInfoRaw = data[diagBase + 11] ? (data[diagBase + 11].stdout || '').trim() : '';
         // Parse thermal: "type_name temp_int" e.g. "cpu-thermal 52"
@@ -1932,6 +1966,7 @@ return view.extend({
                 dcrd('MT76 driver',  driverStr),
                 dcrd('sku_disable',
                     (function() {
+                        if (!skuKnown) return 'n/a -- no sku_disable debugfs on this driver';
                         var skuIdxVal = (uciData['radio0'] && uciData['radio0']['sku_idx']) || '';
                         var idxSet = skuIdxVal && skuIdxVal !== '0';
                         if (skuBad)   return skuRaw + ' -- regulation INACTIVE';
