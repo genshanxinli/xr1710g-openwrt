@@ -1,0 +1,139 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: report the frames the PSE could not buffer
+
+The PSE pools the packet buffer shared by every GDM and CDM port: 2 MiB
+of 128-byte pages, 16384 in total, of which the per-port reserves already
+claim 4320.  When a port's reserve and its share of the common pool are
+both exhausted the frame is dropped in hardware, and nothing in the
+current driver says so.  The only visible symptom is an unexplained
+throughput ceiling; "ethtool -S" reports nothing, /proc/net/dev reports
+nothing, and the drop is invisible to every tool on the box.
+
+REG_FE_GDM_RX_FC_DROP_CNT counts exactly those frames and is already
+defined in airoha_regs.h, but no code reads it.  Read it next to the
+other RX MIBs, keep the wrap-around delta in a separate accumulator so
+it is not mixed into rx_over_errors (which counts QDMA-side overflows of
+a different cause), and expose it through the named ethtool statistics
+alongside the other drop counters.
+
+That also gives the shared-pool troubleshooting a positive signal: a
+non-zero rx_fc_drops with an idle CPU means the buffer is too small for
+the port, not that the link is congested.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -2117,6 +2117,14 @@
+ 	dev->stats.rx_over_errors += (u32)(val - dev->stats.mib_prev.rx_over_errors);
+ 	dev->stats.mib_prev.rx_over_errors = val;
+ 
++	/* Frames dropped because the PSE had no free page for this port. This
++	 * is the only signal that the shared packet buffer ran dry, so export
++	 * it separately: rx_over_errors mixes in the QDMA-side overflows.
++	 */
++	val = airoha_fe_rr(eth, REG_FE_GDM_RX_FC_DROP_CNT(port->id));
++	dev->stats.rx_fc_drops += (u32)(val - dev->stats.mib_prev.rx_fc_drops);
++	dev->stats.mib_prev.rx_fc_drops = val;
++
+ 	val = airoha_fe_rr(eth, REG_FE_GDM_RX_ETH_FRAG_CNT(port->id));
+ 	dev->stats.rx_fragment += (u32)(val - dev->stats.mib_prev.rx_fragment);
+ 	dev->stats.mib_prev.rx_fragment = val;
+@@ -2846,6 +2854,65 @@
+ 	{},
+ };
+ 
++/* The named counters ethtool -S reports. Everything here is already
++ * collected into struct airoha_hw_stats; this only gives the values a name,
++ * so a drop that the generic ethtool_eth_mac_stats layout cannot express -
++ * the shared PSE buffer running dry, above all - still reaches userspace.
++ */
++static const char *const airoha_ethtool_stat_names[] = {
++	"rx_fc_drops",
++	"rx_over_errors",
++	"rx_dropped",
++	"tx_dropped",
++	"rx_crc_errors",
++	"rx_errors",
++};
++
++static void airoha_ethtool_get_strings(struct net_device *netdev, u32 sset,
++				       u8 *data)
++{
++	int i;
++
++	if (sset != ETH_SS_STATS)
++		return;
++
++	for (i = 0; i < ARRAY_SIZE(airoha_ethtool_stat_names); i++)
++		strscpy(data + i * ETH_GSTRING_LEN,
++			airoha_ethtool_stat_names[i], ETH_GSTRING_LEN);
++}
++
++static int airoha_ethtool_get_sset_count(struct net_device *netdev, int sset)
++{
++	if (sset != ETH_SS_STATS)
++		return -EOPNOTSUPP;
++
++	return ARRAY_SIZE(airoha_ethtool_stat_names);
++}
++
++static void airoha_ethtool_get_stats(struct net_device *netdev,
++				     struct ethtool_stats *stats, u64 *data)
++{
++	struct airoha_gdm_dev *dev = netdev_priv(netdev);
++	const struct airoha_hw_stats *hw_stats = &dev->stats;
++	unsigned int start;
++	int i;
++
++	if (stats->n_stats != ARRAY_SIZE(airoha_ethtool_stat_names))
++		return;
++
++	airoha_update_hw_stats(dev);
++	do {
++		start = u64_stats_fetch_begin(&dev->stats.syncp);
++		i = 0;
++		data[i++] = hw_stats->rx_fc_drops;
++		data[i++] = hw_stats->rx_over_errors;
++		data[i++] = hw_stats->rx_drops;
++		data[i++] = hw_stats->tx_drops;
++		data[i++] = hw_stats->rx_crc_error;
++		data[i++] = hw_stats->rx_errors;
++	} while (u64_stats_fetch_retry(&dev->stats.syncp, start));
++}
++
+ static void
+ airoha_ethtool_get_rmon_stats(struct net_device *netdev,
+ 			      struct ethtool_rmon_stats *stats,
+@@ -3761,6 +3850,9 @@
+ 
+ static const struct ethtool_ops airoha_ethtool_ops = {
+ 	.get_drvinfo		= airoha_ethtool_get_drvinfo,
++	.get_strings		= airoha_ethtool_get_strings,
++	.get_sset_count		= airoha_ethtool_get_sset_count,
++	.get_stats		= airoha_ethtool_get_stats,
+ 	.get_eth_mac_stats      = airoha_ethtool_get_mac_stats,
+ 	.get_rmon_stats		= airoha_ethtool_get_rmon_stats,
+ 	.get_link_ksettings	= airoha_ethtool_get_link_ksettings,
+--- a/drivers/net/ethernet/airoha/airoha_eth.h
++++ b/drivers/net/ethernet/airoha/airoha_eth.h
+@@ -264,6 +264,10 @@
+ 	u64 tx_drops;
+ 	u64 rx_crc_error;
+ 	u64 rx_over_errors;
++	/* Frames the PSE dropped for want of a free page, reported by
++	 * ethtool -S rather than folded into rx_over_errors.
++	 */
++	u64 rx_fc_drops;
+ 	/* ethtool stats */
+ 	u64 tx_broadcast;
+ 	u64 tx_multicast;
+@@ -293,6 +297,7 @@
+ 		u32 rx_errors;
+ 		u32 rx_crc_error;
+ 		u32 rx_over_errors;
++		u32 rx_fc_drops;
+ 		u32 rx_fragment;
+ 		u32 rx_jabber;
+ 		u32 rx_runt;

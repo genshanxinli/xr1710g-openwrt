@@ -36,13 +36,14 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -671,6 +671,11 @@
+@@ -671,6 +671,12 @@
  
  	struct airoha_foe_stats *foe_stats;
  	dma_addr_t foe_stats_dma;
-+	/* Cleared when the NPU refuses to provide the counter region: the
-+	 * statistics path is then skipped entirely and the offload keeps
-+	 * running through the plain PPE fast path.
++	/* Set once the counter region has been allocated and the NPU has
++	 * accepted it; cleared when the NPU refuses. The statistics path is
++	 * skipped entirely while it is clear, so the offload keeps running
++	 * through the plain PPE fast path.
 +	 */
 +	bool foe_stats_enabled;
  
@@ -136,7 +137,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  		u64 packets = ppe->foe_stats[index].packets;
  		u64 bytes = ppe->foe_stats[index].bytes;
  		struct airoha_foe_stats npu_stats;
-@@ -1574,8 +1591,18 @@
+@@ -1574,8 +1591,26 @@
  	if (ppe_num_stats_entries > 0) {
  		err = npu->ops.ppe_init_stats(npu, ppe->foe_stats_dma,
  					      ppe_num_stats_entries);
@@ -153,6 +154,14 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +				 err);
 +			ppe->foe_stats_enabled = false;
 +			err = 0;
++		} else {
++			/* The counters are live, so let the statistics paths
++			 * run. Port 6 carries the counted flows and is flow
++			 * controlled on its own, so it may join shared-buffer
++			 * flow control now; airoha_ppe_hw_init() below acts on
++			 * this.
++			 */
++			ppe->foe_stats_enabled = true;
 +		}
  	}
  
