@@ -129,7 +129,13 @@ get_ppe_entries() {
 			orig=""; match($0,/orig=[^ ]+/); if(RSTART>0) orig=substr($0,RSTART+5,RLENGTH-5)
 			new_flow=""; match($0,/new=[^ ]+/); if(RSTART>0) new_flow=substr($0,RSTART+4,RLENGTH-4)
 			eth=""; match($0,/eth=[^ ]+/); if(RSTART>0) eth=substr($0,RSTART+4,RLENGTH-4)
-			entry[shown]=sprintf("{\"index\":\"%s\",\"state\":\"%s\",\"type\":\"%s\",\"proto\":\"%s\",\"orig\":\"%s\",\"new_flow\":\"%s\",\"eth\":\"%s\"}",$1,state,type,subtype,orig,new_flow,eth)
+			# Per-entry counters, only present when the kernel is built with
+			# CONFIG_NET_AIROHA_FLOW_STATS; the PPE writes them for bound
+			# flows so the UI can tell a 3-packet flow from a bulk transfer.
+			pkts=0; byts=0
+			if (match($0,/ packets=[0-9]+/)) pkts=substr($0,RSTART+9,RLENGTH-9)+0
+			if (match($0,/ bytes=[0-9]+/)) byts=substr($0,RSTART+7,RLENGTH-7)+0
+			entry[shown]=sprintf("{\"index\":\"%s\",\"state\":\"%s\",\"type\":\"%s\",\"proto\":\"%s\",\"orig\":\"%s\",\"new_flow\":\"%s\",\"eth\":\"%s\",\"packets\":%d,\"bytes\":%d}",$1,state,type,subtype,orig,new_flow,eth,pkts,byts)
 		}
 		END {
 			printf "{\"total\":%d,\"ipv4\":%d,\"ipv6\":%d,\"entries\":[",total,n4,n6

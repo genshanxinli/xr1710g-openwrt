@@ -5,3 +5,16 @@ config settings 'settings'
 	# Airtime→goodput efficiency (%) for the offloaded-throughput needle estimate.
 	# throughput ≈ airtime × bitrate × air_eff/100. Calibrated to iperf (~80).
 	option air_eff '80'
+
+config pacing 'pacing'
+	# Jitter-driven WAN egress cap. The PPE does not signal congestion
+	# upstream, so a fast ingress aimed at a slower egress drops rather than
+	# slowing the sender. When the measured jitter exceeds the threshold the
+	# daemon caps wan with a tbf qdisc and keeps halving the cap until the
+	# jitter settles; it removes the cap again once it is below threshold.
+	# Off by default: it shapes traffic, which is not something to do behind
+	# the user's back.
+	option enabled '0'
+	option threshold_ms '25'
+	option min_mbps '100'
+	option max_mbps '9500'

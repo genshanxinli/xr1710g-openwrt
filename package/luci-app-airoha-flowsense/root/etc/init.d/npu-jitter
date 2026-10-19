@@ -21,7 +21,19 @@ start_service() {
 		target=$(ip -4 route show default 2>/dev/null | awk '/via/ {print $3; exit}')
 	[ -n "$target" ] || target="1.1.1.1"
 
+	# Pacing is opt-in; pass the UCI values through the environment so the
+	# daemon stays a plain script that can also be run by hand for testing.
+	local sh_thr sh_min sh_max
+	sh_thr=$(uci -q get npu-monitor.pacing.threshold_ms || echo 25)
+	sh_min=$(uci -q get npu-monitor.pacing.min_mbps || echo 100)
+	sh_max=$(uci -q get npu-monitor.pacing.max_mbps || echo 9500)
+
 	procd_open_instance
+	procd_set_param env \
+		SHAPE_ENABLE="$(uci -q get npu-monitor.pacing.enabled || echo 0)" \
+		SHAPE_JITTER_MS="$sh_thr" \
+		SHAPE_MIN_MBPS="$sh_min" \
+		SHAPE_MAX_MBPS="$sh_max"
 	procd_set_param command "$DAEMON" "$target"
 	procd_set_param pidfile "$PIDFILE"
 	procd_set_param respawn 30 5 0
