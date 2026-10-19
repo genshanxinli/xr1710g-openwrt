@@ -19,6 +19,14 @@ an7581_setup_interfaces()
 		;;
 	gemtek,xr1710g-ubi)
 		ucidef_set_interfaces_lan_wan "lan2 lan3 lan4" "wan"
+
+		# This is a US-market device (sold by Brightspeed) and 6 GHz is not
+		# usable without a real country code: /lib/wifi/mac80211.uc seeds
+		# an unprovisioned radio with the placeholder '00', which hostapd
+		# rejects outright. Board defaults are the intended mechanism for
+		# this (board.json wlan.defaults.country), and they are also what
+		# the 6 GHz radio needs in order to come up out of the box.
+		ucidef_set_country "US"
 		;;
 	nokia,valyrian)
 		ucidef_set_interfaces_lan_wan "lan1 lan2 lan3 10g" "wan"
