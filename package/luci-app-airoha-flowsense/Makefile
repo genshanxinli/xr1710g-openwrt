@@ -18,15 +18,26 @@ endef
 
 define Package/luci-app-airoha-flowsense/postinst
 #!/bin/sh
-# Enforce +x on our scripts: source-tree perms have drifted to 0644 before
-# (build workflow chmod missed / editor or sync resetting the mode), which
-# ships a non-exec init script + rpcd backend -> "Permission denied" on the
-# post-upgrade enable and an RPCError on the page. Self-heal here so the app
-# works regardless of how the apk was packed. Runs offline (IPKG_INSTROOT
-# set) and online.
+# Normalise the modes of everything we ship. The build tree is usually a copy
+# of a repository that lives on a Windows drive through WSL, where chmod() is
+# a no-op and every file reads back as 0777 no matter what git recorded.
+#
+# Both directions of that bug are fatal here:
+#   - scripts that lost +x cannot be executed (init script, rpcd backend,
+#     hotplug handler) -> "Permission denied" on the post-upgrade enable
+#   - files that gained +o+w are REFUSED by rpcd itself:
+#     "Ignoring ucode script ... because it is world writable", so the
+#     luci.airoha_flowsense object is never registered and LuCI dies with
+#     "RPC call to luci.airoha_flowsense/getStatus failed ... Object not found"
+#
+# Self-heal both, so the app works regardless of how the package was packed.
+# Runs offline (IPKG_INSTROOT set) and online.
 chmod 0755 "$${IPKG_INSTROOT}/etc/init.d/npu-jitter" \
            "$${IPKG_INSTROOT}/usr/libexec/npu-jitter-daemon" \
            "$${IPKG_INSTROOT}/usr/share/luci-airoha-flowsense/backend.sh" 2>/dev/null
+chmod 0644 "$${IPKG_INSTROOT}/usr/share/rpcd/ucode/luci.airoha_flowsense.uc" \
+           "$${IPKG_INSTROOT}/usr/share/rpcd/acl.d/luci-app-airoha-flowsense.json" \
+           "$${IPKG_INSTROOT}/usr/share/luci/menu.d/luci-app-airoha-flowsense.json" 2>/dev/null
 [ -n "$${IPKG_INSTROOT}" ] || {
 	/etc/init.d/npu-jitter enable 2>/dev/null
 	/etc/init.d/npu-jitter restart 2>/dev/null
