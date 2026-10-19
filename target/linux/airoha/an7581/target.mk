@@ -8,7 +8,7 @@ FEATURES+=pwm audio
 
 DEFAULT_PACKAGES += \
 	airoha-en7581-npu-firmware uboot-envtools kmod-crypto-hw-eip93 \
-	kmod-nft-bridge
+	kmod-nft-bridge kmod-sched-act-police
 
 define Target/Description
 	Build firmware images for Airoha an7581 ARM based boards.

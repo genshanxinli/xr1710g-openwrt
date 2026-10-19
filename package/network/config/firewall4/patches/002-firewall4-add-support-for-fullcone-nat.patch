@@ -22,12 +22,18 @@ Renew: ZiMing Mo <msylgj@immortalwrt.org>
 
 --- a/root/etc/config/firewall
 +++ b/root/etc/config/firewall
-@@ -5,6 +5,10 @@ config defaults
+@@ -5,6 +5,16 @@ config defaults
  	option forward		REJECT
  # Uncomment this line to disable ipv6 rules
  #	option disable_ipv6	1
 +	option flow_offloading	1
 +	option flow_offloading_hw	1
++# The bridge flowtable is off by default: on the Airoha PPE a bridge
++# entry is only ever inserted into the software rhashtable, never into
++# the hardware table, so enabling this turns a software-only lookup into
++# a conntrack flow that is then marked [HW_OFFLOAD]. Turn it on only
++# where that is understood.
++	option flow_offloading_bridge	0
 +	option fullcone		1
 +	option fullcone6	0
  

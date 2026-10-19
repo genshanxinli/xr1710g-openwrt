@@ -27,9 +27,16 @@
  	read_state: function() {
  		let fd = fs.open(STATEFILE, "r");
  		let state = null;
+@@ -1972,5 +1972,6 @@
+ 			flow_offloading: [ "bool", "0" ],
+ 			flow_offloading_hw: [ "bool", "0" ],
++			flow_offloading_bridge: [ "bool", "0" ],
+ 
+ 			auto_includes: [ "bool", "1" ]
+ 		});
 --- a/root/usr/share/firewall4/templates/ruleset.uc
 +++ b/root/usr/share/firewall4/templates/ruleset.uc
-@@ -469,4 +469,31 @@
+@@ -469,4 +469,33 @@
  	}
  {% fw4.includes('table-append') %}
  }
@@ -39,6 +46,7 @@
 +delete flowtable bridge fw4 fb
 +{% endif %}
 +
++{% if (fw4.default_option("flow_offloading_bridge")): %}
 +{% let bridge_devices = fw4.resolve_bridge_devices(flowtable_devices); %}
 +{% if (length(bridge_devices) > 0): %}
 +table bridge fw4 {
@@ -59,5 +67,6 @@
 +		meta l4proto { tcp, udp } flow offload @fb;
 +	}
 +}
++{% endif %}
 +{% endif %}
  {% fw4.includes('ruleset-append') %}
