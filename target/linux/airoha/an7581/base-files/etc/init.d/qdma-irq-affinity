@@ -1,0 +1,77 @@
+#!/bin/sh /etc/rc.common
+
+# The AN7581 raises one banked IRQ per QDMA and the driver leaves the affinity
+# at the kernel default, which on arm64 is the mask of the boot CPU. All RX
+# and TX completions of both QDMAs therefore run their softirq work on cpu0.
+# With a 10G port saturating that one core, the second 10G port and the Wi-Fi
+# offload rings queue behind it even though three cores sit idle.
+#
+#  SPREAD the QDMA banks over the online CPUs. The driver registers its
+# handlers as IRQF_SHARED, so an IRQ line can carry other users' actions; only
+# the lines that list a qdma action are touched, and each line is moved
+# wholesale rather than by rewriting a subset of its list.
+#
+# NAPI sits on the dummy "qdma_eth" netdev rather than on wan/lan, so there is
+# no per-interface RPS knob to tune here: IRQ affinity is the effective
+# control for this driver.
+
+START=39
+
+# airoha_qdma_init_irq() names its handlers KBUILD_MODNAME "." <irq index>,
+# i.e. "airoha_eth.0", "airoha_eth.1".
+IRQ_NAME="${QDMA_IRQ_NAME:-airoha_eth}"
+LOG_TAG="qdma-irq-affinity"
+
+log() {
+	logger -t "$LOG_TAG" "$@" 2>/dev/null
+}
+
+online_cpu_list() {
+	# "0-3" / "0,2-3" -> individual numbers
+	sed 's/,/ /g' /sys/devices/system/cpu/online 2>/dev/null | \
+	while read -r range; do
+		case "$range" in
+		*-*) start=${range%-*}; end=${range#*-}
+			while [ "$start" -le "$end" ]; do
+				echo "$start"
+				start=$((start + 1))
+			done ;;
+		'') ;;
+		*) echo "$range" ;;
+		esac
+	done
+}
+
+# IRQ lines whose action list mentions a qdma handler.
+qdma_irqs() {
+	awk -v name="$IRQ_NAME" '
+		/^[[:space:]]*[0-9]+:/ && index(tolower($0), name) { sub(/:.*/, ""); gsub(/[[:space:]]/, ""); print }
+	' /proc/interrupts 2>/dev/null
+}
+
+main() {
+	local cpus ncpu i=0 irq cpu mask
+
+	cpus=$(online_cpu_list | tr '\n' ' ')
+	ncpu=$(echo "$cpus" | wc -w)
+	[ "$ncpu" -gt 0 ] || return 0
+
+	for irq in $(qdma_irqs); do
+		cpu=$(echo "$cpus" | cut -d' ' -f$(( (i % ncpu) + 1 )))
+		mask=$(printf '%08x' "$((1 << cpu))")
+
+		[ "$(cat "/proc/irq/$irq/smp_affinity" 2>/dev/null)" = "$mask" ] && {
+			i=$((i + 1))
+			continue
+		}
+
+		if echo "$mask" > "/proc/irq/$irq/smp_affinity" 2>/dev/null; then
+			log "irq $irq pinned to cpu$cpu"
+		fi
+		i=$((i + 1))
+	done
+}
+
+start() {
+	main
+}

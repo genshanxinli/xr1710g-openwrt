@@ -1,0 +1,53 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: give the RX rings room for a 10G burst
+
+Every one of the 32 RX rings is bound to an IRQ (RX_DONE_INT_MASK is
+0xffffffff), but most of them hold only 32 descriptors.  At 10G a 1 KiB
+packet consumes a slot roughly every 800 ns, so 32 slots buy about 25 us
+of slack - less than one NAPI poll takes when the ring is drained with a
+full budget.  The QDMA then runs dry and starts dropping.
+
+Ring 0 is the CPU port and already had 1024 descriptors.  The four rings
+that carry the multi-gigabit ports (2, 4, 11, 15) are raised to 256 and
+the rest to 128.  At 32 bytes per descriptor and 1 KiB buffers that is
+~172 KiB of descriptors and ~5 MiB of buffers, which a 2 GiB board takes
+without noticing.
+
+This does not change the memory window reserved for hardware forwarding
+(qdma0/qdma1-buf): those are separate regions sized by the DTS.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+
+--- a/drivers/net/ethernet/airoha/airoha_eth.h
++++ b/drivers/net/ethernet/airoha/airoha_eth.h
+@@ -39,12 +39,24 @@
+ #define HW_DSCP_NUM			2048
+ #define IRQ_QUEUE_LEN(_n)		((_n) ? 1024 : 2048)
+ #define TX_DSCP_NUM			1024
++/* Every one of the 32 rings is bound to an IRQ (RX_DONE_INT_MASK is
++ * 0xffffffff), so a ring with 32 slots leaves the QDMA only a few
++ * microseconds of slack before it starts dropping: at 10G a 1 KB packet
++ * consumes a slot roughly every 800 ns, and NAPI only refills the ring after
++ * it has drained a whole budget. The 32-entry default was sized for the
++ * gigabit reference board, not for a port running at 10G.
++ *
++ * Ring 0 is the CPU port and keeps its 1024. The four rings that carry the
++ * multi-gigabit ports get 256, everything else 128. At 32 bytes per
++ * descriptor that is ~190 KiB of descriptors in total, plus the matching
++ * page_pool buffers, which a 2 GiB board absorbs without trouble.
++ */
+ #define RX_DSCP_NUM(_n)			\
+-	((_n) ==  2 ? 128 :		\
+-	 (_n) ==  4 ? 128 :		\
+-	 (_n) == 11 ? 128 :		\
+-	 (_n) == 15 ? 128 :		\
+-	 (_n) ==  0 ? 1024 : 32)
++	((_n) ==  2 ? 256 :		\
++	 (_n) ==  4 ? 256 :		\
++	 (_n) == 11 ? 256 :		\
++	 (_n) == 15 ? 256 :		\
++	 (_n) ==  0 ? 1024 : 128)
+ 
+ #define AIROHA_LRO_PAGE_ORDER		get_order(SZ_16K)
+ #define AIROHA_MAX_NUM_LRO_QUEUES	8
