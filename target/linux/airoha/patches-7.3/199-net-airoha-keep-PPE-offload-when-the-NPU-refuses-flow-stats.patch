@@ -1,0 +1,159 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: keep PPE offload when the NPU refuses flow stats
+
+With CONFIG_NET_AIROHA_FLOW_STATS enabled, airoha_ppe_offload_setup()
+asks the NPU firmware for the counter region and treats any failure as
+fatal:
+
+	err = npu->ops.ppe_init_stats(npu, ppe->foe_stats_dma,
+				      ppe_num_stats_entries);
+	if (err)
+		goto error_npu_put;
+
+so a firmware that does not implement PPE_FUNC_SET_WAIT_FLOW_STATS_SETUP
+ends up with no offload at all - the feature that is the whole point of
+the driver - instead of offload without counters.
+
+The firmware also reports success with a zero npu_stats_addr when its
+internal SRAM pool is exhausted, and that zero address was being handed
+to devm_ioremap().
+
+Treat flow statistics as the optional capability they are: warn and
+continue without them, remember the decision in a new foe_stats_enabled
+flag so the statistics paths become no-ops, and reject a zero counter
+address as a refusal.
+
+While the counters are in use the counted flows are steered to port 6
+(the CDM3 path to the NPU), which is flow controlled separately from the
+other ports; clear PSE_PORT6_SHARE_DIS so that port takes part in the
+shared-buffer flow control.  Without counters the port is left alone.
+
+Based on the upstream "[PATCH net v3] net: airoha: keep PPE offload when
+NPU refuses flow stats" by Chad Monroe / Sayantan Nandy.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+
+--- a/drivers/net/ethernet/airoha/airoha_eth.h
++++ b/drivers/net/ethernet/airoha/airoha_eth.h
+@@ -671,6 +671,11 @@
+ 
+ 	struct airoha_foe_stats *foe_stats;
+ 	dma_addr_t foe_stats_dma;
++	/* Cleared when the NPU refuses to provide the counter region: the
++	 * statistics path is then skipped entirely and the offload keeps
++	 * running through the plain PPE fast path.
++	 */
++	bool foe_stats_enabled;
+ 
+ 	struct dentry *debugfs_dir;
+ };
+--- a/drivers/net/ethernet/airoha/airoha_regs.h
++++ b/drivers/net/ethernet/airoha/airoha_regs.h
+@@ -72,6 +72,11 @@
+ #define PSE_CFG_OQ_RSV_MASK		GENMASK(13, 0)
+ 
+ #define PSE_FQ_CFG			0x008c
++/* PSE_FC_CFG carries one share-control bit per port; bit 22 covers port 6,
++ * the CDM3 path that carries the flows the NPU is asked to count.
++ */
++#define PSE_FC_CFG			0x0098
++#define PSE_PORT6_SHARE_DIS		BIT(22)
+ #define PSE_FQ_LIMIT_MASK		GENMASK(14, 0)
+ 
+ #define REG_FE_PSE_BUF_SET		0x0090
+--- a/drivers/net/ethernet/airoha/airoha_npu.c
++++ b/drivers/net/ethernet/airoha/airoha_npu.c
+@@ -475,6 +475,15 @@
+ 	if (err)
+ 		goto out;
+ 
++	/* The firmware answers success with a zero address when its SRAM pool
++	 * has no room left for the counters, so a zero address is a refusal
++	 * and must not reach devm_ioremap().
++	 */
++	if (!ppe_data->stats_info.npu_stats_addr) {
++		err = -ENOSPC;
++		goto out;
++	}
++
+ 	npu->stats = devm_ioremap(npu->dev,
+ 				  ppe_data->stats_info.npu_stats_addr,
+ 				  size);
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -181,6 +181,14 @@
+ 	sram_ppe_num_data_entries =
+ 		PPE_RAM_NUM_ENTRIES_SHIFT(sram_ppe_num_data_entries);
+ 
++	/* Counted flows are steered through port 6, the CDM3 path to the NPU,
++	 * and that port is flow controlled separately from the others. Let it
++	 * take part in shared-buffer flow control only while counters are in
++	 * use, so a board running without them keeps the port out of the way.
++	 */
++	if (sram_num_stats_entries > 0 && ppe->foe_stats_enabled)
++		airoha_fe_clear(eth, PSE_FC_CFG, PSE_PORT6_SHARE_DIS);
++
+ 	for (i = 0; i < eth->soc->num_ppe; i++) {
+ 		airoha_fe_wr(eth, REG_PPE_TB_BASE(i),
+ 			     ppe->foe_dma + sram_tb_size);
+@@ -663,6 +671,9 @@
+ {
+ 	int i, ppe_num_stats_entries;
+ 
++	if (unlikely(!ppe->foe_stats_enabled))
++		return;
++
+ 	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
+ 	if (ppe_num_stats_entries < 0)
+ 		return;
+@@ -681,6 +692,9 @@
+ 	int ppe_num_stats_entries;
+ 	u8 nbq;
+ 
++	if (unlikely(!ppe->foe_stats_enabled))
++		return;
++
+ 	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
+ 	if (ppe_num_stats_entries < 0)
+ 		return;
+@@ -1429,6 +1443,9 @@
+ 	struct airoha_npu *npu;
+ 	u32 index;
+ 
++	if (unlikely(!ppe->foe_stats_enabled))
++		return;
++
+ 	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
+ 	if (ppe_num_stats_entries < 0)
+ 		return;
+@@ -1442,7 +1459,7 @@
+ 	rcu_read_lock();
+ 
+ 	npu = rcu_dereference(eth->npu);
+-	if (npu) {
++	if (npu && npu->stats) {
+ 		u64 packets = ppe->foe_stats[index].packets;
+ 		u64 bytes = ppe->foe_stats[index].bytes;
+ 		struct airoha_foe_stats npu_stats;
+@@ -1574,8 +1591,18 @@
+ 	if (ppe_num_stats_entries > 0) {
+ 		err = npu->ops.ppe_init_stats(npu, ppe->foe_stats_dma,
+ 					      ppe_num_stats_entries);
+-		if (err)
+-			goto error_npu_put;
++		if (err) {
++			/* Counting flows is optional: a firmware that cannot
++			 * provide counters must not cost us the offload. Drop
++			 * the statistics path and keep the plain PPE fast
++			 * path, which needs no NPU involvement at all.
++			 */
++			dev_warn(eth->dev,
++				 "NPU refused flow stats (%d), continuing without counters\n",
++				 err);
++			ppe->foe_stats_enabled = false;
++			err = 0;
++		}
+ 	}
+ 
+ 	airoha_ppe_hw_init(ppe);
