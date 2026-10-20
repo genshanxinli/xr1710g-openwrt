@@ -1,0 +1,118 @@
+From: Gilly1970 <gilroyscott1970@gmail.com>
+Date: Sat, 23 Aug 2026 00:00:00 +0000
+Subject: [PATCH] net: pcs: airoha: re-trigger the JCPLL VCO band search on the AN7581 ETH lane
+
+On the AN7581 ETH SerDes lane the JCPLL VCO band search runs only once, from
+an7581_pcs_jcpll_bringup(), and it programs JCPLL_VCO_TCLVAR *before* the
+"Enable PLL" writes at the end of the same function. The field is never
+written again, and the driver never checks whether the PLL locked.
+
+Because the band search runs while the PLL is still off, it can settle on a
+VCO code whose transmit the link partner cannot lock onto: the partner's
+system-side SerDes shows no block lock, the USXGMII in-band AN word never
+completes, and the lane stays down for good. On at least one W1700K this
+reproduces 100% of the time; it is also the likely cause of the "lan2 only
+comes up on some boots" reports, where the one-shot search happens to land on
+a usable code.
+
+Re-run the search once the PLL is enabled and the lane is fully configured. A
+TCLVAR transition while the PLL runs re-triggers it; the final value does not
+matter (0x3 and 0x5 both work), only that the field changes with the PLL up.
+That has to happen after the whole configuration sequence, so it is wired in
+as a post_config op, called at the end of airoha_pcs_config(), and only for
+the ETH lane (USXGMII/10GBASER). The PON lane is untouched.
+
+One-line check on a live, unpatched board (ETH-lane pcs_ana + 0x30, TCLVAR is
+bits [2:0]):
+
+  devmem 0x1fa7a030                 # 0x0000301B, lane dead
+  devmem 0x1fa7a030 32 0x0000301D   # link comes up within ~1-2s
+
+Reported on one board only; the devmem line above is how to confirm it on
+another one.
+
+Not merged upstream as of 2026-10-20.
+
+Signed-off-by: Gilly1970 <gilroyscott1970@gmail.com>
+---
+--- a/drivers/net/pcs/airoha/pcs-airoha.h
++++ b/drivers/net/pcs/airoha/pcs-airoha.h
+@@ -1260,6 +1260,8 @@
+ 		       int index, phy_interface_t interface);
+ 	void (*link_up)(struct airoha_pcs_priv *priv, int index);
+ 	int (*rxlock_workaround)(struct airoha_pcs_priv *priv, int index);
++	void (*post_config)(struct airoha_pcs_priv *priv,
++			    int index, phy_interface_t interface);
+ };
+ 
+ #define to_airoha_pcs_port(n) container_of(n, struct airoha_pcs_port, pcs)
+@@ -1274,6 +1276,8 @@
+ 
+ void an7581_pcs_phya_link_up(struct airoha_pcs_priv *priv, int index);
+ int an7581_pcs_rxlock_workaround(struct airoha_pcs_priv *priv, int index);
++void an7581_pcs_jcpll_recal(struct airoha_pcs_priv *priv,
++			    int index, phy_interface_t interface);
+ #else
+ static inline int an7581_pcs_alloc_regmap_fields(struct airoha_pcs_priv *priv)
+ {
+@@ -1307,4 +1311,10 @@
+ {
+ 	return 0;
+ }
++
++static inline void an7581_pcs_jcpll_recal(struct airoha_pcs_priv *priv,
++					  int index,
++					  phy_interface_t interface)
++{
++}
+ #endif
+--- a/drivers/net/pcs/airoha/pcs-airoha-common.c
++++ b/drivers/net/pcs/airoha/pcs-airoha-common.c
+@@ -659,6 +659,9 @@
+ 				AIROHA_PCS_XFI_TX_FC_EN | AIROHA_PCS_XFI_RX_FC_EN :
+ 				0);
+ 
++	if (data->post_config)
++		data->post_config(priv, index, interface);
++
+ 	return 0;
+ }
+ 
+@@ -1266,6 +1269,7 @@
+ 	.bringup = an7581_pcs_bringup,
+ 	.link_up = an7581_pcs_phya_link_up,
+ 	.rxlock_workaround = an7581_pcs_rxlock_workaround,
++	.post_config = an7581_pcs_jcpll_recal,
+ };
+ 
+ static const struct airoha_pcs_match_data an7581_pcs_pon = {
+--- a/drivers/net/pcs/airoha/pcs-an7581.c
++++ b/drivers/net/pcs/airoha/pcs-an7581.c
+@@ -1906,6 +1906,27 @@
+ 	return 0;
+ }
+ 
++void an7581_pcs_jcpll_recal(struct airoha_pcs_priv *priv,
++			    int index, phy_interface_t interface)
++{
++	struct regmap_field **pcs_ana_fields = priv->pcs_ana_fields[index];
++
++	if (interface != PHY_INTERFACE_MODE_USXGMII &&
++	    interface != PHY_INTERFACE_MODE_10GBASER)
++		return;
++
++	/* an7581_pcs_jcpll_bringup() runs the VCO band search with the PLL
++	 * still off, so it can settle on a code the link partner cannot lock
++	 * onto. Transition the field again now that the PLL is up and the
++	 * lane is fully configured: the search re-runs and settles on a
++	 * usable band. The final value does not matter, only that it changed
++	 * while the PLL is running.
++	 */
++	regmap_field_write(pcs_ana_fields[AN7581_PCS_JCPLL_VCO_TCLVAR], 0x3);
++	usleep_range(1000, 2000);
++	regmap_field_write(pcs_ana_fields[AN7581_PCS_JCPLL_VCO_TCLVAR], 0x5);
++}
++
+ static void an7581_pcs_pll_bringup(struct airoha_pcs_priv *priv,
+ 				   int index, phy_interface_t interface)
+ {
