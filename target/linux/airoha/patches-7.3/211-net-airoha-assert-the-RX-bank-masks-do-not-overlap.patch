@@ -1,0 +1,47 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: assert that the RX interrupt bank masks do not overlap
+
+airoha_qdma_rx_napi_poll() re-arms a ring after a NAPI round by walking
+every interrupt bank and enabling the ring in each bank whose
+RX_IRQ_BANK_PIN_MASK() contains it.  The walk is written as a loop and
+not as a lookup, so it keeps working only as long as at most one bank
+names a given ring: with two matching banks the ring's interrupt would be
+enabled twice, which leaves the hardware raise count out of step with
+the number of times the driver re-enables it, and the ring stops being
+serviced.
+
+Today the four masks are disjoint - bank 0 covers 0xbb9f, bank 1 the top
+21 bits, banks 2 and 3 name ring 5 and ring 6 - but nothing states or
+checks that.  Ring sizes are currently assigned by ring number without
+reference to which bank owns it, so a future split of a bank moves rings
+between banks with no compile-time signal.
+
+Assert the property at build time so that a change to the masks cannot
+quietly break ring re-arming.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -1285,6 +1285,20 @@
+ {
+ 	int i;
+ 
++	/* A ring is serviced only if some interrupt bank raises its
++	 * completion, and airoha_qdma_rx_napi_poll() finds that bank by
++	 * testing each RX_IRQ_BANK_PIN_MASK() in turn and enabling the ring
++	 * in every bank that matches.  That only identifies one bank if the
++	 * masks do not overlap.  They do not today; assert it so a future
++	 * bank split cannot silently enable a ring twice.
++	 */
++	BUILD_BUG_ON(RX_IRQ_BANK_PIN_MASK(0) & RX_IRQ_BANK_PIN_MASK(1));
++	BUILD_BUG_ON(RX_IRQ_BANK_PIN_MASK(0) & RX_IRQ_BANK_PIN_MASK(2));
++	BUILD_BUG_ON(RX_IRQ_BANK_PIN_MASK(0) & RX_IRQ_BANK_PIN_MASK(3));
++	BUILD_BUG_ON(RX_IRQ_BANK_PIN_MASK(1) & RX_IRQ_BANK_PIN_MASK(2));
++	BUILD_BUG_ON(RX_IRQ_BANK_PIN_MASK(1) & RX_IRQ_BANK_PIN_MASK(3));
++	BUILD_BUG_ON(RX_IRQ_BANK_PIN_MASK(2) & RX_IRQ_BANK_PIN_MASK(3));
++
+ 	for (i = 0; i < ARRAY_SIZE(qdma->q_rx); i++) {
+ 		int err;
+ 
