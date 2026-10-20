@@ -28,10 +28,10 @@ of 4096.  Three consequences, in order of severity:
    overwrites the other's forwarding decision.
 
  - Hashes in [4096, 8192) are presented to PPE1's control register as
-   entry numbers up to 8191, but PPE1 only has 4096 entries.  Only the
-   16-bit PPE_SRAM_CTRL_ENTRY_MASK width keeps that from being an
-   out-of-range write, and the entry it does name belongs to another
-   flow.
+   entry numbers up to 8191, but PPE1 only has 4096 entries, so the entry
+   they name belongs to another flow.  This patch does not fix that
+   addressing - the follow-up "address PPE entries from their own table"
+   does, by sending the index relative to the PPE that owns it.
 
  - airoha_ppe_get_total_num_entries() reports 32768 where the hardware
    has 4096 * 2 + 16384 == 24576, so the hash space and the DRAM region
