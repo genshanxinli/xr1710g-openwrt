@@ -1,0 +1,107 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: show what the PSE actually reserved
+
+The PSE pool is 16384 pages and the per-port reserves claim 4320 of
+them, but the split is invisible: the total is readable from
+REG_FE_PSE_BUF_SET, while the per-queue split only exists in the
+reservation calls made at probe time.  That makes the interesting
+question unanswerable - is GDM4's 8 KiB reserve really the two queues it
+has, or has something else eaten the pool - without a debugger.
+
+Add /sys/kernel/debug/pse/queues, walking every port and queue and
+printing the reserve it holds, and spell out in pse/usage that there is
+no occupancy register: those thresholds are limits, not watermarks, and
+a full pool shows up as rx_fc_drops and nothing else.  Reading a reserve
+means writing the port/queue index first, so this is deliberately not a
+fast path, and it only exists with debugfs compiled in.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -643,7 +643,11 @@
+ 		   fq_limit ? all_rsv * 100 / fq_limit : 0);
+ 	seq_printf(m, "shared   %u pages (%u KiB)\n", fq_limit - all_rsv,
+ 		   (fq_limit - all_rsv) * 128 / 1024);
+-	seq_puts(m, "\nshare-used thresholds (pages)\n");
++	seq_puts(m, "\nshare-used thresholds (pages): when the shared pool\n");
++	seq_puts(m, "crosses these the port's share is throttled. The PSE\n");
++	seq_puts(m, "exposes no current-occupancy register, so the only\n");
++	seq_puts(m, "runtime evidence of a full pool is rx_fc_drops in\n");
++	seq_puts(m, "ethtool -S.\n\n");
+ 	seq_printf(m, "  high %u\n", hthd);
+ 	seq_printf(m, "  mid  %u\n", mthd);
+ 	seq_printf(m, "  low  %u\n", lthd);
+@@ -652,11 +656,71 @@
+ }
+ DEFINE_SHOW_ATTRIBUTE(airoha_pse_debugfs);
+ 
++static const char *const airoha_pse_port_names[] = {
++	[FE_PSE_PORT_CDM1] = "cdm1",
++	[FE_PSE_PORT_GDM1] = "gdm1",
++	[FE_PSE_PORT_GDM2] = "gdm2",
++	[FE_PSE_PORT_GDM3] = "gdm3",
++	[FE_PSE_PORT_PPE1] = "ppe1",
++	[FE_PSE_PORT_CDM2] = "cdm2",
++	[FE_PSE_PORT_CDM3] = "cdm3",
++	[FE_PSE_PORT_CDM4] = "cdm4",
++	[FE_PSE_PORT_PPE2] = "ppe2",
++	[FE_PSE_PORT_GDM4] = "gdm4",
++	[FE_PSE_PORT_CDM5] = "cdm5",
++};
++
++static const u8 airoha_pse_port_queues[] = {
++	[FE_PSE_PORT_CDM1] = 6,
++	[FE_PSE_PORT_GDM1] = 6,
++	[FE_PSE_PORT_GDM2] = 32,
++	[FE_PSE_PORT_GDM3] = 6,
++	[FE_PSE_PORT_PPE1] = 4,
++	[FE_PSE_PORT_CDM2] = 6,
++	[FE_PSE_PORT_CDM3] = 8,
++	[FE_PSE_PORT_CDM4] = 10,
++	[FE_PSE_PORT_PPE2] = 4,
++	[FE_PSE_PORT_GDM4] = 2,
++	[FE_PSE_PORT_CDM5] = 2,
++};
++
++/* Reading a per-queue reserve means writing the port/queue index first, so
++ * it is not a plain load. The reservation code only writes during probe and
++ * on link up/down, well before this file is of any use, so a reader here
++ * cannot race a meaningful update.
++ */
++static int airoha_pse_debugfs_queues_show(struct seq_file *m, void *private)
++{
++	struct airoha_eth *eth = m->private;
++	u32 port, q;
++
++	seq_puts(m, "port queue rsv_pages rsv_KiB\n");
++	for (port = 0; port <= FE_PSE_PORT_CDM5; port++) {
++		if (!airoha_pse_port_names[port])
++			continue;
++
++		for (q = 0; q < airoha_pse_port_queues[port]; q++) {
++			u32 pages = airoha_fe_get_pse_queue_rsv_pages(eth, port,
++								      q);
++
++			if (pages)
++				seq_printf(m, "%-4s %5u %9u %7u\n",
++					   airoha_pse_port_names[port], q, pages,
++					   pages * 128 / 1024);
++		}
++	}
++
++	return 0;
++}
++DEFINE_SHOW_ATTRIBUTE(airoha_pse_debugfs_queues);
++
+ static void airoha_pse_debugfs_init(struct airoha_eth *eth)
+ {
+ 	eth->debugfs_dir = debugfs_create_dir("pse", NULL);
+ 	debugfs_create_file("usage", 0444, eth->debugfs_dir, eth,
+ 			    &airoha_pse_debugfs_fops);
++	debugfs_create_file("queues", 0444, eth->debugfs_dir, eth,
++			    &airoha_pse_debugfs_queues_fops);
+ }
+ #else
+ static void airoha_pse_debugfs_init(struct airoha_eth *eth) {}
