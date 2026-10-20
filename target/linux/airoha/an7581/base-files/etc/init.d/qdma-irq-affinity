@@ -43,7 +43,10 @@ START=39
 QDMA_IRQ_NAME="${QDMA_IRQ_NAME:-airoha_eth}"
 # The Wi-Fi and NPU lines are named after their module, sometimes with a
 # "-hif" suffix for the firmware doorbell.
-OTHER_IRQ_NAMES="${OTHER_IRQ_NAMES:-mt76-npu mt7996e}"
+# mt7996e-hif is the second PCI function of the same chip and shares the
+# "mt7996e" prefix; listing both means the longest-match rule below names it
+# correctly instead of folding it into the first.
+OTHER_IRQ_NAMES="${OTHER_IRQ_NAMES:-mt76-npu mt7996e-hif mt7996e}"
 LOG_TAG="qdma-irq-affinity"
 
 log() {
@@ -104,26 +107,34 @@ matching_irqs() {
 	awk -v qdma="$QDMA_IRQ_NAME" -v others="$OTHER_IRQ_NAMES" '
 		BEGIN {
 			n = split(others, o, " ")
+			cand[1] = qdma
 			for (i = 1; i <= n; i++)
-				want[o[i]] = 1
+				cand[i + 1] = o[i]
+			ncand = n + 1
 		}
 		/^[[:space:]]*[0-9]+:/ {
 			line = tolower($0)
+
+			# mt7996e is a prefix of mt7996e-hif, and awk
+			# iterates arrays in an unspecified order, so take
+			# the longest name that matches rather than whichever
+			# one the hash table happens to yield first.
 			name = ""
-			if ((p = index(line, tolower(qdma))) > 0) {
-				name = qdma
-			} else {
-				for (w in want)
-					if ((p = index(line, tolower(w))) > 0) {
-						name = w
-						break
-					}
+			p = 0
+			for (i = 1; i <= ncand; i++) {
+				pos = index(line, tolower(cand[i]))
+				if (!pos)
+					continue
+				if (length(cand[i]) > length(name)) {
+					name = cand[i]
+					p = pos
+				}
 			}
 			if (name == "")
 				next
 
-			# Walk the characters right after the handler name; the
-			# driver names its QDMA handlers "<mod>.<irq index>".
+			# Walk the characters right after the handler name;
+			# the driver names its QDMA handlers "<mod>.<index>".
 			p += length(name)
 			suffix = ""
 			while (p <= length(line)) {
