@@ -1,0 +1,188 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: let a running board say how the entry field treats an out-of-range index
+
+The driver now sends PPE_SRAM_CTRL_ENTRY an index relative to the PPE that
+owns the slot, so no data path depends on what the hardware does when that
+index is larger than the table.  Whether it wraps to the start of the table
+or is taken as written is still worth being able to answer, because it
+decides whether a hash and a slot are the same thing for every entry past
+the first PPE, and because it is not observable from anywhere else.
+
+There is no /dev/mem on this target (CONFIG_DEVMEM is not set) and no
+devmem applet, so the probe has to live in the driver.  Reading
+/sys/kernel/debug/ppe/entry_alias runs it: it finds a slot inside PPE1 that
+holds something, reads slot + table_size through the same control register,
+and compares.  Wrap lands on the first read and the two agree; raw goes
+past the end and they do not.
+
+It reads only, and it only runs when that file is read, so a board nobody
+is inspecting never has its tables touched.  A table with nothing bound
+reports "no sample" instead of a guess, since two empty slots would agree
+on zero for the wrong reason.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+
+--- a/drivers/net/ethernet/airoha/airoha_eth.h	2026-10-20 17:12:33.569749534 +0800
++++ b/drivers/net/ethernet/airoha/airoha_eth.h	2026-10-20 17:13:45.516499408 +0800
+@@ -667,6 +667,18 @@
+ #define AIROHA_RXD4_PPE_CPU_REASON	GENMASK(20, 16)
+ #define AIROHA_RXD4_FOE_ENTRY		GENMASK(15, 0)
+ 
++/* Whether PPE_SRAM_CTRL_ENTRY wraps an out-of-range entry number back to
++ * the start of the table or takes it as written.  The driver sends the
++ * index relative to the owning PPE, which is correct either way, so this
++ * exists only to be able to answer the question from a running board.
++ */
++enum airoha_ppe_entry_alias {
++	AIROHA_PPE_ENTRY_ALIAS_UNKNOWN,
++	AIROHA_PPE_ENTRY_ALIAS_WRAPS,
++	AIROHA_PPE_ENTRY_ALIAS_RAW,
++	AIROHA_PPE_ENTRY_ALIAS_FAILED,
++};
++
+ struct airoha_ppe {
+ 	struct airoha_ppe_dev dev;
+ 	struct airoha_eth *eth;
+@@ -688,6 +700,12 @@
+ 	 */
+ 	bool foe_stats_enabled;
+ 
++	/* What the entry field in PPE_SRAM_CTRL_ENTRY does with a value
++	 * past the end of a table.  Filled in by a probe at hw_init time;
++	 * see airoha_ppe_probe_entry_alias().
++	 */
++	enum airoha_ppe_entry_alias entry_alias;
++
+ 	struct dentry *debugfs_dir;
+ };
+ 
+@@ -817,6 +835,7 @@
+ u32 airoha_ppe_get_total_num_entries(struct airoha_ppe *ppe);
+ struct airoha_foe_entry *airoha_ppe_foe_get_entry(struct airoha_ppe *ppe,
+ 						  u32 hash);
++int airoha_ppe_probe_entry_alias(struct airoha_ppe *ppe);
+ void airoha_ppe_foe_entry_get_stats(struct airoha_ppe *ppe, u32 hash,
+ 				    struct airoha_foe_stats64 *stats);
+ 
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c	2026-10-20 17:12:03.735048395 +0800
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c	2026-10-20 17:13:40.356519200 +0800
+@@ -858,6 +858,77 @@
+ 	return !memcmp(&e->data.d, &hwe->d, len - sizeof(hwe->ib1));
+ }
+ 
++/* The entry field in PPE_SRAM_CTRL_ENTRY is 16 bits wide and the driver
++ * hands it an index that always fits the selected PPE, so nothing in the
++ * data path depends on what the hardware does with a larger value.  This
++ * answers the question anyway, because whether entry N and entry N +
++ * table_size name the same slot decides whether a hash and a slot can be
++ * told apart at all - and that is not observable from the read side any
++ * other way.
++ *
++ * It is read only: it looks for a slot inside PPE1 that holds something,
++ * then reads slot + table_size and compares.  If the hardware wraps the
++ * entry number, the second read lands on the first and the two agree.  If
++ * it takes the number raw, the second read is outside the table and does
++ * not match.  A slot that is zero is not usable as a sample, since both
++ * reads could then agree on zero for the wrong reason, so empty slots are
++ * skipped and a table with nothing bound reports FAILED rather than a
++ * guess.
++ */
++int airoha_ppe_probe_entry_alias(struct airoha_ppe *ppe)
++{
++	u32 num_entries = airoha_ppe_get_sram_num_entries(ppe);
++	u32 e, val;
++	int i;
++
++	spin_lock_bh(&ppe_lock);
++
++	ppe->entry_alias = AIROHA_PPE_ENTRY_ALIAS_FAILED;
++
++	for (e = 0; e < num_entries; e++) {
++		u32 a[PPE_ENTRY_SIZE / sizeof(u32)];
++		u32 b[PPE_ENTRY_SIZE / sizeof(u32)];
++
++		/* slot e */
++		airoha_fe_wr(ppe->eth, REG_PPE_RAM_CTRL(0),
++			     FIELD_PREP(PPE_SRAM_CTRL_ENTRY_MASK, e) |
++			     PPE_SRAM_CTRL_REQ_MASK);
++		if (read_poll_timeout_atomic(airoha_fe_rr, val,
++					     val & PPE_SRAM_CTRL_ACK_MASK,
++					     10, 100, false, ppe->eth,
++					     REG_PPE_RAM_CTRL(0)))
++			break;
++		for (i = 0; i < PPE_ENTRY_SIZE / sizeof(u32); i++)
++			a[i] = airoha_fe_rr(ppe->eth, REG_PPE_RAM_ENTRY(0, i));
++
++		if (!a[0])
++			continue;
++
++		/* slot e + table_size, still addressed through PPE1 */
++		airoha_fe_wr(ppe->eth, REG_PPE_RAM_CTRL(0),
++			     FIELD_PREP(PPE_SRAM_CTRL_ENTRY_MASK,
++					e + num_entries) |
++			     PPE_SRAM_CTRL_REQ_MASK);
++		if (read_poll_timeout_atomic(airoha_fe_rr, val,
++					     val & PPE_SRAM_CTRL_ACK_MASK,
++					     10, 100, false, ppe->eth,
++					     REG_PPE_RAM_CTRL(0)))
++			break;
++		for (i = 0; i < PPE_ENTRY_SIZE / sizeof(u32); i++)
++			b[i] = airoha_fe_rr(ppe->eth, REG_PPE_RAM_ENTRY(0, i));
++
++		if (!memcmp(a, b, PPE_ENTRY_SIZE))
++			ppe->entry_alias = AIROHA_PPE_ENTRY_ALIAS_WRAPS;
++		else
++			ppe->entry_alias = AIROHA_PPE_ENTRY_ALIAS_RAW;
++		break;
++	}
++
++	spin_unlock_bh(&ppe_lock);
++
++	return ppe->entry_alias == AIROHA_PPE_ENTRY_ALIAS_FAILED ? -ENODATA : 0;
++}
++
+ static int airoha_ppe_foe_commit_sram_entry(struct airoha_ppe *ppe, u32 hash)
+ {
+ 	struct airoha_foe_entry *hwe = ppe->foe + hash * sizeof(*hwe);
+--- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c	2026-10-20 17:12:33.571749714 +0800
++++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c	2026-10-20 17:13:55.396578702 +0800
+@@ -242,6 +242,29 @@
+ }
+ DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_foe_bind);
+ 
++static int airoha_ppe_debugfs_foe_alias_show(struct seq_file *m, void *private)
++{
++	static const char *const str[] = {
++		[AIROHA_PPE_ENTRY_ALIAS_UNKNOWN] = "not probed",
++		[AIROHA_PPE_ENTRY_ALIAS_WRAPS] = "wraps",
++		[AIROHA_PPE_ENTRY_ALIAS_RAW] = "raw",
++		[AIROHA_PPE_ENTRY_ALIAS_FAILED] = "no sample",
++	};
++	struct airoha_ppe *ppe = m->private;
++
++	/* Reading this file runs the probe, so nothing touches the tables
++	 * on a board nobody is looking at.  It only reads.
++	 */
++	if (ppe->entry_alias == AIROHA_PPE_ENTRY_ALIAS_UNKNOWN)
++		airoha_ppe_probe_entry_alias(ppe);
++
++	seq_printf(m, "entry_alias %s\n",
++		   str[ppe->entry_alias] ?: "unknown");
++
++	return 0;
++}
++DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_foe_alias);
++
+ int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
+ {
+ 	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
+@@ -251,6 +274,8 @@
+ 			    &airoha_ppe_debugfs_foe_bind_fops);
+ 	debugfs_create_file("usage", 0444, ppe->debugfs_dir, ppe,
+ 			    &airoha_ppe_debugfs_foe_usage_fops);
++	debugfs_create_file("entry_alias", 0444, ppe->debugfs_dir, ppe,
++			    &airoha_ppe_debugfs_foe_alias_fops);
+ 
+ 	return 0;
+ }
