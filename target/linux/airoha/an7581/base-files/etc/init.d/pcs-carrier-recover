@@ -1,0 +1,93 @@
+#!/bin/sh /etc/rc.common
+
+# The AN7581 PCS block occasionally fails its RX calibration and then never
+# brings the in-band link up:
+#
+#   airoha-pcs 1fa09000.pcs: No FBCK Lock from FreqDet module after 50
+#   calibration try. PCS won't work.
+#
+# Copper still negotiates (2.5G on lan2), but the internal USXGMII link stays
+# down and the netdev reports NO-CARRIER forever. Patch 745 makes E2 silicon
+# take the manual calibration path, which removes the usual trigger, but it is
+# a workaround for a vendor calibration routine and does not make the failure
+# impossible. When it does happen the only known recovery is to bounce the
+# interface:
+#
+#   ifdown lan; sleep 3; ifup lan; sleep 12
+#
+# so do exactly that, unattended, but only when the failure actually shows up
+# in the kernel log. Polling for a carrier that never comes would take a
+# working port down for 15 seconds on every boot.
+#
+# The check runs a few minutes after boot rather than once: lan2 is brought up
+# by netifd well before the calibration retries have exhausted themselves, and
+# the log line lands after that.
+
+START=95
+
+# Ports that use the airoha PCS. lan2 is GDM4/phy5 on the XR1710G; wan is
+# GDM2/phy8 on its own PCS instance and is not affected by this failure mode.
+PCS_DEV="${PCS_DEV:-lan2}"
+PCS_LOG_PATTERN="${PCS_LOG_PATTERN:-FreqDet module after 50 calibration try}"
+PCS_DELAY="${PCS_DELAY:-180}"
+PCS_DOWN_SECS="${PCS_DOWN_SECS:-3}"
+PCS_UP_SECS="${PCS_UP_SECS:-12}"
+PCS_MAX_ATTEMPTS="${PCS_MAX_ATTEMPTS:-2}"
+LOG_TAG="pcs-carrier-recover"
+
+log() {
+	logger -t "$LOG_TAG" "$@"
+}
+
+# The calibration failure is printed by the PCS driver at probe time, before
+# syslogd has necessarily started, so look at the persistent ring buffer
+# rather than at what the log daemon happened to capture.
+saw_calib_failure() {
+	dmesg 2>/dev/null | grep -q "$PCS_LOG_PATTERN"
+}
+
+has_carrier() {
+	[ -r "/sys/class/net/$PCS_DEV/carrier" ] || return 0
+	[ "$(cat "/sys/class/net/$PCS_DEV/carrier" 2>/dev/null)" = "1" ]
+}
+
+recover() {
+	log "$PCS_DEV: carrier down with PCS calibration failure, bouncing it"
+	ifdown "$PCS_DEV" 2>/dev/null
+	sleep "$PCS_DOWN_SECS"
+	ifup "$PCS_DEV" 2>/dev/null
+	sleep "$PCS_UP_SECS"
+}
+
+main() {
+	local attempt=0
+
+	[ -d "/sys/class/net/$PCS_DEV" ] || return 0
+
+	while [ "$attempt" -lt "$PCS_MAX_ATTEMPTS" ]; do
+		saw_calib_failure || return 0
+		has_carrier && return 0
+
+		recover
+		attempt=$((attempt + 1))
+
+		has_carrier && {
+			log "$PCS_DEV: carrier restored after $attempt attempt(s)"
+			return 0
+		}
+	done
+
+	log "$PCS_DEV: carrier still down after $attempt attempt(s)"
+	return 0
+}
+
+start() {
+	(
+		sleep "$PCS_DELAY"
+		main
+	) &
+}
+
+stop() {
+	:
+}
