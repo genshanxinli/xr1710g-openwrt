@@ -9,7 +9,19 @@
 #
 # Enable it on the WAN device when it comes up, and turn it off again when it
 # goes down so the aggregation state does not outlive the interface.
-
+#
+# Do not add lan2 to this script.  The LRO block aggregates per QDMA, not per
+# port: qdma is chosen by "QDMA0 for lan ports, QDMA1 for WAN ports"
+# (airoha_dev_set_qdma()), so lan2 and the DSA conduit share one LRO engine.
+# Once two ingress ports feed one aggregation, the metadata the aggregate
+# carries - source GDM, L2 length, DSA tag - belongs to whichever packet
+# arrived first, and the driver cannot recover the real ingress.  The
+# community saw exactly that and withdrew the "enable LRO by default" patch
+# (994) that removed the "-EBUSY while a QDMA is shared" guard; patches 195
+# and 198 here deliberately removed that same guard, so the guard no longer
+# protects us.  What protects us today is this script: WAN (GDM2) really does
+# sit on its own QDMA.  Test with lan2 first (ethtool -K lan2 rx-lro on plus
+# two simultaneous flows) before widening this.
 [ "$ACTION" = ifup ] || [ "$ACTION" = ifdown ] || exit 0
 [ "$INTERFACE" = wan ] || exit 0
 

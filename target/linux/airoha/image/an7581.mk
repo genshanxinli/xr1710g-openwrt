@@ -142,7 +142,8 @@ define Device/gemtek_xr1710g-ubi
        the end of flash. A reinstall including corrected chainloader is needed.
   DEVICE_PACKAGES := airoha-en7581-mt7996-npu-firmware fitblk \
 		    kmod-br-netfilter kmod-hwmon-nct7802 kmod-mt7996-firmware \
-		    wpad-basic-mbedtls rtl826x-firmware dumpimage ethtool-full \
+		    wpad-basic-mbedtls rtl826x-firmware rtl8261c-firmware \
+		    dumpimage ethtool-full \
 		    luci-app-airoha-npu luci-app-airoha-flowsense \
 		    luci-app-airoha-fancontrol luci-app-wifi7 luci-app-mlo \
 		    luci
