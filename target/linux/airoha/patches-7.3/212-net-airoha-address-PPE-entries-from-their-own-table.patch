@@ -1,0 +1,135 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: address PPE entries from their own table, and fold without udiv
+
+Two follow-ups to "size the SRAM tables the way the hardware sees them".
+
+First, that patch left the entry index alone while halving the table.  The
+index written to PPE_SRAM_CTRL_ENTRY_MASK is a slot number inside the PPE
+the control register selects, and the hash is a slot number across both
+PPEs, so a hash in [base, 2 * base) named a slot in the second PPE that had
+been offset by base:
+
+	hash 4096 -> PPE2, entry 4096 of a 4096 entry table
+
+That was harmless only as long as the hardware wrapped the field to its own
+table size, which is the very assumption the previous patch was resting on.
+Avoiding the assumption is better than testing it: send "hash - base" and
+the write is in range whether or not the hardware wraps.  Do the same on
+the read side, so both halves address the same slot.
+
+Second, folding the hash with a variable modulo put a udiv on a path that
+runs per packet: airoha_ppe_check_skb() reaches it for every packet that
+lands on the slow path when a bind rate has been reached.  Only two
+geometries exist, and neither needs a divide.  A power of two is a mask,
+which is what the code did before counters were enabled.  24576 is
+3 * 8192, so it splits into "keep the low 13 bits, take everything above
+them modulo 3" - and the modulo by a constant 3 is compiled to a
+multiply-shift.  Anything else falls back to the real modulo.
+
+The two maps agree with "hash % num_entries" and both reach every slot:
+32768 -> 32768 of 32768, 24576 -> 24576 of 24576.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -78,6 +78,32 @@
+ 	return PPE_SRAM_NUM_ENTRIES;
+ }
+ 
++/* The table is not a power of two once flow counters carve their slots out
++ * of the SRAM: 8192 - 4096 entries per PPE over two PPEs, plus the DRAM
++ * region, gives 24576.  Folding with "& (entries - 1)" would then only ever
++ * produce the 16384 values that share the low 14 bits and leave 8192 entries
++ * unreachable, so the real size has to be divided out instead.
++ *
++ * "hash % num_entries" would do that, but airoha_ppe_check_skb() calls this
++ * for every packet that reaches the slow path, and a variable modulo is a
++ * udiv.  The two geometries that exist are handled without one: a power of
++ * two is a mask, and 24576 == 3 * 8192 splits into "low 13 bits kept,
++ * everything above them taken modulo 3", where the modulo is by a constant
++ * and the compiler turns it into a multiply-shift.  Anything else falls back
++ * to the real thing.
++ */
++static u32 airoha_ppe_fold_hash(u32 hash, u32 num_entries)
++{
++	if (!(num_entries & (num_entries - 1)))
++		return hash & (num_entries - 1);
++
++	if (num_entries == 3 * PPE_SRAM_NUM_ENTRIES)
++		return ((hash >> 13) % 3) * PPE_SRAM_NUM_ENTRIES +
++		       (hash & (PPE_SRAM_NUM_ENTRIES - 1));
++
++	return hash % num_entries;
++}
++
+ static u32 airoha_ppe_get_total_sram_num_entries(struct airoha_ppe *ppe)
+ {
+ 	struct airoha_eth *eth = ppe->eth;
+@@ -654,13 +680,7 @@
+ 	hash ^= hv1 ^ hv2 ^ hv3;
+ 	hash ^= hash >> 16;
+ 
+-	/* The table is not a power of two once flow counters carve their
+-	 * slots out of the SRAM, so "& (entries - 1)" would leave a hole:
+-	 * with 24576 entries it can only ever produce the 16384 values that
+-	 * share the low 14 bits, making 8192 entries permanently unreachable.
+-	 * Fold by the real size instead.
+-	 */
+-	return hash % num_entries;
++	return airoha_ppe_fold_hash(hash, num_entries);
+ }
+ 
+ static int airoha_ppe_foe_get_flow_stats_index(struct airoha_ppe *ppe,
+@@ -779,11 +799,18 @@
+ 
+ 	if (hash < sram_num_entries) {
+ 		u32 *hwe = ppe->foe + hash * sizeof(struct airoha_foe_entry);
+-		bool ppe2 = hash >= airoha_ppe_get_sram_num_entries(ppe);
++		u32 base = airoha_ppe_get_sram_num_entries(ppe);
++		bool ppe2 = hash >= base;
+ 		struct airoha_eth *eth = ppe->eth;
+ 		u32 val;
+ 		int i;
+ 
++		/* The entry field is an index into the selected PPE's own
++		 * table, so the second PPE is addressed from zero again.
++		 */
++		if (ppe2)
++			hash -= base;
++
+ 		airoha_fe_wr(ppe->eth, REG_PPE_RAM_CTRL(ppe2),
+ 			     FIELD_PREP(PPE_SRAM_CTRL_ENTRY_MASK, hash) |
+ 			     PPE_SRAM_CTRL_REQ_MASK);
+@@ -834,10 +861,20 @@
+ static int airoha_ppe_foe_commit_sram_entry(struct airoha_ppe *ppe, u32 hash)
+ {
+ 	struct airoha_foe_entry *hwe = ppe->foe + hash * sizeof(*hwe);
+-	bool ppe2 = hash >= airoha_ppe_get_sram_num_entries(ppe);
++	u32 base = airoha_ppe_get_sram_num_entries(ppe);
++	bool ppe2 = hash >= base;
+ 	u32 *ptr = (u32 *)hwe, val;
+ 	int i;
+ 
++	/* Address the entry relative to the PPE that owns it.  Writing the
++	 * raw hash worked only as long as the hardware wrapped it to its own
++	 * table size, and stopped working entirely once flow counters halved
++	 * that size, because every hash past the first PPE then named an
++	 * index the second PPE does not have.
++	 */
++	if (ppe2)
++		hash -= base;
++
+ 	for (i = 0; i < sizeof(*hwe) / sizeof(*ptr); i++)
+ 		airoha_fe_wr(ppe->eth, REG_PPE_RAM_ENTRY(ppe2, i), ptr[i]);
+ 
+@@ -1690,7 +1727,7 @@
+ 	u16 now, diff;
+ 
+ 	if (hash >= num_entries)
+-		hash %= num_entries;
++		hash = airoha_ppe_fold_hash(hash, num_entries);
+ 
+ 	now = (u16)jiffies;
+ 	diff = now - ppe->foe_check_time[hash];
