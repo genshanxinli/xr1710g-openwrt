@@ -11,9 +11,9 @@
 # take the manual calibration path, which removes the usual trigger, but it is
 # a workaround for a vendor calibration routine and does not make the failure
 # impossible. When it does happen the only known recovery is to bounce the
-# interface:
+# port, which re-runs phylink_start() and with it the calibration:
 #
-#   ifdown lan; sleep 3; ifup lan; sleep 12
+#   ip link set lan2 down; sleep 3; ip link set lan2 up; sleep 12
 #
 # so do exactly that, unattended, but only when the failure actually shows up
 # in the kernel log. Polling for a carrier that never comes would take a
@@ -51,11 +51,17 @@ has_carrier() {
 	[ "$(cat "/sys/class/net/$PCS_DEV/carrier" 2>/dev/null)" = "1" ]
 }
 
+# Bounce the netdev, not the netifd interface. On this board lan2 is a member
+# of br-lan and the only logical interface is "lan", so "ifdown lan2" fails
+# outright and "ifdown lan" would take every other LAN port down with it.
+# Flipping the port's admin state is enough: going up runs phylink_start(),
+# which reconfigures the PCS and re-runs the calibration this script is here
+# to repeat.
 recover() {
 	log "$PCS_DEV: carrier down with PCS calibration failure, bouncing it"
-	ifdown "$PCS_DEV" 2>/dev/null
+	ip link set dev "$PCS_DEV" down 2>/dev/null
 	sleep "$PCS_DOWN_SECS"
-	ifup "$PCS_DEV" 2>/dev/null
+	ip link set dev "$PCS_DEV" up 2>/dev/null
 	sleep "$PCS_UP_SECS"
 }
 
