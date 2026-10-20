@@ -1,0 +1,34 @@
+From: Julius Bairaktaris <julius@bairaktaris.de>
+Date: Sun, 11 Oct 2026 17:44:53 +0200
+Subject: [PATCH] net: make room for the tunnel header in skb_segment_list()
+
+skb_segment_list() pushes each frag_list member back to the outer MAC
+header and copies the tunnel headers in front of it, but never checks
+that the member has the headroom. A fraglist GRO packet forwarded into
+a tunnel and segmented in software then hits skb_under_panic() on IPIP,
+and on VXLAN the copy writes before the member's head (KASAN:
+slab-out-of-bounds write in skb_segment_list()).
+
+Call skb_cow_head() on each member before pushing it.
+
+OpenWrt enables fraglist GRO by default (generic/hack/600), so every
+tunnel egress of a forwarded fraglist GRO packet is affected.
+
+Fixes: 3a1296a38d0c ("net: Support GRO/GSO fraglist chaining.")
+Link: https://lore.kernel.org/netdev/cover.1792293419.git.julius@bairaktaris.de/
+Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
+---
+
+--- a/net/core/skbuff.c
++++ b/net/core/skbuff.c
+@@ -4729,6 +4729,10 @@ struct sk_buff *skb_segment_list(struct
+ 			}
+ 		}
+ 
++		if (!err)
++			err = skb_cow_head(nskb, offset + tnl_hlen -
++					   skb_network_offset(nskb));
++
+ 		if (!tail)
+ 			skb->next = nskb;
+ 		else
