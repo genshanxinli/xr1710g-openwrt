@@ -87,10 +87,20 @@ Signed-off-by: Balázs Triszka <info@balika011.hu>
  MODULE_DESCRIPTION("Realtek PHY driver");
  MODULE_AUTHOR("Johnson Leung");
  MODULE_LICENSE("GPL");
-@@ -3277,6 +3300,125 @@ static int rtl8251b_c45_match_phy_device
+@@ -3277,6 +3300,135 @@ static int rtl8251b_c45_match_phy_device
  	return rtlgen_is_c45_match(phydev, RTL_8251B, true);
  }
  
++static int rtl826x_read_pkg_model(struct phy_device *phydev)
++{
++	/* A failed probe may have asserted reset. Release it before
++	 * reading the package identification registers.
++	 */
++	phy_device_reset(phydev, 0);
++
++	return phy_read_mmd(phydev, MDIO_MMD_VEND1, RTL826X_VEND1_PKG_MODEL);
++}
++
 +static int rtl8251l_match_phy_device(struct phy_device *phydev,
 +				     const struct phy_driver *phydrv)
 +{
@@ -102,7 +112,7 @@ Signed-off-by: Balázs Triszka <info@balika011.hu>
 +	if (!phydev->mdio.bus->read_c45)
 +		return 0;
 +
-+	data = phy_read_mmd(phydev, MDIO_MMD_VEND1, RTL826X_VEND1_PKG_MODEL);
++	data = rtl826x_read_pkg_model(phydev);
 +	if (data < 0)
 +		return 0;
 +
@@ -123,7 +133,7 @@ Signed-off-by: Balázs Triszka <info@balika011.hu>
 +	if (!phydev->mdio.bus->read_c45)
 +		return 0;
 +
-+	data = phy_read_mmd(phydev, MDIO_MMD_VEND1, RTL826X_VEND1_PKG_MODEL);
++	data = rtl826x_read_pkg_model(phydev);
 +	if (data < 0)
 +		return 0;
 +
@@ -144,7 +154,7 @@ Signed-off-by: Balázs Triszka <info@balika011.hu>
 +	if (!phydev->mdio.bus->read_c45)
 +		return 0;
 +
-+	data = phy_read_mmd(phydev, MDIO_MMD_VEND1, RTL826X_VEND1_PKG_MODEL);
++	data = rtl826x_read_pkg_model(phydev);
 +	if (data < 0)
 +		return 0;
 +
@@ -172,7 +182,7 @@ Signed-off-by: Balázs Triszka <info@balika011.hu>
 +	if (!phydev->mdio.bus->read_c45)
 +		return 0;
 +
-+	data = phy_read_mmd(phydev, MDIO_MMD_VEND1, RTL826X_VEND1_PKG_MODEL);
++	data = rtl826x_read_pkg_model(phydev);
 +	if (data < 0)
 +		return 0;
 +
@@ -200,7 +210,7 @@ Signed-off-by: Balázs Triszka <info@balika011.hu>
 +	if (!phydev->mdio.bus->read_c45)
 +		return 0;
 +
-+	data = phy_read_mmd(phydev, MDIO_MMD_VEND1, RTL826X_VEND1_PKG_MODEL);
++	data = rtl826x_read_pkg_model(phydev);
 +	if (data < 0)
 +		return 0;
 +
@@ -213,7 +223,7 @@ Signed-off-by: Balázs Triszka <info@balika011.hu>
  static int rtlgen_resume(struct phy_device *phydev)
  {
  	int ret = genphy_resume(phydev);
-@@ -3498,6 +3640,485 @@ static int rtlgen_sfp_config_aneg(struct
+@@ -3498,6 +3650,485 @@ static int rtlgen_sfp_config_aneg(struct
  	return 0;
  }
  
@@ -699,7 +709,7 @@ Signed-off-by: Balázs Triszka <info@balika011.hu>
  static struct phy_driver realtek_drvs[] = {
  	{
  		PHY_ID_MATCH_EXACT(0x00008201),
-@@ -3522,7 +4143,116 @@ static struct phy_driver realtek_drvs[]
+@@ -3522,7 +4153,116 @@ static struct phy_driver realtek_drvs[]
  		.resume		= genphy_resume,
  		.read_page	= rtl821x_read_page,
  		.write_page	= rtl821x_write_page,
