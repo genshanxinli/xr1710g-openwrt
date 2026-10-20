@@ -1,0 +1,59 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: do not alias flow counters onto unrelated flows
+
+airoha_ppe_foe_get_flow_stats_index() maps a flow hash onto a counter
+slot with
+
+	*index = hash >= ppe_num_stats_entries ? hash - PPE_STATS_NUM_ENTRIES
+					      : hash;
+
+On an EN7581 there are two PPEs, so ppe_num_stats_entries is 8192
+(PPE_STATS_NUM_ENTRIES * num_ppe) while PPE_STATS_NUM_ENTRIES itself is
+4096.  The two sides of that expression therefore disagree about the
+size of the block being indexed:
+
+  hash in [0, 8192)      -> index [0, 8192)      usable
+  hash in [8192, 12288)  -> index [4096, 8192)   usable, but aliased
+  hash in [12288, 20480) -> index [8192, ...)    dropped by the caller
+  hash in [20480, 32768) -> index [...]          dropped by the caller
+
+so hash 4096 and hash 8192 share slot 4096, hash 4097 and hash 8193
+share slot 4097, and so on for 4096 slot pairs.  A flow reading another
+flow's counters is worse than a flow reporting no counters.  On top of
+that, 20480 of the 32768 hashes come out with an index past the end of
+the block and are discarded, so 62.5% of flows can never be counted even
+though the NPU was given a slot for them.
+
+An SRAM entry owns the counter slot named by its own hash: the NPU is
+told the size of the counter block and where it lives, and counts by the
+same hash the PPE used.  Inside the block the mapping is therefore the
+identity, and a hash outside it must not be counted rather than folded
+back onto somebody else's slot.  Both callers already treat a non-zero
+return as "no counters for this flow".
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -672,8 +672,18 @@
+ 	if (ppe_num_stats_entries < 0)
+ 		return ppe_num_stats_entries;
+ 
+-	*index = hash >= ppe_num_stats_entries ? hash - PPE_STATS_NUM_ENTRIES
+-					       : hash;
++	/* Every SRAM entry owns the counter slot named by its own hash, and
++	 * PPE_STATS_NUM_ENTRIES worth of them exist per PPE, so inside the
++	 * block the mapping is the identity.  A hash past the block names a
++	 * DRAM entry or an entry in the second PPE, and neither was handed
++	 * to the NPU to count: the old "hash - PPE_STATS_NUM_ENTRIES" moved
++	 * those onto slots that belong to unrelated SRAM entries, so one
++	 * flow reported another flow's counters.  Report no counters.
++	 */
++	if (hash >= ppe_num_stats_entries)
++		return -ENOENT;
++
++	*index = hash;
+ 
+ 	return 0;
+ }
