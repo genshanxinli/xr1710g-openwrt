@@ -6,10 +6,31 @@
 # With a 10G port saturating that one core, the second 10G port and the Wi-Fi
 # offload rings queue behind it even though three cores sit idle.
 #
-#  SPREAD the QDMA banks over the online CPUs. The driver registers its
-# handlers as IRQF_SHARED, so an IRQ line can carry other users' actions; only
-# the lines that list a qdma action are touched, and each line is moved
-# wholesale rather than by rewriting a subset of its list.
+# Round-robin over the IRQ lines is not good enough: the lines are numbered
+# "4 * qdma + bank", so a plain rotation hands cpu0 the bank0 of both QDMAs.
+# Bank0 is the expensive one - it carries all TX completions, the CPU port
+# and the 10G RX rings - while bank1 holds the LRO rings and banks 2/3 hold a
+# single ring each. Spreading by line number therefore piles the two hottest
+# banks onto one core and parks the two quietest ones on the others, which is
+# the opposite of what helps.
+#
+# So give each QDMA's bank0 a core of its own, and spread everything else
+# over the rest:
+#
+#   first core  <- qdma0 bank0   (TX completions, CPU port, 10G RX)
+#   second core <- qdma1 bank0   (same, for the second QDMA)
+#   remaining   <- banks 1/2/3 and the Wi-Fi/NPU lines, round-robin
+#
+# Banks 2 and 3 carry one ring apiece, so they ride along rather than claim a
+# core. The Wi-Fi and NPU lines (mt76-npu, mt7996e, mt7996e-hif) have the same
+# problem - the kernel leaves them on the boot CPU mask and they land on cpu0
+# in practice - and they carry real traffic, so they are part of the same
+# round-robin rather than left where they are.
+#
+# The driver registers its handlers as IRQF_SHARED, so an IRQ line can carry
+# other users' actions; only lines whose action list names one of the handlers
+# below are touched, and each line is moved wholesale rather than by rewriting
+# a subset of its list.
 #
 # NAPI sits on the dummy "qdma_eth" netdev rather than on wan/lan, so there is
 # no per-interface RPS knob to tune here: IRQ affinity is the effective
@@ -19,7 +40,10 @@ START=39
 
 # airoha_qdma_init_irq() names its handlers KBUILD_MODNAME "." <irq index>,
 # i.e. "airoha_eth.0", "airoha_eth.1".
-IRQ_NAME="${QDMA_IRQ_NAME:-airoha_eth}"
+QDMA_IRQ_NAME="${QDMA_IRQ_NAME:-airoha_eth}"
+# The Wi-Fi and NPU lines are named after their module, sometimes with a
+# "-hif" suffix for the firmware doorbell.
+OTHER_IRQ_NAMES="${OTHER_IRQ_NAMES:-mt76-npu mt7996e}"
 LOG_TAG="qdma-irq-affinity"
 
 log() {
@@ -27,8 +51,11 @@ log() {
 }
 
 online_cpu_list() {
-	# "0-3" / "0,2-3" -> individual numbers
-	sed 's/,/ /g' /sys/devices/system/cpu/online 2>/dev/null | \
+	# "0-3" / "0,2-3" -> individual numbers. The range list is one line, so
+	# split it into words before looping; reading it line by line would treat
+	# "0 2 3" as a single range.
+	tr ',' ' ' < /sys/devices/system/cpu/online 2>/dev/null | \
+	tr ' ' '\n' | \
 	while read -r range; do
 		case "$range" in
 		*-*) start=${range%-*}; end=${range#*-}
@@ -42,34 +69,125 @@ online_cpu_list() {
 	done
 }
 
-# IRQ lines whose action list mentions a qdma handler.
-qdma_irqs() {
-	awk -v name="$IRQ_NAME" '
-		/^[[:space:]]*[0-9]+:/ && index(tolower($0), name) { sub(/:.*/, ""); gsub(/[[:space:]]/, ""); print }
+# The handler suffix is the driver's IRQ index, and the lines are allocated as
+# "4 * qdma + bank". Return the QDMA number for a bank0 line and fail for
+# everything else: only bank0 earns a dedicated core.
+qdma_bank0() {
+	local idx="$1"
+
+	case "$idx" in
+	''|*[!0-9]*) return 1 ;;
+	esac
+
+	[ $((idx % 4)) -eq 0 ] || return 1
+	echo $((idx / 4))
+}
+
+# Move one IRQ line, logging only when the mask actually changes.
+pin_irq() {
+	local irq="$1" cpu="$2" mask cur
+
+	mask=$(printf '%08x' "$((1 << cpu))")
+	cur=$(cat "/proc/irq/$irq/smp_affinity" 2>/dev/null)
+	[ "$cur" = "$mask" ] && return 0
+
+	if echo "$mask" > "/proc/irq/$irq/smp_affinity" 2>/dev/null; then
+		log "irq $irq pinned to cpu$cpu"
+	fi
+}
+
+# Print "<irq> <handler> <suffix>" for every line whose action list mentions
+# one of our handlers. The suffix is what follows the handler name in the
+# action list - ".0", ".1", ... for the QDMA lines - because that index, not
+# the IRQ number, is what says which bank the line belongs to.
+matching_irqs() {
+	awk -v qdma="$QDMA_IRQ_NAME" -v others="$OTHER_IRQ_NAMES" '
+		BEGIN {
+			n = split(others, o, " ")
+			for (i = 1; i <= n; i++)
+				want[o[i]] = 1
+		}
+		/^[[:space:]]*[0-9]+:/ {
+			line = tolower($0)
+			name = ""
+			if ((p = index(line, tolower(qdma))) > 0) {
+				name = qdma
+			} else {
+				for (w in want)
+					if ((p = index(line, tolower(w))) > 0) {
+						name = w
+						break
+					}
+			}
+			if (name == "")
+				next
+
+			# Walk the characters right after the handler name; the
+			# driver names its QDMA handlers "<mod>.<irq index>".
+			p += length(name)
+			suffix = ""
+			while (p <= length(line)) {
+				c = substr(line, p, 1)
+				if (c !~ /[0-9.]/)
+					break
+				suffix = suffix c
+				p++
+			}
+
+			irq = $0
+			sub(/:.*/, "", irq)
+			gsub(/[[:space:]]/, "", irq)
+			print irq, name, suffix
+		}
 	' /proc/interrupts 2>/dev/null
 }
 
+# Map a position in the online-CPU list to the CPU id it holds, so a box with
+# an offline core still gets valid ids rather than "cpu3" on a two-core SoC.
+cpu_at() {
+	echo "$CPU_LIST" | cut -d' ' -f$(($1 + 1))
+}
+
 main() {
-	local cpus ncpu i=0 irq cpu mask
+	local ncpu irq name suffix qdma cpu extra=0 first_shared=2 spare slot
 
-	cpus=$(online_cpu_list | tr '\n' ' ')
-	ncpu=$(echo "$cpus" | wc -w)
+	CPU_LIST=$(online_cpu_list | tr '\n' ' ')
+	ncpu=$(echo "$CPU_LIST" | wc -w)
 	[ "$ncpu" -gt 0 ] || return 0
+	[ "$ncpu" -lt "$first_shared" ] && first_shared=$ncpu
 
-	for irq in $(qdma_irqs); do
-		cpu=$(echo "$cpus" | cut -d' ' -f$(( (i % ncpu) + 1 )))
-		mask=$(printf '%08x' "$((1 << cpu))")
+	matching_irqs > /tmp/qdma-irqs.$$ 2>/dev/null || return 0
 
-		[ "$(cat "/proc/irq/$irq/smp_affinity" 2>/dev/null)" = "$mask" ] && {
-			i=$((i + 1))
-			continue
-		}
+	# Bank0 of each QDMA gets a core to itself, in QDMA order.
+	while read -r irq name suffix; do
+		[ "$name" = "$QDMA_IRQ_NAME" ] || continue
+		qdma=$(qdma_bank0 "${suffix#.}")
+		[ -n "$qdma" ] || continue
+		[ "$qdma" -lt "$first_shared" ] || continue
+		pin_irq "$irq" "$(cpu_at "$qdma")"
+	done < /tmp/qdma-irqs.$$
 
-		if echo "$mask" > "/proc/irq/$irq/smp_affinity" 2>/dev/null; then
-			log "irq $irq pinned to cpu$cpu"
+	# Everything else - the remaining QDMA banks and the Wi-Fi/NPU lines -
+	# round-robins over the cores that are not carrying a bank0. Those lines
+	# carry far less traffic than bank0, so sharing them is fine; leaving
+	# them on cpu0 next to a saturating QDMA is not. If every core is
+	# already carrying a bank0 there is nothing left to reserve, and the
+	# extras share with them.
+	spare=$((ncpu - first_shared))
+	[ "$spare" -gt 0 ] || spare=$ncpu
+	while read -r irq name suffix; do
+		if [ "$name" = "$QDMA_IRQ_NAME" ]; then
+			qdma=$(qdma_bank0 "${suffix#.}")
+			[ -n "$qdma" ] && [ "$qdma" -lt "$first_shared" ] && continue
 		fi
-		i=$((i + 1))
-	done
+		slot=$extra
+		[ "$((ncpu - first_shared))" -gt 0 ] && slot=$((first_shared + extra % spare))
+		cpu=$(cpu_at $((slot % ncpu)))
+		pin_irq "$irq" "$cpu"
+		extra=$((extra + 1))
+	done < /tmp/qdma-irqs.$$
+
+	rm -f /tmp/qdma-irqs.$$
 }
 
 start() {

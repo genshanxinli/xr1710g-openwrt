@@ -112,7 +112,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	.get_drvinfo		= airoha_ethtool_get_drvinfo,
 +	.get_strings		= airoha_ethtool_get_strings,
 +	.get_sset_count		= airoha_ethtool_get_sset_count,
-+	.get_stats		= airoha_ethtool_get_stats,
++	.get_ethtool_stats	= airoha_ethtool_get_stats,
  	.get_eth_mac_stats      = airoha_ethtool_get_mac_stats,
  	.get_rmon_stats		= airoha_ethtool_get_rmon_stats,
  	.get_link_ksettings	= airoha_ethtool_get_link_ksettings,

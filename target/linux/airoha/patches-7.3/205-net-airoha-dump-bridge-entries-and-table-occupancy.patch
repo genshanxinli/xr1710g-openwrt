@@ -1,0 +1,108 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: dump bridge entries and table occupancy in debugfs
+
+/sys/kernel/debug/ppe/entries walks every FOE slot and prints whatever the
+entry's type says is there.  PPE_PKT_TYPE_BRIDGE was not among the types the
+dump knows how to decode, so a bridge entry fell through to the IPv4 path and
+had its source MAC read from airoha_foe_ipv4.l2.src_mac_lo.  The two unions
+overlap only partially: the type, ib2 and data words happen to line up, which
+is why the output looked plausible, but the MAC halves do not, so every L2B
+entry was reported with a garbage source address.  Decode the bridge member
+explicitly.
+
+The dump also has no way to answer "how full is the table", which is the
+first question when flows start missing the fast path.  A slot that has aged
+out is not cleared - its state field drops to invalid while the tuple stays -
+so counting non-zero slots would report the table as permanently full.  Add
+ppe/usage, which counts only slots that are currently bound, splits the L2B
+entries out, and prints the software l2_flows rhashtable length beside them so
+the "software has it, hardware does not" case is visible in one place.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+--- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
+@@ -132,7 +132,18 @@
+ 			break;
+ 		}
+ 
+-		if (type >= PPE_PKT_TYPE_IPV6_ROUTE_3T) {
++		if (type == PPE_PKT_TYPE_BRIDGE) {
++			/* A bridge entry is its own union member: the MAC
++			 * halves live at different offsets than in the IPv4
++			 * layout, so reading it as IPv4 yields a plausible but
++			 * wrong source address.
++			 */
++			data = hwe->bridge.data;
++			ib2 = hwe->bridge.ib2;
++			l2 = &hwe->bridge.l2.common;
++			*((__be16 *)&h_source[4]) =
++				cpu_to_be16(hwe->bridge.src_mac_lo);
++		} else if (type >= PPE_PKT_TYPE_IPV6_ROUTE_3T) {
+ 			data = hwe->ipv6.data;
+ 			ib2 = hwe->ipv6.ib2;
+ 			l2 = &hwe->ipv6.l2;
+@@ -161,6 +172,54 @@
+ 	return 0;
+ }
+ 
++static int airoha_ppe_debugfs_foe_usage_show(struct seq_file *m,
++					    void *private)
++{
++	struct airoha_ppe *ppe = m->private;
++	u32 total = airoha_ppe_get_total_num_entries(ppe);
++	u32 sram = total - PPE_DRAM_NUM_ENTRIES;
++	u32 bound = 0, unbound = 0, l2b = 0;
++	int i;
++
++	/* The hardware age-out never clears a slot back to zero: an entry that
++	 * timed out keeps its tuple and only its state field changes. So
++	 * "invalid" here counts slots the driver has written and later
++	 * released, not slots that were never used.
++	 */
++	for (i = 0; i < total; i++) {
++		const struct airoha_foe_entry *hwe;
++		u32 state, type;
++
++		hwe = airoha_ppe_foe_get_entry(ppe, i);
++		if (!hwe)
++			continue;
++
++		state = FIELD_GET(AIROHA_FOE_IB1_BIND_STATE, hwe->ib1);
++		if (!state)
++			continue;
++
++		if (state == AIROHA_FOE_STATE_BIND) {
++			bound++;
++			type = FIELD_GET(AIROHA_FOE_IB1_BIND_PACKET_TYPE,
++					 hwe->ib1);
++			if (type == PPE_PKT_TYPE_BRIDGE)
++				l2b++;
++		} else {
++			unbound++;
++		}
++	}
++
++	seq_printf(m, "entries %u (sram %u, dram %u)\n", total, sram,
++		   total - sram);
++	seq_printf(m, "bound %u (%u%%) unbound %u\n", bound,
++		   total ? bound * 100 / total : 0, unbound);
++	seq_printf(m, "l2b_bound %u l2_flows_sw %u\n", l2b,
++		   atomic_read(&ppe->l2_flows.nelems));
++
++	return 0;
++}
++DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_foe_usage);
++
+ static int airoha_ppe_debugfs_foe_all_show(struct seq_file *m, void *private)
+ {
+ 	return airoha_ppe_debugfs_foe_show(m, private, false);
+@@ -180,6 +239,8 @@
+ 			    &airoha_ppe_debugfs_foe_all_fops);
+ 	debugfs_create_file("bind", 0444, ppe->debugfs_dir, ppe,
+ 			    &airoha_ppe_debugfs_foe_bind_fops);
++	debugfs_create_file("usage", 0444, ppe->debugfs_dir, ppe,
++			    &airoha_ppe_debugfs_foe_usage_fops);
+ 
+ 	return 0;
+ }
