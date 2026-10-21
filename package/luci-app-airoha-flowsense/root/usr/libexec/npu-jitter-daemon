@@ -36,9 +36,12 @@ count=0
 apply_shaper() {
 	local jitter="$1" link_mbps new_mbps
 
-	# Below the threshold the link is keeping up: drop any cap we added so the
-	# full rate stays available.
-	if [ "$jitter" -lt "$SHAPE_JITTER_MS" ] 2>/dev/null; then
+	# jitter carries two decimals (printf '%.2f' below) and the shell has no
+	# float arithmetic: [ 12.34 -lt 25 ] is an error in ash, so the comparison
+	# has to happen in awk.
+	if awk -v j="$jitter" -v t="$SHAPE_JITTER_MS" 'BEGIN { exit !(j < t) }'; then
+		# Below the threshold the link is keeping up: drop any cap we added so
+		# the full rate stays available.
 		if [ "$shaped_mbps" -gt 0 ]; then
 			tc qdisc del dev "$SHAPE_IFACE" root 2>/dev/null
 			shaped_mbps=0
