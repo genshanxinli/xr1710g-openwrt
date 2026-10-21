@@ -82,7 +82,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  }
  
  static int airoha_ppe_foe_get_flow_stats_index(struct airoha_ppe *ppe,
-@@ -779,11 +799,18 @@
+@@ -779,11 +799,19 @@
  
  	if (hash < sram_num_entries) {
  		u32 *hwe = ppe->foe + hash * sizeof(struct airoha_foe_entry);
@@ -95,12 +95,14 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
 +		/* The entry field is an index into the selected PPE's own
 +		 * table, so the second PPE is addressed from zero again.
++		 * Keep "hash" itself intact: it also selects the slot in the
++		 * local bounce buffer, which is laid out across both tables.
 +		 */
-+		if (ppe2)
-+			hash -= base;
++		u32 entry = ppe2 ? hash - base : hash;
 +
  		airoha_fe_wr(ppe->eth, REG_PPE_RAM_CTRL(ppe2),
- 			     FIELD_PREP(PPE_SRAM_CTRL_ENTRY_MASK, hash) |
+-			     FIELD_PREP(PPE_SRAM_CTRL_ENTRY_MASK, hash) |
++			     FIELD_PREP(PPE_SRAM_CTRL_ENTRY_MASK, entry) |
  			     PPE_SRAM_CTRL_REQ_MASK);
 @@ -834,10 +861,20 @@
  static int airoha_ppe_foe_commit_sram_entry(struct airoha_ppe *ppe, u32 hash)
