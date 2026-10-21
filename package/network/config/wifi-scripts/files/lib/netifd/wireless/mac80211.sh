@@ -1203,8 +1203,11 @@ drv_mac80211_setup() {
 		# global regulatory domain -- `iw reg set 00` would set the whole
 		# system to world regdomain and relax the limits for the 2.4 and
 		# 5 GHz radios that do have a proper country configured.
+		# Same rule as the ucode driver (files-ucode/.../mac80211.sh),
+		# which is what actually ships when CONFIG_WIFI_SCRIPTS_UCODE=y.
 		case "$country" in
-		[0-9][0-9]|'') country= ;;
+		[A-Za-z][A-Za-z]) ;;
+		*) country= ;;
 		esac
 	}
 
