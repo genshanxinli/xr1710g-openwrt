@@ -87,13 +87,26 @@ main() {
 	return 0
 }
 
+# The delayed run is backgrounded, so it needs a pid so `stop` can cancel it
+# and `restart` cannot stack a second copy.
+PIDFILE="/var/run/${LOG_TAG}.pid"
+
 start() {
 	(
 		sleep "$PCS_DELAY"
 		main
 	) &
+	echo "$!" > "$PIDFILE"
 }
 
 stop() {
-	:
+	local pid
+
+	pid="$(cat "$PIDFILE" 2>/dev/null)"
+	[ -n "$pid" ] || return 0
+
+	# Killing the subshell is enough: either it has not left its sleep yet, so
+	# main never runs, or it is mid-run and the next attempt is abandoned.
+	kill "$pid" 2>/dev/null
+	rm -f "$PIDFILE"
 }

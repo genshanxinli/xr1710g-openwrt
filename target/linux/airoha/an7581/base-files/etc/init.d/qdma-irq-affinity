@@ -160,23 +160,34 @@ cpu_at() {
 }
 
 main() {
-	local ncpu irq name suffix qdma cpu extra=0 first_shared=2 spare slot
+	local ncpu irq name suffix qdma cpu extra=0 first_shared=2 spare slot irqs
 
 	CPU_LIST=$(online_cpu_list | tr '\n' ' ')
 	ncpu=$(echo "$CPU_LIST" | wc -w)
 	[ "$ncpu" -gt 0 ] || return 0
 	[ "$ncpu" -lt "$first_shared" ] && first_shared=$ncpu
 
-	matching_irqs > /tmp/qdma-irqs.$$ 2>/dev/null || return 0
+	# Hold the list in a variable rather than in /tmp/qdma-irqs.$$, which is
+	# what this used to do and which leaked the file whenever either of the
+	# early returns below was taken. A trap would not have helped: rc.common
+	# sources this script (package/base-files/files/etc/rc.common:119), so an
+	# EXIT trap here fires only when that shell finally exits, long after the
+	# function's own local has gone out of scope.
+	#
+	# Feeding the loops from a pipe puts the body in a subshell, which is fine:
+	# pin_irq's effect is the write to /proc, and `extra` is only ever read and
+	# incremented inside its own loop.
+	irqs="$(matching_irqs 2>/dev/null)" || return 0
+	[ -n "$irqs" ] || return 0
 
 	# Bank0 of each QDMA gets a core to itself, in QDMA order.
-	while read -r irq name suffix; do
+	echo "$irqs" | while read -r irq name suffix; do
 		[ "$name" = "$QDMA_IRQ_NAME" ] || continue
 		qdma=$(qdma_bank0 "${suffix#.}")
 		[ -n "$qdma" ] || continue
 		[ "$qdma" -lt "$first_shared" ] || continue
 		pin_irq "$irq" "$(cpu_at "$qdma")"
-	done < /tmp/qdma-irqs.$$
+	done
 
 	# Everything else - the remaining QDMA banks and the Wi-Fi/NPU lines -
 	# round-robins over the cores that are not carrying a bank0. Those lines
@@ -186,7 +197,7 @@ main() {
 	# extras share with them.
 	spare=$((ncpu - first_shared))
 	[ "$spare" -gt 0 ] || spare=$ncpu
-	while read -r irq name suffix; do
+	echo "$irqs" | while read -r irq name suffix; do
 		if [ "$name" = "$QDMA_IRQ_NAME" ]; then
 			qdma=$(qdma_bank0 "${suffix#.}")
 			[ -n "$qdma" ] && [ "$qdma" -lt "$first_shared" ] && continue
@@ -196,9 +207,7 @@ main() {
 		cpu=$(cpu_at $((slot % ncpu)))
 		pin_irq "$irq" "$cpu"
 		extra=$((extra + 1))
-	done < /tmp/qdma-irqs.$$
-
-	rm -f /tmp/qdma-irqs.$$
+	done
 }
 
 start() {

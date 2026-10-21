@@ -2,7 +2,10 @@
 
 # Airoha fan control RPC backend for LuCI
 
-# Dynamically find NCT7802 fan controller hwmon device
+# Dynamically find NCT7802 fan controller hwmon device.
+# No hardcoded fallback: hwmon numbering is probe-order dependent, so a fixed
+# path can name a different chip after a driver reorder, and writing pwm1_*
+# to the wrong one is worse than reporting nothing.
 find_nct7802() {
 	for hwmon in /sys/class/hwmon/hwmon*; do
 		if [ -f "$hwmon/name" ] && [ "$(cat "$hwmon/name" 2>/dev/null)" = "nct7802" ]; then
@@ -10,7 +13,6 @@ find_nct7802() {
 			return
 		fi
 	done
-	echo "/sys/class/hwmon/hwmon5"  # fallback
 }
 
 # Dynamically find mt7996 WiFi hwmon devices

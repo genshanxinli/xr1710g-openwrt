@@ -7,7 +7,7 @@ PKG_RELEASE:=1
 PKG_LICENSE:=Apache-2.0
 
 LUCI_TITLE:=LuCI Airoha SoC Status (NPU, CPU, Frame Engine)
-LUCI_DEPENDS:=+luci-base @TARGET_airoha
+LUCI_DEPENDS:=+luci-base +jsonfilter @TARGET_airoha
 
 include $(TOPDIR)/feeds/luci/luci.mk
 

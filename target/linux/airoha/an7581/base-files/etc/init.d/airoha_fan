@@ -14,10 +14,9 @@ START=99
 # could be silently overwritten on boot.
 #
 # Now /etc/init.d/fan is authoritative whenever it is installed and this
-# script only seeds the UCI config. Without the LuCI app (minimal images) the
-# stock curve is still applied from here, so the fan is never left unmanaged.
-
-CONFIG=/etc/config/fan
+# script is a no-op. Without the LuCI app (minimal images) the stock curve is
+# applied from here, so the fan is never left unmanaged. /etc/config/fan is
+# owned entirely by luci-app-airoha-fancontrol; this script does not create it.
 
 # Stock curve: 40/50/60/70/80 degC -> PWM 54/69/95/199 (idle 770 rpm,
 # 1000/1400/2700 rpm at the higher points), matching "balanced" in LuCI.
@@ -31,30 +30,6 @@ find_nct7802() {
 			return
 		fi
 	done
-}
-
-seed_config() {
-	[ -f "$CONFIG" ] && return 0
-
-	mkdir -p "${CONFIG%/*}" || return 0
-	cat > "$CONFIG" <<-EOF
-		config fancontrol 'settings'
-			option mode 'auto'
-			option manual_pwm '127'
-			option curve_preset 'balanced'
-
-		config curve 'balanced'
-			option point1_temp '40'
-			option point1_pwm '54'
-			option point2_temp '50'
-			option point2_pwm '69'
-			option point3_temp '60'
-			option point3_pwm '95'
-			option point4_temp '70'
-			option point4_pwm '199'
-			option point5_temp '80'
-			option point5_pwm '255'
-	EOF
 }
 
 apply_stock_curve() {
@@ -81,8 +56,6 @@ boot() {
 	gemtek,w1700k-ubi|gemtek,xr1710g-ubi) ;;
 	*) return 0 ;;
 	esac
-
-	seed_config
 
 	# luci-app-airoha-fancontrol owns the hardware once installed.
 	[ -x /etc/init.d/fan ] && return 0

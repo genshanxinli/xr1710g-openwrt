@@ -10,11 +10,17 @@ DEFAULT_PACKAGES += \
 	airoha-en7581-npu-firmware uboot-envtools \
 	kmod-nft-bridge kmod-sched-act-police
 
+# kmod-sched-act-police is here because the airoha driver offloads
+# FLOW_ACTION_POLICE to the PPE.  Without the module an ingress shaper fails
+# with "No such file or directory" and nothing says why.  No in-tree script
+# installs such a filter today; this only makes the capability reachable.
+
 # bridger is in the tree but deliberately unused here.  It is one of three
 # mutually incompatible routes to getting bridged traffic into the PPE; this
-# target takes the nft-native one (675-01..675-05: a "table bridge fw4"
-# flowtable with offload flags, plus 675-05 rejecting connections that cross
-# the bridge twice).  bridger would need kmod-sched-bpf and a BPF pipeline to
+# target takes the nft-native one (patches 675-01..675-05, under
+# target/linux/generic/pending-7.3/: a "table bridge fw4" flowtable with
+# offload flags, plus 675-05 rejecting connections that cross the bridge
+# twice).  bridger would need kmod-sched-bpf and a BPF pipeline to
 # do the same job, and its RTM_DELTFILTER control path fails silently while a
 # PPE flow is BIND-active, which is exactly the stale-filter black hole the
 # nft path avoids.  Do not add it back without removing the nft route first.
