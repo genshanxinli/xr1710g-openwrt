@@ -362,6 +362,17 @@
 			reset-deassert-us = <200000>;
 			tx-polarity = <PHY_POL_INVERT>;
 			rx-polarity = <PHY_POL_INVERT>;
+			/* The vendor bootloader leaves SDS page 6 reg 3 at
+			 * 0x88c6 on this board; the shared firmware table does
+			 * not know that, so say it here.
+			 */
+			realtek,sds-mode = <0x88c6>;
+			/* The 2.5G USXGMII link to the AN7581 PCS needs the RTK
+			 * SerDes tuning re-applied after each copper AN cycle,
+			 * otherwise copper negotiates but the PCS never sees an
+			 * in-band partner word and the netdev stays no-carrier.
+			 */
+			realtek,patch-rtk-serdes;
 
 			leds {
 				#address-cells = <1>;
@@ -391,6 +402,11 @@
 			reset-deassert-us = <200000>;
 			tx-polarity = <PHY_POL_INVERT>;
 			rx-polarity = <PHY_POL_INVERT>;
+			/* Same USXGMII retuning requirement as phy5; the SDS
+			 * mode here is left at the firmware-table default,
+			 * matching what the vendor bootloader leaves behind.
+			 */
+			realtek,patch-rtk-serdes;
 
 			leds {
 				#address-cells = <1>;
