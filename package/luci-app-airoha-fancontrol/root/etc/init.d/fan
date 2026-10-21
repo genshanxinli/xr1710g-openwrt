@@ -3,7 +3,10 @@
 START=99
 USE_PROCD=1
 
-# Dynamically find NCT7802 fan controller hwmon device
+# Dynamically find NCT7802 fan controller hwmon device.
+# No hardcoded fallback: hwmon numbering is probe-order dependent, so a fixed
+# path can name a different chip after a driver reorder, and writing pwm1_*
+# to the wrong one is worse than leaving the fan alone.
 find_nct7802() {
 	for hwmon in /sys/class/hwmon/hwmon*; do
 		if [ -f "$hwmon/name" ] && [ "$(cat "$hwmon/name" 2>/dev/null)" = "nct7802" ]; then
@@ -11,7 +14,6 @@ find_nct7802() {
 			return
 		fi
 	done
-	echo "/sys/class/hwmon/hwmon5"  # fallback
 }
 
 HWMON=$(find_nct7802)
@@ -41,7 +43,8 @@ apply_curve() {
 apply_settings() {
 	local mode preset manual_pwm
 
-	[ ! -d "$HWMON" ] && return 1
+	# Nothing to drive: the nct7802 module is missing or did not bind.
+	[ -n "$HWMON" ] && [ -d "$HWMON" ] || return 1
 
 	mode=$(uci -q get fan.settings.mode)
 	preset=$(uci -q get fan.settings.curve_preset)

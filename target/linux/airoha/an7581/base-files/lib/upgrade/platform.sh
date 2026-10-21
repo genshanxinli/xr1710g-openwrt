@@ -29,9 +29,9 @@ platform_check_image() {
 		# The bootloader boots whatever FDT the FIT carries, so an image for
 		# the other Gemtek board flashes fine and then comes up with a device
 		# tree whose MAC cells, PHY wiring and LED map do not exist there.
-		# fwtool_check_image() already matches the image metadata against
-		# board_name on the normal path, but it is skipped with -F, so also
-		# look at the FDT description inside the FIT.
+		# fwtool_check_image() already compares the image metadata against
+		# board_name, but only for metadata that is present -- a bare FIT
+		# passes there, so also look at the FDT description inside the FIT.
 		local devname desc
 
 		fit_check_image "$1" || return $?
@@ -47,6 +47,8 @@ platform_check_image() {
 			head -n 1)"
 		if [ -n "$desc" ] && [ "$desc" != "$devname" ]; then
 			echo "Invalid image: built for '$desc', this device is '$devname'."
+			# 74 = notify_firmware_broken: cross-flashing another board's
+			# image is not something -F should be able to force.
 			return 74
 		fi
 
