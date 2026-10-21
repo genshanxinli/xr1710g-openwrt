@@ -309,16 +309,33 @@
 
 	thermal-zones {
 		cpu_thermal: cpu-thermal {
-			polling-delay-passive = <0>;
+			/*
+			 * The sensor is interrupt driven: en7581_thermal_set_trips()
+			 * programs the high/low thresholds and the IRQ handler
+			 * calls thermal_zone_device_update().  The poll delay only
+			 * has to exist for the window in which the governor is
+			 * actively throttling; passive polling costs nothing while
+			 * the zone is below its trip.
+			 */
+			polling-delay-passive = <1000>;
 			polling-delay = <0>;
 
 			thermal-sensors = <&thermal 0>;
 
 			trips {
-				cpu_hot: cpu-hot {
+				/*
+				 * This trip must be "passive", not "hot".
+				 * step_wise_manage() skips THERMAL_TRIP_HOT and
+				 * THERMAL_TRIP_CRITICAL unconditionally, so a
+				 * cooling map bound to a "hot" trip is never acted
+				 * on - the crossing is only reported.  With "hot"
+				 * the only remaining protection was the critical
+				 * trip, i.e. an immediate power-off.
+				 */
+				cpu_passive: cpu-passive {
 					temperature = <95000>;
 					hysteresis = <1000>;
-					type = "hot";
+					type = "passive";
 				};
 
 				cpu-critical {
@@ -330,7 +347,7 @@
 
 			cooling-maps {
 				map0 {
-					trip = <&cpu_hot>;
+					trip = <&cpu_passive>;
 					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
 							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
 							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,

@@ -268,10 +268,15 @@
 			thermal-sensors = <&thermal 0>;
 
 			trips {
-				cpu_hot: cpu-hot {
+				/*
+				 * Must be "passive", not "hot": step_wise
+				 * skips THERMAL_TRIP_HOT outright, so a map
+				 * bound to a "hot" trip never throttles.
+				 */
+				cpu_passive: cpu-passive {
 					temperature = <95000>;
 					hysteresis = <1000>;
-					type = "hot";
+					type = "passive";
 				};
 
 				cpu-critical {
@@ -283,7 +288,7 @@
 
 			cooling-maps {
 				map0 {
-					trip = <&cpu_hot>;
+					trip = <&cpu_passive>;
 					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
 							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
 				};
