@@ -1,0 +1,47 @@
+From: Gilly1970 <gilroyscott1970@gmail.com>
+Subject: [PATCH] wifi: mt76: mt7996: attribute radar events to the detecting band
+
+mt7996_mcu_rx_radar_detected() picks the mt76_phy from rdd_idx, then calls
+ieee80211_radar_detected(mphy->hw, NULL) - a NULL chanctx.
+
+ieee80211_radar_detected() walks every chanctx of the wiphy and, because
+ieee80211_radar_mark_chan_ctx_iterator() returns early only when
+"data && data != chanctx_conf", a NULL data marks all of them.  All bands
+share one wiphy, so a radar pulse seen by the 5 GHz or 6 GHz RDD also marks
+the 2.4 GHz channel context as radar-affected, where no radar detector
+exists at all.  The band then goes off-channel / CAC-holds for no reason,
+and every BSS on it logs a radar event at its own frequency.
+
+Pass the detecting phy's own channel context instead, falling back to NULL
+(previous behaviour) if the phy has none at the time of the event.
+
+Link: https://github.com/Gilly1970/Gemtek-W1700K-6.18
+Signed-off-by: Gilly1970 <gilroyscott1970@gmail.com>
+Signed-off-by: airola <airola@example.org>
+---
+--- a/mt7996/mcu.c
++++ b/mt7996/mcu.c
+@@ -562,10 +562,22 @@
+ 						&dev->rdd2_chandef,
+ 						GFP_ATOMIC);
+ 	} else {
++		struct ieee80211_chanctx_conf *conf = NULL;
+ 		struct mt7996_phy *phy = mphy->priv;
+ 
++		/* All bands share one wiphy: a radar reported with a NULL
++		 * chanctx marks every channel context, so each BSS logs a
++		 * radar event on its own frequency, including 2.4 GHz where
++		 * no radar detector exists. Report it on the detecting band
++		 * only.
++		 */
++		if (mphy->chanctx)
++			conf = container_of((void *)mphy->chanctx,
++					    struct ieee80211_chanctx_conf,
++					    drv_priv);
++
+ 		phy->rdd_tx_paused = true;
+-		ieee80211_radar_detected(mphy->hw, NULL);
++		ieee80211_radar_detected(mphy->hw, conf);
+ 	}
+ 	dev->hw_pattern++;
+ 

@@ -1,0 +1,100 @@
+From: Gilly <gilroyscott1970@gmail.com>
+Subject: [PATCH] wifi: mt76: mt7996: restart the NPU on a full chip reset
+
+The L1 SER path stops the NPU (mt7996_mac_reset_work(), MT_MCU_CMD_STOP_DMA
+branch), hands it the new rings with __mt7996_npu_hw_init() once DMA is back,
+and keeps NAPI off the NPU-owned queues.  A full chip reset (WM/WA watchdog)
+takes mt7996_mac_full_reset() -> mt7996_mac_restart() instead, which restarts
+WED but has no NPU equivalent: the NPU is never stopped, and never learns the
+ring and descriptor addresses recreated by the WFSYS reset.  Host TX also runs
+through the NPU rings, so Wi-Fi stays dead until reboot.
+
+There is a second, sharper problem in mt7996_mac_restart() itself.  Its two
+NAPI loops only skip queues when WED is active:
+
+	if (mtk_wed_device_active(&dev->mt76.mmio.wed) &&
+	    mt76_queue_is_wed_rro(&mdev->q_rx[i]))
+		continue;
+
+	if (mdev->q_rx[i].ndesc)
+		napi_disable(&dev->mt76.napi[i]);
+
+Under NPU, mt7996_npu_rx_queues_init() sets hwrro_mode, so the RRO queues are
+allocated (ndesc != 0) but mt76_dma_init() skips them because they carry
+MT_QFLAG_WED_RRO, and only MT_RXQ_NPU0/1 get a napi from
+mt76_npu_rx_queue_init().  napi_disable() therefore runs on a napi_struct
+that was never registered, whose ->dev is NULL, and netdev_lock(n->dev) in
+napi_disable() dereferences it.  The L1 path already guards against this;
+the full-reset path does not.
+
+Mirror the L1 path: stop the NPU at the start of mt7996_mac_full_reset(),
+apply the same queue skips to both NAPI loops in mt7996_mac_restart(), and
+re-initialise the NPU after the WED restart, failing the restart on error so
+mt7996_mac_full_reset() retries it instead of leaving host TX dead.
+
+Not exercised on-device: full chip resets are rare.
+
+Link: https://github.com/Gilly1970/Gemtek-W1700K-6.18
+Signed-off-by: Gilly <gilroyscott1970@gmail.com>
+Signed-off-by: airola <airola@example.org>
+---
+--- a/mt7996/mac.c
++++ b/mt7996/mac.c
+@@ -2325,6 +2325,13 @@
+ 		    mt76_queue_is_wed_rro(&mdev->q_rx[i]))
+ 			continue;
+ 
++		if (mt76_npu_device_active(mdev) &&
++		    mt76_queue_is_wed_rro(&mdev->q_rx[i]))
++			continue;
++
++		if (mt76_queue_is_npu_txfree(&mdev->q_rx[i]))
++			continue;
++
+ 		if (mdev->q_rx[i].ndesc)
+ 			napi_disable(&dev->mt76.napi[i]);
+ 	}
+@@ -2341,6 +2348,13 @@
+ 		    mt76_queue_is_wed_rro(&mdev->q_rx[i]))
+ 			continue;
+ 
++		if (mt76_npu_device_active(mdev) &&
++		    mt76_queue_is_wed_rro(&mdev->q_rx[i]))
++			continue;
++
++		if (mt76_queue_is_npu_txfree(&mdev->q_rx[i]))
++			continue;
++
+ 		if (mdev->q_rx[i].ndesc) {
+ 			napi_enable(&dev->mt76.napi[i]);
+ 			local_bh_disable();
+@@ -2394,6 +2408,17 @@
+ 				     MT_INT_TX_RX_DONE_EXT);
+ 	}
+ 
++	/* The NPU still holds the ring and descriptor addresses from before
++	 * the reset. Hand it the new ones, as the L1 recovery path does. Host
++	 * TX runs through the NPU rings too, so treat a failure like any other
++	 * init step and let mt7996_mac_full_reset() retry the restart.
++	 */
++	ret = __mt7996_npu_hw_init(dev);
++	if (ret) {
++		dev_err(mdev->dev, "NPU re-init after full reset failed: %d\n", ret);
++		goto out;
++	}
++
+ 	/* set the necessary init items */
+ 	ret = mt7996_mcu_set_eeprom(dev);
+ 	if (ret)
+@@ -2472,6 +2497,11 @@
+ 
+ 	dev->recovery.hw_full_reset = true;
+ 
++	/* Quiesce the NPU before the chip is reset, as the L1 recovery path
++	 * does. mt7996_mac_restart() hands it the new rings afterwards.
++	 */
++	mt7996_npu_hw_stop(dev);
++
+ 	set_bit(MT76_RESTART, &dev->mphy.state);
+ 	set_bit(MT76_MCU_RESET, &dev->mphy.state);
+ 	wake_up(&dev->mt76.mcu.wait);
