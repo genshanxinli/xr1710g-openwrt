@@ -569,11 +569,14 @@ function generate(config) {
 	if (!config)
 		die(`${config.path} is an unknown phy`);
 
+	/* Band has to be resolved before the capabilities are read: the legacy
+	 * UCI config may carry only hw_mode, and device_capabilities() looks up
+	 * wiphy_band(phy, config.band), which throws on an absent band. */
+	set_device_defaults(config);
+
 	device_capabilities(config);
 
 	append('driver', 'nl80211');
-
-	set_device_defaults(config);
 
 	device_log_append(config);
 
