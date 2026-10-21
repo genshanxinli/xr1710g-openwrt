@@ -33,8 +33,7 @@ define Package/luci-app-airoha-flowsense/postinst
 # Self-heal both, so the app works regardless of how the package was packed.
 # Runs offline (IPKG_INSTROOT set) and online.
 chmod 0755 "$${IPKG_INSTROOT}/etc/init.d/npu-jitter" \
-           "$${IPKG_INSTROOT}/usr/libexec/npu-jitter-daemon" \
-           "$${IPKG_INSTROOT}/usr/share/luci-airoha-flowsense/backend.sh" 2>/dev/null
+           "$${IPKG_INSTROOT}/usr/libexec/npu-jitter-daemon" 2>/dev/null
 chmod 0644 "$${IPKG_INSTROOT}/usr/share/rpcd/ucode/luci.airoha_flowsense.uc" \
            "$${IPKG_INSTROOT}/usr/share/rpcd/acl.d/luci-app-airoha-flowsense.json" \
            "$${IPKG_INSTROOT}/usr/share/luci/menu.d/luci-app-airoha-flowsense.json" 2>/dev/null
