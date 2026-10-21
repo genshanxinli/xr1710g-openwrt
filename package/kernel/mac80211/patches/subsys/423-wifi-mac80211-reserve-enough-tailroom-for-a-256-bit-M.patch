@@ -1,0 +1,25 @@
+From: Chien Wong <m@xv97.com>
+Subject: [PATCH 1/2] wifi: mac80211: reserve enough tailroom for a 256-bit MME
+
+BIP-CMAC-256 and BIP-GMAC-256 build a 26-byte MME, but
+IEEE80211_ENCRYPT_TAILROOM is 18, sized for the 802.11w maximum of the
+original BIP ciphers.  The shortfall is currently hidden by the kmalloc
+size-class rounding on dev_alloc_skb() and by the 256-byte TIM allowance
+in the beacon path, neither of which is a guarantee.
+
+Raise the reservation to 26 so that every path which adds IEEE80211_MMIE
+has room for it.
+
+Upstream: c49f54fd2abf ("wifi: mac80211: fix encryption tailroom")
+
+--- a/net/mac80211/ieee80211_i.h
++++ b/net/mac80211/ieee80211_i.h
+@@ -52,7 +52,7 @@ struct ieee80211_mesh_fast_tx;
+ 
+ /* Required encryption head and tailroom */
+ #define IEEE80211_ENCRYPT_HEADROOM 8
+-#define IEEE80211_ENCRYPT_TAILROOM 18
++#define IEEE80211_ENCRYPT_TAILROOM 26 /* current max: GMAC/CMAC-256 MME */
+ 
+ /* power level hasn't been configured (or set to automatic) */
+ #define IEEE80211_UNSET_POWER_LEVEL	INT_MIN
