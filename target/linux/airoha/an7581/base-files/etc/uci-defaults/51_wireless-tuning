@@ -1,0 +1,92 @@
+#!/bin/sh
+#
+# Radio defaults for the Gemtek XR1710G (MT7996, 2.4/5/6 GHz).
+#
+# The stock wireless config puts 2.4 GHz on channel 1, 5 GHz on channel 36
+# and 6 GHz on an automatic channel at EHT80. A survey of this site found
+# channel 1 carrying 39 neighbour BSSes at 66% airtime, while channel 149
+# is quiet *and* has a 5 dB higher regulatory ceiling than channel 36
+# (28 vs 23 dBm on this board), and channel 37 is a 6 GHz PSC that supports
+# EHT320 at 30 dBm. See docs/wifi-signal-survey-2026-10-21.md.
+#
+# Every option below is a plain UCI setting, so it is trivially reversible
+# with `uci revert`; nothing here touches the EEPROM, the regdb, the SKU
+# table or the calibration data.
+#
+# A value is only rewritten while it is still unset or still at the stock
+# default, so a deliberate operator choice (or a config restored from a
+# backup) always wins. Runs from /etc/init.d/boot (START=10), after
+# `wifi config` has created the radio sections and before wifi starts.
+
+. /lib/functions.sh
+
+[ -e /etc/config/wireless ] || exit 0
+
+# uci_set_from <section> <option> <stock> <value>
+uci_set_from() {
+	local section="$1"
+	local option="$2"
+	local stock="$3"
+	local value="$4"
+	local cur
+
+	cur=$(uci -q get "wireless.$section.$option")
+
+	[ -z "$cur" ] || [ "$cur" = "$stock" ] || return 0
+	[ "$cur" = "$value" ] && return 0
+
+	uci -q set "wireless.$section.$option=$value"
+	changed=1
+}
+
+case "$(board_name)" in
+gemtek,xr1710g-ubi)
+	# 2.4 GHz: leave the crowded channel 1. Keep 20 MHz -- at 66%
+	# airtime a second 20 MHz just feeds half the bandwidth to the
+	# neighbours.
+	uci_set_from radio0 channel 1 6
+
+	# eBF never fires on this band (measured 0 times) and the antenna
+	# report gains only 1.33 dB, so do not pay for the sounding.
+	uci_set_from radio0 he_mu_beamformer "" 0
+
+	# 5 GHz: channel 149 is quiet and its ceiling is 28 dBm, not 23.
+	# EHT80 rather than EHT160 -- many clients reject HE160 at 149.
+	uci_set_from radio1 channel 36 149
+
+	# 6 GHz: channel 37 is a PSC (clients that only scan PSC can find
+	# it) and EHT320 is usable here -- 0.4% airtime, zero neighbour
+	# BSSes.
+	uci_set_from radio2 channel auto 37
+	uci_set_from radio2 htmode EHT80 EHT320
+
+	# A fixed BSS colour per band. The schema default of 128 means "pick
+	# a random colour on every reload", and a colour that changes on
+	# every reload makes the neighbours' SRG bitmaps flap.
+	uci_set_from radio0 he_bss_color "" 37
+	uci_set_from radio1 he_bss_color "" 38
+	uci_set_from radio2 he_bss_color "" 39
+
+	# Do not drop a client just because its ACKs get sparse, and do not
+	# time out an idle one after the 5 minute default: an edge-of-cell
+	# client that reconnects every few minutes never gets a stable rate.
+	#
+	# 802.11k and 802.11v are turned on here because DEVICE_PACKAGES now
+	# pulls in wpad-mbedtls, which actually implements them; usteer needs
+	# both (neighbour reports to know where a client could go, BSS
+	# transition requests to ask it to move) and is useless without them.
+	for radio in radio0 radio1 radio2; do
+		iface="default_$radio"
+
+		uci -q get "wireless.$iface" >/dev/null || continue
+		uci_set_from "$iface" disassoc_low_ack "" 0
+		uci_set_from "$iface" max_inactivity "" 86400
+		uci_set_from "$iface" ieee80211k "" 1
+		uci_set_from "$iface" bss_transition "" 1
+	done
+	;;
+esac
+
+[ -n "$changed" ] && uci commit wireless
+
+exit 0

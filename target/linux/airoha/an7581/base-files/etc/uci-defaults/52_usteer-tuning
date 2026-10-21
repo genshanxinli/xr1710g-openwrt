@@ -1,0 +1,55 @@
+#!/bin/sh
+#
+# usteer defaults for the Gemtek XR1710G.
+#
+# The package ships its own /etc/config/usteer, which leaves every policy
+# option commented out. band_steering_interval therefore falls back to the
+# built-in 30000 ms, and 5/6 GHz capable clients that park on 2.4 GHz are
+# steered up automatically. That is exactly the behaviour this board wants:
+# the survey found a client sitting at 5 GHz / -52 dBm drop back to 2.4 GHz
+# after a reload and never return, because wpad-basic has no 11k/v and the
+# kernel never asks it to move.
+#
+# Two changes from the stock defaults:
+#
+#   - band_steering_min_snr is relaxed from -60 to -70 dBm. The 2.4 GHz
+#     cell here reads -43 dBm at the same spot where 5 GHz reads -52 dBm,
+#     so at -60 a client would have to be almost on top of the AP before
+#     steering kicks in.
+#   - roam_scan_snr is set so a client on a fading link is asked to scan
+#     instead of being kicked.
+#
+# The section is anonymous (`config usteer`, not `config usteer 'usteer'`),
+# so it has to be addressed as @usteer[0].
+
+. /lib/functions.sh
+
+[ -e /etc/config/usteer ] || exit 0
+
+# uci_set_default <option> <stock> <value>
+uci_set_default() {
+	local option="$1"
+	local stock="$2"
+	local value="$3"
+	local cur
+
+	cur=$(uci -q get "usteer.@usteer[0].$option")
+
+	[ -z "$cur" ] || [ "$cur" = "$stock" ] || return 0
+	[ "$cur" = "$value" ] && return 0
+
+	uci -q set "usteer.@usteer[0].$option=$value"
+	changed=1
+}
+
+case "$(board_name)" in
+gemtek,xr1710g-ubi)
+	uci_set_default band_steering_interval 30000 30000
+	uci_set_default band_steering_min_snr -60 -70
+	uci_set_default roam_scan_snr 0 -75
+	;;
+esac
+
+[ -n "$changed" ] && uci commit usteer
+
+exit 0

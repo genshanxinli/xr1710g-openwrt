@@ -1,0 +1,142 @@
+From 3f6c8a1d94b25e70f8c31a6d5b7e20c948d1a7f3 Mon Sep 17 00:00:00 2001
+From: Yanghan Ye <yyh94306@gmail.com>
+Date: Wed, 21 Oct 2026 11:13:40 +0800
+Subject: [PATCH] wifi: mt76: mt7996: add a txpower debugfs dump
+
+The per-rate power table that mt7996_mcu_set_txpower_sku() hands to the
+firmware is not observable from userspace. mt76_get_rate_power_limits()
+already knows how to resolve the EEPROM, SKU and backoff limits for a
+channel, so expose the result through a read-only debugfs node next to
+the other mt7996 diagnostic files.
+
+Print the configured limit, the running txpower, the regdb limits and
+every rate table (cck, ofdm, mcs, ru, eht and the per-path backoff) for
+each radio. This makes it possible to tell a regdb clamp apart from an
+EEPROM or SKU clamp without rebuilding the driver.
+
+The node follows the band currently configured on the radio, so it reads
+"6g" on the 6 GHz radio and so on; mt76_get_rate_power_limits() takes
+the band from the channel, matching what the power path does at runtime.
+
+Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
+---
+ mt7996/debugfs.c | 103 +++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 103 insertions(+)
+
+--- a/mt7996/debugfs.c
++++ b/mt7996/debugfs.c
+@@ -899,6 +899,105 @@
+ DEFINE_SHOW_ATTRIBUTE(mt7996_xmit_queues);
+ 
+ static int
++mt7996_txpower_show(struct seq_file *s, void *data)
++{
++	struct mt7996_dev *dev = dev_get_drvdata(s->private);
++	struct mt76_power_limits *limits;
++	struct mt7996_phy *phy;
++	int i, j;
++
++	limits = kzalloc(sizeof(*limits), GFP_KERNEL);
++	if (!limits)
++		return -ENOMEM;
++
++	mt7996_for_each_phy(dev, phy) {
++		struct mt76_phy *mphy = phy->mt76;
++		struct cfg80211_chan_def *chandef = &mphy->chandef;
++		struct ieee80211_channel *chan = chandef->chan;
++		char band[8];
++		s8 power;
++
++		if (!chan)
++			continue;
++
++		switch (chan->band) {
++		case NL80211_BAND_2GHZ:
++			strscpy(band, "2g", sizeof(band));
++			break;
++		case NL80211_BAND_5GHZ:
++			strscpy(band, "5g", sizeof(band));
++			break;
++		case NL80211_BAND_6GHZ:
++			strscpy(band, "6g", sizeof(band));
++			break;
++		default:
++			continue;
++		}
++
++		seq_printf(s, "band %d %s ch%d (%d MHz, %d MHz): limit %d dBm, cur %d dBm, regdb %d/%d dBm\n",
++			   mphy->band_idx, band,
++			   ieee80211_frequency_to_channel(chan->center_freq),
++			   chan->center_freq,
++			   nl80211_chan_width_to_mhz(chandef->width),
++			   phy->txpower, mphy->txpower_cur,
++			   chan->max_power, chan->max_reg_power);
++
++		if (!phy->sku_limit_en)
++			continue;
++
++		power = mt76_get_power_bound(mphy, phy->txpower);
++		power = mt76_get_rate_power_limits(mphy, chan, limits, power);
++
++		seq_printf(s, "  resolved %d dBm\n", power);
++
++		seq_puts(s, "  cck ");
++		for (i = 0; i < ARRAY_SIZE(limits->cck); i++)
++			seq_printf(s, " %d", limits->cck[i]);
++		seq_puts(s, "\n  ofdm");
++		for (i = 0; i < ARRAY_SIZE(limits->ofdm); i++)
++			seq_printf(s, " %d", limits->ofdm[i]);
++		seq_puts(s, "\n");
++
++		for (i = 0; i < ARRAY_SIZE(limits->mcs); i++) {
++			seq_printf(s, "  mcs%d", i);
++			for (j = 0; j < ARRAY_SIZE(limits->mcs[i]); j++)
++				seq_printf(s, " %d", limits->mcs[i][j]);
++			seq_puts(s, "\n");
++		}
++
++		for (i = 0; i < ARRAY_SIZE(limits->ru); i++) {
++			seq_printf(s, "  ru%d ", i);
++			for (j = 0; j < ARRAY_SIZE(limits->ru[i]); j++)
++				seq_printf(s, " %d", limits->ru[i][j]);
++			seq_puts(s, "\n");
++		}
++
++		for (i = 0; i < ARRAY_SIZE(limits->eht); i++) {
++			seq_printf(s, "  eht%d", i);
++			for (j = 0; j < ARRAY_SIZE(limits->eht[i]); j++)
++				seq_printf(s, " %d", limits->eht[i][j]);
++			seq_puts(s, "\n");
++		}
++
++		seq_puts(s, "  path cck");
++		for (i = 0; i < ARRAY_SIZE(limits->path.cck); i++)
++			seq_printf(s, " %d", limits->path.cck[i]);
++		seq_puts(s, "\n  path ofdm");
++		for (i = 0; i < ARRAY_SIZE(limits->path.ofdm); i++)
++			seq_printf(s, " %d", limits->path.ofdm[i]);
++		seq_puts(s, "\n  path ofdm_bf");
++		for (i = 0; i < ARRAY_SIZE(limits->path.ofdm_bf); i++)
++			seq_printf(s, " %d", limits->path.ofdm_bf[i]);
++		seq_puts(s, "\n");
++	}
++
++	kfree(limits);
++
++	return 0;
++}
++DEFINE_SHOW_ATTRIBUTE(mt7996_txpower);
++
++static int
+ mt7996_twt_stats(struct seq_file *s, void *data)
+ {
+ 	struct mt7996_dev *dev = dev_get_drvdata(s->private);
+@@ -1077,6 +1176,8 @@
+ 				    mt7996_twt_stats);
+ 	debugfs_create_file("rf_regval", 0600, dir, dev, &fops_rf_regval);
+ 	debugfs_create_file("vow_atf", 0600, dir, dev, &fops_vow_atf);
++	debugfs_create_devm_seqfile(dev->mt76.dev, "txpower", dir,
++				    mt7996_txpower_show);
+ 
+ 	debugfs_create_u32("dfs_hw_pattern", 0400, dir, &dev->hw_pattern);
+ 	debugfs_create_file("radar_trigger", 0200, dir, dev,
