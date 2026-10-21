@@ -25,11 +25,35 @@
 [ "$ACTION" = ifup ] || [ "$ACTION" = ifdown ] || exit 0
 [ "$INTERFACE" = wan ] || exit 0
 
-DEV="${DEVICE:-wan}"
+# LRO lives on the physical netdev, not on the stacked one.  When the WAN is
+# PPPoE, netifd reports $DEVICE=pppoe-wan and l3_device is pppoe-wan too; a
+# virtual device has no LRO knob ("large-receive-offload: off [fixed]"), so
+# ethtool fails and nothing is applied.  Ask netifd for the underlying device
+# instead of trusting $DEVICE: status reports @.device as main_dev (the
+# physical port) and only @.l3_device as the PPP interface.
+#
+# The fallback is not DHCP-only.  netifd sets DEVICE only for ifup and
+# ifupdate (interface-event.c: device = current->l3_dev.dev->ifname under
+# `current_ev == IFEV_UP || current_ev == IFEV_UPDATE`), so on ifdown it is
+# unset for every proto - and by then interface.c has already released
+# main_dev, so @.device is gone from the status reply too.  Without the
+# fallback the LRO state would outlive the interface.
+DEV="$(ubus call network.interface.wan status 2>/dev/null | jsonfilter -e '@.device' 2>/dev/null)"
+[ -n "$DEV" ] || DEV="${DEVICE:-wan}"
+
+# A stacked device would silently accept the ioctl and change nothing, so
+# refuse anything whose LRO is fixed rather than pretending it worked.
+case "$(ethtool -k "$DEV" 2>/dev/null)" in
+	*"large-receive-offload: off [fixed]"*)
+		logger -t wan-lro "refusing to touch $DEV: LRO is fixed off"
+		exit 0
+		;;
+esac
 
 case "$ACTION" in
 	ifup)
-		ethtool -K "$DEV" rx-lro on >/dev/null 2>&1
+		ethtool -K "$DEV" rx-lro on >/dev/null 2>&1 &&
+			logger -t wan-lro "LRO enabled on $DEV"
 		;;
 	ifdown)
 		ethtool -K "$DEV" rx-lro off >/dev/null 2>&1
