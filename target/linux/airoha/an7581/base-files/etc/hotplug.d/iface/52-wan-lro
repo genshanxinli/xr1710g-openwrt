@@ -10,18 +10,33 @@
 # Enable it on the WAN device when it comes up, and turn it off again when it
 # goes down so the aggregation state does not outlive the interface.
 #
-# Do not add lan2 to this script.  The LRO block aggregates per QDMA, not per
-# port: qdma is chosen by "QDMA0 for lan ports, QDMA1 for WAN ports"
-# (airoha_dev_set_qdma()), so lan2 and the DSA conduit share one LRO engine.
-# Once two ingress ports feed one aggregation, the metadata the aggregate
-# carries - source GDM, L2 length, DSA tag - belongs to whichever packet
-# arrived first, and the driver cannot recover the real ingress.  The
-# community saw exactly that and withdrew the "enable LRO by default" patch
-# (994) that removed the "-EBUSY while a QDMA is shared" guard; patches 195
-# and 198 here deliberately removed that same guard, so the guard no longer
-# protects us.  What protects us today is this script: WAN (GDM2) really does
-# sit on its own QDMA.  Test with lan2 first (ethtool -K lan2 rx-lro on plus
-# two simultaneous flows) before widening this.
+# Do not add any LAN port to this script.  Two independent reasons, and the
+# first one alone is enough:
+#
+#   1. A LAN port is a bridge member, and no bridge member may carry LRO.
+#      NETIF_F_UPPER_DISABLES is NETIF_F_LRO (include/linux/netdev_features.h)
+#      and netdev_sync_upper_features() clears it off the lower device when the
+#      upper has it off.  br-lan builds its feature set from COMMON_FEATURES
+#      (net/bridge/br_device.c), which has no NETIF_F_LRO, so br-lan can never
+#      pass LRO down.  ethtool -K lan2 rx-lro on fails while lan2 is enslaved
+#      and the feature appears again the moment it is released.  Verified on
+#      hardware: 2026-10-21, docs/community-onhardware-2026-10-21b.md section 2.4.
+#
+#   2. If a port is taken out of the bridge to get around point 1, it then
+#      really does share QDMA0 with the DSA conduit (airoha_dev_set_qdma()
+#      picks "QDMA0 for lan ports, QDMA1 for WAN ports"), and the LRO block
+#      aggregates per QDMA rather than per port.  Once two ingress ports feed
+#      one aggregation, the metadata the aggregate carries - source GDM, L2
+#      length, DSA tag - belongs to whichever packet arrived first, and the
+#      driver cannot recover the real ingress.  That is the failure the
+#      community hit when patch 994 removed the "-EBUSY while a QDMA is
+#      shared" guard, and patches 195/198 here remove that same guard, so
+#      nothing in the driver stops this any more.
+#
+# So point 1 is why LAN LRO simply does not work today; point 2 is why "just
+# pull the port out of the bridge" is not the fix either.  WAN (GDM2) is not a
+# bridge member and sits on its own QDMA, which is the only combination that
+# works - hence this script touches WAN and nothing else.
 [ "$ACTION" = ifup ] || [ "$ACTION" = ifdown ] || exit 0
 [ "$INTERFACE" = wan ] || exit 0
 
