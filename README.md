@@ -22,10 +22,18 @@ SHAs do not match even where the subject lines do. As a result
 `git merge-base upstream/kernel73 xr1710g` reports the point where `kernel73`
 split off `main` (`89381af998`, 2026-10-16), **not** the tip of `kernel73`:
 
-- all 34 commits that upstream has on `kernel73` and not on `main` are present
-  in `xr1710g` by subject, with different SHAs;
+- 70 of the 247 commits upstream has on `kernel73` and not on `main` are
+  present in `xr1710g` by subject, with different SHAs; the remaining 177
+  (later kernel, netfilter and driver work) are not carried here;
 - on top of those, `xr1710g` carries the XR1710G device support and its own
   fixes.
+
+To see the real divergence at any time:
+
+```sh
+comm -23 <(git log --format=%s upstream/kernel73 ^main | sort -u) \
+         <(git log --format=%s main..HEAD | sort -u)   # upstream-only
+```
 
 Because `kernel73` does not exist in the fork by default, GitHub's *Sync fork*
 button never offers it. The branch is mirrored here so the relationship is
@@ -50,7 +58,7 @@ and ships a different factory bootloader. W1700K images must not be flashed.
 
 | | |
 |---|---|
-| SoC | Airoha AN7581 (4× Cortex-A53, 1.3 GHz) |
+| SoC | Airoha AN7581 (4× Cortex-A53, 1.2 GHz max OPP) |
 | RAM / flash | 2 GiB DDR4 / 512 MiB SPI-NAND |
 | Wired | 4 ports: 2× 10G (RTL8261BE — `wan` + `lan2`), 2× 1G LAN (`lan3` + `lan4`, AN7581 internal switch) |
 | Wireless | MediaTek MT7996, Wi-Fi 7, 2.4/5/6 GHz |
@@ -83,13 +91,15 @@ boot the other board's device tree.
   equivalent to MASQUERADE. `fw4` probes the module once at startup and falls
   back to plain NAT with a warning in `logread` if it cannot be loaded.
 - NPU offload for wired and wireless traffic, plus MT7996 NPU firmware.
-- CPU frequency scaling up to 1350 MHz (`performance` governor default), with
-  a tickless idle kernel (`CONFIG_NO_HZ_IDLE`), so the periodic tick is
-  stopped while the CPU is idle instead of firing at a fixed 100 Hz.
+- CPU frequency scaling up to 1200 MHz, the top OPP in the base `an7581.dtsi`
+  table (`performance` governor default), with a tickless idle kernel
+  (`CONFIG_NO_HZ_IDLE`), so the periodic tick stops while the CPU is idle
+  instead of firing at a fixed CONFIG_HZ=250.
 - Status LEDs, including the 10G port LEDs, which are driven by the RTL8261BE
   LED engine rather than by GPIOs.
-- A single fan owner: `/etc/init.d/airoha_fan` only seeds `/etc/config/fan` and
-  stays out of the way once `luci-app-airoha-fancontrol` is installed.
+- A single fan owner: `/etc/init.d/airoha_fan` applies the stock curve only
+  when `luci-app-airoha-fancontrol` is not installed, and stays out of the way
+  once it is.
 - The hardware LuCI pages are part of the image: Airoha NPU, flow sense, fan
   control, Wi-Fi 7 and MLO.
 

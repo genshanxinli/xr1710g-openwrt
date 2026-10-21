@@ -4,7 +4,6 @@
 //
 // Replaces the fork-heavy shell backend: rpcd runs this inside its own VM, so
 // a poll cycle costs file reads and netlink calls instead of ~600 processes.
-// backend.sh is kept alongside as a manual fallback/debug tool; nothing calls it.
 
 'use strict';
 

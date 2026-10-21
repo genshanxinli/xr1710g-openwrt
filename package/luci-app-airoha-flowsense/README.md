@@ -159,11 +159,10 @@ old form as `npu-monitor.@jitter[0].target`.
 - **Dependencies**: `luci-base`, `rpcd-mod-ucode`, `ucode-mod-fs`, `ucode-mod-ubus`, `ucode-mod-uci`, `ucode-mod-nl80211`
 - **Config file**: `/etc/config/npu-monitor`
 - **Init script**: `/etc/init.d/npu-jitter`
-- **Debug fallback**: `/usr/share/luci-airoha-flowsense/backend.sh` — the old shell backend, kept for manual debugging only; nothing calls it
 
 ## Installation
 
-Install the package with `apk add`. The post-install script does all the setup: it sets +x on the init script, daemon and `backend.sh`, enables and restarts `npu-jitter`, clears the LuCI caches and restarts rpcd. No manual `chmod`/`enable` steps are needed.
+Install the package with `apk add`. The post-install script does all the setup: it sets +x on the init script and daemon, enables and restarts `npu-jitter`, clears the LuCI caches and restarts rpcd. No manual `chmod`/`enable` steps are needed.
 
 **Upgrading from the shell-backend releases (≤ r6):** if the old backend was ever copied onto the router by hand rather than installed from the package, remove it. Otherwise it registers the same `luci.airoha_flowsense` ubus object as the ucode plugin:
 
@@ -175,7 +174,7 @@ rm -f /usr/libexec/rpcd/luci.airoha_flowsense
 **Manual install (copying files without apk):** the ucode plugin needs no +x, but the rest does:
 
 ```sh
-chmod +x /etc/init.d/npu-jitter /usr/libexec/npu-jitter-daemon /usr/share/luci-airoha-flowsense/backend.sh
+chmod +x /etc/init.d/npu-jitter /usr/libexec/npu-jitter-daemon
 /etc/init.d/npu-jitter enable
 /etc/init.d/npu-jitter restart
 /etc/init.d/rpcd restart
