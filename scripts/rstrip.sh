@@ -20,11 +20,11 @@ TARGETS=$*
   exit 1
 }
 
-find $TARGETS -not -path \*/lib/firmware/\* -a -type f -a -exec file {} \; | \
+find $TARGETS -not -path \*/lib/firmware/\* -a -type f -a -exec file -r {} \; | \
   sed -n -e 's/^\(.*\):.*ELF.*\(executable\|relocatable\|shared object\).*,.*/\1:\2/p' | \
 (
   IFS=":"
-  while read F S; do
+  while read -r F S; do
     echo "$SELF: $F: $S"
 	[ "${S}" = "relocatable" ] && {
 		[ "${F##*.}" == "o" ] && continue
