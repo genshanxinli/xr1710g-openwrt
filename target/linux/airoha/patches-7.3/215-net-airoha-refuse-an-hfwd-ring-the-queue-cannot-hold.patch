@@ -1,0 +1,39 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: refuse an HFWD ring the queue cannot hold
+
+airoha_qdma_init_hfwd_queues() derives the descriptor count from the size of
+the memory-region the DTS reserves, then writes it into
+HW_FWD_DESC_NUM_MASK, a 17-bit field.  A reservation larger than 131072
+payloads wraps around the field, and the queue is then programmed with a
+truncated descriptor count while the driver keeps handing the hardware the
+full buffer: descriptors past the wrap are never used again, and the payload
+area the hardware can address no longer matches the one the driver filled.
+
+The current DTS files are well inside the limit (32 MiB / 2 KiB and 16 MiB /
+1 KiB, 16384 descriptors each), so nothing is broken today; that is exactly
+why the bound belongs here, next to the division that produces the number,
+instead of being re-derived by hand whenever someone resizes the region.
+
+Reject a count the field cannot express, and a zero count, which allocates a
+zero-length descriptor array and leaves the queue with no descriptors at all.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+ drivers/net/ethernet/airoha/airoha_eth.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -1690,6 +1690,12 @@
+ 		 * reserved memory size and the payload buffer size
+ 		 */
+ 		num_desc = div_u64(rmem->size, buf_size);
++		if (!num_desc || num_desc > HW_FWD_DESC_NUM_MASK) {
++			dev_err(eth->dev,
++				"%s needs %d descriptors, only 1-%lu fit\n",
++				name, num_desc, HW_FWD_DESC_NUM_MASK);
++			return -EINVAL;
++		}
+ 	} else {
+ 		size = buf_size * num_desc;
+ 		if (!dmam_alloc_coherent(eth->dev, size, &dma_addr,
