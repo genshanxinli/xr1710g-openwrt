@@ -1,0 +1,30 @@
+#!/bin/sh
+#
+# The Gemtek boxes ship with hardware flow offloading and Full Cone NAT on.
+#
+# These are device characteristics, not tree-wide policy. They used to be
+# baked into /etc/config/firewall by the firewall4 fullcone patch, which
+# meant every board on every target in the tree inherited them from a core
+# package. The PPE is what makes 2.5G/10G routing possible on these boxes,
+# and Full Cone NAT is the behaviour their owners expect from the stock
+# firmware -- but a reference design or a PON stick has no reason to get it.
+#
+# Runs once from /etc/init.d/boot (START=10), before firewall starts
+# (START=19), and only on boards that are actually deployed.
+#
+# flow_offloading_bridge is deliberately NOT set: its default is 0 and this
+# only reproduces the previous effective configuration.
+
+. /lib/functions.sh
+
+case "$(board_name)" in
+gemtek,xr1710g-ubi|gemtek,w1700k-ubi)
+	uci set firewall.@defaults[0].flow_offloading='1'
+	uci set firewall.@defaults[0].flow_offloading_hw='1'
+	uci set firewall.@defaults[0].fullcone='1'
+	uci set firewall.@defaults[0].fullcone6='0'
+	uci commit firewall
+	;;
+esac
+
+exit 0

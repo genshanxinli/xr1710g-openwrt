@@ -113,7 +113,7 @@ define Device/gemtek_w1700k-ubi
   DEVICE_ALT2_VARIANT := UBI
   DEVICE_PACKAGES := airoha-en7581-mt7996-npu-firmware fitblk \
 		    kmod-hwmon-nct7802 kmod-mt7996-firmware \
-		    wpad-basic-mbedtls \
+		    kmod-nft-fullcone wpad-basic-mbedtls \
 		    rtl826x-firmware rtl8261c-firmware
   ARTIFACT/chainload-uboot.itb := an7581-chainloader gemtek_w1700k
 endef
@@ -128,7 +128,7 @@ define Device/gemtek_xr1710g-ubi
   DEVICE_ALT0_VARIANT := UBI
   DEVICE_PACKAGES := airoha-en7581-mt7996-npu-firmware fitblk \
 		    kmod-br-netfilter kmod-hwmon-nct7802 kmod-mt7996-firmware \
-		    wpad-basic-mbedtls \
+		    kmod-nft-fullcone wpad-basic-mbedtls \
 		    rtl826x-firmware rtl8261c-firmware \
 		    dumpimage ethtool-full \
 		    luci-app-airoha-npu luci-app-airoha-flowsense \
