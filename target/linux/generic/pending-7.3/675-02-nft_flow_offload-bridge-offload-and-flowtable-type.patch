@@ -269,7 +269,7 @@
  	switch (nft_pf(pkt)) {
  	case NFPROTO_IPV4:
  		fl.u.ip4.daddr = ct->tuplehash[dir].tuple.src.u3.ip;
-@@ -306,15 +383,19 @@ int nft_flow_route(const struct nft_pkti
+@@ -306,15 +383,17 @@ int nft_flow_route(const struct nft_pkti
  		return -ENOENT;
  	}
  
@@ -280,14 +280,12 @@
  
  	if (route->tuple[dir].xmit_type	== FLOW_OFFLOAD_XMIT_NEIGH &&
 -	    nft_dev_forward_path(pkt, route, ct, dir, ft) < 0)
-+	    nft_dev_forward_path(pkt, is_bridging, route, ct, dir, dir, ft) &&
-+	    is_bridging)
++	    nft_dev_forward_path(pkt, is_bridging, route, ct, dir, dir, ft) < 0)
  		goto err_dst_release;
  
  	if (route->tuple[!dir].xmit_type == FLOW_OFFLOAD_XMIT_NEIGH &&
 -	    nft_dev_forward_path(pkt, route, ct, !dir, ft) < 0)
-+	    nft_dev_forward_path(pkt, is_bridging, route, ct, !dir, dir, ft) &&
-+	    is_bridging)
++	    nft_dev_forward_path(pkt, is_bridging, route, ct, !dir, dir, ft) < 0)
  		goto err_dst_release;
  
  	return 0;
