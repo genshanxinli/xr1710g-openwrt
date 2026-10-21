@@ -67,10 +67,41 @@ define Device/airoha_an7581-evb-multievb
 endef
 TARGET_DEVICES += airoha_an7581-evb-multievb
 
-define Device/gemtek_w1700k-ubi
+# Both Gemtek boxes are the same hardware generation: same SoC, same flash
+# geometry, same UBI layout and the same compat bump. Only the vendor/model
+# labels, the DTS and the package list differ, so those live in the two
+# definitions below and everything else here.
+#
+# KERNEL_INITRAMFS is a := assignment that names $$(DEVICE_DTS), so it has to
+# be expanded after DEVICE_DTS is set. The two devices therefore assign
+# DEVICE_DTS *before* calling this, which is why the call is not the first
+# line of each definition.
+define Device/gemtek-ubi-common
   DEVICE_VENDOR := Gemtek
-  DEVICE_MODEL := W1700K
   DEVICE_VARIANT := UBI
+  DEVICE_COMPAT_VERSION := 2.0
+  DEVICE_COMPAT_MESSAGE := Partition table has been changed to cooperate \
+       with the vendor bootloader with regard to the BMT/BBT partition at \
+       the end of flash. A reinstall including corrected chainloader is needed.
+  UBINIZE_OPTS := -E 5
+  BLOCKSIZE := 128k
+  PAGESIZE := 2048
+  UBOOTENV_IN_UBI := 1
+  KERNEL_IN_UBI := 1
+  KERNEL := kernel-bin | gzip
+  KERNEL_INITRAMFS := kernel-bin | lzma | \
+	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb with-initrd | pad-to 128k
+  KERNEL_INITRAMFS_SUFFIX := -recovery.itb
+  IMAGES := sysupgrade.itb
+  IMAGE/sysupgrade.itb := append-kernel | fit gzip $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb external-static-with-rootfs | append-metadata
+  ARTIFACTS := chainload-uboot.itb
+  SOC := an7581
+endef
+
+define Device/gemtek_w1700k-ubi
+  DEVICE_DTS := an7581-w1700k-ubi
+  $(call Device/gemtek-ubi-common)
+  DEVICE_MODEL := W1700K
   DEVICE_ALT0_VENDOR := CenturyLink
   DEVICE_ALT0_MODEL := W1700K
   DEVICE_ALT0_VARIANT := UBI
@@ -80,64 +111,30 @@ define Device/gemtek_w1700k-ubi
   DEVICE_ALT2_VENDOR := Quantum Fiber
   DEVICE_ALT2_MODEL := W1700K
   DEVICE_ALT2_VARIANT := UBI
-  DEVICE_DTS := an7581-w1700k-ubi
-  DEVICE_COMPAT_VERSION := 2.0
-  DEVICE_COMPAT_MESSAGE := Partition table has been changed to cooperate \
-       with the vendor bootloader with regard to the BMT/BBT partition at \
-       the end of flash. A reinstall including corrected chainloader is needed.
   DEVICE_PACKAGES := airoha-en7581-mt7996-npu-firmware fitblk \
-		    kmod-hwmon-nct7802 kmod-mt7996-firmware wpad-basic-mbedtls \
+		    kmod-hwmon-nct7802 kmod-mt7996-firmware \
+		    wpad-basic-mbedtls \
 		    rtl826x-firmware rtl8261c-firmware
-  UBINIZE_OPTS := -E 5
-  BLOCKSIZE := 128k
-  PAGESIZE := 2048
-  UBOOTENV_IN_UBI := 1
-  KERNEL_IN_UBI := 1
-  KERNEL := kernel-bin | gzip
-  KERNEL_INITRAMFS := kernel-bin | lzma | \
-	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb with-initrd | pad-to 128k
-  KERNEL_INITRAMFS_SUFFIX := -recovery.itb
-  IMAGES := sysupgrade.itb
-  IMAGE/sysupgrade.itb := append-kernel | fit gzip $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb external-static-with-rootfs | append-metadata
-  ARTIFACTS := chainload-uboot.itb
   ARTIFACT/chainload-uboot.itb := an7581-chainloader gemtek_w1700k
-  SOC := an7581
 endef
 TARGET_DEVICES += gemtek_w1700k-ubi
 
 define Device/gemtek_xr1710g-ubi
-  DEVICE_VENDOR := Gemtek
+  DEVICE_DTS := an7581-xr1710g-ubi
+  $(call Device/gemtek-ubi-common)
   DEVICE_MODEL := XR1710G
-  DEVICE_VARIANT := UBI
   DEVICE_ALT0_VENDOR := Brightspeed
   DEVICE_ALT0_MODEL := XR1710G
   DEVICE_ALT0_VARIANT := UBI
-  DEVICE_DTS := an7581-xr1710g-ubi
-  DEVICE_COMPAT_VERSION := 2.0
-  DEVICE_COMPAT_MESSAGE := Partition table has been changed to cooperate \
-       with the vendor bootloader with regard to the BMT/BBT partition at \
-       the end of flash. A reinstall including corrected chainloader is needed.
   DEVICE_PACKAGES := airoha-en7581-mt7996-npu-firmware fitblk \
 		    kmod-br-netfilter kmod-hwmon-nct7802 kmod-mt7996-firmware \
-		    wpad-basic-mbedtls rtl826x-firmware rtl8261c-firmware \
+		    wpad-basic-mbedtls \
+		    rtl826x-firmware rtl8261c-firmware \
 		    dumpimage ethtool-full \
 		    luci-app-airoha-npu luci-app-airoha-flowsense \
 		    luci-app-airoha-fancontrol luci-app-wifi7 luci-app-mlo \
 		    luci
-  UBINIZE_OPTS := -E 5
-  BLOCKSIZE := 128k
-  PAGESIZE := 2048
-  UBOOTENV_IN_UBI := 1
-  KERNEL_IN_UBI := 1
-  KERNEL := kernel-bin | gzip
-  KERNEL_INITRAMFS := kernel-bin | lzma | \
-	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb with-initrd | pad-to 128k
-  KERNEL_INITRAMFS_SUFFIX := -recovery.itb
-  IMAGES := sysupgrade.itb
-  IMAGE/sysupgrade.itb := append-kernel | fit gzip $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb external-static-with-rootfs | append-metadata
-  ARTIFACTS := chainload-uboot.itb
   ARTIFACT/chainload-uboot.itb := an7581-chainloader gemtek_xr1710g
-  SOC := an7581
 endef
 TARGET_DEVICES += gemtek_xr1710g-ubi
 
