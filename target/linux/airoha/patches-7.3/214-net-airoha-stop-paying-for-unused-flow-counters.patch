@@ -1,0 +1,181 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: stop paying for flow counters the NPU never provides
+
+Two separate ways the driver gives away offload capacity.
+
+The first is the counter carve-out.  airoha_ppe_get_num_stats_entries()
+answers from the build and the SoC alone, so every AN7581 reserves
+PPE_STATS_NUM_ENTRIES worth of each PPE's SRAM for counters before anyone
+has asked the NPU whether it can count at all.  On a board whose NPU
+answers -EINVAL, airoha_ppe_offload_setup() sets foe_stats_enabled to
+false and the warning says "continuing without counters" - but the SRAM is
+still carved out.  Half of each PPE stays unusable for the life of the
+boot to hold counters that were never handed to the NPU.  Keep the
+question "could this build count" separate from "is it counting now": the
+capability answer sizes the buffer that gets handed over, while the
+geometry answer decides the carve-out, and only the second one has to look
+at foe_stats_enabled.  Nothing allocates less because of this - the buffer
+is still sized for the capability, and the geometry only shrinks.
+
+The second is the DRAM half of the table.  The hardware has 16384 entries
+there and the driver already programs everything they need: TB_BASE points
+straight at the buffer, DRAM_TB_NUM_ENTRY holds shift(16384), and the hash
+mode is set.  Only PPE_DRAM_TABLE_EN and, symmetrically with the SRAM
+side's PPE_SRAM_HASH1_EN, PPE_DRAM_HASH1_EN are missing, so the enable
+mask clears them and the hardware never looks at the region.  airoha_ppe_
+get_total_num_entries() counts those 16384 entries anyway, which is what
+makes it hurt: fold_hash() spreads hashes over [0, 32768) while
+airoha_ppe_foe_commit_entry() only programs the ones below the SRAM total,
+and the rest fall out of the function with err still 0.  The flow gets
+marked HW_OFFLOAD and is then forwarded by the CPU.
+
+Turning the table on makes those hashes land somewhere the hardware
+actually searches.  No write path is needed: this table is host memory
+that TB_BASE addresses directly, so the memcpy that commit_entry() already
+does is the write, and dmam_alloc_coherent() has zeroed the region, which
+BIND_STATE reads as AIROHA_FOE_STATE_INVALID - a miss, exactly what the
+hardware does today.  The worst case of getting this wrong is therefore
+the behaviour we already have, not a false hit.
+
+Keep folding on the hash the hardware reported rather than re-deriving a
+slot, so driver and hardware cannot disagree about which entry a flow
+owns; the only remaining way to leave commit_entry() without programming
+anything is a hash past the end of the table, which folding rules out, and
+that now reports -EINVAL instead of claiming success.
+
+A readback after the programming warns once per PPE if the bit did not
+stick, because the failure is silent otherwise: the entries would simply
+never match.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c	2026-10-21 17:26:20.380663285 +0800
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c	2026-10-21 17:48:06.542786539 +0800
+@@ -38,7 +38,13 @@
+ 	.automatic_shrinking = true,
+ };
+ 
+-static int airoha_ppe_get_num_stats_entries(struct airoha_ppe *ppe)
++/* How many counter slots per PPE this build could ask the NPU for.  This is
++ * a property of the build and the SoC, not of what the NPU ended up agreeing
++ * to, and it has to stay that way: the counter buffer is allocated in
++ * airoha_ppe_init() and handed to the NPU in airoha_ppe_offload_setup(), both
++ * of which run before there is an answer to ask for.
++ */
++static int airoha_ppe_stats_capable_entries(struct airoha_ppe *ppe)
+ {
+ 	if (!IS_ENABLED(CONFIG_NET_AIROHA_FLOW_STATS))
+ 		return -EOPNOTSUPP;
+@@ -49,9 +55,25 @@
+ 	return PPE_STATS_NUM_ENTRIES;
+ }
+ 
++/* How many counter slots per PPE are carved out of the SRAM right now.  Zero
++ * until the NPU has agreed to provide counters, because a firmware that
++ * cannot count must not cost us half of the table: the carve-out is not free
++ * - it halves the entries every PPE can resolve - and paying it for counters
++ * that will never be read is a straight loss of offload capacity.
++ */
++static int airoha_ppe_get_num_stats_entries(struct airoha_ppe *ppe)
++{
++	int num_stats = airoha_ppe_stats_capable_entries(ppe);
++
++	if (num_stats > 0 && !ppe->foe_stats_enabled)
++		return -EOPNOTSUPP;
++
++	return num_stats;
++}
++
+ static int airoha_ppe_get_total_num_stats_entries(struct airoha_ppe *ppe)
+ {
+-	int num_stats = airoha_ppe_get_num_stats_entries(ppe);
++	int num_stats = airoha_ppe_stats_capable_entries(ppe);
+ 
+ 	if (num_stats > 0) {
+ 		struct airoha_eth *eth = ppe->eth;
+@@ -209,7 +231,7 @@
+ static void airoha_ppe_hw_init(struct airoha_ppe *ppe)
+ {
+ 	u32 sram_ppe_num_data_entries = airoha_ppe_get_sram_num_entries(ppe);
+-	u32 sram_num_entries;
++	u32 sram_num_entries, val;
+ 	u32 sram_tb_size, dram_num_entries;
+ 	struct airoha_eth *eth = ppe->eth;
+ 	int i, sram_num_stats_entries;
+@@ -249,6 +271,7 @@
+ 			      PPE_SRAM_TABLE_EN_MASK |
+ 			      PPE_SRAM_HASH1_EN_MASK |
+ 			      PPE_DRAM_TABLE_EN_MASK |
++			      PPE_DRAM_HASH1_EN_MASK |
+ 			      PPE_SRAM_HASH0_MODE_MASK |
+ 			      PPE_SRAM_HASH1_MODE_MASK |
+ 			      PPE_DRAM_HASH0_MODE_MASK |
+@@ -256,6 +279,8 @@
+ 			      FIELD_PREP(PPE_SRAM_TABLE_EN_MASK, 1) |
+ 			      FIELD_PREP(PPE_SRAM_HASH1_EN_MASK, 1) |
+ 			      FIELD_PREP(PPE_SRAM_HASH1_MODE_MASK, 1) |
++			      FIELD_PREP(PPE_DRAM_TABLE_EN_MASK, 1) |
++			      FIELD_PREP(PPE_DRAM_HASH1_EN_MASK, 1) |
+ 			      FIELD_PREP(PPE_DRAM_HASH1_MODE_MASK, 3));
+ 
+ 		airoha_fe_rmw(eth, REG_PPE_TB_CFG(i),
+@@ -271,6 +296,20 @@
+ 			      FIELD_PREP(PPE_DRAM_TB_NUM_ENTRY_MASK,
+ 					 dram_num_entries));
+ 
++		/* The driver does not control this field, so make sure the
++		 * hardware accepted it.  The whole point of the DRAM half is
++		 * that fold_hash() spreads hashes across it; if the table is
++		 * off after all, those hashes are written to memory the PPE
++		 * never searches and the flows silently stay on the slow
++		 * path, which is exactly the state this patch is meant to
++		 * end.
++		 */
++		val = airoha_fe_rr(eth, REG_PPE_TB_HASH_CFG(i));
++		if (!(val & PPE_DRAM_TABLE_EN_MASK))
++			dev_warn(eth->dev,
++				 "PPE%u: DRAM table did not come up, %u entries unreachable\n",
++				 i + 1, PPE_DRAM_NUM_ENTRIES);
++
+ 		airoha_fe_rmw(eth, REG_PPE_BIND_RATE(i),
+ 			      PPE_BIND_RATE_L2B_BIND_MASK |
+ 			      PPE_BIND_RATE_BIND_MASK,
+@@ -1098,6 +1137,11 @@
+ 	struct airoha_npu *npu;
+ 	int err = 0;
+ 
++	/* The SRAM half needs a control-register handshake, the DRAM half does
++	 * not: REG_PPE_TB_BASE() points straight at this buffer, so the copy
++	 * below *is* the write, and the barrier is what makes the payload
++	 * visible before the state field that claims it.
++	 */
+ 	memcpy(&hwe->d, &e->d, sizeof(*hwe) - sizeof(hwe->ib1));
+ 	wmb();
+ 
+@@ -1118,6 +1162,12 @@
+ 
+ 	if (hash < sram_num_entries)
+ 		err = airoha_ppe_foe_commit_sram_entry(ppe, hash);
++	else if (hash >= airoha_ppe_get_total_num_entries(ppe))
++		/* Not reachable with the geometries this driver programs, but
++		 * folding is the only thing that keeps hash in range and a
++		 * silently dropped flow still shows up as offloaded.
++		 */
++		err = -EINVAL;
+ unlock:
+ 	rcu_read_unlock();
+ 
+@@ -2093,6 +2143,13 @@
+ 	if (!ppe->foe_check_time)
+ 		return -ENOMEM;
+ 
++	/* Clear both PPE tables while the geometry is still the conservative
++	 * one.  foe_stats_enabled is false here, so the driver believes each
++	 * PPE has its full 8192 entries and therefore touches every slot the
++	 * hardware could ever resolve.  airoha_ppe_offload_setup() may later
++	 * shrink that to 4096 per PPE, but shrinking the range we already
++	 * cleared is safe; growing it after the fact would not be.
++	 */
+ 	err = airoha_ppe_flush_sram_entries(ppe);
+ 	if (err)
+ 		return err;
