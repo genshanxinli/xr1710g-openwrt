@@ -7,8 +7,15 @@ KERNEL_PATCHVER:=7.3
 FEATURES+=pwm
 
 DEFAULT_PACKAGES += \
-	airoha-en7581-npu-firmware uboot-envtools \
-	kmod-nft-bridge kmod-sched-act-police
+	uboot-envtools kmod-nft-bridge kmod-sched-act-police
+
+# airoha-en7581-npu-firmware (the MT7992 blob) is not a default package.  Only
+# the MT7992 reference boards load it - an7581-evb.dtso and
+# an7581-evb-emmc-kite.dtso include an7581-npu-mt7992.dtsi - and
+# airoha_an7581-evb-multievb already lists it in its DEVICE_PACKAGES.  Every
+# other board in this subtarget drives an MT7996 radio and loads
+# airoha-en7581-mt7996-npu-firmware instead, so the MT7992 blob was dead
+# weight in those images.
 
 # kmod-sched-act-police is here because the airoha driver offloads
 # FLOW_ACTION_POLICE to the PPE.  Without the module an ingress shaper fails
