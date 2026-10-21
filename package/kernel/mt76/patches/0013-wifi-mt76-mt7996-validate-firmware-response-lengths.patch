@@ -1,0 +1,173 @@
+From: Jiale Yao <yaojiale02@163.com>
+Subject: [PATCH] wifi: mt76: mt7996: validate firmware response lengths
+
+The MCU receive, response, EEPROM, free-block, channel-MIB, temperature
+and RF-register paths all index into the response skb using a fixed
+structure layout without first checking that the payload is that long.
+Every one of those lengths is controlled by firmware, so a truncated or
+malformed response is read straight past the end of the skb.
+
+Return -EINVAL (or -EIO where a caller treats -EINVAL as "this block is
+not valid" and would otherwise silently skip it) instead of parsing.
+
+This is the serialised form of the series posted by Jiale Yao:
+
+  150685fac5 wifi: mt76: mt7996: validate MCU response lengths
+  7704daf76d wifi: mt76: mt7996: validate EEPROM response lengths
+  e3e6a031f4 wifi: mt76: mt7996: validate free-block response length
+  17896d3cfb wifi: mt76: mt7996: validate channel MIB response length
+  73fdcb2ea7 wifi: mt76: mt7996: validate temperature response length
+  ba0d6029b4 wifi: mt76: mt7996: validate RF register response length
+
+Signed-off-by: Jiale Yao <yaojiale02@163.com>
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+--- a/mt7996/mcu.c
++++ b/mt7996/mcu.c
+@@ -238,6 +238,11 @@ mt7996_mcu_parse_response(struct mt76_dev *mdev, int cmd,
+ 
+ 		return -ETIMEDOUT;
+ 	}
++	if (cmd == MCU_CMD(PATCH_SEM_CONTROL) &&
++	    skb->len < offsetofend(struct mt7996_mcu_rxd, ext_eid))
++		return -EINVAL;
++	if (cmd != MCU_CMD(PATCH_SEM_CONTROL) && skb->len < sizeof(*rxd))
++		return -EINVAL;
+ 
+ 	rxd = (struct mt7996_mcu_rxd *)skb->data;
+ 	if (seq != rxd->seq)
+@@ -245,6 +250,9 @@ mt7996_mcu_parse_response(struct mt76_dev *mdev, int cmd,
+ 		ret = *skb->data;
+ 	} else if ((rxd->option & MCU_UNI_CMD_EVENT) &&
+ 		    rxd->eid == MCU_UNI_EVENT_RESULT) {
++		if (skb->len < sizeof(*rxd) + sizeof(*event))
++			return -EINVAL;
++
+ 		skb_pull(skb, sizeof(*rxd));
+ 		event = (struct mt7996_mcu_uni_event *)skb->data;
+ 		ret = le32_to_cpu(event->status);
+@@ -984,6 +992,11 @@ void mt7996_mcu_rx_event(struct mt7996_dev *dev, struct sk_buff *skb)
+ {
+ 	struct mt7996_mcu_rxd *rxd = (struct mt7996_mcu_rxd *)skb->data;
+ 
++	if (skb->len < offsetofend(struct mt7996_mcu_rxd, ext_eid)) {
++		dev_kfree_skb(skb);
++		return;
++	}
++
+ 	if (rxd->option & MCU_UNI_CMD_UNSOLICITED_EVENT) {
+ 		mt7996_mcu_uni_rx_unsolicited_event(dev, skb);
+ 		return;
+@@ -4637,6 +4650,7 @@ int mt7996_mcu_get_eeprom(struct mt7996_dev *dev, u32 offset, u8 *buf, u32 buf_l
+ 	};
+ 	struct mt7996_mcu_eeprom_access_event *event;
+ 	struct sk_buff *skb;
++	size_t data_offset;
+ 	int ret, cmd;
+ 	u32 addr;
+ 
+@@ -4662,9 +4676,14 @@ int mt7996_mcu_get_eeprom(struct mt7996_dev *dev, u32 offset, u8 *buf, u32 buf_l
+ 	if (ret)
+ 		return ret;
+ 
++	data_offset = offsetof(struct mt7996_mcu_eeprom_access_event, eeprom);
++	if (skb->len < data_offset) {
++		ret = -EIO;
++		goto out;
++	}
++
+ 	event = (struct mt7996_mcu_eeprom_access_event *)skb->data;
+ 	if (event->valid) {
+-		u32 ret_len = le32_to_cpu(event->eeprom.ext_eeprom.data_len);
+ 		u32 block = mode == EEPROM_MODE_EXT ? MT7996_EXT_EEPROM_BLOCK_SIZE :
+ 						      MT7996_EEPROM_BLOCK_SIZE;
+ 
+@@ -4682,16 +4701,35 @@ int mt7996_mcu_get_eeprom(struct mt7996_dev *dev, u32 offset, u8 *buf, u32 buf_l
+ 		case EEPROM_MODE_EFUSE:
+ 			if (!buf_len || buf_len > MT7996_EEPROM_BLOCK_SIZE)
+ 				buf_len = MT7996_EEPROM_BLOCK_SIZE;
++			if (skb->len - data_offset < buf_len) {
++				ret = -EIO;
++				break;
++			}
+ 
+ 			memcpy(buf, event->eeprom.efuse, buf_len);
+ 			break;
+-		case EEPROM_MODE_EXT:
++		case EEPROM_MODE_EXT: {
++			u32 ret_len;
++
++			if (skb->len - data_offset < sizeof(__le32)) {
++				ret = -EIO;
++				break;
++			}
++
++			ret_len = le32_to_cpu(event->eeprom.ext_eeprom.data_len);
++			data_offset += sizeof(__le32);
++			if (ret_len > skb->len - data_offset) {
++				ret = -EIO;
++				break;
++			}
++
+ 			if (!buf_len || buf_len > MT7996_EXT_EEPROM_BLOCK_SIZE)
+ 				buf_len = MT7996_EXT_EEPROM_BLOCK_SIZE;
+ 
+ 			memcpy(buf, event->eeprom.ext_eeprom.data,
+ 			       ret_len < buf_len ? ret_len : buf_len);
+ 			break;
++		}
+ 		default:
+ 			ret = -EINVAL;
+ 			break;
+@@ -4700,6 +4738,7 @@ int mt7996_mcu_get_eeprom(struct mt7996_dev *dev, u32 offset, u8 *buf, u32 buf_l
+ 		ret = -EINVAL;
+ 	}
+ 
++out:
+ 	dev_kfree_skb(skb);
+ 
+ 	return ret;
+@@ -4723,6 +4762,10 @@ int mt7996_mcu_get_efuse_free_block(struct mt7996_dev *dev, u8 *block_num)
+ 					sizeof(req), true, &skb);
+ 	if (ret)
+ 		return ret;
++	if (skb->len < 8 + sizeof(*block_num)) {
++		dev_kfree_skb(skb);
++		return -EINVAL;
++	}
+ 
+ 	*block_num = *(u8 *)(skb->data + 8);
+ 	dev_kfree_skb(skb);
+@@ -4834,6 +4877,10 @@ int mt7996_mcu_get_chan_mib_info(struct mt7996_phy *phy, bool chan_switch)
+ 					&req, sizeof(req), true, &skb);
+ 	if (ret)
+ 		return ret;
++	if (skb->len < sizeof(req.hdr) + IDX_NUM * sizeof(*res)) {
++		dev_kfree_skb(skb);
++		return -EINVAL;
++	}
+ 
+ 	skb_pull(skb, sizeof(req.hdr));
+ 
+@@ -4904,6 +4951,10 @@ int mt7996_mcu_get_temperature(struct mt7996_phy *phy)
+ 					&req, sizeof(req), true, &skb);
+ 	if (ret)
+ 		return ret;
++	if (skb->len < sizeof(*res)) {
++		dev_kfree_skb(skb);
++		return -EINVAL;
++	}
+ 
+ 	res = (void *)skb->data;
+ 	temp = le32_to_cpu(res->temperature);
+@@ -5583,6 +5634,10 @@ int mt7996_mcu_rf_regval(struct mt7996_dev *dev, u32 regidx, u32 *val, bool set)
+ 					&req, sizeof(req), true, &skb);
+ 	if (ret)
+ 		return ret;
++	if (skb->len < sizeof(*res)) {
++		dev_kfree_skb(skb);
++		return -EINVAL;
++	}
+ 
+ 	res = (void *)skb->data;
+ 	*val = le32_to_cpu(res->data);
