@@ -50,7 +50,7 @@ never match.
 Signed-off-by: OpenWrt <openwrt@example.org>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c	2026-10-21 17:26:20.380663285 +0800
-+++ b/drivers/net/ethernet/airoha/airoha_ppe.c	2026-10-21 17:48:06.542786539 +0800
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c	2026-10-21 18:09:52.912493219 +0800
 @@ -38,7 +38,13 @@
  	.automatic_shrinking = true,
  };
@@ -140,10 +140,27 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  		airoha_fe_rmw(eth, REG_PPE_BIND_RATE(i),
  			      PPE_BIND_RATE_L2B_BIND_MASK |
  			      PPE_BIND_RATE_BIND_MASK,
-@@ -1098,6 +1137,11 @@
+@@ -1092,12 +1131,27 @@
+ 				       u32 hash, bool rx_wlan)
+ {
+ 	u32 sram_num_entries = airoha_ppe_get_total_sram_num_entries(ppe);
+-	struct airoha_foe_entry *hwe = ppe->foe + hash * sizeof(*hwe);
++	struct airoha_foe_entry *hwe;
+ 	u32 ts = airoha_ppe_get_timestamp(ppe);
+ 	struct airoha_eth *eth = ppe->eth;
  	struct airoha_npu *npu;
  	int err = 0;
  
++	/* Every caller folds its hash through airoha_ppe_fold_hash() against
++	 * the same count, so this cannot trigger - but the check has to come
++	 * before the copy below, not after it, or a hash past the end of the
++	 * buffer would be written out of bounds and *then* rejected.
++	 */
++	if (hash >= airoha_ppe_get_total_num_entries(ppe))
++		return -EINVAL;
++
++	hwe = ppe->foe + hash * sizeof(*hwe);
++
 +	/* The SRAM half needs a control-register handshake, the DRAM half does
 +	 * not: REG_PPE_TB_BASE() points straight at this buffer, so the copy
 +	 * below *is* the write, and the barrier is what makes the payload
@@ -152,20 +169,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	memcpy(&hwe->d, &e->d, sizeof(*hwe) - sizeof(hwe->ib1));
  	wmb();
  
-@@ -1118,6 +1162,12 @@
- 
- 	if (hash < sram_num_entries)
- 		err = airoha_ppe_foe_commit_sram_entry(ppe, hash);
-+	else if (hash >= airoha_ppe_get_total_num_entries(ppe))
-+		/* Not reachable with the geometries this driver programs, but
-+		 * folding is the only thing that keeps hash in range and a
-+		 * silently dropped flow still shows up as offloaded.
-+		 */
-+		err = -EINVAL;
- unlock:
- 	rcu_read_unlock();
- 
-@@ -2093,6 +2143,13 @@
+@@ -2093,6 +2147,13 @@
  	if (!ppe->foe_check_time)
  		return -ENOMEM;
  
