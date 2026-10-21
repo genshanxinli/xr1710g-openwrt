@@ -1,0 +1,128 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: free the L2 entry a key replacement displaces
+
+airoha_ppe_foe_l2_flow_commit_entry() inserts the new entry with
+rhashtable_lookup_get_insert_fast().  When the bridge key is already taken
+that returns the existing entry instead, and the code then calls
+rhashtable_replace_fast() to swap the old rhash node for the new one.
+
+rhashtable_replace_fast() only re-links the hash chains, it does not free
+what it displaces, and neither airoha_l2_flow_table_params nor
+airoha_flow_table_params carries an obj_free callback.  So every bridge
+rule replace for the same MAC pair leaked the old entry plus every subflow
+still hanging on its l2_flows list: the subflows are anchored in the
+displaced entry's hlist head, so once that entry is unreachable, nothing
+walks them again - airoha_ppe_foe_flow_l2_entry_update() only ever follows
+the list of the entry that is still in the table.
+
+Split the subflow teardown out of airoha_ppe_foe_remove_l2_flow() and call
+it on the displaced entry after a successful replace, then kfree() the
+entry itself.  The replace already removed it from the hashtable, so doing
+this under ppe_lock keeps it equivalent to the removal path without
+touching the rhashtable twice.
+
+Do this while ppe_lock is held for the whole sequence.  The previous code
+dropped the lock between the claim check and the insert, which let two
+concurrent commits both observe "no entry" and both insert.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+ drivers/net/ethernet/airoha/airoha_ppe.c | 59 ++++++++++++++++++++++++---------
+ 1 file changed, 41 insertions(+), 18 deletions(-)
+
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -1197,20 +1197,29 @@
+ 	}
+ }
+ 
+-static void airoha_ppe_foe_remove_l2_flow(struct airoha_ppe *ppe,
+-					  struct airoha_flow_table_entry *e)
++static void
++airoha_ppe_foe_remove_l2_subflows(struct airoha_ppe *ppe,
++				  struct airoha_flow_table_entry *e)
+ {
+ 	struct hlist_head *head = &e->l2_flows;
+ 	struct hlist_node *n;
+ 
+ 	lockdep_assert_held(&ppe_lock);
+ 
+-	rhashtable_remove_fast(&ppe->l2_flows, &e->l2_node,
+-			       airoha_l2_flow_table_params);
+ 	hlist_for_each_entry_safe(e, n, head, l2_subflow_node)
+ 		airoha_ppe_foe_remove_flow(ppe, e);
+ }
+ 
++static void airoha_ppe_foe_remove_l2_flow(struct airoha_ppe *ppe,
++					  struct airoha_flow_table_entry *e)
++{
++	lockdep_assert_held(&ppe_lock);
++
++	rhashtable_remove_fast(&ppe->l2_flows, &e->l2_node,
++			       airoha_l2_flow_table_params);
++	airoha_ppe_foe_remove_l2_subflows(ppe, e);
++}
++
+ static void airoha_ppe_foe_flow_remove_entry(struct airoha_ppe *ppe,
+ 					     struct airoha_flow_table_entry *e)
+ {
+@@ -1393,31 +1402,45 @@
+ 				    struct airoha_flow_table_entry *e)
+ {
+ 	struct airoha_flow_table_entry *prev;
+-	bool refuse;
++	int err;
+ 
+ 	e->type = FLOW_TYPE_L2;
+ 
+ 	spin_lock_bh(&ppe_lock);
++
+ 	prev = rhashtable_lookup_fast(&ppe->l2_flows, &e->data.bridge,
+ 				      airoha_l2_flow_table_params);
+-	refuse = prev && airoha_ppe_foe_l2_claim(ppe, prev,
+-						 e->ingress_dev_idx);
+-	spin_unlock_bh(&ppe_lock);
+-
+-	if (refuse)
+-		return -EOPNOTSUPP;
++	if (prev && airoha_ppe_foe_l2_claim(ppe, prev, e->ingress_dev_idx)) {
++		err = -EOPNOTSUPP;
++		goto unlock;
++	}
+ 
+ 	prev = rhashtable_lookup_get_insert_fast(&ppe->l2_flows, &e->l2_node,
+ 						 airoha_l2_flow_table_params);
+-	if (!prev)
+-		return 0;
++	if (!prev) {
++		err = 0;
++		goto unlock;
++	}
++
++	if (IS_ERR(prev)) {
++		err = PTR_ERR(prev);
++		goto unlock;
++	}
+ 
+-	if (IS_ERR(prev))
+-		return PTR_ERR(prev);
++	err = rhashtable_replace_fast(&ppe->l2_flows, &prev->l2_node,
++				      &e->l2_node,
++				      airoha_l2_flow_table_params);
++	if (!err) {
++		/* The key now belongs to @e: the entry it displaced, and the
++		 * subflows anchored on it, are unreachable and must be freed.
++		 */
++		airoha_ppe_foe_remove_l2_subflows(ppe, prev);
++		kfree(prev);
++	}
++unlock:
++	spin_unlock_bh(&ppe_lock);
+ 
+-	return rhashtable_replace_fast(&ppe->l2_flows, &prev->l2_node,
+-				       &e->l2_node,
+-				       airoha_l2_flow_table_params);
++	return err;
+ }
+ 
+ static int airoha_ppe_foe_flow_commit_entry(struct airoha_ppe *ppe,
