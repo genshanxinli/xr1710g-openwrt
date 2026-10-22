@@ -167,6 +167,13 @@ hostapd_prepare_device_config() {
 	set_default airtime_mode 0
 	set_default cell_density 0
 
+	# hostapd rejects the whole phy when country_code is not two letters, so
+	# drop anything else here. '00' is what an unprovisioned 6 GHz radio gets.
+	case "$country" in
+	[A-Za-z][A-Za-z]) ;;
+	*) country= ;;
+	esac
+
 	[ -n "$country" ] && {
 		append base_cfg "country_code=$country" "$N"
 		[ -n "$country3" ] && append base_cfg "country3=$country3" "$N"

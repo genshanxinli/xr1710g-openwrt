@@ -17,6 +17,27 @@ const NL80211_EXT_FEATURE_RADAR_BACKGROUND = 61;
 let phy_features = {};
 let phy_capabilities = {};
 
+/* One generate() run reads the same wiphy and the same wireless status more
+ * than once: infer_band() needs both to pick a band, set_device_defaults()
+ * runs before device_capabilities(), and device_country_code() asks for the
+ * status again.  Each wiphy_info() is a NL80211_CMD_GET_WIPHY dump and each
+ * status call is a round trip into netifd's own handler, so cache them for
+ * the lifetime of the process.  libubus reconnects per invocation, so a new
+ * run gets a fresh view.
+ */
+let wiphy_cache = {};
+let wireless_status_cache = null;
+
+function cached_wiphy_info(phy) {
+	wiphy_cache[phy] ??= wiphy_info(phy);
+	return wiphy_cache[phy];
+}
+
+function wireless_status() {
+	wireless_status_cache ??= global.ubus.call('network.wireless', 'status');
+	return wireless_status_cache;
+}
+
 /* Derive a band when the configuration does not carry one.
  *
  * Older and hand-edited configurations often only have htmode and channel.
@@ -29,13 +50,13 @@ let phy_capabilities = {};
  * claimed yet, instead of silently defaulting everything to 2.4 GHz.
  */
 function infer_band(config) {
-	let info = wiphy_info(config.phy);
+	let info = cached_wiphy_info(config.phy);
 
 	if (!info)
 		return null;
 
 	let used = {};
-	let status = global.ubus.call('network.wireless', 'status');
+	let status = wireless_status();
 
 	for (let name, radio in status)
 		if (radio.config.band)
@@ -105,7 +126,7 @@ function device_log_append(config) {
 
 /* setup country code */
 function device_country_code(config) {
-	let status = global.ubus.call('network.wireless', 'status');
+	let status = wireless_status();
 	let country, fallback;
 	for (let name, radio in status) {
 		let cc = radio.config.country;
@@ -131,6 +152,13 @@ function device_country_code(config) {
 	}
 
 	country ??= fallback;
+
+	/* No radio reported a usable country, e.g. a phy shared by MLO links
+	 * whose radios are still unprovisioned. Fall back to the code this
+	 * device was configured with instead of dropping the setting. */
+	if (country == null && config.country_code &&
+	    match(config.country_code, /^[A-Za-z][A-Za-z]$/))
+		country = config.country_code;
 
 	if (country == null)
 		return;
@@ -337,7 +365,8 @@ function device_htmode_append(config) {
 					break;
 				}
 			config.op_class = 137;
-			config.eht_oper_chwidth = 7;
+			/* CONF_OPER_CHWIDTH_320MHZ, not 8640MHz (which is 7). */
+			config.eht_oper_chwidth = 9;
 
 			/*
 			 * Set HE operation values for 160MHz backward compatibility
@@ -542,9 +571,7 @@ function device_extended_features(data, flag) {
 }
 
 function device_capabilities(config) {
-	let phy = config.phy;
-
-	phy = wiphy_info(phy);
+	let phy = cached_wiphy_info(config.phy);
 	let band = wiphy_band(phy, config.band);
 
 	phy_capabilities.ht_capa = band.ht_capa ?? 0;
