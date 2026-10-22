@@ -40,6 +40,14 @@
 [ "$ACTION" = ifup ] || [ "$ACTION" = ifdown ] || exit 0
 [ "$INTERFACE" = wan ] || exit 0
 
+# ethtool-full is only pulled in by some devices; without it the -k query
+# below matches nothing and the -K call fails silently, which looks exactly
+# like "LRO is fixed off". Say so instead of failing quietly.
+command -v ethtool >/dev/null || {
+	logger -t wan-lro "ethtool not installed, leaving LRO alone on $INTERFACE"
+	exit 0
+}
+
 # LRO lives on the physical netdev, not on the stacked one.  When the WAN is
 # PPPoE, netifd reports $DEVICE=pppoe-wan and l3_device is pppoe-wan too; a
 # virtual device has no LRO knob ("large-receive-offload: off [fixed]"), so

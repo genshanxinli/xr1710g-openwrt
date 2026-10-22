@@ -96,6 +96,13 @@ define Device/gemtek-ubi-common
   IMAGE/sysupgrade.itb := append-kernel | fit gzip $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb external-static-with-rootfs | append-metadata
   ARTIFACTS := chainload-uboot.itb
   SOC := an7581
+  # Everything both boards need. dumpimage is not optional: platform.sh calls
+  # it to compare the FIT device tree description against the running board and
+  # silently allows the upgrade when the tool is missing.
+  DEVICE_PACKAGES := airoha-en7581-mt7996-npu-firmware fitblk \
+		     kmod-hwmon-nct7802 kmod-mt7996-firmware \
+		     kmod-nft-fullcone rtl826x-firmware rtl8261c-firmware \
+		     dumpimage
 endef
 
 define Device/gemtek_w1700k-ubi
@@ -111,10 +118,7 @@ define Device/gemtek_w1700k-ubi
   DEVICE_ALT2_VENDOR := Quantum Fiber
   DEVICE_ALT2_MODEL := W1700K
   DEVICE_ALT2_VARIANT := UBI
-  DEVICE_PACKAGES := airoha-en7581-mt7996-npu-firmware fitblk \
-		    kmod-hwmon-nct7802 kmod-mt7996-firmware \
-		    kmod-nft-fullcone wpad-basic-mbedtls \
-		    rtl826x-firmware rtl8261c-firmware
+  DEVICE_PACKAGES += wpad-basic-mbedtls
   ARTIFACT/chainload-uboot.itb := an7581-chainloader gemtek_w1700k
 endef
 TARGET_DEVICES += gemtek_w1700k-ubi
@@ -126,11 +130,7 @@ define Device/gemtek_xr1710g-ubi
   DEVICE_ALT0_VENDOR := Brightspeed
   DEVICE_ALT0_MODEL := XR1710G
   DEVICE_ALT0_VARIANT := UBI
-  DEVICE_PACKAGES := airoha-en7581-mt7996-npu-firmware fitblk \
-		    kmod-br-netfilter kmod-hwmon-nct7802 kmod-mt7996-firmware \
-		    kmod-nft-fullcone wpad-mbedtls usteer \
-		    rtl826x-firmware rtl8261c-firmware \
-		    dumpimage ethtool-full \
+  DEVICE_PACKAGES += kmod-br-netfilter wpad-mbedtls usteer ethtool-full \
 		    luci-app-airoha-npu luci-app-airoha-flowsense \
 		    luci-app-airoha-fancontrol luci-app-wifi7 luci-app-mlo \
 		    luci
