@@ -22,6 +22,13 @@ INTERVAL=2  # seconds between pings
 # to WAN and refuses if another device already holds the role), so touching
 # lan2 would silently re-route the WAN role.
 SHAPE_ENABLE="${SHAPE_ENABLE:-0}"
+# Shape the physical port behind the WAN, not a guessed name: netifd reports
+# it as @.device, which stays the GDM port even when the WAN is PPPoE (where
+# the netdev is pppoe-wan -- no speed to read, no GDM role to shape).  Same
+# lookup as /etc/hotplug.d/iface/52-wan-lro; the literal name below is the
+# fallback for when ubus is not up yet.
+SHAPE_IFACE="${SHAPE_IFACE:-$(ubus call network.interface.wan status 2>/dev/null |
+	jsonfilter -e '@.device' 2>/dev/null)}"
 SHAPE_IFACE="${SHAPE_IFACE:-wan}"
 SHAPE_MIN_MBPS="${SHAPE_MIN_MBPS:-100}"
 SHAPE_MAX_MBPS="${SHAPE_MAX_MBPS:-9500}"

@@ -44,7 +44,12 @@ apply_settings() {
 	local mode preset manual_pwm
 
 	# Nothing to drive: the nct7802 module is missing or did not bind.
-	[ -n "$HWMON" ] && [ -d "$HWMON" ] || return 1
+	# Say so rather than returning 1 into procd's void: a fan that is never
+	# programmed looks identical to one that is, until the box cooks.
+	[ -n "$HWMON" ] && [ -d "$HWMON" ] || {
+		logger -t fan "nct7802 not found, leaving the fan unmanaged"
+		return 1
+	}
 
 	mode=$(uci -q get fan.settings.mode)
 	preset=$(uci -q get fan.settings.curve_preset)
