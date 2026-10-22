@@ -41,6 +41,15 @@ platform_check_image() {
 		# board_name. Only reject on a positive mismatch: if the FIT cannot
 		# be listed, keep the previous behaviour instead of blocking valid
 		# upgrades.
+		#
+		# A missing dumpimage is not the same as an unlistable FIT: it means
+		# the check below can never run, so every upgrade would silently pass
+		# unverified. Refuse instead, and do not let -F override it.
+		command -v dumpimage >/dev/null || {
+			echo "dumpimage is missing, refusing to skip the FIT check."
+			return 74
+		}
+
 		devname="$(echo "$board" | tr ',' '_')"
 		desc="$(dumpimage -l "$1" 2>/dev/null | \
 			sed -n 's/^ *Description: .* OpenWrt \(.*\) device tree blob$/\1/p' | \

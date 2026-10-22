@@ -1,23 +1,65 @@
 #!/bin/sh
+#
+# Make bridged traffic reachable by the PPE, and reload fw4 once the bridge
+# membership has settled.
+#
+# Two things have to happen for bridge flows to be offloaded:
+#
+#   1. The bridge has to run the netfilter hooks at all.  kmod-br-netfilter
+#      ships /etc/sysctl.d/11-br-netfilter.conf, which sets
+#      net.bridge.bridge-nf-call-{ip,ip6}tables=0, so out of the box bridged IP
+#      traffic never enters the forward chain and nft_flow_offload has nothing
+#      to pick up (flowtable stays empty, hardware offload reports 0 entries).
+#      Turn it back on for br-lan only, so user-created bridges (docker, guest
+#      networks) do not pay for netfilter they did not ask for.
+#
+#   2. fw4 has to be reloaded after the bridge members are known.
+#      resolve_bridge_devices() in /usr/share/ucode/fw4.uc reads
+#      /sys/class/net/<br>/brif at reload time, so a reload that happens before
+#      wlan joins the bridge builds a flowtable without the wlan devices.
+#
+# This used to be split over /etc/hotplug.d/net/{50-nf-bridge-call,
+# 50-bridge-hw-offload}.  That directory is dead on this tree: procd only
+# exports a passive "hotplug.net" ubus object, netifd hardcodes
+# argv[1] = "iface", and no /sbin/hotplug exists, so the scripts there never
+# ran.  Everything lives in the iface hotplug now, which netifd always
+# dispatches (interface-event.c).
+#
+# One reload, not three.  The old code reloaded again 40 s and 70 s later on
+# the theory that more wlan ports keep showing up; the settle loop below
+# already covers that, and every extra "fw4 reload" drops flows on a busy 10G
+# link.
 
 [ "$ACTION" = ifup ] || exit 0
 [ "$INTERFACE" = lan ] || exit 0
 
+BRIDGE="${BR_HW_BRIDGE:-br-lan}"
 SYS_NET="${BR_HW_SYS_NET:-/sys/class/net}"
 SETTLE_TIMEOUT="${BR_HW_SETTLE_TIMEOUT:-120}"
 SETTLE_INTERVAL="${BR_HW_SETTLE_INTERVAL:-5}"
 SETTLE_STABLE="${BR_HW_SETTLE_STABLE:-3}"
-RECHECK1="${BR_HW_RECHECK1_DELAY:-40}"
-RECHECK2="${BR_HW_RECHECK2_DELAY:-70}"
 
 mkdir -p /var/lock 2>/dev/null
 
+# The bridge device exists before the lan interface is marked up; if it does
+# not, this is not the interface we are looking for.
+[ -d "${SYS_NET}/${BRIDGE}/bridge" ] || exit 0
+
+echo 1 > "${SYS_NET}/${BRIDGE}/bridge/nf_call_iptables" 2>/dev/null
+echo 1 > "${SYS_NET}/${BRIDGE}/bridge/nf_call_ip6tables" 2>/dev/null
+
 (
 	exec 9>/var/lock/bridge-hw-offload.lock
-	flock -n 9 || exit 0
+	# -w, not -n: the lock serialises reloads, it does not mean "drop the
+	# second caller".  A bridge member arriving while the settle loop runs
+	# must queue up, not be silently ignored.
+	flock -w 10 9 || {
+		logger -t bridge-hw-offload "reload already in progress, giving up"
+		exit 0
+	}
 	seen=""; prev=""; stable=0; waited=0
 	while [ "$waited" -lt "$SETTLE_TIMEOUT" ]; do
-		cur=$(ls "${SYS_NET}/br-lan/brif" 2>/dev/null | sort | tr '\n' ' ')
+		cur=$(ls "${SYS_NET}/${BRIDGE}/brif" 2>/dev/null | sort | tr '\n' ' ')
 		[ -n "$cur" ] && seen=1
 		if [ -n "$cur" ] && [ "$cur" = "$prev" ]; then
 			stable=$((stable + 1))
@@ -33,9 +75,16 @@ mkdir -p /var/lock 2>/dev/null
 		exit 0
 	fi
 	/etc/init.d/firewall reload >/dev/null 2>&1
-	sleep "$RECHECK1"
-	/etc/init.d/firewall reload >/dev/null 2>&1
-	sleep "$RECHECK2"
+
+	# A 5 GHz AP on a DFS channel only joins the bridge after its CAC
+	# finishes, which can be past the settle window.  Instead of the two
+	# blind reloads this script used to do (at +40 s and +70 s, dropping
+	# flows on a busy link each time), wait once more and reload only if
+	# the member set actually moved.
+	sleep "${RECHECK_DELAY:-40}"
+	now=$(ls "${SYS_NET}/${BRIDGE}/brif" 2>/dev/null | sort | tr '\n' ' ')
+	[ "$now" = "$prev" ] && exit 0
+	logger -t bridge-hw-offload "bridge members changed, reloading again"
 	/etc/init.d/firewall reload >/dev/null 2>&1
 ) &
 
