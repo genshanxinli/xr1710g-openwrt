@@ -2,8 +2,7 @@
 
 START=99
 
-# board_name() lives in lib/functions.sh.
-. "$IPKG_INSTROOT/lib/functions.sh"
+# lib/functions.sh (board_name) is already sourced by rc.common.
 
 # NCT7802 fan curve.
 #

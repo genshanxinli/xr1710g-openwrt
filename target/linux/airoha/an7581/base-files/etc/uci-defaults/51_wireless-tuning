@@ -63,9 +63,14 @@ gemtek,xr1710g-ubi)
 	# A fixed BSS colour per band. The schema default of 128 means "pick
 	# a random colour on every reload", and a colour that changes on
 	# every reload makes the neighbours' SRG bitmaps flap.
-	uci_set_from radio0 he_bss_color "" 37
-	uci_set_from radio1 he_bss_color "" 38
-	uci_set_from radio2 he_bss_color "" 39
+	#
+	# 128 is accepted as "still stock" as well as unset: uci_set_from()
+	# already treats an empty option as unset, but once something writes
+	# the schema default into /etc/config/wireless the empty check no
+	# longer matches and these three would silently stop applying.
+	uci_set_from radio0 he_bss_color 128 37
+	uci_set_from radio1 he_bss_color 128 38
+	uci_set_from radio2 he_bss_color 128 39
 
 	# Do not drop a client just because its ACKs get sparse, and do not
 	# time out an idle one after the 5 minute default: an edge-of-cell
@@ -78,7 +83,13 @@ gemtek,xr1710g-ubi)
 	for radio in radio0 radio1 radio2; do
 		iface="default_$radio"
 
-		uci -q get "wireless.$iface" >/dev/null || continue
+		# A missing section is normal before `wifi config` has run on a
+		# board whose radios are still disabled, but it also means the
+		# four settings below are silently skipped, so say which one.
+		uci -q get "wireless.$iface" >/dev/null || {
+			logger -t wireless-tuning "no $iface, skipping 11k/v defaults"
+			continue
+		}
 		uci_set_from "$iface" disassoc_low_ack "" 0
 		uci_set_from "$iface" max_inactivity "" 86400
 		uci_set_from "$iface" ieee80211k "" 1
