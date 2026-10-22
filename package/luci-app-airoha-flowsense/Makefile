@@ -38,8 +38,9 @@ chmod 0644 "$${IPKG_INSTROOT}/usr/share/rpcd/ucode/luci.airoha_flowsense.uc" \
            "$${IPKG_INSTROOT}/usr/share/rpcd/acl.d/luci-app-airoha-flowsense.json" \
            "$${IPKG_INSTROOT}/usr/share/luci/menu.d/luci-app-airoha-flowsense.json" 2>/dev/null
 [ -n "$${IPKG_INSTROOT}" ] || {
-	/etc/init.d/npu-jitter enable 2>/dev/null
-	/etc/init.d/npu-jitter restart 2>/dev/null
+	# No enable/start of npu-jitter here: default_postinst() enables and
+	# starts every /etc/init.d script the package installed, and it runs
+	# after this hook. Only the caches and rpcd are this hook's business.
 	rm -f /tmp/luci-indexcache.*
 	rm -rf /tmp/luci-modulecache/
 	/etc/init.d/rpcd restart 2>/dev/null

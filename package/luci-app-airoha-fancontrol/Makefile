@@ -5,7 +5,6 @@ include $(TOPDIR)/rules.mk
 PKG_LICENSE:=Apache-2.0
 
 LUCI_TITLE:=LuCI Airoha Fan Control
-LUCI_PKGNAME:=luci-app-airoha-fancontrol
 LUCI_DEPENDS:=+luci-base +jsonfilter @TARGET_airoha
 
 include $(TOPDIR)/feeds/luci/luci.mk
