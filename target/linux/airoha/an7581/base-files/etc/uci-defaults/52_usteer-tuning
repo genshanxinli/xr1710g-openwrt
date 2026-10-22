@@ -44,7 +44,10 @@ uci_set_default() {
 
 case "$(board_name)" in
 gemtek,xr1710g-ubi)
-	uci_set_default band_steering_interval 30000 30000
+	# band_steering_interval is deliberately left alone: the package leaves
+	# it commented out and the built-in 30000 ms is already what the comment
+	# above asks for, so writing it would only pin a value that upstream may
+	# tune later.
 	uci_set_default band_steering_min_snr -60 -70
 	uci_set_default roam_scan_snr 0 -75
 	;;

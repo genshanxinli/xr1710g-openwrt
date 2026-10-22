@@ -24,6 +24,10 @@
 # the log line lands after that.
 
 START=95
+# Without STOP no K link is created (rc.common only does that when STOP is
+# set) and stop() never runs on shutdown, leaving the backgrounded poller
+# alive until the kernel kills it.
+STOP=10
 
 # Ports that use the airoha PCS. lan2 is GDM4/phy5 on the XR1710G; wan is
 # GDM2/phy8 on its own PCS instance and is not affected by this failure mode.
