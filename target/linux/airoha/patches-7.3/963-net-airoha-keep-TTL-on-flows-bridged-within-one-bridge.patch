@@ -1,0 +1,97 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: do not decrement TTL on flows bridged within one bridge
+
+A frame that enters and leaves through two ports of the same bridge is
+L2-forwarded and must keep its IP TTL.  The flowtable fast path only
+decrements TTL for routed flows; the PPE was not making that distinction,
+because a bridged flow reaches the inet flowtable through br_netfilter and
+is encoded as PPE_PKT_TYPE_IPV4_HNAPT, indistinguishable by address type
+from a routed one.
+
+Patch 960 tried to fix this by clearing AIROHA_FOE_IB1_BIND_TTL for
+PPE_PKT_TYPE_BRIDGE, but that type is only reachable from a tc-flower rule
+that matches on ethernet addresses explicitly; the nft flowtable never
+emits one, so bridged flows kept the bit set and the hardware decremented
+the TTL.  Measured on a Gemtek XR1710G: a frame entering lan2 with TTL 5
+left phy0.0-ap0 with TTL 4.
+
+Decide it from the devices instead: if the egress device is a bridge port
+and the ingress device is a port of the same bridge, the flow stays in L2
+and BIND_TTL is cleared.  Routed flows keep decrementing, which also keeps
+the previous behaviour for flows that enter or leave the bridge.
+
+Note this covers the hardware path only.  nf_flow_offload_ipv4_forward()
+still calls ip_decrease_ttl() unconditionally, so flows that are not (yet)
+bound to the PPE are still decremented by software.  Fixing that needs a
+flowtable-family test in the generic fast path and is left for a separate
+change.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+ drivers/net/ethernet/airoha/airoha_ppe.c | 38 ++++++++++++++++++++++++++++----
+ 1 file changed, 32 insertions(+), 6 deletions(-)
+
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -586,7 +586,7 @@
+ 					struct airoha_foe_entry *hwe,
+ 					struct net_device *netdev, int type,
+ 					struct airoha_flow_data *data,
+-					int l4proto, u8 dsfield)
++					int l4proto, u8 dsfield, bool bridged)
+ {
+ 	u32 qdata = FIELD_PREP(AIROHA_FOE_SHAPER_ID, 0x7f), ports_pad, val;
+ 	int wlan_etype = -EINVAL, dsa_port = airoha_get_dsa_port(&netdev);
+@@ -601,7 +601,12 @@
+ 	      FIELD_PREP(AIROHA_FOE_IB1_BIND_VLAN_LAYER, data->vlan.num) |
+ 	      FIELD_PREP(AIROHA_FOE_IB1_BIND_VPM, data->vlan.num) |
+ 	      FIELD_PREP(AIROHA_FOE_IB1_BIND_PPPOE, data->pppoe.num);
+-	if (type != PPE_PKT_TYPE_BRIDGE)
++	/* Bridged flows that stay inside one bridge are L2-forwarded: the
++	 * PPE must not decrement their TTL.  Everything else -- routed
++	 * flows, and flows crossing into or out of the bridge -- is a
++	 * router hop and keeps the decrement.
++	 */
++	if (type != PPE_PKT_TYPE_BRIDGE && !bridged)
+ 		val |= AIROHA_FOE_IB1_BIND_TTL;
+ 	hwe->ib1 = val;
+ 
+@@ -1568,6 +1573,8 @@
+ 	struct flow_match_meta meta;
+ 	u8 dsfield = 0, l4proto = 0;
+ 	struct airoha_foe_entry hwe;
++	struct net_device *indev;
++	bool bridged;
+ 	int err, i, offload_type;
+ 	u16 addr_type = 0;
+ 
+@@ -1672,8 +1679,28 @@
+ 	    !is_valid_ether_addr(data.eth.h_dest))
+ 		return -EINVAL;
+ 
++	/* A flow whose ingress and egress devices are both ports of the same
++	 * bridge never leaves L2, so the PPE must forward it without touching
++	 * the IP TTL.  Routing -- including entering or leaving the bridge --
++	 * is the only case that decrements.
++	 *
++	 * This cannot be told from the dissector keys: bridged packets reach
++	 * the inet flowtable through br_netfilter and are encoded as
++	 * IPV4_HNAPT, exactly like routed ones.
++	 */
++	bridged = false;
++	if (odev && netif_is_bridge_port(odev)) {
++		rcu_read_lock();
++		indev = dev_get_by_index_rcu(dev_net(odev),
++					     meta.key->ingress_ifindex);
++		bridged = indev && netif_is_bridge_port(indev) &&
++			  netdev_master_upper_dev_get_rcu(indev) ==
++			  netdev_master_upper_dev_get_rcu(odev);
++		rcu_read_unlock();
++	}
++
+ 	err = airoha_ppe_foe_entry_prepare(eth, &hwe, odev, offload_type,
+-					   &data, l4proto, dsfield);
++					   &data, l4proto, dsfield, bridged);
+ 	if (err)
+ 		return err;
+ 
