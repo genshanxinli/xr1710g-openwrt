@@ -12,8 +12,11 @@
 # Runs once from /etc/init.d/boot (START=10), before firewall starts
 # (START=19), and only on boards that are actually deployed.
 #
-# flow_offloading_bridge is deliberately NOT set: its default is 0 and this
-# only reproduces the previous effective configuration.
+# Bridged traffic is already offloaded: 50-nf-bridge-call sets
+# br-lan's nf_call_iptables=1, which feeds bridged packets through
+# NF_INET_FORWARD where the inet flowtable picks them up as HNAPT entries.
+# There is no bridge-family flowtable and none is needed; one only added
+# UNB churn.  See docs/bridge-ppe-offload-2026-10-23.md.
 
 . /lib/functions.sh
 
