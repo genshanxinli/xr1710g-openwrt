@@ -1,0 +1,42 @@
+#!/bin/sh
+#
+# Spread RX across all CPUs on the AN7581.
+#
+# packet_steering defaults to the "local flows" mode, which walks the netdevs
+# and pins every rx queue's RPS mask to the single core it picked for that
+# device.  On this SoC that lands wan and every lan port on cpu0 -- measured
+# 6884 of 7252 packets processed on cpu0 (8/360/0 on the other three) and
+# 63006 softnet drops for a 200k packet flow.
+#
+# Mode 2 sets the mask to all online CPUs instead.  Same traffic, measured:
+# cpu0/cpu1/cpu2/cpu3 process an even share (11068/11889/11146/11244) and the
+# drops go to zero.  Mode 1 ("all flows") is not a substitute here: it only
+# widens rps_flow_cnt, leaving rps_cpus pinned to one core.
+#
+# This is a plain UCI setting, so `uci revert network.@globals[0].packet_steering`
+# undoes it.  Like the other tuning defaults here, an operator's own value wins.
+#
+# Runs from /etc/init.d/boot (START=10), before packet_steering (START=25)
+# reads the option.
+
+. /lib/functions.sh
+
+case "$(board_name)" in
+gemtek,xr1710g-ubi|gemtek,w1700k-ubi)
+	# Stock is unset, which packet-steering.uc reads as its default mode
+	# (the same thing an explicit "1" does).  Anything else is a deliberate
+	# choice -- including "0" (off) and "2" (already what we want) -- so
+	# leave it alone.
+	cur=$(uci -q get network.@globals[0].packet_steering)
+
+	case "$cur" in
+	''|1) ;;
+	*) exit 0 ;;
+	esac
+
+	uci -q set network.@globals[0].packet_steering='2'
+	uci -q commit network
+	;;
+esac
+
+exit 0

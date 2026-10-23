@@ -22,15 +22,48 @@ DEFAULT_PACKAGES += \
 # with "No such file or directory" and nothing says why.  No in-tree script
 # installs such a filter today; this only makes the capability reachable.
 
-# bridger is in the tree but deliberately unused here.  It is one of three
-# mutually incompatible routes to getting bridged traffic into the PPE; this
-# target takes the nft-native one (patches 675-01..675-05, under
-# target/linux/generic/pending-7.3/: a "table bridge fw4" flowtable with
-# offload flags, plus 675-05 rejecting connections that cross the bridge
-# twice).  bridger would need kmod-sched-bpf and a BPF pipeline to
-# do the same job, and its RTM_DELTFILTER control path fails silently while a
-# PPE flow is BIND-active, which is exactly the stale-filter black hole the
-# nft path avoids.  Do not add it back without removing the nft route first.
+# bridger is in the tree but deliberately unused here.  It is one of the
+# routes to getting bridged traffic into the PPE; bridger would need
+# kmod-sched-bpf and a BPF pipeline to do it, and its RTM_DELTFILTER control
+# path fails silently while a PPE flow is BIND-active, which is exactly the
+# stale-filter black hole the current path avoids.
+#
+# The route this target actually uses is neither bridger nor a bridge-family
+# flowtable: bridged traffic is fed through NF_INET_FORWARD by br_netfilter
+# (nf_call_iptables on br-lan) and lands in the ordinary "table inet fw4"
+# flowtable, where the PPE encodes it as a 5-tuple IPV4_HNAPT/IPV6_ROUTE
+# entry, exactly like routed traffic.  Measured: it binds, and a 3.5M-packet
+# run spent 0.46 CPU-seconds against 34.3 for the same traffic unbound.
+#
+# generic/pending-7.3/675-01..675-05 are what a *bridge-family* flowtable
+# needed.  Nothing here creates one any more (firewall4 has no
+# flow_offloading_bridge option), so those patches are retained rather than
+# used; removing them is a separate change that needs its own build test.
+
+# Two facts about /sys/kernel/debug/ppe/usage that read as bugs but are not:
+#
+#   l2b_bound 0    counts entries of PPE_PKT_TYPE_BRIDGE.  The driver can only
+#                  pick that type when the flow dissector reports addr_type 0,
+#                  and nf_flow_table_offload.c builds the key from
+#                  tuple->l3proto, which is only ever AF_INET or AF_INET6
+#                  (anything else returns -EOPNOTSUPP).  So this counter is
+#                  structurally unreachable and bridged flows are counted in
+#                  "bound" instead.  Do not read it as "bridging is not
+#                  offloaded".
+#
+#   packets=n/a    the NPU refuses per-flow counters (the driver logs "NPU
+#                  refused flow stats (-22), continuing without counters"), so
+#                  entries have no byte/packet counts.  Use the ib1/ib2 decode
+#                  plus the interface counters instead.
+
+# A flow needs roughly 31 packets before the PPE turns its UNB record into a
+# BIND one -- REG_PPE_BIND_RATE is set to 0x1e (30) and the handshake overhead
+# puts the observed edge at 31.  The threshold is packets, not bytes and not
+# time: a 20-packet flow never binds even when it lives for 40 seconds, and
+# 20 x 1400B binds no sooner than 20 x 200B.  Consequence for benchmarking:
+# DNS lookups, single HTTP requests and other short flows never reach the
+# hardware, so a throughput test that only sends short requests will report
+# "offload does not work".  Drive one long flow instead.
 
 # kmod-crypto-hw-eip93 is deliberately not a default package.  The SoC has
 # the EIP93 block and an7581.dtsi describes it, but nothing in this image
