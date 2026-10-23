@@ -24,8 +24,7 @@
 # already offloaded: br-lan's nf_call_iptables=1 feeds it through
 # NF_INET_FORWARD, where the inet flowtable encodes it as a 5-tuple HNAPT
 # entry.  A separate "table bridge fw4" flowtable was tried, measured to
-# contribute nothing to PPE binding, and removed - see
-# docs/bridge-ppe-offload-2026-10-23.md.
+# contribute nothing to PPE binding, and removed.
 #
 # The split is: this script owns the *boot-time* half (wait for membership to
 # settle, then reload once), and /etc/hotplug.d/net/50-bridge-hw-offload owns

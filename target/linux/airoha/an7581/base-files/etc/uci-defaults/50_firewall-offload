@@ -16,7 +16,7 @@
 # br-lan's nf_call_iptables=1, which feeds bridged packets through
 # NF_INET_FORWARD where the inet flowtable picks them up as HNAPT entries.
 # There is no bridge-family flowtable and none is needed; one only added
-# UNB churn.  See docs/bridge-ppe-offload-2026-10-23.md.
+# UNB churn.
 
 . /lib/functions.sh
 
