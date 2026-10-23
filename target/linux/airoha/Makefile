@@ -8,7 +8,7 @@ SUBTARGETS:=en7523 an7581 an7583
 # base device tree plus DT overlays instead of one full DTS per board. Without
 # the feature CONFIG_HAS_DT_OVERLAY_SUPPORT stays unset, dtc is not called
 # with -@, the base blob has no /__symbols__ node, and every overlay fails to
-# apply. Upstream enabled it in the commit that introduced the overlays.
+# apply.
 FEATURES:=dt dt-overlay squashfs nand ramdisk gpio
 
 KERNEL_PATCHVER:=6.18
