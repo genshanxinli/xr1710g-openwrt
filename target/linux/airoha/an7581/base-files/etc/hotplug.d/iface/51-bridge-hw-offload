@@ -14,11 +14,18 @@
 #      when the bridge appears.
 #
 #   2. fw4 has to be reloaded after the bridge members are known.
-#      resolve_bridge_devices() in /usr/share/ucode/fw4.uc reads
-#      /sys/class/net/<br>/brif at reload time, so a reload that happens before
-#      wlan joins the bridge builds a flowtable without the wlan devices.
+#      fw4 builds the inet flowtable's device list at reload time from the
+#      current network.device status, so a reload that happens before wlan
+#      joins the bridge builds a flowtable without the wlan devices.
 #      This script does that at boot; 50-bridge-hw-offload does it again for
 #      each later member change.
+#
+# There is deliberately no bridge-family flowtable here.  Bridged traffic is
+# already offloaded: br-lan's nf_call_iptables=1 feeds it through
+# NF_INET_FORWARD, where the inet flowtable encodes it as a 5-tuple HNAPT
+# entry.  A separate "table bridge fw4" flowtable was tried, measured to
+# contribute nothing to PPE binding, and removed - see
+# docs/bridge-ppe-offload-2026-10-23.md.
 #
 # The split is: this script owns the *boot-time* half (wait for membership to
 # settle, then reload once), and /etc/hotplug.d/net/50-bridge-hw-offload owns
