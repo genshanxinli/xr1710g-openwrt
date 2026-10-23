@@ -10,20 +10,26 @@
 #      net.bridge.bridge-nf-call-{ip,ip6}tables=0, so out of the box bridged IP
 #      traffic never enters the forward chain and nft_flow_offload has nothing
 #      to pick up (flowtable stays empty, hardware offload reports 0 entries).
-#      Turn it back on for br-lan only, so user-created bridges (docker, guest
-#      networks) do not pay for netfilter they did not ask for.
+#      /etc/hotplug.d/net/50-nf-bridge-call turns it back on for br-lan only
+#      when the bridge appears.
 #
 #   2. fw4 has to be reloaded after the bridge members are known.
 #      resolve_bridge_devices() in /usr/share/ucode/fw4.uc reads
 #      /sys/class/net/<br>/brif at reload time, so a reload that happens before
 #      wlan joins the bridge builds a flowtable without the wlan devices.
+#      This script does that at boot; 50-bridge-hw-offload does it again for
+#      each later member change.
 #
-# This used to be split over /etc/hotplug.d/net/{50-nf-bridge-call,
-# 50-bridge-hw-offload}.  That directory is dead on this tree: procd only
-# exports a passive "hotplug.net" ubus object, netifd hardcodes
-# argv[1] = "iface", and no /sbin/hotplug exists, so the scripts there never
-# ran.  Everything lives in the iface hotplug now, which netifd always
-# dispatches (interface-event.c).
+# The split is: this script owns the *boot-time* half (wait for membership to
+# settle, then reload once), and /etc/hotplug.d/net/50-bridge-hw-offload owns
+# the *member-change* half (a vif joining or leaving after boot).  Both write
+# the same lock, which is why it is flock -w and not flock -n: a member
+# change during the settle window must queue, not be dropped.
+#
+# nf_call_{ip,ip6}tables is not touched here.  It is a bridge attribute that
+# only has to be set once, /etc/hotplug.d/net/50-nf-bridge-call already does
+# it when br-lan appears, and doing it from both places would just be two
+# copies of the same three lines.
 #
 # One reload, not three.  The old code reloaded again 40 s and 70 s later on
 # the theory that more wlan ports keep showing up; the settle loop below
@@ -44,9 +50,6 @@ mkdir -p /var/lock 2>/dev/null
 # The bridge device exists before the lan interface is marked up; if it does
 # not, this is not the interface we are looking for.
 [ -d "${SYS_NET}/${BRIDGE}/bridge" ] || exit 0
-
-echo 1 > "${SYS_NET}/${BRIDGE}/bridge/nf_call_iptables" 2>/dev/null
-echo 1 > "${SYS_NET}/${BRIDGE}/bridge/nf_call_ip6tables" 2>/dev/null
 
 (
 	exec 9>/var/lock/bridge-hw-offload.lock

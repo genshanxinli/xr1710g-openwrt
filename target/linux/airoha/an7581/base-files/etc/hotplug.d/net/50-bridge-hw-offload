@@ -1,0 +1,48 @@
+#!/bin/sh
+#
+# Reload the firewall once br-lan's member set has settled.
+#
+# This is the *member* half of the bridge offload setup, so it lives where
+# member changes are reported: /etc/hotplug.d/net fires an "add"/"remove"
+# for every netdevice that appears or disappears, including a wlan vif
+# joining the bridge long after lan came up.
+#
+# /etc/hotplug.json has no "eq SUBSYSTEM net" rule, but its last rule is an
+# "if" whose fourth element -- the else branch, libubox json_script.c
+# handle_if() -- tests isdir(/etc/hotplug.d/net) and execs
+# /sbin/hotplug-call on a match.  Verified on hardware with a probe script,
+# and by deleting the else branch and watching the probes stop.
+
+BRIDGE="${BR_HW_BRIDGE:-br-lan}"
+SYS_NET="${BR_HW_SYS_NET:-/sys/class/net}"
+
+case "$ACTION" in
+	add|remove) ;;
+	*) exit 0 ;;
+esac
+[ -n "$DEVICENAME" ] || exit 0
+case "$DEVICENAME" in
+	lo|"$BRIDGE") exit 0 ;;
+esac
+
+if [ -L "${SYS_NET}/${DEVICENAME}/master" ] || [ -e "${SYS_NET}/${DEVICENAME}/master" ]; then
+	master=$(readlink "${SYS_NET}/${DEVICENAME}/master" 2>/dev/null)
+	[ "${master##*/}" = "$BRIDGE" ] || exit 0
+fi
+
+mkdir -p /var/lock 2>/dev/null
+
+(
+	exec 9>/var/lock/bridge-hw-offload.lock
+	# -w, not -n: the lock serialises reloads, it does not mean "drop the
+	# second caller".  A member arriving while the boot-time settle loop in
+	# hotplug.d/iface/51 still runs must queue up, not be silently ignored.
+	flock -w 10 9 || {
+		logger -t bridge-hw-offload "reload already in progress, giving up"
+		exit 0
+	}
+	sleep 3
+	/etc/init.d/firewall reload >/dev/null 2>&1
+) &
+
+exit 0

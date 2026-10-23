@@ -1,0 +1,31 @@
+#!/bin/sh
+#
+# Enable netfilter on br-lan only, so bridged IP traffic traverses the
+# netfilter forward chain where nft_flow_offload can pick it up for
+# hardware PPE offload.
+#
+# kmod-br-netfilter ships /etc/sysctl.d/11-br-netfilter.conf, which sets
+# net.bridge.bridge-nf-call-{ip,ip6}tables=0 to keep bridge firewalling
+# off by default. Turn it back on for br-lan, otherwise hardware flow
+# offloading has no flows to offload and reports 0 entries.
+#
+# Scoped to br-lan to avoid imposing netfilter overhead on user-created
+# bridges, e.g. docker or guest networks, which may not need it.
+#
+# This really does run: /etc/hotplug.json has no "eq SUBSYSTEM net" rule,
+# but its last rule is an "if" whose fourth element -- the else branch,
+# libubox json_script.c handle_if() -- tests isdir(/etc/hotplug.d/net) and
+# execs /sbin/hotplug-call on a match.  Verified on hardware with a probe
+# script, and by removing the else branch and watching the probes stop.
+
+[ "$ACTION" = "add" ] || exit 0
+[ "$DEVICENAME" = "br-lan" ] || exit 0
+
+SYS_NET="${NF_BR_SYS_NET:-/sys/class/net}"
+bridge="$SYS_NET/br-lan/bridge"
+[ -d "$bridge" ] || exit 0
+
+echo 1 > "$bridge/nf_call_iptables" 2>/dev/null
+echo 1 > "$bridge/nf_call_ip6tables" 2>/dev/null
+
+exit 0
