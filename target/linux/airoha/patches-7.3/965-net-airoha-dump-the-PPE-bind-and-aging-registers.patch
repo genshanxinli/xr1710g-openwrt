@@ -1,0 +1,89 @@
+From: OpenWrt <openwrt@example.org>
+Date: Sat, 24 Oct 2026 11:40:00 +0800
+Subject: [PATCH] net: airoha: dump the PPE bind and aging registers
+
+The driver never writes REG_PPE_BIND_LIMIT0/1, REG_PPE_UNBIND_AGE, or
+the six aging-enable bits in REG_PPE_TB_CFG.  mtk_ppe programs all
+three registers with specific values, so either this hardware has
+usable reset values and the driver is leaning on them, or the fields
+are inert here.  Nothing in the kernel can tell the difference: there
+is no /dev/mem, no devmem, and ethtool -d is not implemented for this
+driver.
+
+Add /sys/kernel/debug/ppe/tb_regs, a read-only dump of the three
+registers plus the aging-enable bits decoded out of TB_CFG.
+
+It answers the question: this hardware ships with usable reset values.
+Both PPEs read back bind_limit0 0fa00fa0 (quarter 4000, half 4000),
+bind_limit1 00011f40 (full 8000, non_l4 1), unbind_age 03e80003
+(min_packets 1000, delta 3) -- the same shape mtk_ppe programs -- and
+TB_CFG has AGE_TCP_FIN, AGE_UDP, AGE_TCP, AGE_UNBIND and AGE_NON_L4
+set.  The driver is leaning on those values, not losing them.  Do not
+program them.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+ drivers/net/ethernet/airoha/airoha_ppe_debugfs.c | 45 +++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 45 insertions(+)
+
+--- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
+@@ -322,6 +322,49 @@
+ 	.release	= single_release,
+ };
+ 
++/* The bind/aging registers the driver never writes.  Nothing else in the
++ * kernel can read them (no /dev/mem, no devmem, no ethtool -d), so a
++ * read-only dump is the only way to tell "the driver leaves the reset value
++ * alone" apart from "the driver leaves them at zero".
++ */
++static int airoha_ppe_debugfs_tb_regs_show(struct seq_file *m, void *private)
++{
++	struct airoha_ppe *ppe = m->private;
++	struct airoha_eth *eth = ppe->eth;
++	int i;
++
++	for (i = 0; i < eth->soc->num_ppe; i++) {
++		u32 cfg = airoha_fe_rr(eth, REG_PPE_TB_CFG(i));
++		u32 limit0 = airoha_fe_rr(eth, REG_PPE_BIND_LIMIT0(i));
++		u32 limit1 = airoha_fe_rr(eth, REG_PPE_BIND_LIMIT1(i));
++		u32 unbind = airoha_fe_rr(eth, REG_PPE_UNBIND_AGE(i));
++
++		seq_printf(m, "PPE%u tb_cfg %08x age %u%u%u%u%u%u\n", i + 1,
++			   cfg,
++			   !!(cfg & PPE_TB_CFG_AGE_TCP_FIN_MASK),
++			   !!(cfg & PPE_TB_CFG_AGE_UDP_MASK),
++			   !!(cfg & PPE_TB_CFG_AGE_TCP_MASK),
++			   !!(cfg & PPE_TB_CFG_AGE_UNBIND_MASK),
++			   !!(cfg & PPE_TB_CFG_AGE_NON_L4_MASK),
++			   !!(cfg & PPE_TB_CFG_AGE_PREBIND_MASK));
++		seq_printf(m, "PPE%u bind_limit0 %08x l0q %u l0h %u\n",
++			   i + 1, limit0,
++			   (u32)FIELD_GET(PPE_BIND_LIMIT0_QUARTER_MASK, limit0),
++			   (u32)FIELD_GET(PPE_BIND_LIMIT0_HALF_MASK, limit0));
++		seq_printf(m, "PPE%u bind_limit1 %08x l1f %u l1n %u\n",
++			   i + 1, limit1,
++			   (u32)FIELD_GET(PPE_BIND_LIMIT1_FULL_MASK, limit1),
++			   (u32)FIELD_GET(PPE_BIND_LIMIT1_NON_L4_MASK, limit1));
++		seq_printf(m, "PPE%u unbind_age %08x min_pkts %u delta %u\n",
++			   i + 1, unbind,
++			   (u32)FIELD_GET(PPE_UNBIND_AGE_MIN_PACKETS_MASK, unbind),
++			   (u32)FIELD_GET(PPE_UNBIND_AGE_DELTA_MASK, unbind));
++	}
++
++	return 0;
++}
++DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_tb_regs);
++
+ int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
+ {
+ 	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
+@@ -335,6 +378,8 @@
+ 			    &airoha_ppe_debugfs_foe_alias_fops);
+ 	debugfs_create_file("bind_rate", 0644, ppe->debugfs_dir, ppe,
+ 			    &airoha_ppe_debugfs_bind_rate_fops);
++	debugfs_create_file("tb_regs", 0444, ppe->debugfs_dir, ppe,
++			    &airoha_ppe_debugfs_tb_regs_fops);
+ 
+ 	return 0;
+ }
