@@ -134,6 +134,7 @@ define Device/gemtek_xr1710g-ubi
   DEVICE_PACKAGES += kmod-br-netfilter wpad-mbedtls usteer ethtool-full \
 		    luci-app-airoha-npu luci-app-airoha-flowsense \
 		    luci-app-airoha-fancontrol luci-app-wifi7 luci-app-mlo \
+		    luci-app-traffic-chart \
 		    luci
   ARTIFACT/chainload-uboot.itb := an7581-chainloader gemtek_xr1710g
 endef
