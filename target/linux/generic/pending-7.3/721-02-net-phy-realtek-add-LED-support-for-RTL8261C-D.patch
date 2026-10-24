@@ -71,6 +71,18 @@ Assisted-by: LLM
  
  #define RTL8261C_CE_FW_NAME	"rtl_nic/rtl8261c.bin"
  MODULE_FIRMWARE(RTL8261C_CE_FW_NAME);
+@@ -364,6 +368,11 @@ struct rtl821x_priv {
+ struct rtl8261x_priv {
+ 	const char *fw_name;
+ 	bool fw_loaded;
++	/* LCR7's polarity bit doubles as the manual on/off level in
++	 * led_brightness_set(), so the configured polarity is kept here
++	 * to restore it whenever hardware control is set up again.
++	 */
++	u8 led_active_low;
+ };
+ 
+ struct rtl822x_priv {
 @@ -2569,6 +2578,215 @@ static int rtl822xb_led_brightness_set(s
  					  RTL822X_VND2_LED_POLAR(index));
  }
@@ -158,6 +170,7 @@ Assisted-by: LLM
 +static int rtl8261x_led_hw_control_set(struct phy_device *phydev, u8 index,
 +				       unsigned long rules)
 +{
++	struct rtl8261x_priv *priv = phydev->priv;
 +	u16 lcr7 = RTL822X_VND2_LED_EN(index);
 +	u16 val = 0;
 +	bool act;
@@ -207,11 +220,7 @@ Assisted-by: LLM
 +	/* Enable the output and restore the configured polarity, which
 +	 * led_brightness_set() may have used as a level.
 +	 */
-+	ret = phy_read_mmd(phydev, MDIO_MMD_VEND2, RTL822X_VND2_LCR7);
-+	if (ret < 0)
-+		return ret;
-+
-+	if (ret & RTL822X_VND2_LED_POLAR(index))
++	if (priv->led_active_low & BIT(index))
 +		lcr7 |= RTL822X_VND2_LED_POLAR(index);
 +
 +	return phy_modify_mmd(phydev, MDIO_MMD_VEND2, RTL822X_VND2_LCR7,
@@ -222,6 +231,7 @@ Assisted-by: LLM
 +static int rtl8261x_led_brightness_set(struct phy_device *phydev, u8 index,
 +				       enum led_brightness value)
 +{
++	struct rtl8261x_priv *priv = phydev->priv;
 +	u16 lcr7 = RTL822X_VND2_LED_EN(index);
 +	bool active_low, on;
 +	int ret;
@@ -244,11 +254,7 @@ Assisted-by: LLM
 +	/* With no link condition selected the output sits at its idle
 +	 * level, so inverting the polarity turns the LED on.
 +	 */
-+	ret = phy_read_mmd(phydev, MDIO_MMD_VEND2, RTL822X_VND2_LCR7);
-+	if (ret < 0)
-+		return ret;
-+
-+	active_low = !!(ret & RTL822X_VND2_LED_POLAR(index));
++	active_low = priv->led_active_low & BIT(index);
 +	on = value != LED_OFF;
 +	if (on != active_low)
 +		lcr7 |= RTL822X_VND2_LED_POLAR(index);
@@ -261,6 +267,7 @@ Assisted-by: LLM
 +static int rtl8261x_led_polarity_set(struct phy_device *phydev, int index,
 +				     unsigned long modes)
 +{
++	struct rtl8261x_priv *priv = phydev->priv;
 +	bool active_low = false;
 +	u32 mode;
 +
@@ -278,6 +285,11 @@ Assisted-by: LLM
 +			return -EINVAL;
 +		}
 +	}
++
++	if (active_low)
++		priv->led_active_low |= BIT(index);
++	else
++		priv->led_active_low &= ~BIT(index);
 +
 +	return phy_modify_mmd(phydev, MDIO_MMD_VEND2, RTL822X_VND2_LCR7,
 +			      RTL822X_VND2_LED_POLAR(index),

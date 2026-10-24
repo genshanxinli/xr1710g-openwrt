@@ -2,6 +2,20 @@
 'require view';
 'require rpc';
 'require poll';
+'require uci';
+
+/*
+ * Warning state is computed by trafficchart-agg from V2Fly groups and the optional
+ * legacy application-name patterns. The browser only renders the marker carried by
+ * the backend, avoiding false positives and duplicate warning glyphs.
+ */
+function alertBaseLabel(value) {
+    return String(value || '').replace(/\s*⚠+\s*$/, '').trim();
+}
+
+function isAlertMatch(value) {
+    return /(?:^|\s)⚠+$/.test(String(value || '').trim());
+}
 
 var callTrafficStats = rpc.declare({
     object: 'luci.trafficchart',
@@ -12,7 +26,7 @@ var callTrafficStats = rpc.declare({
 var callHistory = rpc.declare({
     object: 'luci.trafficchart',
     method: 'get_stats',
-    params: [ 'history', 'tier', 'dim' ],
+    params: [ 'history', 'tier', 'dim', 'n', 'skip' ],
     expect: { '': {} }
 });
 
@@ -89,7 +103,9 @@ var previousCleanup = null;
 
 return view.extend({
     load: function() {
-        return Promise.all([ canCall('restart'), canCall('reset_history') ]);
+        return Promise.all([ canCall('restart'), canCall('reset_history'), uci.load('trafficchart') ]).then(function(result) {
+            return result.slice(0, 2);
+        });
     },
 
     render: function(perm) {
@@ -137,6 +153,15 @@ return view.extend({
                 '.qos-legend-row:hover .qos-swatch { transform: scale(1.15); }';
             document.head.appendChild(styleTag);
         }
+
+        // no animation for the first draw of a tab: its views were not updated while hidden, so the
+        // transition would run from stale values to the current ones and look like a jump
+        var ntOld = document.getElementById('qos_notrans_style');
+        if (ntOld) ntOld.parentNode.removeChild(ntOld);
+        var ntStyle = document.createElement('style');
+        ntStyle.id = 'qos_notrans_style';
+        ntStyle.textContent = '.qos-notrans, .qos-notrans * { transition: none !important; }';
+        document.head.appendChild(ntStyle);
 
         var tipOld = document.getElementById('qos_tip_style');
         if (tipOld) tipOld.parentNode.removeChild(tipOld);
@@ -201,11 +226,15 @@ return view.extend({
                     E('th', {}, '\u2191 ' + _('Upload')) ]) ];
                 m.details.forEach(function(d) {
                     var pct = max > 0 ? Math.max(3, ((d[1] || 0) + (d[2] || 0)) / max * 100) : 0;
+                    var detailAlert = !!d[3] || isAlertMatch(d[0]);
+                    var detailName = alertBaseLabel(d[0]);
+                    var detailNameChildren = [detailName];
+                    if (detailAlert) detailNameChildren.unshift(E('span', { style: 'color:#ffffff !important;font-weight:800;' }, '⚠ '));
                     rows.push(E('tr', {}, [
                         E('td', {}, [
-                            E('div', { 'class': 'tt-name' }, d[0]),
+                            E('div', { 'class': 'tt-name' }, detailNameChildren),
                             E('div', { style: 'height:3px; margin-top:4px; border-radius:2px; background:rgba(255,255,255,0.12) !important;' }, [
-                                E('div', { style: 'height:100%; width:' + pct.toFixed(1) + '%; border-radius:2px; background:hsl(' + slotHue(d[0]) + ',65%,62%) !important;' }) ]) ]),
+                                E('div', { style: 'height:100%; width:' + pct.toFixed(1) + '%; border-radius:2px; background:hsl(' + slotHue(detailName) + ',65%,62%) !important;' }) ]) ]),
                         E('td', { 'class': 'dl' }, formatBytes(d[1])),
                         E('td', { 'class': 'ul' }, formatBytes(d[2])) ]));
                 });
@@ -318,7 +347,12 @@ return view.extend({
                 refs.classes[cls].sigmaSuffixTime = sigmaSuffixTimeEl;
                 refs.classes[cls].totalPct = totalPctEl;
 
-                var labelEl = E('span', { style: 'font-size:11.5px; color:var(--qos-text-strong); font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;' }, metaOf(cls).label);
+                var labelRaw = metaOf(cls).label;
+                var labelAlert = isAlertMatch(labelRaw);
+                var labelText = alertBaseLabel(labelRaw);
+                var labelChildren = [labelText];
+                if (labelAlert) labelChildren.unshift(E('span', { style: 'color:#dc2626 !important;font-weight:800;' }, '⚠ '));
+                var labelEl = E('span', { style: 'font-size:11.5px; color:var(--qos-text-strong); font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;' }, labelChildren);
                 var swatch = E('span', { class: 'qos-swatch', style: 'width:11px; height:11px; background:' + metaOf(cls).color + '; border-radius:3px; display:inline-block; flex-shrink:0; box-shadow:0 2px 5px rgba(0,0,0,0.15);' });
 
                 var headerRow = E('div', {
@@ -417,7 +451,12 @@ return view.extend({
                     var m = getMeta(cls);
                     refs.segEls[cls].setAttribute('stroke', m.color);
                     refs.classes[cls].swatchEl.style.background = m.color;
-                    refs.classes[cls].labelEl.textContent = m.label;
+                    var alert = isAlertMatch(m.label);
+                    refs.classes[cls].labelEl.textContent = (alert ? '⚠ ' : '') + alertBaseLabel(m.label);
+                    refs.classes[cls].labelEl.style.color = alert ? 'var(--qos-danger, #dc2626)' : 'var(--qos-text-strong)';
+                    refs.classes[cls].labelEl.style.fontWeight = alert ? '800' : '600';
+                    refs.classes[cls].headerRow.style.background = alert ? 'rgba(220,38,38,0.09)' : '';
+                    refs.classes[cls].headerRow.title = alert ? _('Warning: matches a configured alert rule') : '';
                     if (refs.classes[cls].liveBar)
                         refs.classes[cls].liveBar.style.background = m.color;
                 });
@@ -601,8 +640,12 @@ return view.extend({
                             // traffic (see un_update() in trafficchart-agg) - label it as such
                             // instead of presenting it with the same confidence as a normal row.
                             var unLabel = (un.conf === 0)
-                                ? _('Not attributed (uncertain - counter sync jitter, not necessarily real traffic)')
-                                : _('Not attributed (not counted by conntrack)');
+                                ? _('Not attrib. (sync jitter)')
+                                : _('Not attrib. (N/C)');
+                            // flows that exist but have no byte counters in conntrack (created while accounting was off):
+                            // their traffic is carried by the shaper and can never be counted - say so instead of leaving it unexplained
+                            if (un.conf !== 0 && rateInfo.nocount > 0)
+                                unLabel += ' - ' + _('%d flows w/o counters').format(rateInfo.nocount);
                             res.meta[d][UN_SLOT] = { label: unLabel, color: 'hsl(0,0%,55%)', details: null };
                             res[d].rate[UN_SLOT] = un.rate;
                             res[d].bytes[UN_SLOT] = Math.max(un.bytes, 1);
@@ -708,8 +751,19 @@ return view.extend({
 
                     row.el.style.display = '';
                     row.cells[0].textContent = dev; row.cells[0].title = dev;
-                    row.cells[1].textContent = f.app; row.cells[1].title = f.app;
-                    row.cells[2].textContent = dest; row.cells[2].title = f.dst + (f.host ? ' - ' + f.host : '');
+                    var appAlert = isAlertMatch(f.app);
+                    var destAlert = !!f.dest_alert || isAlertMatch(dest) || isAlertMatch(f.dst);
+                    var appLabel = alertBaseLabel(f.app);
+                    var destLabel = alertBaseLabel(dest);
+                    var hostLabel = alertBaseLabel(f.host || '');
+                    var rawDestLabel = alertBaseLabel(f.dst || '');
+                    row.cells[1].textContent = (appAlert ? '⚠ ' : '') + appLabel; row.cells[1].title = appAlert ? _('Warning: matches a configured alert rule') : appLabel;
+                    row.cells[2].textContent = (destAlert ? '⚠ ' : '') + destLabel; row.cells[2].title = (rawDestLabel + (hostLabel ? ' - ' + hostLabel : '')) + (destAlert ? ' — ' + _('Warning: matches a configured alert rule') : '');
+                    row.cells[1].style.color = appAlert ? 'var(--qos-danger, #dc2626)' : '';
+                    row.cells[2].style.color = destAlert ? 'var(--qos-danger, #dc2626)' : '';
+                    row.cells[1].style.fontWeight = appAlert ? '800' : '';
+                    row.cells[2].style.fontWeight = destAlert ? '800' : '';
+                    row.el.style.background = (appAlert || destAlert) ? 'rgba(220,38,38,0.08)' : '';
                     row.cells[3].textContent = (f.proto || '') + (f.port ? '/' + f.port : '');
                     row.down.bar.style.width = pctIn.toFixed(1) + '%'; row.down.text.textContent = formatRate(inBits);
                     row.up.bar.style.width = pctOut.toFixed(1) + '%'; row.up.text.textContent = formatRate(outBits);
@@ -721,7 +775,7 @@ return view.extend({
         }
 
         function makeHistoryView() {
-            var v = { active: false, loadedAt: 0, persist: null, hasShaper: false, sqm: { down: 0, up: 0 } };
+            var v = { active: false, loadedAt: 0, loading: false, loadingAt: 0, persist: null, hasShaper: false, sqm: { down: 0, up: 0 } };
             var RANGES = [
                 { id: '24h',  label: _('24 hours'), tier: '5m', span: 86400 },
                 { id: '7d',   label: _('Week'),     tier: '1h', span: 7 * 86400 },
@@ -729,10 +783,20 @@ return view.extend({
                 { id: '365d', label: _('Year'),     tier: '1d', span: 365 * 86400 }
             ];
             var REFRESH_MS = { '5m': 60000, '1h': 300000, '1d': 900000 };
+            // Failed history reads should not wait for the normal long cache TTL before retrying.
+            function historyRefreshDelayMs(tier, hasError) {
+                return hasError ? 15000 : REFRESH_MS[tier];
+            }
             var TIER_SEC = { '5m': 300, '1h': 3600, '1d': 86400 };
             var TIER_ORDER = [ '5m', '1h', '1d' ];   // finest first
+            // get_stats caps each reply at 800 buckets / about 1 MB. Page through older
+            // buckets so long-history views and comparisons are not silently truncated.
+            var HISTORY_PAGE_SIZE = 800;
+            var HISTORY_MAX_BUCKETS = 1600; // enough for the longest range plus its comparison
+            var loadSequence = 0;
             var st = { dim: 'a', dir: 'both', range: '24h', data: {}, cmp: false, hidden: {} };
             var historyPinned = null;
+            var resetError = null;
 
             function historyTipKey(type, a, b, c) {
                 return type + ':' + String(a) + ':' + String(b || '') + ':' + String(c || '');
@@ -832,12 +896,18 @@ return view.extend({
                 e.stopPropagation();
                 if (!window.confirm(_('Clear all cumulative totals and history? This cannot be undone from here (buckets already saved to a storage path, if any, are kept).')))
                     return;
+                resetError = null;
                 resetBtn.disabled = true;
                 callResetHistory().then(function() {
+                    resetError = null;
                     st.data = {};
+                    st.err = {};
                     render();
                     v.load();
-                }).catch(function() {}).then(function() { resetBtn.disabled = false; });
+                }).catch(function(err) {
+                    resetError = err && err.message ? err.message : String(err || _('unknown error'));
+                    render();
+                }).then(function() { resetBtn.disabled = false; });
             });
 
             v.el = E('div', { style: 'width:100%; display:none;' }, [
@@ -899,12 +969,13 @@ return view.extend({
                     return [ _('Persistence is off: the history is kept in RAM only and is lost on reboot. Set a storage path under Network - Traffic Chart Settings.') ];
                 (p.targets || []).forEach(function(t) {
                     var pend = t.pending ? ', ' + _('%d buckets not written yet').format(t.pending) : '';
+                    var scope = (t.tiers && t.tiers !== '5m,1h,1d') ? ' (' + t.tiers + ')' : '';
                     if (t.state === 'ok')
-                        out.push(_('Saved to %s (last write: %s%s).').format(t.dir, t.saved ? new Date(t.saved * 1000).toLocaleString() : _('not yet'), pend));
+                        out.push(_('Saved to %s (last write: %s%s).').format(t.dir + scope, t.saved ? new Date(t.saved * 1000).toLocaleString() : _('not yet'), pend));
                     else if (t.state === 'err')
-                        out.push(_('Writing to %s failed - retrying%s.').format(t.dir, pend));
+                        out.push(_('Writing to %s failed - retrying%s.').format(t.dir + scope, pend));
                     else
-                        out.push(_('%s is not available (yet) - it gets everything it missed as soon as it is back%s.').format(t.dir, pend));
+                        out.push(_('%s is not available (yet) - it gets everything it missed as soon as it is back%s.').format(t.dir + scope, pend));
                 });
                 out.push(_('Written every %d min to every available target; the history stays in RAM meanwhile.').format(Math.round((p.sec || 0) / 60)));
                 return out;
@@ -949,7 +1020,7 @@ return view.extend({
 
                 var end = latest;
                 var start = Math.max(end - R.span, first);
-                var sel = B.filter(function(b) { return b.t - (b.dt || 0) > start; });
+                var sel = B.filter(function(b) { return b.t - (b.dt || 0) >= start; });
                 if (!sel.length) sel = [ B[B.length - 1] ];
                 return { end: end, start: start, sel: sel, dataEnd: end };
             }
@@ -1092,8 +1163,13 @@ return view.extend({
             function render() {
                 while (chartHost.firstChild) chartHost.removeChild(chartHost.firstChild);
                 tipHide();
+                if (resetError) {
+                    chartHost.appendChild(E('div', { style: 'text-align:center; color:var(--qos-danger); padding:8px 0;' },
+                        _('Could not clear history: ') + resetError));
+                }
                 var R = rangeDef(), B = st.data[R.tier];
                 var errored = st.err && st.err[R.tier];
+                var compareErrored = st.cmp && TIER_ORDER.slice(TIER_ORDER.indexOf(R.tier) + 1).some(function(t) { return st.err && st.err[t]; });
                 if (!B) {
                     if (errored) {
                         chartHost.appendChild(E('div', { style: 'text-align:center; color:var(--qos-danger); padding:30px 0;' },
@@ -1103,9 +1179,11 @@ return view.extend({
                     }
                     return;
                 }
-                if (errored) {
+                if (errored || compareErrored) {
                     chartHost.appendChild(E('div', { style: 'text-align:center; color:var(--qos-danger); font-size:11px; padding:4px 0;' },
-                        _('The last refresh of this history failed - showing the most recently loaded data, which may be outdated. Retrying automatically.')));
+                        errored
+                            ? _('The last refresh of this history failed - showing the most recently loaded data, which may be outdated. Retrying automatically.')
+                            : _('The previous-period comparison could not be fully refreshed; it may use older or incomplete data.')));
                 }
                 if (!B.length) {
                     chartHost.appendChild(E('div', { style: 'text-align:center; color:var(--qos-text-muted); padding:30px 0;' },
@@ -1134,7 +1212,7 @@ return view.extend({
                 var ncols = Math.max(1, Math.ceil((end - start) / colw));
                 var t0 = end - ncols * colw;
                 var cols = [];
-                for (var ci0 = 0; ci0 < ncols; ci0++) cols.push({ dt: 0, src: {}, drop: { rx: 0, tx: 0 }, ecn: { rx: 0, tx: 0 }, bl: { rx: 0, tx: 0 } });
+                for (var ci0 = 0; ci0 < ncols; ci0++) cols.push({ dt: 0, src: {}, alerts: {}, drop: { rx: 0, tx: 0 }, ecn: { rx: 0, tx: 0 }, bl: { rx: 0, tx: 0 } });
                 sel.forEach(function(b) {
                     var bd = b.dt || 0;
                     if (bd <= 0) return;
@@ -1156,6 +1234,8 @@ return view.extend({
                             var s = c.src[k] || (c.src[k] = [0, 0]);
                             s[0] += (src[k][0] || 0) * frac;
                             s[1] += (src[k][1] || 0) * frac;
+                            // warning flag of THIS bucket (device label carries a suffix, apps/destinations their name)
+                            if (isAlertMatch(k) || (st.dim === 'd' && isAlertMatch(src[k][2]))) c.alerts[k] = 1;
                         });
                         if (b.sh) {
                             c.drop.rx += ((b.sh.rx && b.sh.rx[0]) || 0) * frac;
@@ -1168,12 +1248,13 @@ return view.extend({
                     }
                 });
 
-                var totals = {}, names = {};
+                var totals = {}, names = {}, alertKeys = {};
                 sel.forEach(function(b) {
                     var src = b[st.dim] || {};
                     Object.keys(src).forEach(function(k) {
                         totals[k] = (totals[k] || 0) + val(src[k]);
-                        if (st.dim === 'd' && src[k][2]) names[k] = src[k][2];
+                        if (st.dim === 'd' && src[k][2]) names[k] = alertBaseLabel(src[k][2]);
+                        if (isAlertMatch(k) || (st.dim === 'd' && isAlertMatch(src[k][2]))) alertKeys[k] = true;
                     });
                 });
                 var keys = Object.keys(totals).sort(function(a, b) { return totals[b] - totals[a]; });
@@ -1249,9 +1330,16 @@ return view.extend({
 
                 function dropTip(c, ci, d, rate, ecnRate) {
                     var di = d === 'in' ? 0 : 1;
+                    // r = [ name, in, out, rate in this direction, warning flag ]. The flag is carried separately:
+                    // device names are stored without the marker, so it cannot be read from the name there.
                     var rows = Object.keys(c.src).map(function(k) {
-                        return [ st.dim === 'd' ? (names[k] || k) : k, c.src[k][0] || 0, c.src[k][1] || 0, c.src[k][di] || 0 ];
-                    }).filter(function(r) { return r[3] > 0; }).sort(function(a, b) { return b[3] - a[3]; }).slice(0, 5).map(function(r) { return [ r[0], r[1], r[2] ]; });
+                        var nm = st.dim === 'd' ? (names[k] || k) : k;
+                        var warn = isAlertMatch(k) || isAlertMatch(nm) || !!(c.alerts && c.alerts[k]);
+                        return [ nm, c.src[k][0] || 0, c.src[k][1] || 0, c.src[k][di] || 0, warn ];
+                    }).filter(function(r) { return r[3] > 0; }).sort(function(a, b) { return b[3] - a[3]; });
+                    // the five busiest, plus every warned entry below them (a small warned entry must stay visible)
+                    rows = rows.slice(0, 5).concat(rows.slice(5).filter(function(r) { return r[4]; }).slice(0, 5))
+                        .map(function(r) { return [ r[0], r[1], r[2], r[4] ]; });
                     return {
                         label: stampLabel(t0 + ci * colw, R.span) + ' - ' + stampLabel(t0 + (ci + 1) * colw, R.span),
                         sub: _('%.2f drops/s, %.2f ECN marks/s (%s)').format(rate, ecnRate, d === 'in' ? _('download shaper') : _('upload shaper')) +
@@ -1264,15 +1352,16 @@ return view.extend({
 
                 function historyTip(c, ci, k, vv, d) {
                     var timeStr = stampLabel(t0 + ci * colw, R.span) + ' - ' + stampLabel(t0 + (ci + 1) * colw, R.span);
-                    var name = k === '__rest' ? _('Other (%d)').format(rest.length) : (st.dim === 'd' ? (names[k] || k) : k);
-                    var colColor = k === '__rest' ? 'hsl(210,8%,62%)' : colorOf(k);
-
+                    var rawName = k === '__rest' ? _('Other (%d)').format(rest.length) : (st.dim === 'd' ? (names[k] || k) : k);
                     var details = [];
+                    var bucketAlert = isAlertMatch(k) || isAlertMatch(rawName) || !!(c && c.alerts && c.alerts[k]);
                     if (c && c.src) {
                         Object.keys(c.src).forEach(function(key) {
                             if (k === '__rest' && shown.indexOf(key) >= 0) return;
                             var entryName = st.dim === 'd' ? (names[key] || key) : key;
-                            details.push([ entryName, c.src[key][0] || 0, c.src[key][1] || 0 ]);
+                            var entryAlert = isAlertMatch(key) || isAlertMatch(entryName) || !!(c.alerts && c.alerts[key]);
+                            if (entryAlert) bucketAlert = true;
+                            details.push([ entryName, c.src[key][0] || 0, c.src[key][1] || 0, entryAlert ]);
                         });
                         details.sort(function(a, b) {
                             return ((b[1] + b[2]) - (a[1] + a[2]));
@@ -1281,10 +1370,12 @@ return view.extend({
 
                     return {
                         label: timeStr,
-                        sub: name + (dirs.length > 1 ? ' (' + (d === 'in' ? _('Download') : _('Upload')) + ')' : '') + ' \u2022 ' + formatRate(vv * 1e6),
-                        color: colColor,
+                        sub: (bucketAlert ? '⚠ ' : '') + alertBaseLabel(rawName) + (dirs.length > 1 ? ' (' + (d === 'in' ? _('Download') : _('Upload')) + ')' : '') + ' \u2022 ' + formatRate(vv * 1e6),
+                        color: bucketAlert ? '#dc2626' : (k === '__rest' ? 'hsl(210,8%,62%)' : colorOf(k)),
                         detailTitle: dimLabel(),
-                        details: details.slice(0, 8)
+                        // the eight biggest rows, plus every warned row below them: a small warned entry
+                        // must not be cut off just because it moved little traffic
+                        details: details.slice(0, 8).concat(details.slice(8).filter(function(r) { return r[3]; }).slice(0, 8))
                     };
                 }
 
@@ -1352,6 +1443,28 @@ return view.extend({
                             acc += vv;
                         });
                     });
+
+                    /* Alert marker: show a red warning symbol above each history bucket
+                     * containing a configured keyword match in the selected dimension. */
+                    if (d === dirs[0]) {
+                        cols.forEach(function(c, ci) {
+                            if (!c || c.dt <= 0) return;
+                            if (!Object.keys(c.alerts || {}).length) return;
+                            var ax = pl + ci * bw + bw / 2;
+                            var ay = panelTop + pt + 7;
+                            var marker = svgEl('g', {
+                                style: 'pointer-events:none;',
+                                'aria-label': _('Warning: configured alert keyword found in this bucket')
+                            });
+                            var bang = svgEl('text', {
+                                x: ax, y: ay + 4, 'text-anchor': 'middle',
+                                style: 'font-size:15px;font-weight:900;fill:#dc2626;paint-order:stroke;stroke:#ffffff;stroke-width:2px;'
+                            });
+                            bang.textContent = '⚠';
+                            marker.appendChild(bang);
+                            svg.appendChild(marker);
+                        });
+                    }
 
                     /*
                      * Independent interaction layer.
@@ -1662,13 +1775,18 @@ return view.extend({
                     return el;
                 }
                 shown.forEach(function(k) {
-                    var name = st.dim === 'd' ? (names[k] || k) : k;
+                    var name = st.dim === 'd' ? ((alertKeys[k] ? '\u26a0 ' : '') + (names[k] || k)) : k;
                     legend.appendChild(legendItem(k, colorOf(k), name + ' (' + formatBytes(totals[k]) + ')'));
                 });
                 if (rest.length) legend.appendChild(legendItem('__rest', 'hsl(210,8%,62%)', _('Other (%d)').format(rest.length)));
                 if (st.cmp && !prevAny) legend.appendChild(E('span', { style: 'opacity:0.7;' }, _('Previous period: no data stored yet')));
-                if (drawPrev) legend.appendChild(E('span', {}, [
-                    E('span', { style: 'display:inline-block; width:16px; margin-right:5px; vertical-align:middle; border-top:2px dashed var(--qos-text-strong);' }), _('Previous period') ]));
+                if (drawPrev) {
+                    var prevLabel = prevCov < shift * 0.95
+                        ? _('Previous period (partial, %d%% coverage)').format(shift > 0 ? Math.min(100, Math.round(prevCov / shift * 100)) : 0)
+                        : _('Previous period');
+                    legend.appendChild(E('span', {}, [
+                        E('span', { style: 'display:inline-block; width:16px; margin-right:5px; vertical-align:middle; border-top:2px dashed var(--qos-text-strong);' }), prevLabel ]));
+                }
                 if (showDrops) legend.appendChild(E('span', {}, [
                     E('span', { style: 'display:inline-block; width:11px; height:11px; border-radius:3px; margin-right:5px; background:rgba(220,38,38,0.4);' }), _('Shaper drops (strip opacity = intensity relative to the worst column shown)') ]));
                 chartHost.appendChild(legend);
@@ -1690,27 +1808,75 @@ return view.extend({
                 window.removeEventListener('resize', resizeHandler);
                 clearTimeout(resizeTimer);
             });
-            v.stale = function() { return Date.now() - v.loadedAt > REFRESH_MS[rangeDef().tier]; };
+            v.stale = function() {
+                // Avoid overlapping normal refreshes, but recover if an RPC never settles.
+                if (v.loading) return Date.now() - v.loadingAt > 30000;
+                var tier = rangeDef().tier;
+                var failed = !!(st.err && (st.err[tier] ||
+                    (st.cmp && TIER_ORDER.slice(TIER_ORDER.indexOf(tier) + 1).some(function(t) { return st.err[t]; }))));
+                return Date.now() - v.loadedAt > historyRefreshDelayMs(tier, failed);
+            };
             v.clearPinned = function() {
                 historyPinned = null;
                 tipHide();
             };
+            function historyNextSkip(response, skip, returnedCount) {
+                var cursor = response && Number(response.nextSkip);
+                // Compatibility with older rpcd adapters that don't return a cursor.
+                return isFinite(cursor) && cursor > skip ? cursor : skip + returnedCount;
+            }
+
+            function loadTier(tier, dim) {
+                var collected = [];
+                function fetchPage(skip) {
+                    if (collected.length >= HISTORY_MAX_BUCKETS) return Promise.resolve();
+                    var count = Math.min(HISTORY_PAGE_SIZE, HISTORY_MAX_BUCKETS - collected.length);
+                    return callHistory(1, tier, dim, count, skip).then(function(d) {
+                        var page = d && Array.isArray(d.buckets) ? d.buckets : [];
+                        var nextSkip = historyNextSkip(d, skip, page.length);
+                        if (!page.length) {
+                            // An individually oversized bucket is deliberately omitted by
+                            // the RPC. Its cursor advances past it, allowing older buckets
+                            // to load; a genuinely exhausted page has no advancing cursor.
+                            if (nextSkip > skip && nextSkip < HISTORY_MAX_BUCKETS && collected.length < HISTORY_MAX_BUCKETS)
+                                return fetchPage(nextSkip);
+                            return;
+                        }
+                        // The RPC returns each page oldest-to-newest. Later pages are older,
+                        // so prepend them to preserve chronological order in the final array.
+                        collected = page.concat(collected);
+                        if (nextSkip > skip && nextSkip < HISTORY_MAX_BUCKETS && collected.length < HISTORY_MAX_BUCKETS)
+                            return fetchPage(nextSkip);
+                    });
+                }
+                return fetchPage(0).then(function() { return collected; });
+            }
             v.load = function() {
-                var tier = rangeDef().tier, tiers = [ tier ];
+                var seq = ++loadSequence;
+                v.loading = true;
+                v.loadingAt = Date.now();
+                var tier = rangeDef().tier, dim = st.dim, tiers = [ tier ];
                 if (st.cmp) tiers = tiers.concat(TIER_ORDER.slice(TIER_ORDER.indexOf(tier) + 1));
                 v.loadedAt = Date.now();
                 if (!st.err) st.err = {};
                 return Promise.all(tiers.map(function(t) {
-                    return callHistory(1, t, st.dim).then(function(d) {
-                        st.data[t] = (d && d.buckets) ? d.buckets : [];
+                    return loadTier(t, dim).then(function(buckets) {
+                        // Ignore a slower response for a previous dimension / view load.
+                        if (seq !== loadSequence || dim !== st.dim) return;
+                        st.data[t] = buckets;
                         st.err[t] = false;
                     }).catch(function() {
-                        // keep whatever data is already there and set an explicit per-tier error
-                        // flag, so render() can say "history unavailable" instead of showing
-                        // nothing (or possibly outdated data) without any indication
+                        if (seq !== loadSequence || dim !== st.dim) return;
+                        // Retain existing data and expose a visible error instead of silently
+                        // replacing a comparison with stale or incomplete history.
                         st.err[t] = true;
                     });
-                })).then(render);
+                })).then(function() {
+                    if (seq === loadSequence) {
+                        v.loading = false;
+                        if (dim === st.dim) render();
+                    }
+                });
             };
             mark();
             render();
@@ -1728,14 +1894,32 @@ return view.extend({
         // entry per WAN when there is more than one; it stays empty and hidden for a single WAN.
         var wanEl = E('div', { style: 'display:none; font-size:11px; color:var(--qos-text-muted); margin:0 0 10px; line-height:1.5; font-variant-numeric: tabular-nums; text-align:center;' });
         var prevWan = {};
+        function wanRateBps(current, previous, dt) {
+            if (typeof current !== 'number' || !isFinite(current) ||
+                typeof previous !== 'number' || !isFinite(previous) || !(dt > 0)) return null;
+            // Interface devices can be recreated while the logical WAN name
+            // stays the same. A lower counter means a new counter generation;
+            // its current total is the best available delta for this interval.
+            var delta = current >= previous ? current - previous : current;
+            return Math.max(0, delta / dt);
+        }
         function wanUpdate(wan, dt) {
             while (wanEl.firstChild) wanEl.removeChild(wanEl.firstChild);
-            if (!wan || wan.length < 2) { wanEl.style.display = 'none'; return; }
+            if (!wan || wan.length < 2) {
+                // A missing/single-WAN sample breaks the per-WAN time baseline.
+                // Do not divide counters accumulated across that gap by just
+                // the next poll interval when multi-WAN data returns.
+                prevWan = {};
+                wanEl.style.display = 'none';
+                return;
+            }
             wanEl.style.display = '';
+            var presentWan = {};
             wan.forEach(function(w, i) {
+                presentWan[w.iface] = true;
                 var prev = prevWan[w.iface];
-                var rxBps = (prev && dt > 0) ? Math.max(0, (w.rx_bytes - prev.rx_bytes) / dt) : null;
-                var txBps = (prev && dt > 0) ? Math.max(0, (w.tx_bytes - prev.tx_bytes) / dt) : null;
+                var rxBps = wanRateBps(w.rx_bytes, prev ? prev.rx_bytes : null, dt);
+                var txBps = wanRateBps(w.tx_bytes, prev ? prev.tx_bytes : null, dt);
                 var downMbit = (w.download_kbit || 0) / 1000, upMbit = (w.upload_kbit || 0) / 1000;
                 var txt = w.iface + ': ';
                 txt += (rxBps !== null ? formatRate(rxBps * 8) : '?') + (downMbit > 0 ? ' / ' + downMbit.toFixed(0) + ' Mbit/s' : '') + ' \u2193, ';
@@ -1744,6 +1928,11 @@ return view.extend({
                 wanEl.appendChild(E('span', {}, txt));
                 prevWan[w.iface] = { rx_bytes: w.rx_bytes, tx_bytes: w.tx_bytes };
             });
+            // If WAN membership changed while two or more WANs remained, forget
+            // vanished interfaces too; they may return later with a stale counter.
+            for (var iface in prevWan)
+                if (Object.prototype.hasOwnProperty.call(prevWan, iface) && !presentWan[iface])
+                    delete prevWan[iface];
         }
         var prevShaper = { rx: null, tx: null };
         var LIVE_DROP_LEN = 60;
@@ -1787,17 +1976,32 @@ return view.extend({
             return svg;
         }
 
+        function shaperCounterRate(current, previous, dt) {
+            if (typeof current !== 'number' || !isFinite(current) ||
+                typeof previous !== 'number' || !isFinite(previous) || !(dt > 0)) return null;
+            // Qdiscs are recreated on SQM reloads, resetting their cumulative counters.
+            // Treat a decrease as a new counter generation instead of clamping the
+            // entire sample to zero until the counter catches up with the old value.
+            var delta = current >= previous ? current - previous : current;
+            return Math.max(0, delta / dt);
+        }
         function shaperUpdate(sh, dt) {
             while (shaperEl.firstChild) shaperEl.removeChild(shaperEl.firstChild);
             [ ['rx', _('Download shaper')], ['tx', _('Upload shaper')] ].forEach(function(def) {
                 var cur = sh && sh[def[0]], prev = prevShaper[def[0]];
                 if (!cur || cur.sent === undefined) return;
-                var dr = prev ? Math.max(0, (cur.dropped || 0) - (prev.dropped || 0)) / dt : 0;
-                var er = prev ? Math.max(0, (cur.ecn || 0) - (prev.ecn || 0)) / dt : 0;
-                var pct = cur.pkts > 0 ? (cur.dropped / cur.pkts * 100) : 0;
+                var dr = prev ? shaperCounterRate(cur.dropped, prev.dropped, dt) : null;
+                var er = prev ? shaperCounterRate(cur.ecn, prev.ecn, dt) : null;
+                var hasDropped = typeof cur.dropped === 'number' && isFinite(cur.dropped);
+                var hasEcn = typeof cur.ecn === 'number' && isFinite(cur.ecn);
+                var hasBacklogB = typeof cur.backlog_b === 'number' && isFinite(cur.backlog_b);
+                var hasBacklogP = typeof cur.backlog_p === 'number' && isFinite(cur.backlog_p);
+                var pct = hasDropped && typeof cur.pkts === 'number' && isFinite(cur.pkts) && cur.pkts > 0 ? (cur.dropped / cur.pkts * 100) : null;
+                var hasActiveFlows = typeof cur.flows_new === 'number' && isFinite(cur.flows_new) && typeof cur.flows_old === 'number' && isFinite(cur.flows_old);
 
                 var hist = liveDropHist[def[0]];
-                hist.d.push(dr); hist.e.push(er);
+                // Unknown readings must not be rendered as fabricated zero counters.
+                hist.d.push(dr === null ? 0 : dr); hist.e.push(er === null ? 0 : er);
                 if (hist.d.length > LIVE_DROP_LEN) { hist.d.shift(); hist.e.shift(); }
 
                 var instMax = 0;
@@ -1805,10 +2009,13 @@ return view.extend({
                 hist.scale = Math.max(instMax, hist.scale * 0.9);
                 var drawMax = hist.scale > 0 ? hist.scale : 0.0001;
 
-                var prefix = def[1] + ' (' + (cur.rate || '?') + ', target ' + (cur.target || '?') + ', limit ' + (cur.limit || '?') + '): ' + _('drops') + ' ' + dr.toFixed(1) + '/s';
-                var suffix = '(' + formatCount(cur.dropped || 0) + ' ' + _('total') + ', ' + pct.toFixed(3) + ' %) · ECN ' + er.toFixed(1) + '/s (' + formatCount(cur.ecn || 0) + ') · ' +
-                    _('backlog') + ' ' + formatBytes(cur.backlog_b || 0) + ' / ' + (cur.backlog_p || 0) + ' pkt · ' +
-                    _('limit hits') + ' ' + (cur.drop_overlimit || 0) + ' · ' + _('active flows') + ' ' + ((cur.flows_new || 0) + (cur.flows_old || 0));
+                // Only show what the qdisc really reports: a value that does not exist for this qdisc type
+                // (for example "limit hits" with cake) is left out instead of being shown as "?".
+                var prefix = def[1] + ' (' + (cur.rate || '?') + (cur.target ? ', target ' + cur.target : '') + (cur.limit ? ', limit ' + cur.limit : '') + '): ' + _('drops') + ' ' + (dr !== null ? dr.toFixed(1) : '?') + '/s';
+                var suffix = '(' + (hasDropped ? formatCount(cur.dropped) : '?') + ' ' + _('total') + ', ' + (pct !== null ? pct.toFixed(3) : '?') + ' %) · ECN ' + (er !== null ? er.toFixed(1) : '?') + '/s (' + (hasEcn ? formatCount(cur.ecn) : '?') + ') · ' +
+                    _('backlog') + ' ' + (hasBacklogB ? formatBytes(cur.backlog_b) : '?') + ' / ' + (hasBacklogP ? cur.backlog_p : '?') + ' pkt' +
+                    ((cur.drop_overlimit !== null && cur.drop_overlimit !== undefined) ? ' · ' + _('limit hits') + ' ' + cur.drop_overlimit : '') +
+                    (hasActiveFlows ? ' · ' + _('active flows') + ' ' + (cur.flows_new + cur.flows_old) : '');
 
                 var spark = liveSparkline(hist.d, hist.e, drawMax); spark.style.flex = '0 0 auto'; spark.style.display = 'inline-block';
                 spark.setAttribute('title', _('Recent drop rate (red) / ECN rate (amber), roughly the last %d polls.').format(LIVE_DROP_LEN));
@@ -1817,7 +2024,7 @@ return view.extend({
                     style: 'display:flex; align-items:center; flex-wrap:nowrap; gap:5px; margin-bottom:2px; height:18px; min-height:18px; max-height:18px; overflow:hidden; white-space:nowrap;',
                     title: _('Drops are normal codel behaviour under load. "Limit hits" > 0 mean the queue limit was exceeded (limit too small for the link speed).')
                 }, [ prefix, spark, suffix ]);
-                if ((cur.drop_overlimit || 0) > 0 && prev && cur.drop_overlimit > (prev.drop_overlimit || 0)) lineEl.style.color = 'var(--qos-danger)';
+                if (typeof cur.drop_overlimit === 'number' && typeof (prev && prev.drop_overlimit) === 'number' && cur.drop_overlimit > prev.drop_overlimit) lineEl.style.color = 'var(--qos-danger)';
 
                 shaperEl.appendChild(lineEl);
             });
@@ -1919,7 +2126,8 @@ return view.extend({
         });
 
         var m = E('div', { class: 'cbi-map' }, [
-            E('h2', {}, _('Live Traffic Chart')),
+            E('h2', {}, [ _('Traffic Chart'), ' ',
+                E('small', { style: 'font-size:55%; font-weight:400; color:var(--qos-text-muted, #888);', title: _('Version') }) ]),
             E('div', { class: 'cbi-section' }, [ container ])
         ]);
 
@@ -1936,7 +2144,7 @@ return view.extend({
             var hostPanels = E('div', { class: 'qos-panels', style: 'margin-bottom: 40px; display:none;' }, [ hostsView.panelIn.el, hostsView.panelOut.el ]);
             var groups = [ appPanels, devPanels, hostPanels, flowsView.el, histView.el ];
             var tabDefs = [ ['qos_tab_apps', _('Applications')], ['qos_tab_devices', _('Devices')],
-                            ['qos_tab_hosts', _('Destinations')], ['qos_tab_flows', _('Live flows')], ['qos_tab_history', _('History')] ];
+                            ['qos_tab_hosts', _('Destinations')], ['qos_tab_flows', _('Flows')], ['qos_tab_history', _('History')] ];
             var tabBtns = [];
             function selectTab(idx) {
                 tipHide();
@@ -1945,15 +2153,19 @@ return view.extend({
                 groups.forEach(function(g, i) { g.style.display = (i === idx) ? '' : 'none'; });
                 tabBtns.forEach(function(li, i) { li.className = (i === idx) ? 'cbi-tab' : 'cbi-tab-disabled'; });
                 activeTab = idx;
+                var tg = groups[idx];
+                tg.classList.add('qos-notrans');
                 renderTab(idx);
+                void tg.offsetWidth;
+                setTimeout(function() { tg.classList.remove('qos-notrans'); }, 60);
                 histView.active = (idx === 4);
                 if (idx === 4) histView.load();
                 if (btnJson) exportTitles();
             }
             function exportTitles() {
                 var h = histView.active;
-                btnJson.title = h ? _('Export the shown history range (all buckets, applications, devices and destinations) as JSON') : _('Export the current live data as JSON');
-                btnCsv.title = h ? _('Export the shown history range (all buckets, applications, devices and destinations) as CSV') : _('Export the current live data as CSV');
+                btnJson.title = h ? _('Export the shown history range (all buckets, applications, devices and destinations) as JSON') : _('Export the current data as JSON');
+                btnCsv.title = h ? _('Export the shown history range (all buckets, applications, devices and destinations) as CSV') : _('Export the current data as CSV');
             }
             tabDefs.forEach(function(d, i) {
                 var a = E('a', { href: '#', id: d[0] }, d[1]);
@@ -1967,8 +2179,16 @@ return view.extend({
             btnJson.addEventListener('click', function(e) { e.stopPropagation(); if (histView.active) histView.exportJson(); else exportJson(); });
             btnCsv.addEventListener('click', function(e) { e.stopPropagation(); if (histView.active) histView.exportCsv(); else exportCsv(); });
             exportTitles();
+            // settings live on their own page (admin ACL only)
+            var toolbarBtns = [ btnJson, btnCsv ];
+            if (canRestart)
+                toolbarBtns.push(E('a', {
+                    href: L.url('admin', 'network', 'traffic_chart_settings'),
+                    'class': 'btn cbi-button', id: 'qos_settings_link',
+                    style: 'text-decoration:none;', title: _('Settings'), 'aria-label': _('Settings')
+                }, '\u2699'));
             var toolbar = E('div', { style: 'display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap;' }, [
-                tabs, E('div', { style: 'display:flex; gap:6px; margin-bottom:1em;' }, [ btnJson, btnCsv ]) ]);
+                tabs, E('div', { style: 'display:flex; gap:6px; margin-bottom:1em;' }, toolbarBtns) ]);
 
             var hintText = _('* Note: rates are the mean of the last %d s, measured by the trafficchart-agg daemon on its own clock (bytes per application, device and destination from /proc/net/nf_conntrack, application names from netifyd). The link rate comes from the tc qdisc counters read in the same instant. "Not attributed" is what the shaper carries but conntrack does not count (after subtracting the link layer header): e.g. traffic to router services, dropped inbound packets, multicast.').format((data && data.rate && data.rate.win) || 0);
             if (data && data.backend === 'nss')
@@ -1992,9 +2212,17 @@ return view.extend({
 
         var lastTime = Date.now();
         var lastSrvUp = null;
+        var lastSrvSince = null;
         var haveRenderedOnce = false;
         var lastSuccessTime = Date.now();
         var consecutiveFailures = 0;
+
+        function initialPollFailureMessage(err) {
+            var detail = err && (err.message || err.statusText);
+            if (!detail && typeof err === 'string') detail = err;
+            if (detail) return _('Error: %s').format(detail);
+            return _('Error: No response from trafficchart RPC. Is the trafficchart service running (/etc/init.d/trafficchart start)?');
+        }
 
         function updateStaleIndicator() {
             if (!haveRenderedOnce) return;
@@ -2012,11 +2240,34 @@ return view.extend({
         }
 
         var baselineTime = null;
+        // The aggregator's `since` timestamp changes when history is cleared, even
+        // though its process uptime does not reset. Refresh this label on every
+        // successful poll instead of pinning it to the first page render.
+        function updateBaselineTime(current, dataSince, now) {
+            if (typeof dataSince === 'number' && isFinite(dataSince) && dataSince > 0)
+                return new Date(dataSince * 1000);
+            return current || new Date(now);
+        }
         function baselineLabelText() {
             return baselineTime ? (_('since %s').format(baselineTime.toLocaleString())) : _('since start');
         }
+        // A small backwards uptime jump is normally an out-of-order/stale sample.
+        // But when `since` has changed, the daemon or its cumulative baseline has
+        // genuinely reset; do not suppress the new zeroed totals for up to 30 s.
+        function isStaleUptimeSample(haveRenderedOnce, srvUp, lastSrvUp, srvSince, lastSrvSince) {
+            return haveRenderedOnce && srvUp !== null && lastSrvUp !== null &&
+                srvUp <= lastSrvUp && lastSrvUp - srvUp < 30 &&
+                (srvSince === null || lastSrvSince === null || srvSince === lastSrvSince);
+        }
         var pollInFlight = false;
         var pollRequestId = 0;
+        // A timed-out request may settle after a replacement poll has started. Only the current
+        // request may release pollInFlight; stale callbacks must not unlock a newer request.
+        function finishPollRequest(requestId) {
+            if (pollRequestId !== requestId) return false;
+            pollInFlight = false;
+            return true;
+        }
         // Far longer than any normal rpc/ubus timeout - this only exists to recover if a request
         // NEVER settles at all. It advances pollRequestId, so a response that arrives later is
         // recognised as stale (myPollId mismatch) and discarded instead of overwriting newer data.
@@ -2053,9 +2304,8 @@ return view.extend({
 
             return callTrafficStats().then(function(data) {
                 clearTimeout(hardTimer);
-                var stale = (pollRequestId !== myPollId);
-                pollInFlight = false;
-                if (stale) return;   // superseded by the hard-timeout fallback above
+                // Do not let a late response from a timed-out request unlock a newer poll.
+                if (!finishPollRequest(myPollId)) return;   // superseded by the hard-timeout fallback above
                 if (!document.getElementById('qos_container')) return;
 
                 if (data.error || !data.apps || !data.rate) {
@@ -2077,7 +2327,8 @@ return view.extend({
                 if (dt <= 0) dt = 1;
 
                 var srvUp = (typeof data.up === 'number') ? data.up : null;
-                if (haveRenderedOnce && srvUp !== null && lastSrvUp !== null && srvUp <= lastSrvUp && lastSrvUp - srvUp < 30) {
+                var srvSince = (typeof data.since === 'number') ? data.since : null;
+                if (isStaleUptimeSample(haveRenderedOnce, srvUp, lastSrvUp, srvSince, lastSrvSince)) {
                     lastSuccessTime = Date.now();
                     consecutiveFailures = 0;
                     updateStaleIndicator();
@@ -2089,7 +2340,8 @@ return view.extend({
 
                 lastTime = now;
                 lastSrvUp = srvUp;
-                if (!baselineTime) baselineTime = (data.since ? new Date(data.since * 1000) : new Date(now));
+                lastSrvSince = srvSince;
+                baselineTime = updateBaselineTime(baselineTime, srvSince, now);
 
                 lastSuccessTime = Date.now();
                 consecutiveFailures = 0;
@@ -2112,11 +2364,18 @@ return view.extend({
                 adaptPoll(data);
             }).catch(function(err) {
                 clearTimeout(hardTimer);
-                var stale = (pollRequestId !== myPollId);
-                pollInFlight = false;
-                if (!stale) {
+                // Rejected stale requests must not clear the active newer request's lock either.
+                if (finishPollRequest(myPollId)) {
                     consecutiveFailures++;
-                    if (haveRenderedOnce) updateStaleIndicator();
+                    if (haveRenderedOnce) {
+                        updateStaleIndicator();
+                    } else {
+                        // A rejected first RPC never reaches the resolved { error: ... } path
+                        // above. Show a useful error instead of leaving the page on "Querying".
+                        statusEl.style.color = 'red';
+                        statusEl.textContent = initialPollFailureMessage(err);
+                        restartBtn.style.display = canRestart ? '' : 'none';
+                    }
                 }
                 throw err;
             });

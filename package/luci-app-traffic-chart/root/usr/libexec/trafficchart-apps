@@ -14,7 +14,8 @@
 # their first packets. netifyd names the flow from its first packets (DNS
 # cache hit / SNI / QUIC initial), so the label arrives in time anyway.
 #
-# Needs: socat, netifyd with a [socket] listen_path.
+# Needs: socat and a Netify JSON socket. Netify 4.x/5.0/5.1 use netifyd.sock;
+# newer 5.x may use netify-sink.sock.
 # Environment: SOCK OUT_DIR AWK SOCAT TC_COMMON
 
 # Settings: /etc/config/trafficchart option "sock" (or the environment variable SOCK),
@@ -36,6 +37,38 @@ umask 077
 mkdir -p "$OUT_DIR" || exit 1
 chmod 700 "$OUT_DIR" 2>/dev/null || exit 1
 
+# apps.map is a snapshot of the CURRENT Netify reader's flow tuples, not a
+# durable cache. When this service (or its socket reader) restarts, the old
+# process may have left tuple labels behind. Clear the snapshot and bump its
+# version before waiting for Netify, otherwise stale tuple reuse can label a
+# new connection with the previous connection's application indefinitely.
+MAP_RESET_SEQ=0
+publish_empty_map() {
+    MAP_RESET_SEQ=$((MAP_RESET_SEQ + 1))
+    local tmp ver_tmp stamp
+    tmp="$OUT_DIR/apps.map.tmp.$$"
+    ver_tmp="$OUT_DIR/apps.map.ver.tmp.$$"
+    if ! : > "$tmp" || ! mv -f "$tmp" "$OUT_DIR/apps.map"; then
+        rm -f "$tmp"
+        # Missing version means the aggregator deliberately re-reads the map
+        # every poll, so this fallback avoids retaining an in-memory stale map.
+        if rm -f "$OUT_DIR/apps.map" "$OUT_DIR/apps.map.ver" 2>/dev/null; then
+            logger -t trafficchart "could not atomically clear apps.map; switched to unversioned refresh"
+            return 0
+        fi
+        return 1
+    fi
+    stamp="$(date +%s 2>/dev/null || echo 0).$$.reset$MAP_RESET_SEQ"
+    if ! printf '%s\n' "$stamp" > "$ver_tmp" || ! mv -f "$ver_tmp" "$OUT_DIR/apps.map.ver"; then
+        rm -f "$ver_tmp" "$OUT_DIR/apps.map.ver" 2>/dev/null
+        logger -t trafficchart "could not publish apps.map version; aggregator will refresh the map every poll"
+    fi
+    return 0
+}
+
+# Clear even if the Netify binary exists but its socket is not available yet.
+publish_empty_map || { logger -t trafficchart "could not clear stale apps.map"; exit 1; }
+
 if [ "$ONCE" != "1" ] && ! command -v "$SOCAT" >/dev/null 2>&1; then
     logger -t trafficchart "socat not installed - application names disabled, everything else unaffected"
     while true; do sleep 3600; done
@@ -45,18 +78,51 @@ run_reader() {
     # TMPID: private temp file name per instance, so two instances (or a stale
     # one after a restart) can never move each other's temp file away
     exec $AWK -v MAP="$OUT_DIR/apps.map" -v TMPID="$$" -v FLUSH_MS="$FLUSH_MS" '
-    # unescape a JSON string value: \" \\ \/ become the plain character, \n \t \r a blank.
-    # \uXXXX is not decoded (the callers sanitize the result anyway).
-    function unescape(s,   out, i, n, c) {
+    # Decode JSON string escapes, including Unicode escapes. Netify commonly emits UTF-8
+    # directly, but escaped labels are equally valid JSON and must not turn "Hulu\u00e9"
+    # into the different application name "Huluu00e9".
+    function hexval(c) { return index("0123456789abcdef", tolower(c)) - 1 }
+    function hex4(s,   i,d,v) {
+        if (length(s) != 4) return -1
+        v = 0
+        for (i = 1; i <= 4; i++) { d = hexval(substr(s, i, 1)); if (d < 0) return -1; v = v * 16 + d }
+        return v
+    }
+    function utf8(cp) {
+        if (cp < 128) return sprintf("%c", cp)
+        if (cp < 2048) return sprintf("%c%c", 192 + int(cp / 64), 128 + cp % 64)
+        if (cp < 65536) return sprintf("%c%c%c", 224 + int(cp / 4096), 128 + int(cp / 64) % 64, 128 + cp % 64)
+        return sprintf("%c%c%c%c", 240 + int(cp / 262144), 128 + int(cp / 4096) % 64, 128 + int(cp / 64) % 64, 128 + cp % 64)
+    }
+    function unescape(s,   out, i, n, c, cp, low) {
         n = length(s); out = ""
         for (i = 1; i <= n; i++) {
             c = substr(s, i, 1)
             if (c == "\\" && i < n) {
                 i++
                 c = substr(s, i, 1)
+                if (c == "u" && i + 4 <= n) {
+                    cp = hex4(substr(s, i + 1, 4))
+                    if (cp >= 0) {
+                        # Leave i on the final hex digit. The for-loop increment then
+                        # advances to the character after this escape (without skipping it).
+                        i += 4
+                        # JSON represents non-BMP code points as a UTF-16 surrogate pair.
+                        if (cp >= 55296 && cp <= 56319) {
+                            if (substr(s, i + 1, 2) == "\\u" && i + 5 <= n) {
+                                low = hex4(substr(s, i + 3, 4))
+                                if (low >= 56320 && low <= 57343) { cp = 65536 + (cp - 55296) * 1024 + low - 56320; i += 6 }
+                                else cp = 65533
+                            } else cp = 65533
+                        } else if (cp >= 56320 && cp <= 57343) cp = 65533
+                        out = out utf8(cp)
+                        continue
+                    }
+                }
                 if (c == "n" || c == "t" || c == "r") c = " "
-                # else: \" -> ", \\ -> \, \/ -> /, and anything else is kept
-                # as the literal character following the backslash
+                else if (c == "b") c = sprintf("%c", 8)
+                else if (c == "f") c = sprintf("%c", 12)
+                # For valid JSON escapes, quote, backslash and slash are now unescaped.
             }
             out = out c
         }
@@ -64,33 +130,69 @@ run_reader() {
     }
     # extract "key":"value" / "key":123 from a one-line JSON object; the pattern walks over
     # escaped pairs, so an escaped quote does not end the value
-    function jstr(l, k) {
-        if (match(l, "\"" k "\":\"(\\\\.|[^\"\\\\])*\""))
-            return unescape(substr(l, RSTART + length(k) + 4, RLENGTH - length(k) - 5))
+    function jstr(l, k, tail, p) {
+        # JSON permits insignificant whitespace around the colon. Extract from
+        # the matched key/value pair rather than relying on a fixed byte offset.
+        if (match(l, "\"" k "\"[ \t]*:[ \t]*\"(\\\\.|[^\"\\\\])*\"")) {
+            tail = substr(l, RSTART, RLENGTH)
+            p = index(tail, ":") + 1
+            while (substr(tail, p, 1) ~ /[ \t]/) p++
+            p++ # opening quote
+            return unescape(substr(tail, p, length(tail) - p))
+        }
         return ""
     }
-    function jnum(l, k) {
-        if (match(l, "\"" k "\":[0-9]+"))
-            return substr(l, RSTART + length(k) + 3, RLENGTH - length(k) - 3) + 0
+    function jnum(l, k, tail) {
+        if (match(l, "\"" k "\"[ \t]*:[ \t]*[0-9]+")) {
+            tail = substr(l, RSTART, RLENGTH)
+            sub(/^[^:]*:[ \t]*/, "", tail)
+            return tail + 0
+        }
         return -1
+    }
+    # Netify may revise digest as DPI classification becomes richer. The first
+    # digest_prev value identifies the existing flow; use it for both mapping and
+    # purge so a digest revision cannot leak an extra tuple reference.
+    function flow_digest(l, tail, p) {
+        if (match(l, /"digest_prev"[ \t]*:[ \t]*\[[ \t]*"[^"]+"/)) {
+            tail = substr(l, RSTART, RLENGTH)
+            p = index(tail, "[") + 1
+            while (substr(tail, p, 1) ~ /[ \t]/) p++
+            p++ # opening quote of the first previous digest
+            tail = unescape(substr(tail, p, length(tail) - p))
+            if (tail != "") return tail
+        }
+        return jstr(l, "digest")
     }
     # conntrack prints IPv6 fully expanded and zero padded (%pI6);
     # netifyd prints it compressed
-    function v6full(a,   n, h, lc, rc, lg, rg, i, g, out, miss) {
+    function v6full(a,   n, h, lc, rc, lg, rg, i, g, out, miss, ip, oct, tail) {
         if (index(a, ":") == 0) return a
+        # inet_ntop-style IPv6 text can include a dotted-decimal IPv4 tail; convert it to two hextets before expansion.
+        if (a ~ /\./) {
+            ip = a
+            if (ip !~ /:[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) return tolower(a)
+            sub(/^.*:/, "", ip)
+            if (split(ip, oct, ".") != 4) return tolower(a)
+            for (i = 1; i <= 4; i++) if (oct[i] !~ /^[0-9]+$/ || oct[i] + 0 > 255) return tolower(a)
+            tail = sprintf("%x:%x", (oct[1] + 0) * 256 + (oct[2] + 0), (oct[3] + 0) * 256 + (oct[4] + 0))
+            sub(/[^:]*$/, tail, a)
+        }
+        a = tolower(a)
+        if (a ~ /:::/) return a
         n = split(a, h, "::")
-        if (n == 1) {
-            lc = split(h[1], lg, ":"); rc = 0; miss = 0
-        } else {
+        if (n > 2) return a
+        if (n == 1) { lc = split(h[1], lg, ":"); rc = 0; miss = 0 }
+        else {
             lc = (h[1] == "") ? 0 : split(h[1], lg, ":")
             rc = (h[2] == "") ? 0 : split(h[2], rg, ":")
             miss = 8 - lc - rc
         }
-        if (miss < 0) return a
+        if (miss < 0) return tolower(a)
         out = ""
         for (i = 1; i <= lc; i++) { g = tolower(lg[i]); while (length(g) < 4) g = "0" g; out = out (out == "" ? "" : ":") g }
         for (i = 1; i <= miss; i++) out = out (out == "" ? "" : ":") "0000"
-        for (i = 1; i <= rc; i++)  { g = tolower(rg[i]); while (length(g) < 4) g = "0" g; out = out (out == "" ? "" : ":") g }
+        for (i = 1; i <= rc; i++) { g = tolower(rg[i]); while (length(g) < 4) g = "0" g; out = out (out == "" ? "" : ":") g }
         return out
     }
     BEGIN {
@@ -100,22 +202,15 @@ run_reader() {
         VER0 = ep "." TMPID
     }
     function flush(   k, tmp, nd) {
-        tmp = MAP ".tmp." TMPID
-        printf "" > tmp          # truncate; also makes an empty map valid
-        for (k in map) printf "%s\t%s\n", k, map[k] > tmp
-        close(tmp)
-        system("mv -f " tmp " " MAP)
-        # AFTER the map: trafficchart-agg re-reads the map only when this changes.
-        # Written in place (one tiny write, no fork); an empty file seen mid-write
-        # just makes the aggregator read the map once more.
-        printf "%s.%d\n", VER0, ++nflush > (MAP ".ver")
-        close(MAP ".ver")
-        dirty = 0; lastflush = now
-        # forget purged flows after a grace period so that flows shorter
-        # than one poll of the aggregator still get labelled
+        # Expire tuple state BEFORE publishing the snapshot. Previously the map
+        # was written and its version advanced first; deleting expired dead[]
+        # entries afterwards only changed memory. If Netify then went quiet, the
+        # stale tuple remained in apps.map indefinitely because no later flush was
+        # guaranteed to occur. A digest-less flow first gets the documented 30 s
+        # no-sighting window, then the existing 30 s dead[] grace period.
         nd = 0
         for (k in dead) {
-            if (now - dead[k] > 30000) { delete dead[k]; delete map[k]; dirty = 1 }
+            if (now - dead[k] > 30000) { delete dead[k]; delete map[k] }
             else nd++
         }
         # Flows without digest never get a purge event: once one has not been
@@ -127,8 +222,18 @@ run_reader() {
             } else nd++
         }
         deadflag = (nd > 0)
+
+        tmp = MAP ".tmp." TMPID
+        printf "" > tmp          # truncate; also makes an empty map valid
+        for (k in map) printf "%s\t%s\n", k, map[k] > tmp
+        close(tmp)
+        if (system("mv -f " tmp " " MAP) != 0) { dirty = 1; return }
+        # Publish the version only AFTER the cleaned map is on disk.
+        printf "%s.%d\\n", VER0, ++nflush > (MAP ".ver")
+        close(MAP ".ver")
+        dirty = 0; lastflush = now
     }
-    function on_flow(l,   app, host, val, ip, proto, lip, oip, lp, op, key, dg) {
+    function on_flow(l,   app, host, val, ip, proto, lip, oip, lp, op, key, dg, oldkey, oldrefs) {
         app = jstr(l, "detected_application_name")
         if (app == "" || app == "Unknown") app = jstr(l, "detected_protocol_name")
         if (app == "") app = "Unknown"
@@ -144,33 +249,62 @@ run_reader() {
         lp = jnum(l, "local_port"); op = jnum(l, "other_port")
         if (lip == "" || oip == "" || lp < 0 || op < 0) return
         key = proto "|" v6full(lip) "|" v6full(oip) "|" lp "|" op
-        dg = jstr(l, "digest")
+        dg = flow_digest(l)
         # A flow without digest cannot go through dg2key/kref (all of them would collide
         # on the empty key): it is tracked by last sighting instead (nodig_last[],
         # swept in flush()).
         if (dg != "") {
-            if (!(dg in dg2key)) kref[key]++
+            # Once this tuple has a digest-backed flow, the no-digest idle timer
+            # must no longer be allowed to expire it. A flow can first arrive
+            # without a digest and later be upgraded; leaving nodig_last[key]
+            # behind would mark the still-live tuple dead after 30 s and remove
+            # its app label on a later unrelated flush.
+            delete nodig_last[key]
+            if (dg in dg2key) {
+                # Normally a digest stays with one tuple. If Netify reuses/reassigns
+                # it (or the tuple identity changes across an agent restart), transfer
+                # the reference instead of leaving the old tuple permanently retained
+                # with a stale kref and the new tuple with no reference count.
+                oldkey = dg2key[dg]
+                if (oldkey != key) {
+                    oldrefs = (oldkey in kref) ? kref[oldkey] - 1 : 0
+                    if (oldrefs <= 0) {
+                        delete kref[oldkey]
+                        dead[oldkey] = now; deadflag = 1
+                    } else kref[oldkey] = oldrefs
+                    kref[key]++
+                }
+            } else kref[key]++
             dg2key[dg] = key
         } else {
-            nodig_last[key] = now
+            # Do not start a no-digest expiry timer while another live digest
+            # currently keeps this same tuple referenced. If that digest purges,
+            # the normal kref/dead path handles its grace period.
+            if (key in kref) delete nodig_last[key]
+            else nodig_last[key] = now
         }
         delete dead[key]
         if (map[key] != val) { map[key] = val; dirty = 1 }
     }
     function on_purge(l,   dg, k) {
-        dg = jstr(l, "digest")
+        dg = flow_digest(l)
         if (dg == "" || !(dg in dg2key)) return
         k = dg2key[dg]; delete dg2key[dg]
         if (--kref[k] <= 0) { delete kref[k]; dead[k] = now; deadflag = 1 }
     }
     {
-        if (index($0, "\"type\":\"flow\"")) {
+        # Dispatch by the parsed JSON value, not by a compact textual substring:
+        # JSON permits whitespace around ':' here just as it does for all other fields.
+        event = jstr($0, "type")
+        if (event == "flow" || event == "flow_dpi_update" || event == "flow_dpi_complete") {
+            # Netify v5 can deliver the classification after the initial flow event.
+            # Treat DPI updates/completion as revisions of the same tuple mapping.
             now = jnum($0, "last_seen_at"); if (now < 0) now = lastflush
             on_flow($0)
-        } else if (index($0, "\"type\":\"flow_purge\"")) {
+        } else if (event == "flow_purge") {
             now = jnum($0, "last_seen_at"); if (now < 0) now = lastflush
             on_purge($0)
-        } else if (index($0, "\"type\":\"agent_status\"")) {
+        } else if (event == "agent_status") {
             now = jnum($0, "timestamp") * 1000
         } else next
         if ((dirty || deadflag) && (now - lastflush >= FLUSH_MS || now < lastflush)) flush()
@@ -211,6 +345,17 @@ while true; do
             ;;
         *) SOCK="" ;;
     esac
+    # Auto-select the socket when the configured/default socket is absent.
+    # Netify 4.x and 5.0/5.1 expose the flow stream on netifyd.sock; newer 5.x
+    # releases may expose it through the sink socket. An explicitly configured
+    # existing socket is always preferred.
+    if [ -z "$SOCK" ] || [ ! -S "$SOCK" ]; then
+        if [ -S /var/run/netifyd/netifyd.sock ]; then
+            SOCK=/var/run/netifyd/netifyd.sock
+        elif [ -S /var/run/netifyd/netify-sink.sock ]; then
+            SOCK=/var/run/netifyd/netify-sink.sock
+        fi
+    fi
     if [ -n "$SOCK" ] && [ -S "$SOCK" ]; then
         rm -f "$FIFO"
         if mkfifo "$FIFO" 2>/dev/null; then
@@ -225,6 +370,10 @@ while true; do
             # no mkfifo in this busybox: plain pipeline (no orphan protection)
             $SOCAT -u "UNIX-CONNECT:$SOCK" - 2>/dev/null | run_reader
         fi
+        # The reader's END block flushes its last in-memory snapshot. Clear it
+        # again after the reader exits so a disconnected Netify agent cannot
+        # leave mappings active while the reconnect loop waits for its socket.
+        publish_empty_map || logger -t trafficchart "could not clear apps.map after reader exit"
     fi
     # interruptible pause, so a TERM from procd is handled at once
     sleep 5 &

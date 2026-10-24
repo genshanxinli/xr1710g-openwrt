@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_VERSION:=1.1.0
-PKG_RELEASE:=12
+PKG_RELEASE:=15
 PKG_LICENSE:=GPL-2.0-or-later
 
 LUCI_NAME:=luci-app-traffic-chart
@@ -11,7 +11,7 @@ LUCI_DESCRIPTION:=Live and historical traffic chart per application, device and 
 	Reads conntrack and the qdisc counters, independent of the shaper in use. \
 	Optional: socat + netifyd (application names), conntrack (nss-trafficchart.qos), \
 	sqm-scripts (nss-trafficchart.qos itself).
-LUCI_DEPENDS:=+luci-base +rpcd +jsonfilter +ip-full +tc-tiny
+LUCI_DEPENDS:=+luci-base +rpcd +jsonfilter +ip-full +tc +tcpdump
 
 include $(TOPDIR)/feeds/luci/luci.mk
 

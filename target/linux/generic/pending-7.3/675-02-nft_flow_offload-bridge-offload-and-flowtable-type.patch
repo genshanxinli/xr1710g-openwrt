@@ -153,21 +153,11 @@
  		default:
  			goto err_out;
  		}
-@@ -194,7 +205,17 @@ static int nft_dev_path_info(struct net_
+@@ -194,7 +205,7 @@ static int nft_dev_path_info(struct net_
  	    nft_is_valid_ether_device(info->dev))
  		info->xmit_type = FLOW_OFFLOAD_XMIT_DIRECT;
  
 -	if (!nft_flowtable_find_dev(info->dev, ft))
-+	/* A bridging flowtable hooks the bridge master (br-lan), but the
-+	 * forward path resolves past it: br_fill_forward_path() reports the
-+	 * bridge for the DEV_PATH_BRIDGE hop and then sets ctx->dev to the
-+	 * port, so the next iteration yields DEV_PATH_ETHERNET with
-+	 * info->dev being the port (lan2), never the master.  Looking that
-+	 * port up in ft->hook_list therefore fails for every bridged flow,
-+	 * so the check can only ever reject them.  The flow reached this
-+	 * point through the flowtable hook on the bridge in the first place,
-+	 * which is the membership test that matters.
-+	 */
 +	if (!is_bridging && !nft_flowtable_find_dev(info->dev, ft))
  		goto err_out;
  
@@ -279,7 +269,7 @@
  	switch (nft_pf(pkt)) {
  	case NFPROTO_IPV4:
  		fl.u.ip4.daddr = ct->tuplehash[dir].tuple.src.u3.ip;
-@@ -306,15 +383,17 @@ int nft_flow_route(const struct nft_pkti
+@@ -306,15 +383,19 @@ int nft_flow_route(const struct nft_pkti
  		return -ENOENT;
  	}
  
@@ -290,12 +280,14 @@
  
  	if (route->tuple[dir].xmit_type	== FLOW_OFFLOAD_XMIT_NEIGH &&
 -	    nft_dev_forward_path(pkt, route, ct, dir, ft) < 0)
-+	    nft_dev_forward_path(pkt, is_bridging, route, ct, dir, dir, ft) < 0)
++	    nft_dev_forward_path(pkt, is_bridging, route, ct, dir, dir, ft) &&
++	    is_bridging)
  		goto err_dst_release;
  
  	if (route->tuple[!dir].xmit_type == FLOW_OFFLOAD_XMIT_NEIGH &&
 -	    nft_dev_forward_path(pkt, route, ct, !dir, ft) < 0)
-+	    nft_dev_forward_path(pkt, is_bridging, route, ct, !dir, dir, ft) < 0)
++	    nft_dev_forward_path(pkt, is_bridging, route, ct, !dir, dir, ft) &&
++	    is_bridging)
  		goto err_dst_release;
  
  	return 0;
