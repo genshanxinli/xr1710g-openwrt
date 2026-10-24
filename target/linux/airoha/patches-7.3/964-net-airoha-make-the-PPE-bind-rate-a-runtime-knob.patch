@@ -1,0 +1,187 @@
+From: OpenWrt <openwrt@example.org>
+Date: Sat, 24 Oct 2026 09:00:00 +0800
+Subject: [PATCH] net: airoha: make the PPE bind rate a runtime knob
+
+The PPE promotes an UNBIND entry to BIND once it sustains
+REG_PPE_BIND_RATE packets per second.  The driver hardcodes 30, which is
+what MediaTek's SDK and upstream mtk_ppe use, and there was no way to
+measure what a different value does: the register is not reachable from
+userspace (no /dev/mem, no devmem, no debugfs register window) and the
+driver is built in, so a new threshold meant a new kernel.
+
+Split the two halves of the register into ppe->bind_rate_l3 and
+ppe->bind_rate_l2b, route the write through airoha_ppe_apply_bind_rate(),
+and expose it as /sys/kernel/debug/ppe/bind_rate ("l3 [l2b]").  Defaults
+are unchanged at 30, so this is a no-op until somebody writes the file.
+
+This is a measurement aid, not a policy change: it lets one image answer
+"is 30 the right threshold" without a rebuild per data point.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+ drivers/net/ethernet/airoha/airoha_eth.h           |  9 +++++++
+ drivers/net/ethernet/airoha/airoha_ppe.c           | 30 +++++++++++++++---
+ drivers/net/ethernet/airoha/airoha_ppe_debugfs.c   | 62 ++++++++++++++++++++++++
+ 3 files changed, 98 insertions(+), 3 deletions(-)
+
+--- a/drivers/net/ethernet/airoha/airoha_eth.h
++++ b/drivers/net/ethernet/airoha/airoha_eth.h
+@@ -709,6 +709,14 @@
+ 	 */
+ 	enum airoha_ppe_entry_alias entry_alias;
+ 
++	/* Packets per second an entry must sustain before the PPE promotes
++	 * it from UNBIND to BIND.  L3 and L2B are separate fields of the
++	 * same register; they are separated here so the threshold can be
++	 * tuned per class without rebuilding.
++	 */
++	u32 bind_rate_l3;
++	u32 bind_rate_l2b;
++
+ 	struct dentry *debugfs_dir;
+ };
+ 
+@@ -859,6 +867,7 @@
+ 
+ #ifdef CONFIG_DEBUG_FS
+ int airoha_ppe_debugfs_init(struct airoha_ppe *ppe);
++void airoha_ppe_apply_bind_rate(struct airoha_ppe *ppe);
+ #else
+ static inline int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
+ {
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -228,6 +228,28 @@
+ 		      __field_prep(FP_EGRESS_MTU_MASK(index), len));
+ }
+ 
++/* Promoted from UNBIND to BIND once an entry sustains this many packets per
++ * second.  MediaTek's SDK calls 30 "packets per second" and treats 1 as the
++ * minimum useful value (bind on the first hit).  L3 and L2B are separate
++ * fields of the same register.
++ */
++#define AIROHA_PPE_DEFAULT_BIND_RATE	30
++
++void airoha_ppe_apply_bind_rate(struct airoha_ppe *ppe)
++{
++	struct airoha_eth *eth = ppe->eth;
++	int i;
++
++	for (i = 0; i < eth->soc->num_ppe; i++)
++		airoha_fe_rmw(eth, REG_PPE_BIND_RATE(i),
++			      PPE_BIND_RATE_L2B_BIND_MASK |
++			      PPE_BIND_RATE_BIND_MASK,
++			      FIELD_PREP(PPE_BIND_RATE_L2B_BIND_MASK,
++					 ppe->bind_rate_l2b) |
++			      FIELD_PREP(PPE_BIND_RATE_BIND_MASK,
++					 ppe->bind_rate_l3));
++}
++
+ static void airoha_ppe_hw_init(struct airoha_ppe *ppe)
+ {
+ 	u32 sram_ppe_num_data_entries = airoha_ppe_get_sram_num_entries(ppe);
+@@ -310,11 +332,7 @@
+ 				 "PPE%u: DRAM table did not come up, %u entries unreachable\n",
+ 				 i + 1, PPE_DRAM_NUM_ENTRIES);
+ 
+-		airoha_fe_rmw(eth, REG_PPE_BIND_RATE(i),
+-			      PPE_BIND_RATE_L2B_BIND_MASK |
+-			      PPE_BIND_RATE_BIND_MASK,
+-			      FIELD_PREP(PPE_BIND_RATE_L2B_BIND_MASK, 0x1e) |
+-			      FIELD_PREP(PPE_BIND_RATE_BIND_MASK, 0x1e));
++		airoha_ppe_apply_bind_rate(ppe);
+ 
+ 		airoha_fe_wr(eth, REG_PPE_HASH_SEED(i), PPE_HASH_SEED);
+ 		airoha_fe_clear(eth, REG_PPE_PPE_FLOW_CFG(i),
+@@ -2167,6 +2185,8 @@
+ 	ppe->dev.priv = ppe;
+ 	ppe->eth = eth;
+ 	eth->ppe = ppe;
++	ppe->bind_rate_l3 = AIROHA_PPE_DEFAULT_BIND_RATE;
++	ppe->bind_rate_l2b = AIROHA_PPE_DEFAULT_BIND_RATE;
+ 
+ 	ppe_num_entries = airoha_ppe_get_total_num_entries(ppe);
+ 	foe_size = ppe_num_entries * sizeof(struct airoha_foe_entry);
+--- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include "airoha_eth.h"
++#include "airoha_regs.h"
+ 
+ static void airoha_debugfs_ppe_print_tuple(struct seq_file *m,
+ 					   void *src_addr, void *dest_addr,
+@@ -265,6 +266,62 @@
+ }
+ DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_foe_alias);
+ 
++static int airoha_ppe_debugfs_bind_rate_show(struct seq_file *m, void *private)
++{
++	struct airoha_ppe *ppe = m->private;
++
++	seq_printf(m, "l3 %u l2b %u\n",
++		   ppe->bind_rate_l3, ppe->bind_rate_l2b);
++
++	return 0;
++}
++
++static ssize_t airoha_ppe_debugfs_bind_rate_write(struct file *file,
++						  const char __user *ubuf,
++						  size_t count, loff_t *ppos)
++{
++	struct seq_file *m = file->private_data;
++	struct airoha_ppe *ppe = m->private;
++	u32 l3, l2b = U32_MAX;
++	char buf[64];
++
++	if (count >= sizeof(buf))
++		return -EINVAL;
++	if (copy_from_user(buf, ubuf, count))
++		return -EFAULT;
++	buf[count] = '\0';
++
++	/* "l3" alone keeps L2B where it is, "l3 l2b" sets both. */
++	if (sscanf(buf, "%u %u", &l3, &l2b) < 1)
++		return -EINVAL;
++	if (l3 > FIELD_MAX(PPE_BIND_RATE_BIND_MASK))
++		return -ERANGE;
++	if (l2b != U32_MAX && l2b > FIELD_MAX(PPE_BIND_RATE_L2B_BIND_MASK))
++		return -ERANGE;
++
++	ppe->bind_rate_l3 = l3;
++	if (l2b != U32_MAX)
++		ppe->bind_rate_l2b = l2b;
++	airoha_ppe_apply_bind_rate(ppe);
++
++	return count;
++}
++
++static int airoha_ppe_debugfs_bind_rate_open(struct inode *inode,
++					     struct file *file)
++{
++	return single_open(file, airoha_ppe_debugfs_bind_rate_show,
++			   inode->i_private);
++}
++
++static const struct file_operations airoha_ppe_debugfs_bind_rate_fops = {
++	.open		= airoha_ppe_debugfs_bind_rate_open,
++	.read		= seq_read,
++	.write		= airoha_ppe_debugfs_bind_rate_write,
++	.llseek		= seq_lseek,
++	.release	= single_release,
++};
++
+ int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
+ {
+ 	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
+@@ -276,6 +333,8 @@
+ 			    &airoha_ppe_debugfs_foe_usage_fops);
+ 	debugfs_create_file("entry_alias", 0444, ppe->debugfs_dir, ppe,
+ 			    &airoha_ppe_debugfs_foe_alias_fops);
++	debugfs_create_file("bind_rate", 0644, ppe->debugfs_dir, ppe,
++			    &airoha_ppe_debugfs_bind_rate_fops);
+ 
+ 	return 0;
+ }
+
