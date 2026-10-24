@@ -56,14 +56,19 @@ DEFAULT_PACKAGES += \
 #                  entries have no byte/packet counts.  Use the ib1/ib2 decode
 #                  plus the interface counters instead.
 
-# A flow needs roughly 31 packets before the PPE turns its UNB record into a
-# BIND one -- REG_PPE_BIND_RATE is set to 0x1e (30) and the handshake overhead
-# puts the observed edge at 31.  The threshold is packets, not bytes and not
-# time: a 20-packet flow never binds even when it lives for 40 seconds, and
-# 20 x 1400B binds no sooner than 20 x 200B.  Consequence for benchmarking:
-# DNS lookups, single HTTP requests and other short flows never reach the
-# hardware, so a throughput test that only sends short requests will report
-# "offload does not work".  Drive one long flow instead.
+# A flow binds once its sustained *rate* clears REG_PPE_BIND_RATE, which this
+# driver sets to 0x1e (30) in both the L3 and the L2B half.  Measured on
+# hardware: at or above the threshold the UNB record becomes BIND after about
+# 1.1-1.8 seconds regardless of how fast you go (30/40/60/80 pps all bind in
+# ~1.3 s); well below it the flow either takes tens of seconds or never binds.
+# It is not a packet count -- an earlier reading of "31 packets" came from
+# tests that all ran about one second, which made count and time collinear.
+# Consequence for benchmarking: a short burst never binds, and DNS lookups,
+# single HTTP requests and other low-rate flows stay on the CPU, so a
+# throughput test built out of short requests will report "offload does not
+# work".  Drive one long, sustained flow instead, or raise the rate.
+# The threshold is runtime adjustable through /sys/kernel/debug/ppe/bind_rate
+# ("l3 [l2b]") when CONFIG_DEBUG_FS is on; see patch 964.
 
 # kmod-crypto-hw-eip93 is deliberately not a default package.  The SoC has
 # the EIP93 block and an7581.dtsi describes it, but nothing in this image
