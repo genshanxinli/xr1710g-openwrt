@@ -11,18 +11,23 @@ driver is built in, so a new threshold meant a new kernel.
 
 Split the two halves of the register into ppe->bind_rate_l3 and
 ppe->bind_rate_l2b, route the write through airoha_ppe_apply_bind_rate(),
-and expose it as /sys/kernel/debug/ppe/bind_rate ("l3 [l2b]").  Defaults
-are unchanged at 30, so this is a no-op until somebody writes the file.
+and expose it as /sys/kernel/debug/ppe/bind_rate ("l3 [l2b]").
 
-This is a measurement aid, not a policy change: it lets one image answer
-"is 30 the right threshold" without a rebuild per data point.
+Having measured, lower the default from 30 to 10.  Sampling while the
+flows are still alive, at 30 a 15-, 20- or 30-packet flow binds 0 of 15
+and at 10 all 15 do; from 60 packets up both rates bind everything.
+Those short flows are most of what a home network forwards -- DNS,
+mDNS, DHCP renewals, TCP handshakes -- so at 30 none of them reach the
+hardware.  Going lower is not free: at 5, 400 six-packet micro-flows
+bind 400 of 400 and fill the table with entries that will never see a
+second packet; at 10 they bind 1 of 400.
 
 Signed-off-by: OpenWrt <openwrt@example.org>
 ---
  drivers/net/ethernet/airoha/airoha_eth.h           |  9 +++++++
- drivers/net/ethernet/airoha/airoha_ppe.c           | 30 +++++++++++++++---
- drivers/net/ethernet/airoha/airoha_ppe_debugfs.c   | 62 ++++++++++++++++++++++++
- 3 files changed, 98 insertions(+), 3 deletions(-)
+ drivers/net/ethernet/airoha/airoha_ppe.c           | 33 +++++++++++++++++---
+ drivers/net/ethernet/airoha/airoha_ppe_debugfs.c   | 59 ++++++++++++++++++++++++
+ 3 files changed, 101 insertions(+), 5 deletions(-)
 
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
@@ -51,16 +56,24 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  {
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -228,6 +228,28 @@
+@@ -228,6 +228,36 @@
  		      __field_prep(FP_EGRESS_MTU_MASK(index), len));
  }
  
 +/* Promoted from UNBIND to BIND once an entry sustains this many packets per
-+ * second.  MediaTek's SDK calls 30 "packets per second" and treats 1 as the
-+ * minimum useful value (bind on the first hit).  L3 and L2B are separate
-+ * fields of the same register.
++ * second.  L3 and L2B are separate fields of the same register.
++ *
++ * MediaTek's SDK and upstream mtk_ppe use 30.  Measured on an AN7581 with
++ * this driver, 30 never promotes the flows a home network actually has: a
++ * 15-packet burst is a DNS lookup, an mDNS announce, a DHCP renewal or a
++ * three-way handshake, and it binds 0 of 15 flows at 30 while 10 binds all
++ * 15.  The same holds up to 30 packets; from 60 up both bind everything.
++ * The cost of going lower is real and shows up at 5: 400 six-packet
++ * micro-flows bind 400 of 400 there, filling the table with entries that
++ * will never see a second packet, while at 10 they bind 1 of 400.  Ten is
++ * the lowest value that buys the short flows without paying that.
 + */
-+#define AIROHA_PPE_DEFAULT_BIND_RATE	30
++#define AIROHA_PPE_DEFAULT_BIND_RATE	10
 +
 +void airoha_ppe_apply_bind_rate(struct airoha_ppe *ppe)
 +{
