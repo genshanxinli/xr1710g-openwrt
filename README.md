@@ -17,37 +17,39 @@ openwrt/openwrt                  (upstream source, default: main)
        └─ xr1710g-openwrt        (this repository, branch: xr1710g)
 ```
 
-The branch was carried over by replaying it, not by a direct merge, so the
-SHAs do not match even where the subject lines do. As a result
-`git merge-base upstream/kernel73 xr1710g` reports the point where `kernel73`
-split off `main` (`89381af998`, 2026-10-16), **not** the tip of `kernel73`:
-
-- 70 of the 247 commits upstream has on `kernel73` and not on `main` are
-  present in `xr1710g` by subject, with different SHAs; the remaining 177
-  (later kernel, netfilter and driver work) are not carried here;
-- on top of those, `xr1710g` carries the XR1710G device support and its own
-  fixes.
-
-To see the real divergence at any time:
+The branch was originally carried over by replaying it, so the SHAs differ
+from upstream's even where the subject lines match. That is history now:
+since the sync of 2026-10-24, `upstream/kernel73` is a real ancestor of
+`xr1710g`, and
 
 ```sh
-comm -23 <(git log --format=%s upstream/kernel73 ^main | sort -u) \
-         <(git log --format=%s main..HEAD | sort -u)   # upstream-only
+git merge-base --is-ancestor upstream/kernel73 HEAD && echo "in sync"
 ```
 
+succeeds. Everything upstream has on `kernel73` is contained in `xr1710g`;
+what remains on top is the XR1710G device support and our own fixes. The
+pre-sync state is preserved as the tag `pre-sync-2026-10-24`, which is the
+rollback point (`git reset --hard pre-sync-2026-10-24`).
+
 Because `kernel73` does not exist in the fork by default, GitHub's *Sync fork*
-button never offers it. The branch is mirrored here so the relationship is
-visible and so a sync has somewhere to land; keep it byte-identical to
-`upstream/kernel73` and do not commit to it:
+button never offers it, and syncing `main` would replace `xr1710g` with the
+fork parent's default branch — do not use it. The branch is mirrored here so
+the relationship is visible and so a sync has somewhere to land; keep it
+byte-identical to `upstream/kernel73` and do not commit to it:
 
 ```sh
 git fetch upstream
-git push origin refs/remotes/upstream/kernel73:refs/heads/kernel73
+git push --force origin upstream/kernel73:refs/heads/kernel73
 ```
 
-To pick up upstream work, merge or cherry-pick from `upstream/kernel73` into
-`xr1710g` — do not sync-fork, which would replace `xr1710g` with the fork
-parent's default branch.
+To pick up new upstream work, merge from `upstream/kernel73` into `xr1710g`:
+
+```sh
+git fetch upstream
+git switch xr1710g
+git merge upstream/kernel73        # resolve, then make target/linux/prepare
+git push --force origin upstream/kernel73:refs/heads/kernel73   # re-mirror
+```
 
 The XR1710G shares the AN7581 platform with the W1700K but is **not** a clone:
 it uses an RTL8261BE 10G PHY instead of the RTL8261N, drives the 1G port LEDs
