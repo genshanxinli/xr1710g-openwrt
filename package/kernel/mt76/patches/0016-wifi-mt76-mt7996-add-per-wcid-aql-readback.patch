@@ -1,0 +1,108 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Sun, 15 Nov 2026 08:05:00 +0800
+Subject: [PATCH] wifi: mt76: mt7996: add a per-WCID AQL pending readback
+
+The pending AQL airtime of a station is accounted by mac80211 in
+struct sta_info, so the driver has no copy of it. mt76 can query it per
+txq through ieee80211_txq_aql_pending(), which returns the per-AC
+aql_tx_pending counter in usec and is exported for the PS-buffering path
+already. That is the value needed to tell an AQL-throttled BE unicast
+path from a softirq or queue limit.
+
+Expose it as a read-only debugfs file "aql" next to the other mt7996
+diagnostic files. For every station the file prints the primary WCID,
+the station address, the VO/VI/BE/BK aql_tx_pending values in usec, the
+per-STA total, and that total in the 4 us unit of
+ieee80211_tx_info.tx_time_est. AQL accounting is per AC, so a TID-level
+dump would only repeat the same value; the per-AC table is used instead.
+
+The file only reads atomics while the station iterator holds RCU. It
+takes no lock, writes nothing, and adds no work to the TX or completion
+paths. With no station associated it prints the header only.
+
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+ mt7996/debugfs.c | 64 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 64 insertions(+)
+
+--- a/mt7996/debugfs.c
++++ b/mt7996/debugfs.c
+@@ -997,6 +997,70 @@
+ }
+ DEFINE_SHOW_ATTRIBUTE(mt7996_txpower);
+ 
++/*
++ * Per-WCID AQL pending airtime. The pending counter lives in struct sta_info,
++ * so query it through ieee80211_txq_aql_pending() instead of accessing it
++ * directly. It is accounted per AC (all TIDs of an AC share the counter), so
++ * one txq per AC is enough. The file only reads atomics and changes nothing.
++ */
++struct mt7996_aql_iter {
++	struct ieee80211_hw *hw;
++	struct seq_file *s;
++};
++
++static void
++mt7996_aql_sta_iter(void *data, struct ieee80211_sta *sta)
++{
++	struct mt7996_aql_iter *iter = data;
++	struct mt7996_sta *msta = (struct mt7996_sta *)sta->drv_priv;
++	u32 pending[IEEE80211_NUM_ACS] = {};
++	u32 total = 0;
++	int ac, tid;
++
++	if (msta->deflink_id == IEEE80211_LINK_UNSPECIFIED)
++		return;
++
++	for (ac = 0; ac < IEEE80211_NUM_ACS; ac++) {
++		for (tid = 0; tid < IEEE80211_NUM_TIDS; tid++) {
++			struct ieee80211_txq *txq = sta->txq[tid];
++
++			if (!txq || txq->ac != ac)
++				continue;
++
++			pending[ac] = ieee80211_txq_aql_pending(iter->hw, txq);
++			break;
++		}
++		total += pending[ac];
++	}
++
++	seq_printf(iter->s, "%4u  %pM  %8u %8u %8u %8u  %10u  %11u\n",
++		   msta->deflink.wcid.idx, sta->addr,
++		   pending[IEEE80211_AC_VO], pending[IEEE80211_AC_VI],
++		   pending[IEEE80211_AC_BE], pending[IEEE80211_AC_BK],
++		   total, total / 4);
++}
++
++static int
++mt7996_aql_show(struct seq_file *s, void *data)
++{
++	struct mt7996_dev *dev = s->private;
++	struct mt7996_aql_iter iter = {
++		.hw = dev->mphy.hw,
++		.s = s,
++	};
++
++	seq_puts(s, "AQL tx_pending per station, from mac80211 aql_tx_pending (usec)\n");
++	seq_puts(s, "tx_time_est is the same total in 4us units (ieee80211_tx_info.tx_time_est)\n");
++	seq_puts(s, "wcid  sta                VO(us)   VI(us)   BE(us)   BK(us)  total(us)  tx_time_est\n");
++
++	ieee80211_iterate_stations_atomic(dev->mphy.hw,
++					  mt7996_aql_sta_iter, &iter);
++
++	return 0;
++}
++
++DEFINE_SHOW_ATTRIBUTE(mt7996_aql);
++
+ static int
+ mt7996_twt_stats(struct seq_file *s, void *data)
+ {
+@@ -1162,6 +1226,7 @@
+ 	debugfs_create_file("xmit-queues", 0400, dir, dev,
+ 			    &mt7996_xmit_queues_fops);
+ 	debugfs_create_file("tx_stats", 0400, dir, dev, &mt7996_tx_stats_fops);
++	debugfs_create_file("aql", 0400, dir, dev, &mt7996_aql_fops);
+ 	debugfs_create_file("sys_recovery", 0600, dir, dev,
+ 			    &mt7996_sys_recovery_ops);
+ 	debugfs_create_file("fw_debug_wm", 0600, dir, dev, &fops_fw_debug_wm);
