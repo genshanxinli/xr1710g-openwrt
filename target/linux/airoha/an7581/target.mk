@@ -76,9 +76,16 @@ DEFAULT_PACKAGES += \
 # built without CONFIG_XFRM (no INET_ESP, no INET_AH, no XFRM_USER), without
 # kTLS, without dm-crypt and without AF_ALG, and no IPsec daemon is
 # installed.  So the module loads, registers authenc(hmac(sha*),cbc(aes))
-# and friends, and is never called.  It stays in the feed, so an IPsec user
-# only has to "opkg install kmod-crypto-hw-eip93 kmod-ipsec4" (which pulls
-# in XFRM and ESP) to get hardware assistance for ESP.
+# and friends, and is never called.
+#
+# An IPsec user opts in with the "eip93-ipsec" package group
+# (package/network/config/eip93-ipsec).  Installing it pulls in strongSwan,
+# kmod-ipsec4 (XFRM/ESP) and kmod-crypto-hw-eip93; it is not in
+# DEFAULT_PACKAGES, so images that do not select it are unchanged.  The
+# EIP93 block only accelerates classic ESP (AES-CBC/DES/3DES with
+# MD5/SHA1/SHA2), not GCM or ChaCha20-Poly1305.  scripts/eip93-ipsec-smoke.sh
+# is the reproducible "ip xfrm" check that runs before strongSwan is wired
+# in; it requires ip-full and iperf3 on both ends.
 
 define Target/Description
 	Build firmware images for Airoha an7581 ARM based boards.
