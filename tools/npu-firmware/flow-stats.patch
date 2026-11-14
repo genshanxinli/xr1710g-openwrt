@@ -1,0 +1,75 @@
+diff --git a/npu_ppe.c b/npu_ppe.c
+index 4097898..4a4fc71 100644
+--- a/npu_ppe.c
++++ b/npu_ppe.c
+@@ -939,6 +939,59 @@ static int hwnat_set_wait_api(u32 addr)
+ 	return 1;
+ }
+ 
++/* FLOW_STATS_SETUP: the host maps a fixed array of per-flow counters and
++ * reads the low 32 bits of packets and bytes from it.  The array cannot
++ * come from the NPU SRAM ledger, which is already fully spoken for, so it
++ * sits in the NPU binary DRAM reservation above the 2 MiB image and its
++ * stacks.  Every AN758X board reserves 10 MiB at 0x84000000, and the host
++ * only ever loads a 2 MiB image there.
++ */
++#define FLOW_STATS_BASE		0x84800000U
++#define FLOW_STATS_LIMIT	0x84A00000U
++#define FLOW_STATS_ENTRY_SIZE	8U
++#define FLOW_STATS_CAPACITY	24576U
++#define FLOW_STATS_BYTES	(FLOW_STATS_CAPACITY * FLOW_STATS_ENTRY_SIZE)
++#define FLOW_STATS_VERSION	1U
++
++#if FLOW_STATS_BASE + FLOW_STATS_BYTES > FLOW_STATS_LIMIT
++#error "flow stats area does not fit the NPU binary reservation"
++#endif
++#if FLOW_STATS_CAPACITY > 24576
++#error "flow stats capacity exceeds the host protocol maximum"
++#endif
++
++/* The request leaves npu_stats_addr clear and passes an 8-byte aligned
++ * DMA address in foe_stats_addr for the high half of the counters.  Reply
++ * with the fixed base, and with the version and capacity fields the host
++ * reads once it grows the reply structure; a repeat of the same request
++ * returns the same answer.  Counting itself is not started here.
++ */
++static int hwnat_set_wait_flow_stats(u32 addr)
++{
++	u32 npu_stats_addr = REG32(addr + 8);
++	u32 foe_stats_addr = REG32(addr + 12);
++
++	if (REG32(addr) != 1 || REG32(addr + 4) != 4) {
++		npu_printf("FLOW_STATS_SETUP: bad request\n");
++		return 0;
++	}
++
++	if (npu_stats_addr != 0 && npu_stats_addr != FLOW_STATS_BASE) {
++		npu_printf("FLOW_STATS_SETUP: reply slot is not ours\n");
++		return 0;
++	}
++	if (foe_stats_addr == 0 ||
++	    (foe_stats_addr & (FLOW_STATS_ENTRY_SIZE - 1)) != 0) {
++		npu_printf("FLOW_STATS_SETUP: bad foe_stats_addr\n");
++		return 0;
++	}
++
++	REG32(addr + 8) = FLOW_STATS_BASE;
++	REG32(addr + 16) = FLOW_STATS_VERSION;
++	REG32(addr + 20) = FLOW_STATS_CAPACITY;
++	return 1;
++}
++
+ int hwnat_mail_dispatch(u32 base, u32 cnt)
+ {
+ 	u32 addr = (base & 0x3FFFFFFF) | NPU_ADDR_MASK;
+@@ -976,8 +1029,8 @@ int hwnat_mail_dispatch(u32 base, u32 cnt)
+ 	case 3:			/* API */
+ 		result = hwnat_set_wait_api(addr);
+ 		break;
+-	case 4:			/* FLOW_STATS_SETUP, not implemented */
+-		result = 0;
++	case 4:			/* FLOW_STATS_SETUP */
++		result = hwnat_set_wait_flow_stats(addr);
+ 		break;
+ 	default:		/* L4S_SETUP */
+ 		npu_printf("L4S not support!!!\n");
