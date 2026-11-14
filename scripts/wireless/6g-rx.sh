@@ -31,18 +31,19 @@
 #   iw dev IFACE station dump : "rx bytes", "rx packets", "rx bitrate"
 #   ethtool -S IFACE          : rx_ampdu_bytes_cnt, rx_ampdu_cnt,
 #                               rx_mpdu_cnt, rx_ba_cnt
-#   /proc/interrupts          : lines matching pcie|hif|mt7996 (configurable
-#                               with --irq-pattern); the PCIe0 group is
-#                               pcie*/mt7996*, the hif2 group is *hif*
+#   /proc/interrupts          : lines matching pcie|hif|mt7996 (--irq-pattern);
+#                               PCIe0 group = pcie0|mt7996 (--pcie-pattern),
+#                               hif2 group = hif (--hif-pattern)
 #   mt76 token_info           : token_count, wed_token_count, rx_token_size,
 #                               npu_rx0/npu_rx1 "queued"
 #   mt76 band_bytes           : "Phy band 2" rx_ampdu_bytes
 #   /sys/class/net/IFACE/statistics/rx_bytes
 #
-# Verdict rule: after a successful source, if the PCIe0 IRQ delta is larger
-# than the hif2 IRQ delta the data plane is PCIe0; if hif2 is larger it is
-# hif2; if neither moved, or the station RX bytes did not grow, the verdict
-# is undetermined and the evidence is printed anyway.
+# Verdict rule: an idle --baseline measures the hif2 beacon/background IRQ
+# rate; the traffic delta is corrected by that baseline and only a group
+# whose corrected IRQ count is clearly above idle can win.  PCIe0 wins when
+# its corrected count is larger, hif2 when its is, otherwise the verdict is
+# undetermined and the evidence is printed anyway.
 #
 # No module/firmware change.  A normal run changes no configuration.  The
 # optional --add-bss path writes a temporary wifi-iface, backs up
@@ -88,6 +89,9 @@ RADIO=
 OUT=
 ETHTOOL_IFACE=
 IRQ_PATTERN=${IRQ_PATTERN:-pcie|hif|mt7996}
+PCIE_PATTERN=${PCIE_PATTERN:-pcie0|mt7996}
+HIF_PATTERN=${HIF_PATTERN:-hif}
+BASELINE=2
 DRY_RUN=0
 
 WIRELESS_CONFIG=${WIRELESS_CONFIG:-/etc/config/wireless}
@@ -151,6 +155,20 @@ BAND_AMPDU_DELTA=
 IRQ_PCIE0_DELTA=0
 IRQ_HIF2_DELTA=0
 IRQ_LINE_COUNT=0
+IDLE_IRQ_OUTPUT=
+IDLE_WINDOW_S=
+IDLE_PCIE0_DELTA=0
+IDLE_HIF2_DELTA=0
+IDLE_PCIE0_RATE=0
+IDLE_HIF2_RATE=0
+IRQ_WINDOW_S=
+SOURCE_SECONDS=
+IRQ_PCIE0_EXCESS=
+IRQ_HIF2_EXCESS=
+IRQ_PCIE0_RATE=
+IRQ_HIF2_RATE=
+IRQ_PCIE0_ACTIVE=0
+IRQ_HIF2_ACTIVE=0
 TOKEN_BEFORE=
 TOKEN_AFTER=
 WED_TOKEN_BEFORE=
@@ -213,8 +231,19 @@ need_value() {
 is_uint() {
 	case ${1:-} in
 	''|*[!0-9]*) return 1 ;;
+	0) return 0 ;;
+	0*) return 1 ;;
 	*) return 0 ;;
 	esac
+}
+
+validate_regex() {
+	# $1 option name, $2 awk extended regular expression.
+	# Matching the empty string compiles the regex; an invalid one
+	# makes awk exit non-zero.
+	if ! awk -v p="$2" 'BEGIN { if ("" ~ p) exit 0; exit 0 }' >/dev/null 2>&1; then
+		usage_error "$1 is not a valid awk regular expression: $2"
+	fi
 }
 
 check_uint() {
@@ -225,7 +254,7 @@ check_uint() {
 }
 
 now_s() {
-	awk '{ printf "%d", $1 }' /proc/uptime 2>/dev/null
+	awk '{ printf "%.0f", $1 }' /proc/uptime 2>/dev/null
 }
 
 set_digest_algo() {
@@ -293,6 +322,18 @@ capture() {
 	fi
 }
 
+capture_required() {
+	# $1 destination, rest the command.  Dies when the destination is
+	# empty or contains capture's failure marker; required evidence must
+	# not silently become n/a.
+	_req_dest=$1
+	shift
+	capture "$_req_dest" "$@"
+	if [ ! -s "$_req_dest" ] || grep -q '^capture failed:' "$_req_dest"; then
+		die "required capture failed: $*"
+	fi
+}
+
 write_note() {
 	# $1 destination, $2 text
 	printf '%s\n' "$2" >"$1"
@@ -310,14 +351,12 @@ counter_delta() {
 	# $1 before, $2 after.  Empty when either side is not an integer.
 	case ${1:-} in ''|*[!0-9]*) return 0 ;; esac
 	case ${2:-} in ''|*[!0-9]*) return 0 ;; esac
-	awk -v a="$1" -v b="$2" 'BEGIN { printf "%d", b - a }'
+	awk -v a="$1" -v b="$2" 'BEGIN { printf "%.0f", b - a }'
 }
 
 is_positive() {
-	case ${1:-} in
-	''|*[!0-9]*) return 1 ;;
-	*) [ "$1" -gt 0 ] ;;
-	esac
+	is_uint "${1:-}" || return 1
+	[ "$1" -gt 0 ]
 }
 
 # --- usage ------------------------------------------------------------
@@ -335,7 +374,9 @@ Source modes:
         The AP runs "iperf3 -s -1 -p PORT" and prints the exact client
         command for the STA.  Use this with any STA that has an iperf3
         client.  The AP waits up to --source-wait for a connection; no
-        connection is a clean "SKIP: no STA source connected".
+        connection is a clean "SKIP: no STA source connected".  This
+        mode needs "ss" or "netstat" on the AP to detect the connection;
+        install ip-full/net-tools, or use --sta-ip.
   --sta-ip IP
         Reverse mode.  The AP runs "iperf3 -c IP -R", so an iperf3 server
         on the STA is the sender.  Start it first with
@@ -375,6 +416,16 @@ Options:
                       the counter is not exposed there, another AP iface on
                       the same phy is tried)
   --irq-pattern REGEX /proc/interrupts line filter (default "pcie|hif|mt7996")
+  --pcie-pattern REGEX
+                      descriptions counted in the PCIe0 group (default
+                      "pcie0|mt7996"; PCIe1 and unrelated lines are not
+                      counted)
+  --hif-pattern REGEX descriptions counted in the hif2 group (default "hif")
+  --baseline N        idle IRQ baseline before the source, in seconds
+                      (default 2; 0 disables the beacon correction).  The
+                      baseline is sampled once before the traffic window and
+                      subtracted from both IRQ groups, so hif2 beacons alone
+                      cannot win the verdict.
   --out DIR           result directory (default ./6g-rx-<epoch>).  Must not
                       exist; raw snapshots and raw.log are kept there.
   --dry-run           print the planned commands, snapshot paths and
@@ -388,18 +439,26 @@ Measurements:
   ethtool -S      rx_ampdu_bytes_cnt (the A-MPDU byte counter),
                   rx_ampdu_cnt, rx_mpdu_cnt, rx_ba_cnt
   interrupts      deltas of every /proc/interrupts line matching
-                  --irq-pattern; the strict pcie*/mt7996* lines form the
-                  PCIe0 group and the *hif* lines form the hif2 group
+                  --irq-pattern; the pcie0*/mt7996* lines form the PCIe0
+                  group and the *hif* lines form the hif2 group.  The two
+                  group patterns are configurable.  An idle --baseline
+                  measures the beacon/background rate of each group first.
   token_info      token_count, wed_token_count, rx_token_size and the
                   npu_rx0/npu_rx1 queued depths (NPU/RRO queue evidence)
   band_bytes      rx_ampdu_bytes for Phy band 2 (6 GHz)
   netdev          /sys/class/net/<AP iface>/statistics/rx_bytes
 
 Verdict:
-  PCIe0         PCIe0 IRQ delta > hif2 IRQ delta and station rx bytes grew
-  hif2          hif2 IRQ delta > PCIe0 IRQ delta and station rx bytes grew
-  undetermined  neither IRQ group moved, the two deltas are equal, or the
-                station rx bytes did not grow; the evidence is still printed
+  PCIe0         after subtracting the idle baseline, the PCIe0 IRQ excess
+                is clearly above idle and larger than the hif2 excess, and
+                station rx bytes grew
+  hif2          the same test with the hif2 excess larger
+  undetermined  neither excess is clearly above idle, the excesses are
+                equal, or station rx bytes did not grow; the evidence is
+                still printed.  hif2 beacon traffic alone lands here.
+                A group counts as active only when its idle-corrected
+                excess is at least 5 IRQs and 2 IRQs/s over the source
+                window.
 
 The station counters are per STA; ethtool's A-MPDU counters and the IRQ
 deltas are per phy, so other traffic on the same 6G phy is included.
@@ -587,6 +646,33 @@ while [ "$#" -gt 0 ]; do
 		IRQ_PATTERN=${1#*=}
 		shift
 		;;
+	--pcie-pattern)
+		need_value "$1" "$#"
+		PCIE_PATTERN=$2
+		shift 2
+		;;
+	--pcie-pattern=*)
+		PCIE_PATTERN=${1#*=}
+		shift
+		;;
+	--hif-pattern)
+		need_value "$1" "$#"
+		HIF_PATTERN=$2
+		shift 2
+		;;
+	--hif-pattern=*)
+		HIF_PATTERN=${1#*=}
+		shift
+		;;
+	--baseline)
+		need_value "$1" "$#"
+		BASELINE=$2
+		shift 2
+		;;
+	--baseline=*)
+		BASELINE=${1#*=}
+		shift
+		;;
 	--out)
 		need_value "$1" "$#"
 		OUT=$2
@@ -610,6 +696,7 @@ check_uint PARALLEL "$PARALLEL" 1 64
 check_uint PORT "$PORT" 1 65535
 check_uint SOURCE_WAIT "$SOURCE_WAIT" 0 7200
 check_uint BSS_WAIT "$BSS_WAIT" 1 600
+check_uint BASELINE "$BASELINE" 0 60
 
 if [ "$STA_WAIT_SET" = 0 ]; then
 	if [ "$ADD_BSS" = 1 ]; then
@@ -626,9 +713,12 @@ tcp|udp) ;;
 esac
 
 case $UDP_RATE in
-''|*[!0-9kKmMgG]*) usage_error "invalid UDP rate '$UDP_RATE' (iperf3 -b syntax, e.g. 4G)" ;;
+''|*[!0-9.kKmMgG]*) usage_error "invalid UDP rate '$UDP_RATE' (iperf3 -b syntax, e.g. 4G)" ;;
 esac
-is_uint "${UDP_RATE%[kKmMgG]}" && [ "${UDP_RATE%[kKmMgG]}" -gt 0 ] ||
+_udp_num=${UDP_RATE%[kKmMgG]}
+printf '%s\n' "$_udp_num" | grep -Eq '^[0-9]+([.][0-9]+)?$' ||
+	usage_error "invalid UDP rate '$UDP_RATE'"
+awk -v v="$_udp_num" 'BEGIN { exit !(v > 0) }' ||
 	usage_error "invalid UDP rate '$UDP_RATE'"
 
 if [ -n "$STA_MAC" ]; then
@@ -672,6 +762,11 @@ if [ -n "$ETHTOOL_IFACE" ]; then
 fi
 
 [ -n "$IRQ_PATTERN" ] || usage_error "--irq-pattern must not be empty"
+[ -n "$PCIE_PATTERN" ] || usage_error "--pcie-pattern must not be empty"
+[ -n "$HIF_PATTERN" ] || usage_error "--hif-pattern must not be empty"
+validate_regex --irq-pattern "$IRQ_PATTERN"
+validate_regex --pcie-pattern "$PCIE_PATTERN"
+validate_regex --hif-pattern "$HIF_PATTERN"
 
 if [ -z "$OUT" ]; then
 	OUT=./6g-rx-$(date +%s)
@@ -691,8 +786,9 @@ dry_run_plan() {
 	printf '  sta: %s\n' "${STA_MAC:-<the only station on the selected BSS>}"
 	printf '  proto=%s seconds=%s parallel=%s port=%s udp_rate=%s\n' \
 		"$PROTO" "$WINDOW" "$PARALLEL" "$PORT" "$UDP_RATE"
-	printf '  irq_pattern=%s ethtool_iface=%s\n' \
-		"$IRQ_PATTERN" "${ETHTOOL_IFACE:-<the AP iface>}"
+	printf '  irq_pattern=%s pcie_pattern=%s hif_pattern=%s baseline=%ss ethtool_iface=%s\n' \
+		"$IRQ_PATTERN" "$PCIE_PATTERN" "$HIF_PATTERN" "$BASELINE" \
+		"${ETHTOOL_IFACE:-<the AP iface>}"
 	printf '  out=%s\n' "$OUT"
 	printf '  restore path: WIRELESS_CONFIG=%s PROC_INTERRUPTS=%s DEBUGFS=%s\n' \
 		"$WIRELESS_CONFIG" "$PROC_INTERRUPTS" "$DEBUGFS"
@@ -714,13 +810,20 @@ dry_run_plan() {
 		printf '\nBSS bring-up: disabled (an existing 6G-only BSS is required)\n'
 	fi
 
-	printf '\nsnapshot files (before, mid, after):\n'
+	printf '\nsnapshot files (idle, before, mid, after):\n'
+	if [ "$BASELINE" -gt 0 ]; then
+		printf '  %s/interrupts-idle.txt + sleep %ss    idle IRQ baseline\n' \
+			"$OUT" "$BASELINE"
+	fi
 	printf '  %s/station-{before,mid,after}.txt   iw dev IFACE station dump\n' "$OUT"
 	printf '  %s/ethtool-{before,after}.txt        ethtool -S ETHTOOL_IFACE\n' "$OUT"
-	printf '  %s/interrupts-{before,after}.txt     cat %s\n' "$OUT" "$PROC_INTERRUPTS"
+	printf '  %s/interrupts-{idle,before,after}.txt cat %s\n' "$OUT" "$PROC_INTERRUPTS"
 	printf '  %s/token-info-{before,after}.txt     cat DEBUGFS/ieee80211/phy*/mt76/token_info\n' "$OUT"
 	printf '  %s/band-bytes-{before,after}.txt     cat DEBUGFS/ieee80211/phy*/mt76/band_bytes\n' "$OUT"
 	printf '  %s/ap-rx-{before,after}.txt          /sys/class/net/IFACE/statistics/rx_bytes\n' "$OUT"
+	if [ "$BASELINE" -gt 0 ]; then
+		printf '  %s/uptime-idle.txt                    /proc/uptime (idle start)\n' "$OUT"
+	fi
 	printf '  %s/uptime-{before,after}.txt         /proc/uptime\n' "$OUT"
 
 	printf '\nsource window commands:\n'
@@ -748,16 +851,16 @@ dry_run_plan() {
 	printf '\ncounters used:\n'
 	printf '  station: rx bytes, rx packets, tx bytes, rx bitrate, tx bitrate, signal\n'
 	printf '  ethtool: rx_ampdu_bytes_cnt, rx_ampdu_cnt, rx_mpdu_cnt, rx_ba_cnt\n'
-	printf '  interrupts: PCIe0 group pcie|mt7996, hif2 group hif\n'
+	printf '  interrupts: PCIe0 group %s, hif2 group %s\n' "$PCIE_PATTERN" "$HIF_PATTERN"
 	printf '  token_info: token_count, wed_token_count, rx_token_size, npu_rx0/npu_rx1 queued\n'
 	printf '  band_bytes: Phy band %s rx_ampdu_bytes\n' "$SIXG_BAND"
 	printf '  netdev: rx_bytes\n'
 
-	printf '\nverdict: PCIe0 if the PCIe0 IRQ delta > hif2 IRQ delta; hif2 if the\n'
-	printf '         reverse holds; otherwise undetermined with the evidence.\n'
+	printf '\nverdict: subtract the idle baseline from each IRQ group; the larger\n'
+	printf '         corrected excess wins (PCIe0 or hif2); otherwise undetermined.\n'
 	printf '\nreal-run preconditions not checked by --dry-run: iw, ethtool, iperf3;\n'
 	printf 'a 6G-only BSS; a 6G STA; a source endpoint; the AP LAN firewall allows\n'
-	printf 'port %s.\n' "$PORT"
+	printf 'port %s; listen mode also needs ss or netstat.\n' "$PORT"
 }
 
 if [ "$DRY_RUN" = 1 ]; then
@@ -1024,7 +1127,7 @@ wait_for_station() {
 		"$1" "$SEL_IFACE" "$SEL_SSID"
 	_deadline=$(( $(now_s) + $1 ))
 	while [ "$(now_s)" -lt "$_deadline" ]; do
-		if choose_station 2>/dev/null; then
+		if choose_station; then
 			return 0
 		fi
 		sleep 2
@@ -1091,7 +1194,7 @@ create_bss() {
 		DIGEST_ALGO='cmp'
 	fi
 	BSS_CHANGED=1
-	printf 'restore after a hard kill (SIGKILL): cat %s > %s && wifi reload\n' \
+	printf 'restore after a hard kill (SIGKILL): cp -p %s %s && wifi reload\n' \
 		"$WIRELESS_BACKUP" "$WIRELESS_CONFIG"
 
 	_sec="rx6g_$$"
@@ -1166,13 +1269,22 @@ cleanup() {
 	fi
 	if [ -n "${SRC_PID:-}" ] && kill -0 "$SRC_PID" 2>/dev/null; then
 		kill "$SRC_PID" 2>/dev/null
+		_kill_try=0
+		while kill -0 "$SRC_PID" 2>/dev/null && [ "$_kill_try" -lt 5 ]; do
+			sleep 1
+			_kill_try=$((_kill_try + 1))
+		done
+		if kill -0 "$SRC_PID" 2>/dev/null; then
+			kill -9 "$SRC_PID" 2>/dev/null
+		fi
 		wait "$SRC_PID" 2>/dev/null
 	fi
 	SRC_PID=
 	if [ "${BSS_CHANGED:-0}" = 1 ]; then
 		printf '%s: restoring %s from %s\n' \
 			"$PROG" "$WIRELESS_CONFIG" "$WIRELESS_BACKUP"
-		if cat "$WIRELESS_BACKUP" >"$WIRELESS_CONFIG" 2>/dev/null; then
+		if cp -p "$WIRELESS_BACKUP" "$WIRELESS_CONFIG" 2>/dev/null ||
+			cat "$WIRELESS_BACKUP" >"$WIRELESS_CONFIG" 2>/dev/null; then
 			_gone=0
 			for _try in 1 2 3; do
 				wifi reload >>"${RAW_LOG:-/dev/null}" 2>&1 ||
@@ -1294,13 +1406,17 @@ resolve_ethtool_iface() {
 }
 
 find_debugfs_file() {
-	# $1 filename under DEBUGFS/ieee80211/phy*/mt76
-	[ -n "$SEL_PHY" ] && [ -r "$DEBUGFS/ieee80211/phy$SEL_PHY/mt76/$1" ] &&
-		{ printf '%s' "$DEBUGFS/ieee80211/phy$SEL_PHY/mt76/$1"; return 0; }
-	for _f in "$DEBUGFS"/ieee80211/phy*/mt76/"$1"; do
-		[ -r "$_f" ] || continue
-		printf '%s' "$_f"
-		return 0
+	# mt76 creates one debugfs directory per mt76 device.  On this
+	# single-MT7996 board that is phy0 even for the 6G band, so try the
+	# selected phy first and the primary phy second; never read an
+	# unrelated phy just because its glob sorts first.
+	for _phy in "$SEL_PHY" 0; do
+		[ -n "$_phy" ] || continue
+		_f="$DEBUGFS/ieee80211/phy$_phy/mt76/$1"
+		if [ -r "$_f" ]; then
+			printf '%s' "$_f"
+			return 0
+		fi
 	done
 	return 1
 }
@@ -1316,10 +1432,17 @@ resolve_debugfs() {
 
 # --- snapshots and parsing --------------------------------------------
 
+snapshot_idle() {
+	# Only the IRQ counters and uptime are needed for the beacon/background
+	# baseline; the full before snapshot is taken after the baseline sleep.
+	capture_required "$OUT/interrupts-idle.txt" cat "$PROC_INTERRUPTS"
+	capture "$OUT/uptime-idle.txt" cat /proc/uptime
+}
+
 snapshot_before() {
-	capture "$OUT/station-before.txt" iw dev "$SEL_IFACE" station dump
-	capture "$OUT/ethtool-before.txt" ethtool -S "$ETHTOOL_IFACE"
-	capture "$OUT/interrupts-before.txt" cat "$PROC_INTERRUPTS"
+	capture_required "$OUT/station-before.txt" iw dev "$SEL_IFACE" station dump
+	capture_required "$OUT/ethtool-before.txt" ethtool -S "$ETHTOOL_IFACE"
+	capture_required "$OUT/interrupts-before.txt" cat "$PROC_INTERRUPTS"
 	if [ -n "$TOKEN_INFO_PATH" ]; then
 		capture "$OUT/token-info-before.txt" cat "$TOKEN_INFO_PATH"
 	else
@@ -1344,9 +1467,9 @@ snapshot_mid() {
 
 snapshot_after() {
 	capture "$OUT/uptime-after.txt" cat /proc/uptime
-	capture "$OUT/station-after.txt" iw dev "$SEL_IFACE" station dump
-	capture "$OUT/ethtool-after.txt" ethtool -S "$ETHTOOL_IFACE"
-	capture "$OUT/interrupts-after.txt" cat "$PROC_INTERRUPTS"
+	capture_required "$OUT/station-after.txt" iw dev "$SEL_IFACE" station dump
+	capture_required "$OUT/ethtool-after.txt" ethtool -S "$ETHTOOL_IFACE"
+	capture_required "$OUT/interrupts-after.txt" cat "$PROC_INTERRUPTS"
 	if [ -n "$TOKEN_INFO_PATH" ]; then
 		capture "$OUT/token-info-after.txt" cat "$TOKEN_INFO_PATH"
 	else
@@ -1451,10 +1574,15 @@ iperf_sum_field() {
 
 iperf_error() {
 	awk '
-		index($0, "\"error\":") > 0 {
-			v = $0
-			sub(/^.*:[ \t]*/, "", v)
-			sub(/^"/, "", v)
+		{
+			p = index($0, "\"error\":")
+			if (!p)
+				next
+			v = substr($0, p + 8)
+			sub(/^[ \t]*/, "", v)
+			if (substr(v, 1, 1) != "\"")
+				next
+			v = substr(v, 2)
 			sub(/".*$/, "", v)
 			print v
 			exit
@@ -1588,8 +1716,9 @@ run_source_reverse() {
 # --- IRQ parsing ------------------------------------------------------
 
 irq_deltas() {
-	# $1 before, $2 after, $3 pattern.  Prints IRQ/GROUP/MATCHED tab lines.
-	awk -v pat="$3" '
+	# $1 before, $2 after, $3 filter, $4 PCIe0 pattern, $5 hif2 pattern.
+	# Prints IRQ/GROUP/MATCHED tab lines.
+	awk -v pat="$3" -v pciepat="$4" -v hifpat="$5" '
 		function lc(s) { return tolower(s) }
 		BEGIN { first = ARGV[1] }
 		FILENAME == first {
@@ -1624,18 +1753,18 @@ irq_deltas() {
 				if (lc(desc) !~ lc(pat))
 					next
 				delta = sum - before[irq]
-				printf "IRQ\t%s\t%s\t%d\n", irq, desc, delta
-				if (lc(desc) ~ /hif/)
+				printf "IRQ\t%s\t%s\t%.0f\n", irq, desc, delta
+				if (lc(desc) ~ lc(hifpat))
 					hif2 += delta
-				else if (lc(desc) ~ /pcie|mt7996/)
+				else if (lc(desc) ~ lc(pciepat))
 					pcie0 += delta
 				matched++
 			}
 		}
 		END {
-			printf "GROUP\tpcie0\t%d\n", pcie0 + 0
-			printf "GROUP\thif2\t%d\n", hif2 + 0
-			printf "MATCHED\t%d\n", matched + 0
+			printf "GROUP\tpcie0\t%.0f\n", pcie0 + 0
+			printf "GROUP\thif2\t%.0f\n", hif2 + 0
+			printf "MATCHED\t%.0f\n", matched + 0
 		}
 	' "$1" "$2" 2>/dev/null
 }
@@ -1706,13 +1835,56 @@ analyze() {
 	NPU1_QUEUED_BEFORE=$(token_queue "$OUT/token-info-before.txt" npu_rx1)
 	NPU1_QUEUED_AFTER=$(token_queue "$OUT/token-info-after.txt" npu_rx1)
 
-	_irq=$(irq_deltas "$OUT/interrupts-before.txt" "$OUT/interrupts-after.txt" "$IRQ_PATTERN")
+	_irq=$(irq_deltas "$OUT/interrupts-before.txt" "$OUT/interrupts-after.txt" \
+		"$IRQ_PATTERN" "$PCIE_PATTERN" "$HIF_PATTERN")
+	_irq_rc=$?
+	[ "$_irq_rc" -eq 0 ] ||
+		die "IRQ delta parsing failed (check --irq-pattern/--pcie-pattern/--hif-pattern)"
 	IRQ_PCIE0_DELTA=$(printf '%s\n' "$_irq" | awk -F"$(printf '\t')" '$1 == "GROUP" && $2 == "pcie0" { print $3 }')
 	IRQ_HIF2_DELTA=$(printf '%s\n' "$_irq" | awk -F"$(printf '\t')" '$1 == "GROUP" && $2 == "hif2" { print $3 }')
 	IRQ_LINE_COUNT=$(printf '%s\n' "$_irq" | awk -F"$(printf '\t')" '$1 == "MATCHED" { print $2 }')
 	is_uint "$IRQ_LINE_COUNT" || IRQ_LINE_COUNT=0
 	is_uint "$IRQ_PCIE0_DELTA" || IRQ_PCIE0_DELTA=0
 	is_uint "$IRQ_HIF2_DELTA" || IRQ_HIF2_DELTA=0
+	IRQ_OUTPUT=$_irq
+
+	# Idle baseline.  The before snapshot, taken after the baseline sleep,
+	# is the end of the idle window; the traffic window then runs from that
+	# before snapshot to the after snapshot.
+	IDLE_PCIE0_DELTA=0
+	IDLE_HIF2_DELTA=0
+	IDLE_PCIE0_RATE=0
+	IDLE_HIF2_RATE=0
+	IDLE_WINDOW_S=
+	IDLE_IRQ_OUTPUT=
+	if [ "$BASELINE" -gt 0 ]; then
+		if [ -r "$OUT/interrupts-idle.txt" ] && [ -r "$OUT/interrupts-before.txt" ] &&
+			[ -r "$OUT/uptime-idle.txt" ] && [ -r "$OUT/uptime-before.txt" ]; then
+			IDLE_WINDOW_S=$(uptime_delta "$OUT/uptime-idle.txt" "$OUT/uptime-before.txt")
+			if awk -v s="${IDLE_WINDOW_S:-}" \
+				'BEGIN { exit !(s ~ /^[0-9]+([.][0-9]+)?$/ && s > 0) }'; then
+				IDLE_IRQ_OUTPUT=$(irq_deltas "$OUT/interrupts-idle.txt" \
+					"$OUT/interrupts-before.txt" "$IRQ_PATTERN" \
+					"$PCIE_PATTERN" "$HIF_PATTERN")
+				_idle_rc=$?
+				[ "$_idle_rc" -eq 0 ] || die "idle IRQ baseline parsing failed"
+				IDLE_PCIE0_DELTA=$(printf '%s\n' "$IDLE_IRQ_OUTPUT" |
+					awk -F"$(printf '\t')" '$1 == "GROUP" && $2 == "pcie0" { print $3 }')
+				IDLE_HIF2_DELTA=$(printf '%s\n' "$IDLE_IRQ_OUTPUT" |
+					awk -F"$(printf '\t')" '$1 == "GROUP" && $2 == "hif2" { print $3 }')
+				is_uint "$IDLE_PCIE0_DELTA" || IDLE_PCIE0_DELTA=0
+				is_uint "$IDLE_HIF2_DELTA" || IDLE_HIF2_DELTA=0
+				IDLE_PCIE0_RATE=$(awk -v d="$IDLE_PCIE0_DELTA" -v s="$IDLE_WINDOW_S" \
+					'BEGIN { printf "%.3f", d / s }')
+				IDLE_HIF2_RATE=$(awk -v d="$IDLE_HIF2_DELTA" -v s="$IDLE_WINDOW_S" \
+					'BEGIN { printf "%.3f", d / s }')
+			else
+				warn "idle baseline window is empty; beacon correction disabled"
+			fi
+		else
+			warn "idle baseline snapshots missing; beacon correction disabled"
+		fi
+	fi
 
 	# Rate: use the iperf3 receiver window when available because the
 	# listen mode may wait for the client before traffic starts.
@@ -1725,27 +1897,79 @@ analyze() {
 			'BEGIN { printf "%.1f", b * 8 / s / 1000000 }')
 	fi
 
-	# Verdict.
+	# The IRQ deltas cover before->after; the idle baseline rate is
+	# subtracted over that whole window, then the residual is divided by
+	# the source window.  This removes beacons (and the listen-mode wait)
+	# from the traffic attribution.
+	IRQ_WINDOW_S=$COUNTER_SECONDS
+	if ! awk -v v="${IRQ_WINDOW_S:-}" 'BEGIN { exit !(v ~ /^[0-9]+([.][0-9]+)?$/ && v > 0) }'; then
+		IRQ_WINDOW_S=$IPERF_SECONDS
+	fi
+	if ! awk -v v="${IRQ_WINDOW_S:-}" 'BEGIN { exit !(v ~ /^[0-9]+([.][0-9]+)?$/ && v > 0) }'; then
+		IRQ_WINDOW_S=$WINDOW
+	fi
+	SOURCE_SECONDS=$IPERF_SECONDS
+	if ! awk -v v="${SOURCE_SECONDS:-}" 'BEGIN { exit !(v ~ /^[0-9]+([.][0-9]+)?$/ && v > 0) }'; then
+		SOURCE_SECONDS=$WINDOW
+	fi
+	_irq_rates=$(awk -v p="$IRQ_PCIE0_DELTA" -v h="$IRQ_HIF2_DELTA" \
+		-v ipr="$IDLE_PCIE0_RATE" -v ihr="$IDLE_HIF2_RATE" \
+		-v elapsed="$IRQ_WINDOW_S" -v src="$SOURCE_SECONDS" '
+		BEGIN {
+			ep = p - ipr * elapsed
+			if (ep < 0) ep = 0
+			ep = int(ep + 0.5)
+			eh = h - ihr * elapsed
+			if (eh < 0) eh = 0
+			eh = int(eh + 0.5)
+			epr = (src > 0) ? ep / src : 0
+			ehr = (src > 0) ? eh / src : 0
+			pa = (ep >= 5 && epr >= 2) ? 1 : 0
+			ha = (eh >= 5 && ehr >= 2) ? 1 : 0
+			printf "%.0f %.0f %.3f %.3f %d %d\n", ep, eh, epr, ehr, pa, ha
+		}')
+	IRQ_PCIE0_EXCESS=$(printf '%s\n' "$_irq_rates" | cut -d' ' -f1)
+	IRQ_HIF2_EXCESS=$(printf '%s\n' "$_irq_rates" | cut -d' ' -f2)
+	IRQ_PCIE0_RATE=$(printf '%s\n' "$_irq_rates" | cut -d' ' -f3)
+	IRQ_HIF2_RATE=$(printf '%s\n' "$_irq_rates" | cut -d' ' -f4)
+	IRQ_PCIE0_ACTIVE=$(printf '%s\n' "$_irq_rates" | cut -d' ' -f5)
+	IRQ_HIF2_ACTIVE=$(printf '%s\n' "$_irq_rates" | cut -d' ' -f6)
+	is_uint "$IRQ_PCIE0_EXCESS" || IRQ_PCIE0_EXCESS=0
+	is_uint "$IRQ_HIF2_EXCESS" || IRQ_HIF2_EXCESS=0
+	is_uint "$IRQ_PCIE0_ACTIVE" || IRQ_PCIE0_ACTIVE=0
+	is_uint "$IRQ_HIF2_ACTIVE" || IRQ_HIF2_ACTIVE=0
+
+	# Verdict: unused IRQ groups are excluded by the idle-corrected excess,
+	# so hif2 beacons alone cannot win.
 	if [ "$SOURCE_STATUS" -ne 0 ]; then
 		VERDICT=invalid
 		VERDICT_REASON="the iperf3 source did not complete"
 	elif ! is_positive "$RX_BYTES_DELTA"; then
 		VERDICT=undetermined
 		VERDICT_REASON="station rx bytes did not increase"
-	elif [ "$IRQ_PCIE0_DELTA" -gt "$IRQ_HIF2_DELTA" ]; then
+	elif [ "$IRQ_PCIE0_ACTIVE" = 1 ] && [ "$IRQ_HIF2_ACTIVE" = 0 ]; then
 		VERDICT=PCIe0
-		VERDICT_REASON="PCIe0 IRQ delta is larger"
-	elif [ "$IRQ_HIF2_DELTA" -gt "$IRQ_PCIE0_DELTA" ]; then
+		VERDICT_REASON="PCIe0 IRQ excess is above idle and larger than hif2"
+	elif [ "$IRQ_HIF2_ACTIVE" = 1 ] && [ "$IRQ_PCIE0_ACTIVE" = 0 ]; then
 		VERDICT=hif2
-		VERDICT_REASON="hif2 IRQ delta is larger"
-	elif [ "$IRQ_PCIE0_DELTA" -eq 0 ] && [ "$IRQ_HIF2_DELTA" -eq 0 ]; then
-		VERDICT=undetermined
-		VERDICT_REASON="no PCIe0/hif2 IRQ delta (possible NPU/RRO path)"
+		VERDICT_REASON="hif2 IRQ excess is above idle and larger than PCIe0"
+	elif [ "$IRQ_PCIE0_ACTIVE" = 1 ] && [ "$IRQ_HIF2_ACTIVE" = 1 ]; then
+		if awk -v a="$IRQ_PCIE0_EXCESS" -v b="$IRQ_HIF2_EXCESS" \
+			'BEGIN { exit !(a > b) }'; then
+			VERDICT=PCIe0
+			VERDICT_REASON="both IRQ groups are above idle; PCIe0 excess is larger"
+		elif awk -v a="$IRQ_HIF2_EXCESS" -v b="$IRQ_PCIE0_EXCESS" \
+			'BEGIN { exit !(a > b) }'; then
+			VERDICT=hif2
+			VERDICT_REASON="both IRQ groups are above idle; hif2 excess is larger"
+		else
+			VERDICT=undetermined
+			VERDICT_REASON="PCIe0 and hif2 idle-corrected IRQ excesses are equal"
+		fi
 	else
 		VERDICT=undetermined
-		VERDICT_REASON="PCIe0 and hif2 IRQ deltas are equal"
+		VERDICT_REASON="neither IRQ group rose above the idle/beacon baseline"
 	fi
-	IRQ_OUTPUT=$_irq
 }
 
 print_report() {
@@ -1761,7 +1985,7 @@ print_report() {
 		printf '  source: listen iperf3 from the STA to AP %s (%s, %ss, %s stream(s), port %s)\n' \
 			"$AP_IP" "$PROTO" "$WINDOW" "$PARALLEL" "$PORT"
 	fi
-	printf '  window: requested %ss, iperf3 receiver %ss, counter sample %ss\n' \
+	printf '  window: requested %s s, iperf3 receiver %s s, counter sample %s s\n' \
 		"$WINDOW" "$(val_or_na "$IPERF_SECONDS")" "$(val_or_na "$COUNTER_SECONDS")"
 	if [ -n "$IPERF_SECONDS" ] &&
 		awk -v a="$WINDOW" -v b="$IPERF_SECONDS" \
@@ -1782,7 +2006,7 @@ print_report() {
 		"$(val_or_na "$TX_BYTES_DELTA")"
 	printf '  station rx bitrate     %s\n' "$(val_or_na "$RX_BITRATE")"
 	printf '  station tx bitrate     %s (context)\n' "$(val_or_na "$TX_BITRATE")"
-	printf '  station rx rate        %s Mbit/s (delta / %ss)\n' \
+	printf '  station rx rate        %s Mbit/s (delta / %s s)\n' \
 		"$(val_or_na "$RX_MBIT_S")" "$(val_or_na "$RATE_SECONDS")"
 	printf '  AP netdev rx_bytes     before %-12s after %-12s delta %s\n' \
 		"$(val_or_na "$AP_RX_BYTES_BEFORE")" "$(val_or_na "$AP_RX_BYTES_AFTER")" \
@@ -1825,12 +2049,20 @@ print_report() {
 		printf '  n/a (see %s)\n' "$OUT/iperf.err"
 	fi
 
-	printf '\n/proc/interrupts (pattern "%s"):\n' "$IRQ_PATTERN"
+	printf '\n/proc/interrupts (filter "%s"; PCIe0 "%s"; hif2 "%s"):\n' \
+		"$IRQ_PATTERN" "$PCIE_PATTERN" "$HIF_PATTERN"
 	printf '%s\n' "$IRQ_OUTPUT" |
 		awk -F"$(printf '\t')" '$1 == "IRQ" { printf "  irq %-4s %-40s +%s\n", $2, $3, $4 }'
 	[ "$IRQ_LINE_COUNT" -gt 0 ] || printf '  (no matching IRQ lines)\n'
-	printf '  PCIe0 IRQ delta: %s\n' "$IRQ_PCIE0_DELTA"
-	printf '  hif2 IRQ delta:  %s\n' "$IRQ_HIF2_DELTA"
+	printf '  traffic window %s s, source window %s s, idle baseline %s s\n' \
+		"$(val_or_na "$IRQ_WINDOW_S")" "$(val_or_na "$SOURCE_SECONDS")" \
+		"$(val_or_na "$IDLE_WINDOW_S")"
+	printf '  PCIe0 IRQ delta: %s (idle +%s, %s/s; excess +%s, %s/s; active=%s)\n' \
+		"$IRQ_PCIE0_DELTA" "$IDLE_PCIE0_DELTA" "$IDLE_PCIE0_RATE" \
+		"$IRQ_PCIE0_EXCESS" "$IRQ_PCIE0_RATE" "$IRQ_PCIE0_ACTIVE"
+	printf '  hif2 IRQ delta:  %s (idle +%s, %s/s; excess +%s, %s/s; active=%s)\n' \
+		"$IRQ_HIF2_DELTA" "$IDLE_HIF2_DELTA" "$IDLE_HIF2_RATE" \
+		"$IRQ_HIF2_EXCESS" "$IRQ_HIF2_RATE" "$IRQ_HIF2_ACTIVE"
 
 	printf '\nmt76 token_info (%s):\n' "$(val_or_na "$TOKEN_INFO_PATH")"
 	printf '  token_count:     %s -> %s\n' \
@@ -1851,8 +2083,9 @@ print_report() {
 	else
 		printf '\nverdict: 6G RX data plane is on %s\n' "$VERDICT"
 	fi
-	printf '  evidence: PCIe0 IRQ +%s vs hif2 IRQ +%s; station rx bytes +%s; rx_ampdu_bytes_cnt +%s\n' \
-		"$IRQ_PCIE0_DELTA" "$IRQ_HIF2_DELTA" \
+	printf '  evidence: PCIe0 IRQ +%s (idle +%s, excess +%s) vs hif2 IRQ +%s (idle +%s, excess +%s); station rx +%s; rx_ampdu_bytes_cnt +%s\n' \
+		"$IRQ_PCIE0_DELTA" "$IDLE_PCIE0_DELTA" "$IRQ_PCIE0_EXCESS" \
+		"$IRQ_HIF2_DELTA" "$IDLE_HIF2_DELTA" "$IRQ_HIF2_EXCESS" \
 		"$(val_or_na "$RX_BYTES_DELTA")" "$(val_or_na "$AMPDU_BYTES_DELTA")"
 
 	printf '\nsummary:\n'
@@ -1871,6 +2104,17 @@ print_report() {
 	printf '  RX_RATE_WINDOW_S=%s\n' "$(val_or_na "$RATE_SECONDS")"
 	printf '  IRQ_PCIE0_DELTA=%s\n' "$IRQ_PCIE0_DELTA"
 	printf '  IRQ_HIF2_DELTA=%s\n' "$IRQ_HIF2_DELTA"
+	printf '  IDLE_IRQ_PCIE0_DELTA=%s\n' "$IDLE_PCIE0_DELTA"
+	printf '  IDLE_IRQ_HIF2_DELTA=%s\n' "$IDLE_HIF2_DELTA"
+	printf '  IDLE_WINDOW_S=%s\n' "$(val_or_na "$IDLE_WINDOW_S")"
+	printf '  IRQ_WINDOW_S=%s\n' "$(val_or_na "$IRQ_WINDOW_S")"
+	printf '  SOURCE_WINDOW_S=%s\n' "$(val_or_na "$SOURCE_SECONDS")"
+	printf '  IRQ_PCIE0_EXCESS=%s\n' "$IRQ_PCIE0_EXCESS"
+	printf '  IRQ_HIF2_EXCESS=%s\n' "$IRQ_HIF2_EXCESS"
+	printf '  IRQ_PCIE0_RATE=%s\n' "$IRQ_PCIE0_RATE"
+	printf '  IRQ_HIF2_RATE=%s\n' "$IRQ_HIF2_RATE"
+	printf '  IRQ_PCIE0_ACTIVE=%s\n' "$IRQ_PCIE0_ACTIVE"
+	printf '  IRQ_HIF2_ACTIVE=%s\n' "$IRQ_HIF2_ACTIVE"
 	printf '  VERDICT=%s\n' "$VERDICT"
 	printf '  RESULT_DIR=%s\n' "$OUT"
 }
@@ -1891,12 +2135,12 @@ fi
 if [ "$_sel_rc" -eq 2 ]; then
 	# --sta was given but is not associated yet.
 	if [ "$STA_WAIT" -gt 0 ]; then
-		choose_station 2>/dev/null || true
+		choose_station || true
 		if ! wait_for_station "$STA_WAIT"; then
-			skip "no 6G STA $STA_MAC on $SEL_IFACE"
+			skip "no 6G STA $STA_MAC on $SEL_IFACE; pass --iface if another 6G BSS is selected"
 		fi
 	else
-		skip "no 6G STA $STA_MAC on $SEL_IFACE"
+		skip "no 6G STA $STA_MAC on $SEL_IFACE; pass --iface if another 6G BSS is selected"
 	fi
 	_sel_rc=0
 fi
@@ -1910,8 +2154,14 @@ fi
 
 if ! choose_station; then
 	if ! wait_for_station "$STA_WAIT"; then
-		skip "no 6G STA on $SEL_IFACE (SSID \"$SEL_SSID\")"
+		skip "no 6G STA on $SEL_IFACE (SSID \"$SEL_SSID\"); pass --iface if another 6G BSS is selected"
 	fi
+fi
+
+if [ -z "$STA_IP" ] &&
+	! command -v ss >/dev/null 2>&1 &&
+	! command -v netstat >/dev/null 2>&1; then
+	die "listen mode needs ss or netstat to detect the STA source; install ip-full/net-tools or use --sta-ip"
 fi
 
 make_out
@@ -1926,6 +2176,13 @@ if [ -n "$STA_IP" ]; then
 	:
 elif ! detect_ap_ip; then
 	die "no AP IPv4 address found for the listen-mode client command; pass --ap-ip"
+fi
+
+if [ "$BASELINE" -gt 0 ]; then
+	printf 'idle IRQ baseline: %ss before the source (beacon/background correction)\n' \
+		"$BASELINE"
+	snapshot_idle
+	sleep "$BASELINE"
 fi
 
 snapshot_before
@@ -1955,6 +2212,11 @@ if [ "$SOURCE_STATUS" -ne 0 ]; then
 		printf 'iperf3 stderr:\n' >&2
 		sed -n '1,5p' "$OUT/iperf.err" >&2
 	fi
+	exit 1
+fi
+
+if [ -z "$AMPDU_BYTES_DELTA" ]; then
+	printf '\nERROR: rx_ampdu_bytes_cnt delta is unavailable; the A-MPDU byte evidence is incomplete\n' >&2
 	exit 1
 fi
 
