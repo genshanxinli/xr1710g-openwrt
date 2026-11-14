@@ -55,9 +55,9 @@ define Package/eip93-ipsec/description
  The strongSwan side is the minimal tested IKEv1/IKEv2 PSK set: charon,
  the ipsec utility, and the AES/DES, HMAC, MD5/SHA1/SHA2, GMP-DH, KDF,
  kernel-netlink, socket-default, stroke and updown plugins.  This is the
- same set as the strongswan-isakmp meta-package plus strongswan-mod-kdf,
- listed explicitly because the meta-package lacks a KDF backend by
- default.
+ same set as the strongswan-isakmp meta-package plus strongswan-mod-kdf
+ and strongswan-mod-sha2, listed explicitly because the meta-package
+ lacks a KDF backend by default.
  .
  The EIP93 hardware only accelerates classic ESP, i.e.
  authenc(hmac(sha1|sha256|md5),cbc(aes|des|des3_ede)).  It has no GCM
