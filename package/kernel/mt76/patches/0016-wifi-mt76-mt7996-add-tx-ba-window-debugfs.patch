@@ -1,0 +1,62 @@
+From 667ba55deb806271e5d64d4914fc4885a4437a44 Mon Sep 17 00:00:00 2001
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Sun, 15 Nov 2026 04:08:42 +0800
+Subject: [PATCH] wifi: mt76: mt7996: expose per-STA TX BA window in debugfs
+
+The negotiated TX block-ack window is kept in mt7996_sta for every TID,
+but userspace cannot read it back. A throughput run therefore cannot be
+checked against the window the driver actually negotiated.
+
+Dump the state from the per-station debugfs directory next to hw-queues.
+For every TID present in ba_tx_mask, print the TID number, the negotiated
+buffer size, the starting sequence number and whether A-MSDU is allowed;
+inactive TIDs are omitted after a single header line.
+
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+ mt7996/debugfs.c | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/mt7996/debugfs.c b/mt7996/debugfs.c
+index 6526bbf..a425167 100644
+--- a/mt7996/debugfs.c
++++ b/mt7996/debugfs.c
+@@ -1268,10 +1268,35 @@ mt7996_queues_show(struct seq_file *s, void *data)
+ 
+ DEFINE_SHOW_ATTRIBUTE(mt7996_queues);
+ 
++static int
++mt7996_ba_tx_show(struct seq_file *s, void *data)
++{
++	struct ieee80211_sta *sta = s->private;
++	struct mt7996_sta *msta = (struct mt7996_sta *)sta->drv_priv;
++	int tid;
++
++	seq_puts(s, "tid buf_size ssn amsdu\n");
++
++	for (tid = 0; tid < IEEE80211_NUM_TIDS; tid++) {
++		struct mt7996_sta_ba *ba = &msta->ba_tx[tid];
++
++		if (!(msta->ba_tx_mask & BIT(tid)))
++			continue;
++
++		seq_printf(s, "%d %u %u %u\n", tid, ba->buf_size, ba->ssn,
++			   ba->amsdu);
++	}
++
++	return 0;
++}
++
++DEFINE_SHOW_ATTRIBUTE(mt7996_ba_tx);
++
+ void mt7996_sta_add_debugfs(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+ 			    struct ieee80211_sta *sta, struct dentry *dir)
+ {
+ 	debugfs_create_file("hw-queues", 0400, dir, sta, &mt7996_queues_fops);
++	debugfs_create_file("ba_tx", 0400, dir, sta, &mt7996_ba_tx_fops);
+ }
+ 
+ static ssize_t mt7996_link_sta_fixed_rate_set(struct file *file,
+-- 
+2.56.0
+
