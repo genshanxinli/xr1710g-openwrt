@@ -410,6 +410,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.strict:
         if counts["unverified"] > args.max_unverified:
+            for record in records:
+                if record["status"] == "unverified":
+                    line = record["__field_lines__"].get("status", record["__line__"])
+                    print(
+                        f"{display}:{line}: claim {record.get('id', '<no id>')!r}: unverified",
+                        file=sys.stderr,
+                    )
             print(
                 f"{display}: strict: {counts['unverified']} unverified claim(s) "
                 f"exceed the budget of {args.max_unverified}",
