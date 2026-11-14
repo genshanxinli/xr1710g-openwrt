@@ -1,0 +1,338 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "6G 320 MHz client matrix row",
+  "description": "One matrix row emitted by scripts/wireless/6g320-matrix.sh on stdout as a single JSON line (schema 6g320-matrix/v1). The script runs a fixed local-source AP->STA arm and a fixed STA->AP RX arm against one 6 GHz 320 MHz client. A hardware skip prints the line \"SKIP: no 320 client\" instead of a row and exits 0. An arm with status invalid or error keeps its measured gbit_s inside arms.* but the row's ap_to_sta_gbit_s / sta_to_ap_gbit_s is null. association.width_mhz and association.nss are the minimum values observed around the two arms, which is how a width or NSS downgrade becomes visible.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "record_type",
+    "timestamp",
+    "ap",
+    "client",
+    "country",
+    "association",
+    "source_path",
+    "ap_to_sta_gbit_s",
+    "sta_to_ap_gbit_s",
+    "retries",
+    "target_gbit_s",
+    "target_met",
+    "duration_s",
+    "streams",
+    "iperf3",
+    "arms",
+    "warnings",
+    "raw_dir"
+  ],
+  "properties": {
+    "schema": {
+      "const": "6g320-matrix/v1",
+      "description": "Result schema identifier."
+    },
+    "record_type": {
+      "const": "row",
+      "description": "One client and one pair of arms. The script emits one row per invocation."
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+      "description": "UTC timestamp when the row was written."
+    },
+    "ap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hostname",
+        "model",
+        "interface",
+        "channel",
+        "frequency_mhz",
+        "width_mhz",
+        "center1_mhz",
+        "ssid"
+      ],
+      "properties": {
+        "hostname": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "/tmp/sysinfo/model, the device-tree model, or \"unknown\"."
+        },
+        "interface": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+$",
+          "description": "6 GHz AP BSS interface from iw."
+        },
+        "channel": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 233,
+          "description": "Primary channel."
+        },
+        "frequency_mhz": {
+          "type": "integer",
+          "minimum": 5945,
+          "maximum": 7125,
+          "description": "Primary frequency; 6 GHz only."
+        },
+        "width_mhz": {
+          "const": 320,
+          "description": "The AP BSS is required to be 320 MHz wide."
+        },
+        "center1_mhz": {
+          "type": ["integer", "null"],
+          "description": "center1 frequency reported by iw, null when unavailable."
+        },
+        "ssid": {
+          "type": "string",
+          "description": "BSS SSID; empty for a hidden SSID."
+        }
+      }
+    },
+    "client": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mac", "model", "driver", "firmware"],
+      "properties": {
+        "mac": {
+          "type": "string",
+          "pattern": "^([0-9a-f]{2}:){5}[0-9a-f]{2}$",
+          "description": "Station MAC as printed by iw, lower case."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Client model from --client-model, e.g. Intel Wi-Fi 7 BE200."
+        },
+        "driver": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Client driver from --client-driver, e.g. iwlwifi or mt7925e."
+        },
+        "firmware": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Client firmware version/revision from --client-firmware."
+        }
+      }
+    },
+    "country": {
+      "type": "string",
+      "pattern": "^[A-Z0-9]{2}$",
+      "description": "AP regulatory country (ISO 3166-1 alpha-2); 00 means world."
+    },
+    "association": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width_mhz", "nss", "signal_dbm"],
+      "properties": {
+        "width_mhz": {
+          "type": "integer",
+          "enum": [20, 40, 80, 160, 320],
+          "description": "Minimum tested-direction width across the non-error arms: AP tx width for AP->STA and AP rx width for STA->AP. 320 is the required value; 160 (or lower) means a downgrade and the affected arm is invalid."
+        },
+        "nss": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "maximum": 8,
+          "description": "Minimum tested-direction NSS across the non-error arms: AP tx NSS for AP->STA and AP rx NSS for STA->AP. null when no arm reported an NSS token."
+        },
+        "signal_dbm": {
+          "type": ["integer", "null"],
+          "minimum": -127,
+          "maximum": 0,
+          "description": "Client signal at selection, from the signal avg or signal line."
+        }
+      }
+    },
+    "source_path": {
+      "enum": ["local", "2.5G"],
+      "description": "Where the traffic originated. This harness's two fixed arms are AP-local, so it records local. 2.5G exists for a wired-feed matrix variant."
+    },
+    "ap_to_sta_gbit_s": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "description": "AP->STA throughput, only when arms.ap_to_sta.status is ok; null otherwise."
+    },
+    "sta_to_ap_gbit_s": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "description": "STA->AP throughput, only when arms.sta_to_ap.status is ok; null otherwise."
+    },
+    "retries": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Sum of the AP station tx retries deltas over the non-error arm windows that produced a counter delta; null when none did. Wi-Fi transmission retries, not iperf3 retries."
+    },
+    "target_gbit_s": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "AP->STA target; default 2.5 Gbit/s."
+    },
+    "target_met": {
+      "type": "boolean",
+      "description": "true only when arms.ap_to_sta.status is ok and ap_to_sta_gbit_s is at least target_gbit_s."
+    },
+    "duration_s": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "iperf3 seconds per arm."
+    },
+    "streams": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "iperf3 streams per arm; 2 matches the 2SS target."
+    },
+    "iperf3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["server", "client"],
+      "properties": {
+        "server": {
+          "type": "string",
+          "minLength": 1,
+          "description": "AP iperf3 version string."
+        },
+        "client": {
+          "type": ["string", "null"],
+          "description": "Client iperf3 version string from the JSON start block, or null."
+        }
+      }
+    },
+    "arms": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ap_to_sta", "sta_to_ap"],
+      "properties": {
+        "ap_to_sta": {
+          "$ref": "#/definitions/arm"
+        },
+        "sta_to_ap": {
+          "$ref": "#/definitions/arm"
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Non-fatal conditions such as a world regulatory domain, an unavailable signal, or an NSS below the expected value."
+    },
+    "raw_dir": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Directory holding row.json, the raw client iperf3 JSON, stderr, and the AP server logs."
+    }
+  },
+  "definitions": {
+    "width": {
+      "type": ["integer", "null"],
+      "enum": [20, 40, 80, 160, 320, null],
+      "description": "Tested-direction width at the end of an arm: AP tx width for AP->STA, AP rx width for STA->AP. null when the station was not visible."
+    },
+    "nss": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "maximum": 8,
+      "description": "Tested-direction NSS at the end of an arm: AP tx NSS for AP->STA, AP rx NSS for STA->AP."
+    },
+    "signal": {
+      "type": ["integer", "null"],
+      "minimum": -127,
+      "maximum": 0,
+      "description": "Station signal at the end of the arm, when reported."
+    },
+    "arm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "gbit_s",
+        "bytes",
+        "seconds",
+        "tcp_retransmits",
+        "station",
+        "invalid_reason",
+        "error",
+        "command"
+      ],
+      "properties": {
+        "status": {
+          "enum": ["ok", "invalid", "error"],
+          "description": "ok: valid 320 MHz/NSS arm; invalid: a width or NSS downgrade, re-association or vanished station; error: the arm did not complete."
+        },
+        "gbit_s": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "description": "Measured throughput, retained for invalid and error arms as diagnostic data."
+        },
+        "bytes": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "iperf3 end.sum_received.bytes for AP->STA, end.sum_sent.bytes for STA->AP."
+        },
+        "seconds": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "description": "iperf3 measurement seconds for the same sum."
+        },
+        "tcp_retransmits": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Sender TCP retransmits from iperf3 end.sum_sent.retransmits; null when absent."
+        },
+        "station": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "width_mhz",
+            "nss",
+            "signal_dbm",
+            "tx_retries",
+            "tx_failed"
+          ],
+          "properties": {
+            "width_mhz": {
+              "$ref": "#/definitions/width",
+              "description": "Tested-direction width at the arm end."
+            },
+            "nss": {
+              "$ref": "#/definitions/nss",
+              "description": "Tested-direction NSS at the arm end."
+            },
+            "signal_dbm": {
+              "$ref": "#/definitions/signal"
+            },
+            "tx_retries": {
+              "type": ["integer", "null"],
+              "minimum": 0,
+              "description": "AP station tx retries delta during the arm."
+            },
+            "tx_failed": {
+              "type": ["integer", "null"],
+              "minimum": 0,
+              "description": "AP station tx failed delta during the arm."
+            }
+          }
+        },
+        "invalid_reason": {
+          "type": ["string", "null"],
+          "description": "Why the arm is invalid; null for ok and error arms."
+        },
+        "error": {
+          "type": ["string", "null"],
+          "description": "Why the arm could not complete; null for ok and invalid arms."
+        },
+        "command": {
+          "type": "string",
+          "description": "Exact remote iperf3 command; empty when the arm was skipped before it ran."
+        }
+      }
+    }
+  }
+}
