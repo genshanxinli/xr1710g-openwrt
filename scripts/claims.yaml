@@ -1,0 +1,163 @@
+# XR1710G hardware/offload claim ledger.
+#
+# THE LEDGER IS AN INDEX, NOT THE EVIDENCE ITSELF.  Every row points at a
+# source that must be re-read before the claim is reused; a status is a
+# bookkeeping label, not a proof.  Keep the actual measurements, register
+# dumps and experiment logs in the repository the source points at.
+#
+# Checked by scripts/check-claims.py (Python standard library only):
+#
+#   python3 scripts/check-claims.py
+#   python3 scripts/check-claims.py --strict --max-unverified 5
+#
+# Fields:
+#   id        unique lowercase slug
+#   claim     one claim, one line
+#   source    one or more repo-relative path:line entries or URLs
+#   evidence  实测 (measured) | 代码 (code) | 推断 (inference)
+#   date      YYYY-MM-DD when this entry was last checked against its source
+#   status    supported | refuted | unverified
+#   notes     limitations; why the status is what it is
+#
+# The YAML subset is deliberately small (block mappings/sequences, plain and
+# double-quoted scalars) so build hosts do not need PyYAML.  See the checker.
+#
+# Rules of use:
+#   - 推断 evidence is never promoted to supported.
+#   - An unverified number stays unverified until a source in this tree or a
+#     committed measurement backs it; do not copy it into a README as fact.
+#   - A refuted row keeps the old wording so the correction is searchable.
+
+claims:
+  - id: ppe-table-24576
+    claim: "目标配置开了 CONFIG_NET_AIROHA_FLOW_STATS=y，两颗 PPE 的 SRAM 数据表各 4096 项（合计 8192），整机 PPE 表为 8192 SRAM + 16384 DRAM = 24576，不是 32768 或 49152。"
+    source:
+      - target/linux/airoha/patches-7.3/209-net-airoha-size-the-SRAM-tables-the-way-the-hardware-sees-them.patch:14
+      - target/linux/airoha/patches-7.3/209-net-airoha-size-the-SRAM-tables-the-way-the-hardware-sees-them.patch:36
+      - target/linux/airoha/an7581/config-7.3:279
+    evidence: 代码
+    date: "2026-11-15"
+    status: supported
+    notes: "只在 FLOW_STATS=y 时成立；关掉计数器时整机表回到 32768。结论来自 patch 209、patch 212 的代码说明和 target config，未在硬件上 dump 表几何。"
+
+  - id: ppe-table-32768
+    claim: "整机 PPE 表是 32768（SRAM 16384 + DRAM 16384 共享），不是 49152。"
+    source:
+      - https://github.com/genshanxinli/xr1710g-openwrt/issues/31
+      - target/linux/airoha/patches-7.3/209-net-airoha-size-the-SRAM-tables-the-way-the-hardware-sees-them.patch:36
+    evidence: 代码
+    date: "2026-11-15"
+    status: refuted
+    notes: "对目标配置（FLOW_STATS=y）不成立：patch 209 记录硬件是 4096*2 + 16384 = 24576；32768 只在关闭流计数器时成立。issue #31 的这段文字没有同步 patch 209/212。"
+
+  - id: ppe-19826-slots
+    claim: "PPE 表有 19,826 个可用槽位。"
+    source:
+      - https://github.com/genshanxinli/xr1710g-openwrt/issues/62
+    evidence: 推断
+    date: "2026-11-15"
+    status: unverified
+    notes: "该数字只出现在 issue #62 的背景里，没有提交 dump 或推导过程；既不等于 24576（stats on）也不等于 32768（stats off），可能是扫描值、特定配置值或笔误。用 ppe/entries 全量扫描确认前不得引用。"
+
+  - id: ppe-counter-index-identity
+    claim: "流计数器按流自身的 hash 做恒等映射：只有 hash < 8192 的 SRAM 流能拿到计数器，块外 hash 直接返回无计数器，不会折叠到别的流的槽位。"
+    source:
+      - target/linux/airoha/patches-7.3/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:20
+      - target/linux/airoha/patches-7.3/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:47
+      - target/linux/airoha/patches-7.3/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:56
+    evidence: 代码
+    date: "2026-11-15"
+    status: supported
+    notes: "修复前的 hash - PPE_STATS_NUM_ENTRIES 会让 hash 4096 与 8192、4097 与 8193 等 4096 对槽位别名（patch 210:20）。静态代码结论，未用 NPU 计数器做硬件验证。"
+
+  - id: ppe-hash-bijective
+    claim: "PPE 的 hash 折叠对 32768 和 24576 两种表几何都覆盖全部槽位（32768→32768，24576→24576），且不引入每包 udiv。"
+    source:
+      - target/linux/airoha/patches-7.3/212-net-airoha-address-PPE-entries-from-their-own-table.patch:29
+      - target/linux/airoha/patches-7.3/212-net-airoha-address-PPE-entries-from-their-own-table.patch:30
+    evidence: 代码
+    date: "2026-11-15"
+    status: supported
+    notes: "取自 patch 212 的 split-fold 说明；只有静态一致性检查，没有运行时碰撞或覆盖率统计。"
+
+  - id: bridge-ttl-hardware-path
+    claim: "同一个 bridge 两个端口之间转发的流保持 IP TTL；PPE 只在这类流上清 IB1.BIND_TTL，routed 流仍递减。该修复只覆盖已绑定 PPE 的硬件路径，未绑定流仍由软件 ip_decrease_ttl() 递减。"
+    source:
+      - target/linux/airoha/patches-7.3/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:15
+      - target/linux/airoha/patches-7.3/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:20
+      - target/linux/airoha/patches-7.3/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:23
+      - target/linux/airoha/patches-7.3/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:75
+    evidence: 代码
+    date: "2026-11-15"
+    status: supported
+    notes: "patch 963 记录修复前实测：TTL 5 的帧从 lan2 进、phy0.0-ap0 出变成 TTL 4。修复本身是代码结论，未做修复后的 TTL A/B。"
+
+  - id: eip93-no-gcm
+    claim: "EIP93 的 AEAD 只注册 authenc(hmac(md5/sha1/sha224/sha256), cbc(aes|des|des3_ede) 或 rfc3686(ctr(aes)))，没有 gcm(aes) 或 ChaCha；IPsec 只能按 classic ESP 规划。"
+    source:
+      - https://github.com/torvalds/linux/blob/master/drivers/crypto/inside-secure/eip93/eip93-aead.c
+      - https://github.com/torvalds/linux/blob/master/drivers/crypto/inside-secure/eip93/eip93-cipher.c
+      - https://github.com/genshanxinli/xr1710g-openwrt/issues/72
+    evidence: 代码
+    date: "2026-11-15"
+    status: supported
+    notes: "驱动源码在上游内核树，不在本仓库；issue #72 记录的 REV 0x0301a25d、OPTION1 0x000fe007 与无 GCM/ChaCha 一致。不要宣传 GCM/ChaCha 或 ≥5 Gbit/s。"
+
+  - id: fullcone-udp-only
+    claim: "内置 nft-fullcone 只对 UDP 实现真正的 full-cone；其他协议等价于 MASQUERADE，模块加载失败时 fw4 回退普通 NAT。"
+    source:
+      - README.md:90
+      - README.md:92
+    evidence: 代码
+    date: "2026-11-15"
+    status: supported
+    notes: "README 记录的行为；模块源码不在本仓库，未逐行核对。"
+
+  - id: cpu-top-opp-1200
+    claim: "当前树的 CPU OPP 表最高 1.2 GHz（an7581.dtsi 的 opp-1200000000），不是 issue #1 验收里写的 1.35 GHz。"
+    source:
+      - target/linux/airoha/dts/an7581.dtsi:231
+      - README.md:96
+    evidence: 代码
+    date: "2026-11-15"
+    status: supported
+    notes: "issue #1（D15）按 1.35 GHz 验收，但本树 DTS 只到 1.2 GHz；在 DTS 改到 1.35 GHz 前不能把 D15 当既有事实。"
+
+  - id: 5g-half-offload
+    claim: "5G（band1）是半卸载：band1 没有独立 NPU TX buffer window，WAN→5G 只能走 host 注入（约 1 核/G），2.4G/6G 有自有窗口。"
+    source:
+      - https://github.com/genshanxinli/xr1710g-openwrt/issues/98
+    evidence: 推断
+    date: "2026-11-15"
+    status: unverified
+    notes: "来自 issue #98 的背景约束，未在本树核对相关窗口代码；band1 窗口实验默认关闭且硬件未验。"
+
+  - id: 10g-unidirectional-baseline
+    claim: "10G 上限工作只把单向 iperf3 结果当基线：TX 与 RX 分开跑，禁止同时双向；本仓库尚未提交同构建的双向/全双工基线。"
+    source:
+      - https://github.com/genshanxinli/xr1710g-openwrt/issues/26
+      - https://github.com/genshanxinli/xr1710g-openwrt/issues/13
+    evidence: 推断
+    date: "2026-11-15"
+    status: unverified
+    notes: "issue #26 明确要求 TX/RX 分开，issue #13 的 baseline 表尚未提交。单向数字不能写成双向吞吐。"
+
+  - id: stock-bridge-gap
+    claim: "纯 L2 桥接下 stock 固件约 9.4 Gbit/s，本移植约 3.2 Gbit/s。"
+    source:
+      - https://github.com/genshanxinli/xr1710g-openwrt/issues/3
+      - https://github.com/genshanxinli/xr1710g-openwrt/issues/13
+    evidence: 推断
+    date: "2026-11-15"
+    status: unverified
+    notes: "数字来自 issue #3 的社区/现场报告和 issue #13 的引用，没有本仓库可重放结果；引用时必须带 unverified，不能当基线。"
+
+  - id: pppoe-decap-bit23
+    claim: "PPPoE 入向硬件 decap 依赖 IB1 bit23（BIND_TUNNEL_DECAP）：decap=0 时没有 bit23、没有硬件 decap，decap=1 才有；入向最小集是 5T/route 键 + STATE=2 + TTL + IB1 bit23，etype=8864/bit22/pppoe_id 不是必需。"
+    source:
+      - https://github.com/genshanxinli/xr1710g-openwrt/issues/31
+      - https://github.com/genshanxinli/xr1710g-openwrt/issues/81
+    evidence: 推断
+    date: "2026-11-15"
+    status: unverified
+    notes: "来自 issue #31 的已验证事实清单；b12 三臂实验原始记录未入库，docs/ 被 .gitignore 忽略。issue #81 才把 decap 语义做成可选档。"
