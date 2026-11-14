@@ -1,0 +1,372 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Sun, 15 Nov 2026 07:10:00 +0800
+Subject: [PATCH] net: airoha: add minimal PPE multicast replication
+
+A multicast flow never reached an offloaded entry: its destination is a
+multicast MAC, and the unicast is_valid_ether_addr() check rejected it
+before the entry was built.  The IB2.MULTICAST branch that exists in
+prepare was therefore dead code.  Even if it were reached, the entry kept
+the single destination port computed for the redirect action, so only one
+bridge member would have received the stream.
+
+Accept a multicast destination only when the redirect target is a DSA
+user port and at least two switch-facing members of its bridge can be
+replicated.  Replication uses the DSA/switch destination bitmap in the L2
+etype word that the unicast path already writes as BIT(dsa_port), now
+with every member port set.  The force-QoS bit the LAN entries already
+carry selects the QDMA1 hardware path behind that word, and multicast
+entries are kept off the SRAM fast path as the vendor SDK does.
+IB2.MULTICAST stays set so the CPU also gets a copy for any member that
+is not behind the switch (WLAN).  Flows that cannot be replicated that
+way are refused, leaving the full fan-out to software; this includes
+bridges with fewer than two switch-facing members.
+
+The vendor SDK also defines PPE2_MCAST_PPSE (FE + 0x284), but on AN7581
+that address reads back as 0xdeadbeef and the SDK never writes it.  This
+change does not write it, because the issue forbids writing unknown
+registers.  /sys/kernel/debug/ppe/mcast prints the raw register once per
+PPE and lists every bound multicast entry with its PSE port, switch port
+mask, NBQ/channel and L2 etype.
+
+Only multicast flows are affected; unicast entries keep every field they
+had before.  Table geometry, BND_AGE, PPPoE, L2B and the QoS groups are
+untouched.  The switch bitmap semantics are taken from the vendor SDK and
+are not measured on hardware here.
+
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+ drivers/net/ethernet/airoha/airoha_eth.h         |  14 +++
+ drivers/net/ethernet/airoha/airoha_ppe.c         | 121 ++++++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_ppe_debugfs.c | 105 ++++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_regs.h        |   8 +
+ 4 files changed, 246 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/ethernet/airoha/airoha_eth.h b/drivers/net/ethernet/airoha/airoha_eth.h
+index 5f252ca..d9db0ce 100644
+--- a/drivers/net/ethernet/airoha/airoha_eth.h
++++ b/drivers/net/ethernet/airoha/airoha_eth.h
+@@ -507,6 +507,14 @@ struct airoha_foe_stats64 {
+ 	u64 packets;
+ };
+ 
++/* Minimal multicast replication.  The PPE entry keeps the conduit PSE
++ * port and carries the DSA/switch destination bitmap in the L2 etype
++ * word; IB2.MULTICAST additionally keeps a CPU copy for members that are
++ * not behind that switch (WLAN).  The legacy PPE2_MCAST_PPSE register is
++ * not implemented on AN7581 and is not used.
++ */
++#define AIROHA_PPE_MCAST_SWITCH_PORTS	6
++
+ struct airoha_flow_data {
+ 	struct ethhdr eth;
+ 
+@@ -536,6 +544,12 @@ struct airoha_flow_data {
+ 		u16 sid;
+ 		u8 num;
+ 	} pppoe;
++
++	/* DSA/switch destination bitmap for a multicast flow, zero for a
++	 * unicast flow.  A multicast flow is only offloaded when at least
++	 * two switch ports can be replicated in hardware.
++	 */
++	u16 mcast_mask;
+ };
+ 
+ enum airoha_flow_entry_type {
+diff --git a/drivers/net/ethernet/airoha/airoha_ppe.c b/drivers/net/ethernet/airoha/airoha_ppe.c
+index df614f7..f3d976c 100644
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -482,6 +482,97 @@ static int airoha_get_dsa_port(struct net_device **dev)
+ #endif
+ }
+ 
++/* The vendor SDK's LAN 1->N path does not use the legacy
++ * PPE2_MCAST_PPSE register (FE + 0x284): that address reads back as
++ * 0xdeadbeef on AN7581 and the SDK never writes it.  The hardware path it
++ * does use keeps the conduit PSE port and carries the switch destination
++ * bitmap in the L2 etype word, with the QDMA1 hardware path selected by
++ * the force-QoS bit the LAN entries already set.  Widening that bitmap
++ * from one DSA port to every DSA port of the egress bridge gives one
++ * hardware copy per switch port without a new table or register.
++ *
++ * Members that are not behind the switch (WLAN, direct GDM ports) cannot
++ * be named by this bitmap; the IB2.MULTICAST CPU copy keeps them working
++ * while the LAN ports are replicated in hardware.
++ */
++struct airoha_ppe_mcast_walk {
++	u32 ingress_ifindex;
++	u16 switch_mask;
++	int switch_ports;
++};
++
++#if IS_ENABLED(CONFIG_NET_DSA)
++static int airoha_ppe_mcast_walk_dev(struct net_device *dev,
++				     struct netdev_nested_priv *priv)
++{
++	struct airoha_ppe_mcast_walk *walk = priv->data;
++	struct dsa_port *dp;
++
++	if (dev->ifindex == walk->ingress_ifindex || !netif_running(dev))
++		return 0;
++
++	dp = dsa_port_from_netdev(dev);
++	if (IS_ERR(dp) || dp->index >= AIROHA_PPE_MCAST_SWITCH_PORTS)
++		return 0;
++
++	walk->switch_mask |= BIT(dp->index);
++	walk->switch_ports++;
++
++	return 0;
++}
++
++static u16 airoha_ppe_mcast_switch_mask(struct net_device *netdev,
++					u32 ingress_ifindex)
++{
++	struct netdev_nested_priv priv = {};
++	struct net_device *master;
++	struct airoha_ppe_mcast_walk walk = {
++		.ingress_ifindex = ingress_ifindex,
++	};
++
++	if (!netdev)
++		return 0;
++
++	priv.data = &walk;
++
++	rcu_read_lock();
++	master = netdev_master_upper_dev_get_rcu(netdev);
++	if (!master || !netif_is_bridge_master(master))
++		master = netif_is_bridge_master(netdev) ? netdev : NULL;
++	if (master)
++		netdev_walk_all_lower_dev_rcu(master,
++					      airoha_ppe_mcast_walk_dev,
++					      &priv);
++	rcu_read_unlock();
++
++	/* Replication is only useful (and only provable) with at least two
++	 * switch-facing members; otherwise leave the entry on the old
++	 * single-port path.
++	 */
++	return walk.switch_ports > 1 ? walk.switch_mask : 0;
++}
++#else
++static u16 airoha_ppe_mcast_switch_mask(struct net_device *netdev,
++					u32 ingress_ifindex)
++{
++	return 0;
++}
++#endif
++
++/* The switch port bitmap is only meaningful when the redirect target is a
++ * DSA user port behind the switch.
++ */
++static bool airoha_ppe_mcast_switch_egress(struct net_device *netdev)
++{
++#if IS_ENABLED(CONFIG_NET_DSA)
++	struct dsa_port *dp = dsa_port_from_netdev(netdev);
++
++	return !IS_ERR(dp);
++#else
++	return false;
++#endif
++}
++
+ static void airoha_ppe_foe_set_bridge_addrs(struct airoha_foe_bridge *br,
+ 					    struct ethhdr *eh)
+ {
+@@ -703,6 +794,14 @@ static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
+ 		}
+ 	}
+ 
++	if (data->mcast_mask) {
++		/* The hardware replicates through the switch port mask
++		 * written below.  The SDK keeps multicast entries off the
++		 * SRAM fast path; do the same.
++		 */
++		val &= ~AIROHA_FOE_IB2_FAST_PATH;
++	}
++
+ 	if (is_multicast_ether_addr(data->eth.h_dest))
+ 		val |= AIROHA_FOE_IB2_MULTICAST;
+ 
+@@ -755,7 +854,8 @@ static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
+ 	if (wlan_etype >= 0) {
+ 		l2->etype = wlan_etype;
+ 	} else if (dsa_port >= 0) {
+-		l2->etype = BIT(dsa_port);
++		l2->etype = data->mcast_mask ? data->mcast_mask :
++						     BIT(dsa_port);
+ 		l2->etype |= !data->vlan.num ? BIT(15) : 0;
+ 	} else if (data->pppoe.num) {
+ 		l2->etype = ETH_P_PPP_SES;
+@@ -1702,9 +1802,26 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
+ 	}
+ 
+ 	if (!is_valid_ether_addr(data.eth.h_source) ||
+-	    !is_valid_ether_addr(data.eth.h_dest))
++	    (!is_valid_ether_addr(data.eth.h_dest) &&
++	     !is_multicast_ether_addr(data.eth.h_dest)))
+ 		return -EINVAL;
+ 
++	/* A multicast flow cannot be sent to the single port of the
++	 * unicast path.  Accept it only when the egress is a switch port
++	 * and at least two members of its bridge can be replicated in
++	 * hardware; otherwise leave it entirely to software.
++	 */
++	if (is_multicast_ether_addr(data.eth.h_dest)) {
++		u32 ingress = meta.key->ingress_ifindex;
++
++		if (!airoha_ppe_mcast_switch_egress(odev))
++			return -EOPNOTSUPP;
++
++		data.mcast_mask = airoha_ppe_mcast_switch_mask(odev, ingress);
++		if (!data.mcast_mask)
++			return -EOPNOTSUPP;
++	}
++
+ 	/* A flow whose ingress and egress devices are both ports of the same
+ 	 * bridge never leaves L2, so the PPE must forward it without touching
+ 	 * the IP TTL.  Routing -- including entering or leaving the bridge --
+diff --git a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
+index d1909d2..d7c0861 100644
+--- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
+@@ -365,6 +365,109 @@ static int airoha_ppe_debugfs_tb_regs_show(struct seq_file *m, void *private)
+ }
+ DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_tb_regs);
+ 
++/* Bound multicast entries and their replication port masks.  The masks
++ * live in the entry itself: the DSA/switch port bitmap is the low part of
++ * the L2 etype word and the QDMA NBQ/channel fields select the egress
++ * queue.  The legacy PPE2_MCAST_PPSE register is printed once per PPE as
++ * read-only evidence; it is not implemented on AN7581 (it reads back as
++ * 0xdeadbeef) and the driver never writes it.
++ */
++static int airoha_ppe_debugfs_mcast_show(struct seq_file *m, void *private)
++{
++	static const char *const ppe_type_str[] = {
++		[PPE_PKT_TYPE_IPV4_HNAPT] = "IPv4 5T",
++		[PPE_PKT_TYPE_IPV4_ROUTE] = "IPv4 3T",
++		[PPE_PKT_TYPE_BRIDGE] = "L2B",
++		[PPE_PKT_TYPE_IPV4_DSLITE] = "DS-LITE",
++		[PPE_PKT_TYPE_IPV6_ROUTE_3T] = "IPv6 3T",
++		[PPE_PKT_TYPE_IPV6_ROUTE_5T] = "IPv6 5T",
++		[PPE_PKT_TYPE_IPV6_6RD] = "6RD",
++	};
++	struct airoha_ppe *ppe = m->private;
++	struct airoha_eth *eth = ppe->eth;
++	u32 num_entries = airoha_ppe_get_total_num_entries(ppe);
++	int i;
++
++	for (i = 0; i < eth->soc->num_ppe; i++)
++		seq_printf(m, "PPE%u MCAST_PPSE %#010x (legacy, not written)\n",
++			   i + 1, airoha_fe_rr(eth, REG_PPE_MCAST_PPSE(i)));
++
++	for (i = 0; i < num_entries; i++) {
++		struct airoha_foe_entry *hwe;
++		const char *type_str = "UNKNOWN";
++		u32 type, ib2, data, etype, pse;
++		unsigned char dest[ETH_ALEN];
++		u16 ports;
++		bool ipv6 = false;
++
++		hwe = airoha_ppe_foe_get_entry(ppe, i);
++		if (!hwe)
++			continue;
++
++		if (FIELD_GET(AIROHA_FOE_IB1_BIND_STATE, hwe->ib1) !=
++		    AIROHA_FOE_STATE_BIND)
++			continue;
++
++		type = FIELD_GET(AIROHA_FOE_IB1_BIND_PACKET_TYPE, hwe->ib1);
++		if (type < ARRAY_SIZE(ppe_type_str) && ppe_type_str[type])
++			type_str = ppe_type_str[type];
++
++		if (type == PPE_PKT_TYPE_BRIDGE) {
++			ib2 = hwe->bridge.ib2;
++			data = hwe->bridge.data;
++			etype = hwe->bridge.l2.common.etype;
++			put_unaligned_be32(hwe->bridge.dest_mac_hi, dest);
++			put_unaligned_be16(hwe->bridge.dest_mac_lo, dest + 4);
++		} else if (type >= PPE_PKT_TYPE_IPV6_ROUTE_3T) {
++			ib2 = hwe->ipv6.ib2;
++			data = hwe->ipv6.data;
++			etype = hwe->ipv6.l2.etype;
++			put_unaligned_be32(hwe->ipv6.l2.dest_mac_hi, dest);
++			put_unaligned_be16(hwe->ipv6.l2.dest_mac_lo, dest + 4);
++			ipv6 = true;
++		} else {
++			ib2 = hwe->ipv4.ib2;
++			data = hwe->ipv4.data;
++			etype = hwe->ipv4.l2.common.etype;
++			put_unaligned_be32(hwe->ipv4.l2.common.dest_mac_hi,
++					   dest);
++			put_unaligned_be16(hwe->ipv4.l2.common.dest_mac_lo,
++					   dest + 4);
++		}
++
++		if (!(ib2 & AIROHA_FOE_IB2_MULTICAST))
++			continue;
++
++		pse = FIELD_GET(AIROHA_FOE_IB2_PSE_PORT, ib2);
++		/* Only switch-facing entries carry the DSA port bitmap in
++		 * etype; the WLAN egress reuses that word for band/WCID.
++		 */
++		ports = pse == FE_PSE_PORT_CDM4 ? 0 :
++			etype & GENMASK(AIROHA_PPE_MCAST_SWITCH_PORTS - 1, 0);
++
++		seq_printf(m, "%05x %-7s pse=%u ports=%#04x nbq=%u chan=%u ",
++			   i, type_str, pse, ports,
++			   (u32)FIELD_GET(AIROHA_FOE_IB2_NBQ, ib2),
++			   (u32)FIELD_GET(AIROHA_FOE_CHANNEL, data));
++		seq_printf(m, "etype=%#06x group=", etype);
++
++		if (type == PPE_PKT_TYPE_BRIDGE) {
++			seq_printf(m, "%pM", dest);
++		} else if (ipv6) {
++			__be32 addr[IPV6_ADDR_WORDS];
++
++			ipv6_addr_cpu_to_be32(addr, hwe->ipv6.dest_ip);
++			seq_printf(m, "%pI6", addr);
++		} else {
++			seq_printf(m, "%pI4h", &hwe->ipv4.orig_tuple.dest_ip);
++		}
++		seq_puts(m, "\n");
++	}
++
++	return 0;
++}
++DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_mcast);
++
+ int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
+ {
+ 	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
+@@ -380,6 +483,8 @@ int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
+ 			    &airoha_ppe_debugfs_bind_rate_fops);
+ 	debugfs_create_file("tb_regs", 0444, ppe->debugfs_dir, ppe,
+ 			    &airoha_ppe_debugfs_tb_regs_fops);
++	debugfs_create_file("mcast", 0444, ppe->debugfs_dir, ppe,
++			    &airoha_ppe_debugfs_mcast_fops);
+ 
+ 	return 0;
+ }
+diff --git a/drivers/net/ethernet/airoha/airoha_regs.h b/drivers/net/ethernet/airoha/airoha_regs.h
+index 3c6f8d0..1f6215d 100644
+--- a/drivers/net/ethernet/airoha/airoha_regs.h
++++ b/drivers/net/ethernet/airoha/airoha_regs.h
+@@ -345,6 +345,14 @@
+ #define PPE_SRAM_HASH0_MODE_MASK		GENMASK(7, 4)
+ #define PPE_SRAM_TABLE_EN_MASK			BIT(0)
+ 
++/* Legacy PPE multicast PSE-port map (vendor SDK: PPE2_MCAST_PPSE).
++ * The register is not implemented on AN7581: it reads back as
++ * 0xdeadbeef and the vendor SDK never writes it, so the hardware 1->N
++ * path used by this driver is the QDMA1/switch port bitmap carried in
++ * the L2 etype word instead.  ppe/mcast prints the raw value.
++ */
++#define REG_PPE_MCAST_PPSE(_n)			(((_n) ? PPE2_BASE : PPE1_BASE) + 0x284)
++
+ #define REG_PPE_MTU_BASE(_n)			(((_n) ? PPE2_BASE : PPE1_BASE) + 0x304)
+ #define REG_PPE_MTU(_m, _n)			(REG_PPE_MTU_BASE(_m) + (((_n) / 2) << 2))
+ #define FP_EGRESS_MTU_MASK(_n)			GENMASK(13 + (((_n) % 2) << 4), ((_n) % 2) << 4)
