@@ -966,6 +966,13 @@ verify_fan_restore() {
 	want=$(fan_sysfs_orig "$k")
 	have=$(read_uint_or_na "$FAN/$k")
 	[ "$want" = na ] || [ "$want" = "$have" ] || bad="$bad $k=$want->$have"
+	# In manual mode the PWM value itself is configuration and must come
+	# back; in auto mode pwm1 follows the temperature and is not compared.
+	if [ "$(fan_sysfs_orig pwm1_enable)" = 1 ]; then
+		want=$(fan_sysfs_orig pwm1)
+		have=$(read_uint_or_na "$FAN/pwm1")
+		[ "$want" = na ] || [ "$want" = "$have" ] || bad="$bad pwm1=$want->$have"
+	fi
 	i=1
 	while [ "$i" -le 5 ]; do
 		for suffix in temp pwm; do
