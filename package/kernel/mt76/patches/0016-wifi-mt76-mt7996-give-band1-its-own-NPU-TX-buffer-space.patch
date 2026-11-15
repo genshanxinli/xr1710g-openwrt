@@ -1,0 +1,208 @@
+From 1d73fadd773ef4dc68af7fb0a2b5a7f4000000000 Mon Sep 17 00:00:00 2001
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Sat, 15 Nov 2026 08:30:00 +0800
+Subject: [PATCH] wifi: mt76: mt7996: give band1 its own NPU TX buffer space
+
+The NPU TX window setup only installs the band, band + 5 and band + 10
+buffer spaces for band0 and band2.  Band1 (5 GHz) has no window, so the
+NPU cannot build 5 GHz frames and WAN -> 5 GHz traffic stays on host
+injection.
+
+Add an opt-in npu_band1_tx module parameter (default off).  When it is
+set, allocate the same three windows band2 uses and send them with
+WLAN_FUNC_SET_WAIT_TX_BUF_SPACE_HW_BASE on the band1 interface IDs
+(1, 6 and 11).  An allocation failure or a firmware rejection leaves the
+window out of the NPU with one rate-limited warning, so the existing
+host injection path keeps working.
+
+Expose the requested/allocated/present state and the window sizes
+through a read-only npu_band1_tx debugfs file.  The band0/band2 windows,
+hif2 and the qid assignment are unchanged, and the default configuration
+does not take any new code path.
+
+Whether the firmware accepts a third band is not verified yet; hardware
+throughput measurements are a follow-up.
+
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+ mt7996/debugfs.c | 24 ++++++++++++++++++++++++
+ mt7996/mt7996.h  |  8 ++++++++
+ mt7996/npu.c     | 69 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 101 insertions(+)
+
+--- a/mt7996/npu.c
++++ b/mt7996/npu.c
+@@ -8,6 +8,11 @@
+ 
+ #include "mt7996.h"
+ 
++static bool npu_band1_tx;
++module_param(npu_band1_tx, bool, 0644);
++MODULE_PARM_DESC(npu_band1_tx,
++		 "Give band1 (5 GHz) its own NPU TX buffer window; disabled by default");
++
+ static int mt7992_npu_txrx_offload_init(struct mt7996_dev *dev,
+ 					struct airoha_npu *npu)
+ {
+@@ -338,6 +343,33 @@
+ 	return 0;
+ }
+ 
++static void mt7996_npu_txd_band1_init(struct mt7996_dev *dev,
++				      struct airoha_npu *npu)
++{
++	int i;
++
++	/*
++	 * The interface IDs follow the band, band + 5 and band + 10 layout
++	 * used by the band0/band2 windows.
++	 */
++	for (i = 0; i < MT7996_NPU_TXD_SIZE; i++) {
++		int err;
++
++		err = mt76_npu_send_msg(npu, MT_BAND1 + 5 * i,
++					WLAN_FUNC_SET_WAIT_TX_BUF_SPACE_HW_BASE,
++					dev->npu_band1_tx.addr[i], GFP_KERNEL);
++		if (err) {
++			dev_warn_ratelimited(dev->mt76.dev,
++					     "band1 NPU TX buffer window rejected (%d), keeping host injection\n",
++					     err);
++			dev->npu_band1_tx.present = false;
++			return;
++		}
++	}
++
++	dev->npu_band1_tx.present = true;
++}
++
+ static int mt7996_npu_txd_init(struct mt7996_dev *dev, struct airoha_npu *npu)
+ {
+ 	const enum mt76_band_id band_list[] = {
+@@ -396,6 +428,9 @@
+ 		}
+ 	}
+ 
++	if (dev->npu_band1_tx.allocated)
++		mt7996_npu_txd_band1_init(dev, npu);
++
+ 	return 0;
+ }
+ 
+@@ -522,6 +557,11 @@
+ 	if (!npu)
+ 		return 0;
+ 
++	/* The NPU is (re)started below, so drop the old window state and let
++	 * mt7996_npu_txd_init() report the new one.
++	 */
++	dev->npu_band1_tx.present = false;
++
+ 	err = mt7996_npu_offload_init(dev, npu);
+ 	if (err)
+ 		return err;
+@@ -556,10 +596,35 @@
+ 	return 0;
+ }
+ 
++static void mt7996_npu_band1_tx_alloc(struct mt7996_dev *dev)
++{
++	int i;
++
++	for (i = 0; i < MT7996_NPU_TXD_SIZE; i++) {
++		u32 size = i == MT7996_NPU_TXD_SIZE - 1 ?
++			   256 * 1024 : 256 * MT7996_NPU_TX_RING_SIZE;
++
++		if (!dmam_alloc_coherent(dev->mt76.dma_dev, size,
++					 &dev->npu_band1_tx.addr[i],
++					 GFP_KERNEL)) {
++			dev_warn_ratelimited(dev->mt76.dev,
++					     "failed allocating band1 NPU TX buffer window %d, keeping host injection\n",
++					     i);
++			return;
++		}
++
++		dev->npu_band1_tx.size[i] = size;
++	}
++
++	dev->npu_band1_tx.allocated = true;
++}
++
+ int mt7996_npu_hw_init(struct mt7996_dev *dev)
+ {
+ 	int i, err;
+ 
++	dev->npu_band1_tx.requested = npu_band1_tx;
++
+ 	BUILD_BUG_ON(ARRAY_SIZE(dev->npu_txd_addr) % 3);
+ 
+ 	for (i = 0; i < ARRAY_SIZE(dev->npu_txd_addr); i += 3) {
+@@ -584,6 +649,10 @@
+ 			return -ENOMEM;
+ 	}
+ 
++	if (npu_band1_tx && is_mt7996(&dev->mt76) &&
++	    mt76_npu_device_active(&dev->mt76))
++		mt7996_npu_band1_tx_alloc(dev);
++
+ 	mutex_lock(&dev->mt76.mutex);
+ 	err = __mt7996_npu_hw_init(dev);
+ 	mutex_unlock(&dev->mt76.mutex);
+
+--- a/mt7996/mt7996.h
++++ b/mt7996/mt7996.h
+@@ -564,6 +564,14 @@
+ 
+ 	dma_addr_t npu_txd_addr[2 * MT7996_NPU_TXD_SIZE];
+ 
++	struct {
++		bool requested;
++		bool allocated;
++		bool present;
++		dma_addr_t addr[MT7996_NPU_TXD_SIZE];
++		u32 size[MT7996_NPU_TXD_SIZE];
++	} npu_band1_tx;
++
+ 	bool ibf;
+ 	u8 fw_debug_wm;
+ 	u8 fw_debug_wa;
+
+--- a/mt7996/debugfs.c
++++ b/mt7996/debugfs.c
+@@ -1151,6 +1151,28 @@
+ 	return 0;
+ }
+ 
++static int mt7996_npu_band1_tx_show(struct seq_file *s, void *data)
++{
++	struct mt7996_dev *dev = s->private;
++	u32 total = 0;
++	int i;
++
++	seq_printf(s, "requested: %d\n", dev->npu_band1_tx.requested);
++	seq_printf(s, "allocated: %d\n", dev->npu_band1_tx.allocated);
++	seq_printf(s, "present: %d\n", dev->npu_band1_tx.present);
++
++	for (i = 0; i < ARRAY_SIZE(dev->npu_band1_tx.size); i++) {
++		seq_printf(s, "window%d_size: %u\n", i,
++			   dev->npu_band1_tx.size[i]);
++		total += dev->npu_band1_tx.size[i];
++	}
++	seq_printf(s, "total_size: %u\n", total);
++
++	return 0;
++}
++
++DEFINE_SHOW_ATTRIBUTE(mt7996_npu_band1_tx);
++
+ int mt7996_init_debugfs(struct mt7996_dev *dev)
+ {
+ 	struct dentry *dir;
+@@ -1162,6 +1184,8 @@
+ 	debugfs_create_file("xmit-queues", 0400, dir, dev,
+ 			    &mt7996_xmit_queues_fops);
+ 	debugfs_create_file("tx_stats", 0400, dir, dev, &mt7996_tx_stats_fops);
++	debugfs_create_file("npu_band1_tx", 0400, dir, dev,
++			    &mt7996_npu_band1_tx_fops);
+ 	debugfs_create_file("sys_recovery", 0600, dir, dev,
+ 			    &mt7996_sys_recovery_ops);
+ 	debugfs_create_file("fw_debug_wm", 0600, dir, dev, &fops_fw_debug_wm);
