@@ -52,5 +52,16 @@ jobs:
 
       - name: Source audit
         run: |
+          set +e
           python3 scripts/check-release-image-features.py \
-            --repo . --skip-build --skip-image
+            --repo . --skip-build --skip-image > audit.log 2>&1
+          rc=$?
+          cat audit.log
+          {
+            echo "### Release branch source audit"
+            echo ""
+            echo '```'
+            cat audit.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
