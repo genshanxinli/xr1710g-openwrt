@@ -33,7 +33,7 @@
   `airoha_gdm_dev` 里有 `bql[]`/`bql_dirty` 累加状态。
 - 构建：`CONFIG_BQL=y`；`airoha_eth.o`、`vmlinux` 的符号表里有
   `airoha_qdma_tx_bql_add` 和 `airoha_qdma_tx_bql_flush`。
-- 运行（在跑起来的镜头上，持续 TX 负载下）：
+- 运行（在跑起来的镜像上，持续 TX 负载下）：
 
   ```sh
   cat /sys/class/net/<dev>/queues/tx-*/byte_queue_limits/inflight
