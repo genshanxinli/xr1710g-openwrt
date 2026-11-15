@@ -51,8 +51,33 @@ gemtek,xr1710g-ubi)
 	uci_set_from radio0 he_mu_beamformer "" 0
 
 	# 5 GHz: channel 149 is quiet and its ceiling is 28 dBm, not 23.
-	# EHT80 rather than EHT160 -- many clients reject HE160 at 149.
-	uci_set_from radio1 channel 36 149
+	# EHT80 rather than EHT160 -- many clients reject HE160 at 149, and
+	# 58_xr1710g-wifi-htmode is the script that narrows the width once
+	# the channel is final.
+	#
+	# wireless.radio1.xr1710g_5g160=1 opts in to the 36-64 profile the
+	# survey left unused: the channel is not touched (36 is the stock
+	# default) and EHT160 is restored on 36-64. Any other channel is left
+	# alone, so auto and the channels outside 36-64 keep whatever 58 and
+	# the operator decide. The marker is only read, never written: unset
+	# and 0 both keep the 149/EHT80 default above.
+	if [ "$(uci -q get wireless.radio1.xr1710g_5g160)" = "1" ]; then
+		channel=$(uci -q get wireless.radio1.channel)
+		case "$channel" in
+		36|40|44|48|52|56|60|64)
+			# Restore EHT160 even if an earlier boot narrowed it to
+			# EHT80 while the band sat on 149: the marker asks for the
+			# 160 MHz profile, so it wins on UNII-1/UNII-2A.
+			htmode=$(uci -q get wireless.radio1.htmode)
+			if [ "$htmode" != "EHT160" ]; then
+				uci -q set wireless.radio1.htmode=EHT160
+				changed=1
+			fi
+			;;
+		esac
+	else
+		uci_set_from radio1 channel 36 149
+	fi
 
 	# 6 GHz: channel 37 is a PSC (clients that only scan PSC can find
 	# it) and EHT320 is usable here -- 0.4% airtime, zero neighbour
