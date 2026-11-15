@@ -1,0 +1,126 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Subject: [PATCH] wifi: mt76: mt7996: reject a zero NPU ring base
+
+The NPU firmware answers WLAN_FUNC_GET_WAIT_RXDESC_BASE with a mailbox
+success even when it has no descriptor base for the requested ring.  The
+Clanker eagle build returns msg[2] = 0 for ring 2 (RRO band2), 11 and 12
+(MSDU page band1/2) and ring 7 (TX band2), and mt7996_npu_rxd_init() /
+mt7996_npu_txd_init() write that value straight into desc_base.
+
+A zero base is not a usable ring.  The failure is silent: 2.4G keeps
+working while the bands whose rings got 0 lose RX/TX and look like an RF
+problem.
+
+Treat the zero return as a failure for that ring.  In the RX path keep
+the existing initialization order and only skip the register write for
+the affected ring, so the rings the firmware did answer stay usable.  In
+the TX path a band depends on the ring base for its later buffer-space
+messages, so return -EIO and fail the caller instead of configuring the
+NPU against a ring at address 0.
+
+The val != 0 path writes the same registers in the same order as before.
+
+Not exercised on hardware: this is for custom NPU firmware A/B runs.
+
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/mt7996/npu.c
++++ b/mt7996/npu.c
+@@ -286,7 +286,12 @@
+ 			 "failed retrieving NPU wlan rx ring0 addr\n");
+ 		return err;
+ 	}
+-	writel(val, &dev->mt76.q_rx[MT_RXQ_RRO_BAND0].regs->desc_base);
++	if (!val) {
++		dev_warn(dev->mt76.dev,
++			 "NPU returned a zero wlan rx ring0 base\n");
++	} else {
++		writel(val, &dev->mt76.q_rx[MT_RXQ_RRO_BAND0].regs->desc_base);
++	}
+ 
+ 	err = mt76_npu_get_msg(npu, 2, WLAN_FUNC_GET_WAIT_RXDESC_BASE,
+ 			       &val, GFP_KERNEL);
+@@ -295,7 +300,12 @@
+ 			 "failed retrieving NPU wlan rx ring2 addr\n");
+ 		return err;
+ 	}
+-	writel(val, &dev->mt76.q_rx[MT_RXQ_RRO_BAND2].regs->desc_base);
++	if (!val) {
++		dev_warn(dev->mt76.dev,
++			 "NPU returned a zero wlan rx ring2 base\n");
++	} else {
++		writel(val, &dev->mt76.q_rx[MT_RXQ_RRO_BAND2].regs->desc_base);
++	}
+ 
+ 	/* msdu pg ring */
+ 	err = mt76_npu_get_msg(npu, 10, WLAN_FUNC_GET_WAIT_RXDESC_BASE,
+@@ -305,7 +315,12 @@
+ 			 "failed retrieving NPU wlan msdu pg ring addr\n");
+ 		return err;
+ 	}
+-	writel(val, &dev->mt76.q_rx[MT_RXQ_MSDU_PAGE_BAND0].regs->desc_base);
++	if (!val) {
++		dev_warn(dev->mt76.dev,
++			 "NPU returned a zero wlan msdu pg ring10 base\n");
++	} else {
++		writel(val, &dev->mt76.q_rx[MT_RXQ_MSDU_PAGE_BAND0].regs->desc_base);
++	}
+ 
+ 	err = mt76_npu_get_msg(npu, 11, WLAN_FUNC_GET_WAIT_RXDESC_BASE,
+ 			       &val, GFP_KERNEL);
+@@ -314,7 +329,12 @@
+ 			 "failed retrieving NPU wlan msdu pg ring addr\n");
+ 		return err;
+ 	}
+-	writel(val, &dev->mt76.q_rx[MT_RXQ_MSDU_PAGE_BAND1].regs->desc_base);
++	if (!val) {
++		dev_warn(dev->mt76.dev,
++			 "NPU returned a zero wlan msdu pg ring11 base\n");
++	} else {
++		writel(val, &dev->mt76.q_rx[MT_RXQ_MSDU_PAGE_BAND1].regs->desc_base);
++	}
+ 
+ 	err = mt76_npu_get_msg(npu, 12, WLAN_FUNC_GET_WAIT_RXDESC_BASE,
+ 			       &val, GFP_KERNEL);
+@@ -323,7 +343,12 @@
+ 			 "failed retrieving NPU wlan msdu pg ring addr\n");
+ 		return err;
+ 	}
+-	writel(val, &dev->mt76.q_rx[MT_RXQ_MSDU_PAGE_BAND2].regs->desc_base);
++	if (!val) {
++		dev_warn(dev->mt76.dev,
++			 "NPU returned a zero wlan msdu pg ring12 base\n");
++	} else {
++		writel(val, &dev->mt76.q_rx[MT_RXQ_MSDU_PAGE_BAND2].regs->desc_base);
++	}
+ 
+ 	/* ind_cmd ring */
+ 	err = mt76_npu_get_msg(npu, 8, WLAN_FUNC_GET_WAIT_RXDESC_BASE,
+@@ -333,7 +358,12 @@
+ 			 "failed retrieving NPU wlan ind_cmd ring addr\n");
+ 		return err;
+ 	}
+-	writel(val, &dev->mt76.q_rx[MT_RXQ_RRO_IND].regs->desc_base);
++	if (!val) {
++		dev_warn(dev->mt76.dev,
++			 "NPU returned a zero wlan ind_cmd ring8 base\n");
++	} else {
++		writel(val, &dev->mt76.q_rx[MT_RXQ_RRO_IND].regs->desc_base);
++	}
+ 
+ 	return 0;
+ }
+@@ -362,6 +392,13 @@
+ 			return err;
+ 		}
+ 
++		if (!val) {
++			dev_warn(dev->mt76.dev,
++				 "NPU returned a zero wlan tx ring base for band %d\n",
++				 band);
++			return -EIO;
++		}
++
+ 		phy_id = is_mt7996(&dev->mt76) ? band == MT_BAND0 ? 1 : 0
+ 					       : band;
+ 		writel(val, &dev->mt76.phys[phy_id]->q_tx[0]->regs->desc_base);

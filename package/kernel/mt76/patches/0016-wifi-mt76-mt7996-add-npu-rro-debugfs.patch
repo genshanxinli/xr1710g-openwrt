@@ -1,0 +1,319 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Sun, 15 Nov 2026 06:30:00 +0800
+Subject: [PATCH] wifi: mt76: mt7996: add a read-only npu_rro debugfs
+
+Expose the RRO/NPU ring anchors and the per-queue RX counters so that
+the NPU RRO anchor state can be validated at runtime:
+
+- the RRO top registers the hardware uses to reach the BA bitmap,
+  address-element, session, indirect-command and MSDU-page tables, as
+  address/value pairs,
+- the host DMA address and the hardware/NPU cpu_idx/dma_idx anchors of
+  every RRO and NPU RX ring,
+- a match check between the address-element table and the segmented
+  address registers the driver programs,
+- per-queue RX packet/byte counters for the NPU RX queues and RRO data
+  queues, plus a timestamp/jiffies snapshot.
+
+Everything in the file is computed on read.  The debugfs handler only
+reads existing state and registers; it takes the device mutex to stay
+off the reset path and performs no hardware writes, mailbox traffic or
+hot-path locking.  The per-queue counters are maintained on the
+single-consumer NAPI path with two plain u64 updates per frame, so the
+data path is otherwise unchanged when the file is not read.
+
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+diff --git a/mt76.h b/mt76.h
+index 63ba188..9f27f40 100644
+--- a/mt76.h
++++ b/mt76.h
+@@ -273,6 +273,14 @@ struct mt76_queue {
+ 	dma_addr_t desc_dma;
+ 	struct sk_buff *rx_head;
+ 	struct page_pool *page_pool;
++
++	/* RX accounting for queues consumed by the driver itself (NPU RX
++	 * queues and RRO data queues). Each such queue is read by a single
++	 * RX consumer on the NAPI path, so the counters need no lock. The
++	 * mt7996 "npu_rro" debugfs file only reads them.
++	 */
++	u64 rx_packets;
++	u64 rx_bytes;
+ };
+ 
+ struct mt76_mcu_ops {
+diff --git a/mt7996/debugfs.c b/mt7996/debugfs.c
+index 6526bbf..c4842ef 100644
+--- a/mt7996/debugfs.c
++++ b/mt7996/debugfs.c
+@@ -3,8 +3,10 @@
+  * Copyright (C) 2022 MediaTek Inc.
+  */
+ 
++#include <linux/ktime.h>
+ #include <linux/relay.h>
+ #include "mt7996.h"
++#include "../dma.h"
+ #include "eeprom.h"
+ #include "mcu.h"
+ #include "mac.h"
+@@ -1151,6 +1153,219 @@ static int mt7996_token_info_read(struct seq_file *s, void *data)
+ 	return 0;
+ }
+ 
++static const char *
++mt7996_rro_mode_str(enum mt76_hwrro_mode mode)
++{
++	switch (mode) {
++	case MT76_HWRRO_V3:
++		return "v3";
++	case MT76_HWRRO_V3_1:
++		return "v3.1";
++	default:
++		return "off";
++	}
++}
++
++static const struct {
++	const char *name;
++	u32 reg;
++} mt7996_rro_anchor_regs[] = {
++	{ "ba_bitmap_base0",		MT_RRO_BA_BITMAP_BASE0 },
++	{ "ba_bitmap_base1",		MT_RRO_BA_BITMAP_BASE1 },
++	{ "ba_bitmap_base_ext0",	MT_RRO_BA_BITMAP_BASE_EXT0 },
++	{ "ba_bitmap_base_ext1",	MT_RRO_BA_BITMAP_BASE_EXT1 },
++	{ "addr_array_base0",		MT_RRO_ADDR_ARRAY_BASE0 },
++	{ "addr_array_base1",		MT_RRO_ADDR_ARRAY_BASE1 },
++	{ "ind_cmd_signature_base0",	MT_RRO_IND_CMD_SIGNATURE_BASE0 },
++	{ "ind_cmd_signature_base1",	MT_RRO_IND_CMD_SIGNATURE_BASE1 },
++	{ "addr_elem_seg_addr0",	MT_RRO_ADDR_ELEM_SEG_ADDR0 },
++	{ "msdu_pg_seg_addr0",		MT_RRO_MSDU_PG_SEG_ADDR0 },
++	{ "particular_cfg0",		MT_RRO_PARTICULAR_CFG0 },
++	{ "particular_cfg1",		MT_RRO_PARTICULAR_CFG1 },
++	{ "ack_sn_ctrl",		MT_RRO_ACK_SN_CTRL },
++	{ "host_int_ena",		MT_RRO_HOST_INT_ENA },
++	{ "rro_ap_ring_base",		MT_RXQ_RRO_AP_RING_BASE },
++	{ "rro_ind_ring_base",		MT_RXQ_RRO_IND_RING_BASE },
++	{ "wf_rro_axi_mst_cfg",		WF_RRO_AXI_MST_CFG },
++	{ "rro_3_0_emu_conf",		MT_RRO_3_0_EMU_CONF },
++	{ "rro_3_1_global_config",	MT_RRO_3_1_GLOBAL_CONFIG },
++};
++
++static const struct {
++	const char *name;
++	int qid;
++} mt7996_rro_queues[] = {
++	{ "band0",		MT_RXQ_RRO_BAND0 },
++	{ "band1",		MT_RXQ_RRO_BAND1 },
++	{ "band2",		MT_RXQ_RRO_BAND2 },
++	{ "ind",		MT_RXQ_RRO_IND },
++	{ "rxdmad_c",		MT_RXQ_RRO_RXDMAD_C },
++	{ "msdu_pg0",		MT_RXQ_MSDU_PAGE_BAND0 },
++	{ "msdu_pg1",		MT_RXQ_MSDU_PAGE_BAND1 },
++	{ "msdu_pg2",		MT_RXQ_MSDU_PAGE_BAND2 },
++	{ "npu0",		MT_RXQ_NPU0 },
++	{ "npu1",		MT_RXQ_NPU1 },
++};
++
++static void
++mt7996_npu_rro_table_anchor(struct seq_file *s, struct mt7996_dev *dev,
++			    const char *name, u32 reg, dma_addr_t host,
++			    bool shift)
++{
++	u64 hw = mt76_rr(dev, reg);
++
++	if (shift)
++		hw <<= 4;
++
++	seq_printf(s, "  %-12s host=0x%llx hw=0x%llx%s\n",
++		   name, (unsigned long long)host,
++		   (unsigned long long)hw, hw == host ? " ok" : " MISMATCH");
++}
++
++static void
++mt7996_npu_rro_tables(struct seq_file *s, struct mt7996_dev *dev)
++{
++	seq_puts(s, "\n=== RRO table anchors ===\n");
++
++	if (is_mt7996(&dev->mt76)) {
++		int i, checked = 0, mismatch = 0, first_bad = -1;
++		u32 hw;
++
++		for (i = 0; i < ARRAY_SIZE(dev->wed_rro.addr_elem); i++) {
++			dma_addr_t addr = dev->wed_rro.addr_elem[i].phy_addr;
++
++			if (!addr)
++				continue;
++
++			hw = mt76_rr(dev, MT_RRO_ADDR_ELEM_SEG_ADDR0 + i * 4);
++			checked++;
++			if ((u64)hw << 4 != addr) {
++				mismatch++;
++				if (first_bad < 0)
++					first_bad = i;
++			}
++		}
++
++		seq_printf(s, "  addr_elem    checked=%d mismatch=%d",
++			   checked, mismatch);
++		if (first_bad >= 0) {
++			hw = mt76_rr(dev, MT_RRO_ADDR_ELEM_SEG_ADDR0 +
++				     first_bad * 4);
++			seq_printf(s, " first_bad=%d host=0x%llx hw=0x%llx",
++				   first_bad,
++				   (unsigned long long)dev->wed_rro.addr_elem[first_bad].phy_addr,
++				   (unsigned long long)((u64)hw << 4));
++		}
++		seq_puts(s, "\n");
++
++		mt7996_npu_rro_table_anchor(s, dev, "session",
++					    MT_RRO_PARTICULAR_CFG0,
++					    dev->wed_rro.session.phy_addr, false);
++		mt7996_npu_rro_table_anchor(s, dev, "ba_bitmap[0]",
++					    MT_RRO_BA_BITMAP_BASE0,
++					    dev->wed_rro.ba_bitmap[0].phy_addr,
++					    false);
++		mt7996_npu_rro_table_anchor(s, dev, "ba_bitmap[1]",
++					    MT_RRO_BA_BITMAP_BASE_EXT0,
++					    dev->wed_rro.ba_bitmap[1].phy_addr,
++					    false);
++	} else {
++		mt7996_npu_rro_table_anchor(s, dev, "msdu_pg[0]",
++					    MT_RRO_MSDU_PG_SEG_ADDR0,
++					    dev->wed_rro.msdu_pg[0].phy_addr,
++					    true);
++	}
++}
++
++static void
++mt7996_npu_rro_queue_show(struct seq_file *s, struct mt7996_dev *dev,
++			  const char *name, int qid)
++{
++	struct mt76_queue *q = &dev->mt76.q_rx[qid];
++	const char *reg_name;
++	u32 desc_base = 0, ring_size = 0, cpu_idx = 0, dma_idx = 0;
++
++	if (!q->ndesc)
++		return;
++
++	if (q->regs) {
++		desc_base = Q_READ(q, desc_base);
++		ring_size = Q_READ(q, ring_size);
++		cpu_idx = Q_READ(q, cpu_idx);
++		dma_idx = Q_READ(q, dma_idx);
++	}
++
++	seq_printf(s, "  %-9s qid=%2d hw_idx=%2u ndesc=%5d head=%5u tail=%5u queued=%5d desc_dma=0x%llx\n",
++		   name, qid, q->hw_idx, q->ndesc, q->head, q->tail, q->queued,
++		   (unsigned long long)q->desc_dma);
++
++	reg_name = mt76_queue_is_npu(q) ? "npu_reg" :
++		   q->wed_regs ? "wed_reg" : "host_reg";
++	seq_printf(s, "            %s=0x%05x desc_base=0x%08x\n",
++		   reg_name, q->wed_regs, desc_base);
++	seq_printf(s, "            ring_size=0x%08x cpu_idx=0x%08x dma_idx=0x%08x\n",
++		   ring_size, cpu_idx, dma_idx);
++
++	if (mt76_queue_is_wed_rro_data(q) || mt76_queue_is_npu_rx(q))
++		seq_printf(s, "            rx_packets=%llu rx_bytes=%llu\n",
++			   (unsigned long long)READ_ONCE(q->rx_packets),
++			   (unsigned long long)READ_ONCE(q->rx_bytes));
++}
++
++static int
++mt7996_npu_rro_read(struct seq_file *s, void *data)
++{
++	struct mt7996_dev *dev = dev_get_drvdata(s->private);
++	struct mt76_dev *mdev = &dev->mt76;
++	struct timespec64 ts;
++	int i;
++
++	mutex_lock(&mdev->mutex);
++
++	ktime_get_real_ts64(&ts);
++	seq_printf(s, "snapshot: time=%lld.%09ld mono_ns=%llu jiffies=%llu\n",
++		   (long long)ts.tv_sec, ts.tv_nsec,
++		   (unsigned long long)ktime_get_ns(),
++		   (unsigned long long)get_jiffies_64());
++
++	seq_printf(s, "status: npu=%s hwrro=%s hw_init=%s\n",
++		   mt76_npu_device_active(mdev) ? "active" : "inactive",
++		   mt7996_rro_mode_str(mdev->hwrro_mode),
++		   dev->recovery.hw_init_done ? "done" : "pending");
++
++	if (!dev->recovery.hw_init_done ||
++	    test_bit(MT76_RESTART, &dev->mphy.state)) {
++		seq_puts(s, "device not ready, register readback skipped\n");
++		goto out;
++	}
++
++	if (!mt7996_has_hwrro(dev)) {
++		seq_puts(s, "RRO is not enabled on this device\n");
++		goto out;
++	}
++
++	seq_puts(s, "\n=== RRO anchor registers ===\n");
++	for (i = 0; i < ARRAY_SIZE(mt7996_rro_anchor_regs); i++) {
++		const char *name = mt7996_rro_anchor_regs[i].name;
++		u32 reg = mt7996_rro_anchor_regs[i].reg;
++
++		seq_printf(s, "  %-24s [0x%05x] = 0x%08x\n",
++			   name, reg, mt76_rr(dev, reg));
++	}
++
++	mt7996_npu_rro_tables(s, dev);
++
++	seq_puts(s, "\n=== RRO/NPU queues ===\n");
++	for (i = 0; i < ARRAY_SIZE(mt7996_rro_queues); i++)
++		mt7996_npu_rro_queue_show(s, dev, mt7996_rro_queues[i].name,
++					  mt7996_rro_queues[i].qid);
++
++out:
++	mutex_unlock(&mdev->mutex);
++
++	return 0;
++}
++
+ int mt7996_init_debugfs(struct mt7996_dev *dev)
+ {
+ 	struct dentry *dir;
+@@ -1186,6 +1401,8 @@ int mt7996_init_debugfs(struct mt7996_dev *dev)
+ 				    mt7996_rdd_monitor);
+ 	debugfs_create_devm_seqfile(dev->mt76.dev, "token_info", dir,
+ 				    mt7996_token_info_read);
++	debugfs_create_devm_seqfile(dev->mt76.dev, "npu_rro", dir,
++				    mt7996_npu_rro_read);
+ 
+ 	dev->debugfs_dir = dir;
+ 
+diff --git a/mt7996/mac.c b/mt7996/mac.c
+index e016d0d..e70eafb 100644
+--- a/mt7996/mac.c
++++ b/mt7996/mac.c
+@@ -1922,6 +1922,11 @@ void mt7996_rro_rx_process(struct mt76_dev *mdev, void *data)
+ 			if (seq_id != MT7996_RRO_MAX_SESSION)
+ 				status->aggr = true;
+ 
++			if (mt76_queue_is_wed_rro_data(q)) {
++				q->rx_packets++;
++				q->rx_bytes += len;
++			}
++
+ 			mt7996_queue_rx_skb(mdev, qid, skb, &info);
+ next_page:
+ 			if ((j + 1) % MT7996_MAX_HIF_RXD_IN_PG == 0) {
+diff --git a/npu.c b/npu.c
+index c416072..975e248 100644
+--- a/npu.c
++++ b/npu.c
+@@ -101,6 +101,9 @@ static struct sk_buff *mt76_npu_dequeue(struct mt76_dev *dev,
+ 						len, q->buf_size);
+ 		}
+ 
++		q->rx_packets++;
++		q->rx_bytes += len;
++
+ 		*info = desc[index].info;
+ 		index = (index + 1) % q->ndesc;
+ 	}

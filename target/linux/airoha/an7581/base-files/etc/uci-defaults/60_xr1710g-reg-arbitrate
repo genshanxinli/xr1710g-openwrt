@@ -1,0 +1,159 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Explicitly arbitrate one regulatory domain for the XR1710G radios.
+#
+# radio1 (5 GHz) and radio2 (6 GHz) are provided by one MT7996 wiphy, and
+# cfg80211 keeps one regulatory domain per wireless device.  netifd pushes
+# each radio's UCI `country` through `iw reg set`, so radio1=CN with
+# radio2=US does not fail: the radio netifd brings up last silently decides
+# the domain for both bands, and the 5 GHz width/center1 that comes up can
+# differ from what UCI asked for.
+#
+# This script only arbitrates the two country values.  It does not choose a
+# channel or a width, and it does not start, stop or reload wifi.
+#
+#   * radios agree, or only one has a country: log the domain that will be
+#     requested and change nothing.
+#   * radios conflict and REG_PREFER is unset (the default): log the
+#     conflict and change nothing, so a deliberate per-radio setting is
+#     never rewritten behind the operator's back.
+#   * radios conflict and REG_PREFER=cn|us: keep the radio that already has
+#     that domain, set the other radio to it, commit wireless, and log the
+#     result.  If the preferred domain matches neither radio, refuse and
+#     change nothing rather than invent a third value.
+#
+# REG_PREFER is read from the environment.  /etc/init.d/boot does not export
+# one, so a normal boot is always warn-only; export the preference when
+# invoking this script explicitly.
+#
+# The logger line carries the domain that will be requested plus the
+# channel/htmode configured for each band.  Those are the values wifi will
+# ask for; the width/center1 that actually came up are reported by
+# scripts/wifi-reg-report.sh.  Nothing here claims that 5 GHz 160 MHz and
+# 6 GHz 320 MHz can be active at the same time.
+#
+# Usage:
+#   sh 60_xr1710g-reg-arbitrate
+#   REG_PREFER=cn sh 60_xr1710g-reg-arbitrate
+#   REG_PREFER=us sh 60_xr1710g-reg-arbitrate --dry-run
+#
+# Runs from /etc/init.d/boot (START=10), after `wifi config` has created the
+# radio sections and before wifi starts.
+
+set -u
+
+# shellcheck source=/dev/null
+. /lib/functions.sh
+
+[ -e /etc/config/wireless ] || exit 0
+
+case "$(board_name)" in
+gemtek,xr1710g-ubi) ;;
+*) exit 0 ;;
+esac
+
+uci -q get wireless.radio1 >/dev/null || exit 0
+uci -q get wireless.radio2 >/dev/null || exit 0
+
+DRY_RUN=0
+[ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+
+log_msg() {
+	if [ "$DRY_RUN" -eq 1 ]; then
+		printf 'would log: %s\n' "$1"
+	else
+		logger -t xr1710g-reg "$1"
+	fi
+}
+
+# A value that netifd will actually apply: exactly two letters.  The empty
+# string and the '00' placeholder mean "no country" and are left alone.
+norm_country() {
+	case "${1:-}" in
+	[A-Za-z][A-Za-z])
+		printf '%s' "$1" | tr '[:lower:]' '[:upper:]'
+		;;
+	esac
+}
+
+band_desc() {
+	case "${1:-}" in
+	''|auto) printf 'auto/%s' "${2:-auto}" ;;
+	*) printf 'ch%s/%s' "$1" "${2:-auto}" ;;
+	esac
+}
+
+raw1=$(uci -q get wireless.radio1.country)
+raw2=$(uci -q get wireless.radio2.country)
+country1=$(norm_country "$raw1")
+country2=$(norm_country "$raw2")
+
+desc1=$(band_desc "$(uci -q get wireless.radio1.channel)" \
+	"$(uci -q get wireless.radio1.htmode)")
+desc2=$(band_desc "$(uci -q get wireless.radio2.channel)" \
+	"$(uci -q get wireless.radio2.htmode)")
+
+prefer=$(norm_country "${REG_PREFER:-}")
+if [ -n "${REG_PREFER:-}" ] && [ "$prefer" != CN ] && [ "$prefer" != US ]; then
+	log_msg "ignoring REG_PREFER='${REG_PREFER}': only cn|us is supported"
+	prefer=
+fi
+
+if [ -n "$country1" ] && [ -n "$country2" ] && [ "$country1" != "$country2" ]; then
+	if [ -z "$prefer" ]; then
+		log_msg "reg=${country1}/${country2} conflict, 5g=${desc1}(cfg), 6g=${desc2}(cfg), no change (set REG_PREFER=cn|us to arbitrate)"
+		exit 0
+	fi
+
+	if [ "$country1" = "$prefer" ]; then
+		kept=radio1
+		other=radio2
+	elif [ "$country2" = "$prefer" ]; then
+		kept=radio2
+		other=radio1
+	else
+		log_msg "reg=${country1}/${country2} conflict, 5g=${desc1}(cfg), 6g=${desc2}(cfg), no change (REG_PREFER=${prefer} matches neither radio)"
+		exit 0
+	fi
+
+	changed=0
+	for radio in radio1 radio2; do
+		[ "$(uci -q get "wireless.$radio.country")" = "$prefer" ] && continue
+
+		if [ "$DRY_RUN" -eq 1 ]; then
+			printf 'would set wireless.%s.country=%s\n' "$radio" "$prefer"
+			continue
+		fi
+
+		if ! uci -q set "wireless.$radio.country=$prefer"; then
+			logger -t xr1710g-reg "failed to set wireless.$radio.country=$prefer"
+			exit 1
+		fi
+		changed=1
+	done
+
+	if [ "$DRY_RUN" -eq 0 ] && [ "$changed" -eq 1 ]; then
+		if ! uci -q commit wireless; then
+			logger -t xr1710g-reg "failed to commit wireless"
+			exit 1
+		fi
+	fi
+
+	log_msg "reg=${prefer}, 5g=${desc1}(cfg), 6g=${desc2}(cfg) (arbitrated ${country1}/${country2}, kept ${kept}, set ${other})"
+	exit 0
+fi
+
+if [ -z "$country1" ] && [ -z "$country2" ]; then
+	log_msg "reg=00 (no usable radio country), 5g=${desc1}(cfg), 6g=${desc2}(cfg)"
+elif [ -z "$country1" ]; then
+	log_msg "reg=${country2} (radio2 only), 5g=${desc1}(cfg), 6g=${desc2}(cfg)"
+elif [ -z "$country2" ]; then
+	log_msg "reg=${country1} (radio1 only), 5g=${desc1}(cfg), 6g=${desc2}(cfg)"
+elif [ -n "$prefer" ] && [ "$prefer" != "$country1" ]; then
+	log_msg "reg=${country1}, 5g=${desc1}(cfg), 6g=${desc2}(cfg) (REG_PREFER=${prefer} ignored: radios already agree)"
+else
+	log_msg "reg=${country1}, 5g=${desc1}(cfg), 6g=${desc2}(cfg)"
+fi
+
+exit 0
