@@ -1,0 +1,56 @@
+From: OpenWrt <openwrt@example.org>
+Date: Sun, 9 Nov 2026 16:50:00 +0800
+Subject: [PATCH] phy: airoha: usb: only program the SerDes mux for the shared
+ port
+
+SSTR.USB_PCIE_SEL selects the mode of the *shared* SerDes, the one described
+as serdes-port = AIROHA_SCU_SERDES_USB2.  airoha_usb_phy_u3_set_mode() wrote
+that bit unconditionally, for every instance, so a request coming from the
+dedicated USB-only SerDes (AIROHA_SCU_SERDES_USB1) still reprogrammed the
+shared one.
+
+That is not a harmless no-op.  On AN7581 pcie2 is wired to the shared SerDes
+(an7581.dtsi: pcie2 phys = <&usb1_phy ...>, and usb1_phy's serdes-port is
+AIROHA_SCU_SERDES_USB2) and carries the second Wi-Fi chip, i.e. the 6 GHz
+radio.  usb_add_hcd() calls usb_phy_roothub_set_mode(PHY_MODE_USB_HOST_SS)
+for every PHY listed in the controller's "phys" property, so the moment a USB
+controller on the USB1 SerDes is enabled, this write switches the shared
+SerDes away from PCIe and takes the pcie2 link down underneath a live driver.
+
+Keep the mux write for the shared port only.  The dedicated port has no mux
+to program, so U3 mode selection is simply a no-op there; asking it for PCIe
+mode is still rejected as invalid.
+
+This is a latent defect: usb0 is status = "disabled" on this board today, so
+nothing reaches the write yet.  It becomes live as soon as usb0 is enabled,
+which is exactly the change wanted to give the board a second, independent
+radio path.
+
+---
+--- a/drivers/phy/airoha/phy-airoha-usb.c
++++ b/drivers/phy/airoha/phy-airoha-usb.c
+@@ -418,10 +418,20 @@
+ {
+ 	u32 sel;
+ 
+-	/* Only USB2 supports PCIe mode */
+-	if (mode == PHY_MODE_PCIE &&
+-	    priv->serdes_port != AIROHA_SCU_SERDES_USB2)
+-		return -EINVAL;
++	/*
++	 * Only the shared SerDes (USB2) is muxed between PCIe and USB.
++	 * USB1 has a dedicated USB-only SerDes, so there is no mux to program
++	 * from that port -- and writing it anyway is not harmless:
++	 * SSTR.USB_PCIE_SEL selects the mode of *USB2*, so a USB1 request would
++	 * steal the shared SerDes from PCIe.  On AN7581 pcie2 rides on that
++	 * SerDes (it carries the second Wi-Fi chip, i.e. the 6 GHz radio), so
++	 * flipping it at runtime takes that link down.
++	 */
++	if (priv->serdes_port != AIROHA_SCU_SERDES_USB2) {
++		if (mode == PHY_MODE_PCIE)
++			return -EINVAL;
++		return 0;
++	}
+ 
+ 	if (mode == PHY_MODE_PCIE)
+ 		sel = AIROHA_SCU_SSTR_USB_PCIE_SEL_PCIE;
