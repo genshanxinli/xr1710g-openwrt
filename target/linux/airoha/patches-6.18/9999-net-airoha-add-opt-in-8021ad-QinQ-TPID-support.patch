@@ -24,10 +24,10 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 ---
 
  drivers/net/ethernet/airoha/airoha_eth.h          |  5 +++++
- drivers/net/ethernet/airoha/airoha_ppe.c          | 35 ++++++++++++++++++++++++++++++++++-
- drivers/net/ethernet/airoha/airoha_ppe_debugfs.c  | 15 +++++++++++++++
+ drivers/net/ethernet/airoha/airoha_ppe.c          | 34 +++++++++++++++++++++++++++++++++-
+ drivers/net/ethernet/airoha/airoha_ppe_debugfs.c  | 14 ++++++++++++++
  drivers/net/ethernet/airoha/airoha_regs.h         |  6 ++++++
- 4 files changed, 60 insertions(+), 1 deletions(-)
+ 4 files changed, 58 insertions(+), 1 deletions(-)
 
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
@@ -45,15 +45,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -6,6 +6,7 @@
- 
- #include <linux/ip.h>
- #include <linux/ipv6.h>
-+#include <linux/module.h>
- #include <linux/of_platform.h>
- #include <linux/platform_device.h>
- #include <linux/rhashtable.h>
-@@ -23,6 +24,17 @@
+@@ -24,6 +24,17 @@
  DEFINE_MUTEX(flow_offload_mutex);
  static DEFINE_SPINLOCK(ppe_lock);
  
@@ -71,7 +63,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static const struct rhashtable_params airoha_flow_table_params = {
  	.head_offset = offsetof(struct airoha_flow_table_entry, node),
  	.key_offset = offsetof(struct airoha_flow_table_entry, cookie),
-@@ -1172,6 +1184,18 @@ static int airoha_ppe_entry_idle_time(st
+@@ -1219,6 +1230,18 @@ static int airoha_ppe_entry_idle_time(st
  	return airoha_ppe_get_entry_idle_time(ppe, e->data.ib1);
  }
  
@@ -90,7 +82,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
  					   struct flow_cls_offload *f)
  {
-@@ -1262,7 +1286,7 @@ static int airoha_ppe_flow_offload_repla
+@@ -1309,7 +1332,7 @@ static int airoha_ppe_flow_offload_repla
  			break;
  		case FLOW_ACTION_VLAN_PUSH:
  			if (data.vlan.num == 2 ||
@@ -99,7 +91,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  				return -EOPNOTSUPP;
  
  			data.vlan.hdr[data.vlan.num].id = act->vlan.vid;
-@@ -1774,6 +1798,12 @@ int airoha_ppe_init(struct airoha_eth *e
+@@ -1822,6 +1845,12 @@ int airoha_ppe_init(struct airoha_eth *e
  	if (err)
  		goto error_l2_flow_table_destroy;
  
@@ -112,7 +104,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	return 0;
  
  error_l2_flow_table_destroy:
-@@ -1803,4 +1833,7 @@ void airoha_ppe_deinit(struct airoha_eth
+@@ -1851,4 +1880,7 @@ void airoha_ppe_deinit(struct airoha_eth
  	rhashtable_destroy(&eth->ppe->l2_flows);
  	rhashtable_destroy(&eth->flow_table);
  	debugfs_remove(eth->ppe->debugfs_dir);
@@ -148,13 +140,13 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  {
  	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-@@ -181,5 +193,8 @@ int airoha_ppe_debugfs_init(struct airoh
+@@ -180,6 +192,8 @@ int airoha_ppe_debugfs_init(struct airoh
+ 			    &airoha_ppe_debugfs_foe_all_fops);
  	debugfs_create_file("bind", 0444, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_foe_bind_fops);
- 
 +	debugfs_create_file("tpid", 0444, ppe->debugfs_dir, ppe,
 +			    &airoha_ppe_debugfs_tpid_fops);
-+
+ 
  	return 0;
  }
 --- a/drivers/net/ethernet/airoha/airoha_regs.h

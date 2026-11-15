@@ -24,16 +24,16 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 ---
 
  drivers/net/ethernet/airoha/airoha_eth.h          |  5 +++++
- drivers/net/ethernet/airoha/airoha_ppe.c          | 35 ++++++++++++++++++++++++++++++++++-
- drivers/net/ethernet/airoha/airoha_ppe_debugfs.c  | 14 ++++++++++++++
+ drivers/net/ethernet/airoha/airoha_ppe.c          | 34 +++++++++++++++++++++++++++++++++-
+ drivers/net/ethernet/airoha/airoha_ppe_debugfs.c  | 13 +++++++++++++
  drivers/net/ethernet/airoha/airoha_regs.h         |  6 ++++++
- 4 files changed, 59 insertions(+), 1 deletions(-)
+ 4 files changed, 57 insertions(+), 1 deletions(-)
 
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -717,6 +717,11 @@ struct airoha_ppe {
- 	u32 bind_rate_l3;
- 	u32 bind_rate_l2b;
+@@ -836,6 +836,11 @@ struct airoha_ppe {
+ 	struct airoha_ppe_meter meter[AIROHA_PPE_METER_NUM];
+ 	bool meter_enabled;
  
 +	/* Saved PPE_VLAN_TPID value, restored when the QinQ parameter is
 +	 * enabled and the PPE is torn down.
@@ -45,17 +45,9 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -6,6 +6,7 @@
- 
- #include <linux/ip.h>
- #include <linux/ipv6.h>
-+#include <linux/module.h>
- #include <linux/of_platform.h>
- #include <linux/platform_device.h>
- #include <linux/rhashtable.h>
-@@ -24,6 +25,17 @@
- DEFINE_MUTEX(flow_offload_mutex);
- static DEFINE_SPINLOCK(ppe_lock);
+@@ -80,6 +80,17 @@ bool airoha_ppe_6rd_enabled(void)
+ 	return airoha_ppe_6rd;
+ }
  
 +/* 802.1ad/QinQ: the PPE has a programmable VLAN TPID (REG_PPE_VLAN_TPID),
 + * but pushing a 0x88a8 tag through the hardware is not verified, so the
@@ -68,11 +60,11 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +MODULE_PARM_DESC(airoha_ppe_qinq,
 +		 "Enable 802.1ad/QinQ TPID support in the PPE flow path");
 +
- static const struct rhashtable_params airoha_flow_table_params = {
- 	.head_offset = offsetof(struct airoha_flow_table_entry, node),
- 	.key_offset = offsetof(struct airoha_flow_table_entry, cookie),
-@@ -1588,6 +1600,18 @@ static int airoha_ppe_entry_idle_time(st
- 	return airoha_ppe_get_entry_idle_time(ppe, e->data.ib1);
+ /* -1: use the kernel bridge_input signal (default)
+  *  0: force "routed" (TTL decrement) for A/B testing
+  *  1: force "L2-bridged" (no TTL decrement) for A/B testing
+@@ -2365,6 +2376,18 @@ static void airoha_ppe_foe_entry_set_6rd
+ 		hwe->ib1 |= AIROHA_FOE_IB1_BIND_TUNNEL_DECAP;
  }
  
 +/* The PPE only inserts a tag whose EtherType it recognises.  0x88a8 is
@@ -90,7 +82,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
  					   struct flow_cls_offload *f)
  {
-@@ -1680,7 +1704,7 @@ static int airoha_ppe_flow_offload_repla
+@@ -2480,7 +2503,7 @@ static int airoha_ppe_flow_offload_repla
  			break;
  		case FLOW_ACTION_VLAN_PUSH:
  			if (data.vlan.num == 2 ||
@@ -99,7 +91,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  				return -EOPNOTSUPP;
  
  			data.vlan.hdr[data.vlan.num].id = act->vlan.vid;
-@@ -2250,6 +2274,12 @@ int airoha_ppe_init(struct airoha_eth *e
+@@ -3214,6 +3237,12 @@ int airoha_ppe_init(struct airoha_eth *e
  	if (err)
  		goto error_l2_flow_table_destroy;
  
@@ -112,7 +104,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	return 0;
  
  error_l2_flow_table_destroy:
-@@ -2279,4 +2309,7 @@ void airoha_ppe_deinit(struct airoha_eth
+@@ -3243,4 +3272,7 @@ void airoha_ppe_deinit(struct airoha_eth
  	rhashtable_destroy(&eth->ppe->l2_flows);
  	rhashtable_destroy(&eth->flow_table);
  	debugfs_remove(eth->ppe->debugfs_dir);
@@ -122,9 +114,9 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  }
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -365,6 +365,17 @@ static int airoha_ppe_debugfs_tb_regs_sh
+@@ -751,6 +751,17 @@ static int airoha_ppe_debugfs_mcast_show
  }
- DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_tb_regs);
+ DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_mcast);
  
 +static int airoha_ppe_debugfs_tpid_show(struct seq_file *m, void *private)
 +{
@@ -140,18 +132,18 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  {
  	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-@@ -381,5 +392,8 @@ int airoha_ppe_debugfs_init(struct airoh
- 	debugfs_create_file("tb_regs", 0444, ppe->debugfs_dir, ppe,
- 			    &airoha_ppe_debugfs_tb_regs_fops);
- 
+@@ -778,6 +789,8 @@ int airoha_ppe_debugfs_init(struct airoh
+ 			    &airoha_ppe_debugfs_6rd_fops);
+ 	debugfs_create_file("mcast", 0444, ppe->debugfs_dir, ppe,
+ 			    &airoha_ppe_debugfs_mcast_fops);
 +	debugfs_create_file("tpid", 0444, ppe->debugfs_dir, ppe,
 +			    &airoha_ppe_debugfs_tpid_fops);
-+
+ 
  	return 0;
  }
 --- a/drivers/net/ethernet/airoha/airoha_regs.h
 +++ b/drivers/net/ethernet/airoha/airoha_regs.h
-@@ -349,6 +349,12 @@
+@@ -357,6 +357,12 @@
  #define REG_PPE_MTU(_m, _n)			(REG_PPE_MTU_BASE(_m) + (((_n) / 2) << 2))
  #define FP_EGRESS_MTU_MASK(_n)			GENMASK(13 + (((_n) % 2) << 4), ((_n) % 2) << 4)
  
