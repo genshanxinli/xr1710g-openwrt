@@ -1,0 +1,578 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Sun, 15 Nov 2026 11:20:00 +0800
+Subject: [PATCH] wifi: mt76: reserve per-band token quota
+
+The token pool is global: mt76_token_consume() blocks every band once
+dev->token_count reaches token_size - MT76_TOKEN_FREE_THR. A 4SS 6 GHz
+burst can therefore occupy the whole pool and leave the 5 GHz and 2.4 GHz
+bands without a token to send from, even though those bands only need a
+handful.
+
+Account the in-flight tokens per band and add token_reserved[band], a
+configurable reservation (default 0). While another band has traffic in
+flight, or scheduled or queued a frame within the last 500 ms, its
+reservation is subtracted from the pool this band may use, so a burst
+cannot take the reserved entries. A band whose remaining share would fall
+inside the free headroom keeps the shared pool instead, so a band can
+always leave the blocked state on the next completion. An increase must
+leave two free thresholds in the pool; a decrease or clearing is always
+accepted, so a reservation can be backed out after the pool shrank.
+
+The blocked state is tracked per band instead of being set and cleared
+for all bands together: the TX scheduler sees a per-band blocked flag, so
+the band that reached its ceiling waits for completions while a band that
+still has pool entries keeps scheduling. A reservation is released as
+soon as its band goes idle, so a single active band still uses the whole
+pool. The driver's unblock request clears the per-band flags and always
+reschedules the TX worker in quota mode, because the release path may
+already have cleared the flag that made progress; a release without a
+wake pointer, such as a failed TX preparation returning its token,
+refreshes and reschedules on its own.
+
+With no reservation configured the original __mt76_set_tx_blocked() body
+runs verbatim, so the default keeps the global threshold and the old
+set/clear behavior; the per-band blocked counter is only maintained while
+the quota is on.
+
+Expose a 0600 debugfs file "token_quota" next to "token_info" with the
+per-band used/reserved/blocked counters:
+
+  band |   used | reserved | blocked
+     0 |     12 |        0 |       0
+     1 |      8 |      512 |       3
+     2 |   8000 |        0 |     127
+
+  pool: 8020 of 16384 in flight, quota on
+
+Writing "<band> <tokens>" sets one reservation, e.g. "echo '1 512' >
+token_quota"; writing 0 to every band returns to the default. The
+counters and the reset cleanup are maintained under token_lock, and no
+AQL, firmware or pool size is changed.
+
+The patch applies after the existing 0001..0015 series and builds
+mt76.ko, mt76-connac-lib.ko, mt7996e.ko (NPU config) and mt7925-common.ko
+against the target 7.3 kernel tree. The 5 GHz blocked-counter A/B on
+hardware is left for a follow-up, as the issue says.
+
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/mt76.h
++++ b/mt76.h
+@@ -991,6 +991,20 @@
+ 	u16 token_start;
+ 	u16 token_size;
+ 
++	/*
++	 * Per-band token quota. @token_reserved holds the number of pool
++	 * entries that a band may reclaim from the other bands while it is
++	 * active; everything is shared when it is zero. @token_band_used
++	 * tracks in-flight tokens per band, @token_band_blocked counts the
++	 * transitions into the blocked state and @token_band_active keeps
++	 * the last time a band scheduled or queued a frame.
++	 */
++	u16 token_reserved[__MT_MAX_BAND];
++	u16 token_band_used[__MT_MAX_BAND];
++	u32 token_band_blocked[__MT_MAX_BAND];
++	unsigned long token_band_active[__MT_MAX_BAND];
++	bool token_quota;
++
+ 	spinlock_t rx_token_lock;
+ 	struct idr rx_token;
+ 	u16 rx_token_size;
+@@ -2076,6 +2090,8 @@
+ mt76_token_release(struct mt76_dev *dev, int token, bool *wake);
+ int mt76_token_consume(struct mt76_dev *dev, struct mt76_txwi_cache **ptxwi);
+ void __mt76_set_tx_blocked(struct mt76_dev *dev, bool blocked);
++int mt76_token_set_reserved(struct mt76_dev *dev, unsigned int band,
++			    unsigned int reserved);
+ struct mt76_txwi_cache *mt76_rx_token_release(struct mt76_dev *dev, int token);
+ int mt76_rx_token_consume(struct mt76_dev *dev, void *ptr,
+ 			  struct mt76_txwi_cache *r, dma_addr_t phys);
+--- a/tx.c
++++ b/tx.c
+@@ -595,6 +595,10 @@
+ 		if (test_bit(MT76_RESET, &phy->state) || phy->offchannel)
+ 			continue;
+ 
++		if (READ_ONCE(dev->token_quota))
++			WRITE_ONCE(dev->token_band_active[phy->band_idx],
++				   jiffies);
++
+ 		q = phy->q_tx[qid];
+ 
+ 		if (test_bit(MT_WCID_FLAG_PS, &wcid->flags)) {
+@@ -865,6 +869,9 @@
+ 	struct mt76_phy *phy = hw->priv;
+ 	struct mt76_dev *dev = phy->dev;
+ 
++	if (READ_ONCE(dev->token_quota))
++		WRITE_ONCE(dev->token_band_active[phy->band_idx], jiffies);
++
+ 	mt76_worker_schedule(&dev->tx_worker);
+ }
+ EXPORT_SYMBOL_GPL(mt76_wake_tx_queue);
+@@ -923,35 +930,257 @@
+ }
+ EXPORT_SYMBOL_GPL(mt76_queue_tx_complete);
+ 
+-void __mt76_set_tx_blocked(struct mt76_dev *dev, bool blocked)
++#define MT76_TOKEN_QUOTA_IDLE_MS	500
++
++static struct mt76_queue *mt76_token_band_queue(struct mt76_dev *dev, int band)
+ {
+-	struct mt76_phy *phy = &dev->phy;
+-	struct mt76_queue *q = phy->q_tx[0];
++	struct mt76_phy *phy;
+ 
+-	if (blocked == q->blocked)
+-		return;
++	if (band < 0 || band >= __MT_MAX_BAND)
++		return NULL;
++
++	phy = dev->phys[band];
++	if (!phy)
++		return NULL;
++
++	return phy->q_tx[0];
++}
++
++/*
++ * A band competes for the shared token pool while it has tokens in flight, or
++ * shortly after it queued or scheduled a frame. The idle window lets a band
++ * that is alone use the whole pool shortly after the other bands go quiet.
++ */
++static bool mt76_token_band_active(struct mt76_dev *dev, int band)
++{
++	unsigned long active = READ_ONCE(dev->token_band_active[band]);
++
++	if (READ_ONCE(dev->token_band_used[band]))
++		return true;
++
++	return time_before(jiffies, active +
++			   msecs_to_jiffies(MT76_TOKEN_QUOTA_IDLE_MS));
++}
++
++/*
++ * Returns the number of pool entries a band may occupy. The reservations of
++ * the other active bands are subtracted from the shared pool first, so they
++ * cannot be consumed by a burst on this band.
++ */
++static u32 mt76_token_band_limit(struct mt76_dev *dev, int band)
++{
++	u32 limit = dev->token_size;
++	u32 total = 0;
++	int i;
++
++	for (i = 0; i < __MT_MAX_BAND; i++)
++		total += READ_ONCE(dev->token_reserved[i]);
++
++	/*
++	 * WED can shrink the pool below a reservation set for the full pool.
++	 * Ignore the quota instead of blocking every band until it is reset.
++	 */
++	if (total >= dev->token_size)
++		return dev->token_size;
++
++	for (i = 0; i < __MT_MAX_BAND; i++) {
++		u32 reserved = READ_ONCE(dev->token_reserved[i]);
++
++		if (i == band || !reserved)
++			continue;
++		if (!mt76_token_band_active(dev, i))
++			continue;
++		if (reserved >= limit) {
++			limit = 0;
++			break;
++		}
++		limit -= reserved;
++	}
++
++	/*
++	 * A limit within the free headroom cannot be enforced: a band blocked
++	 * there would stay blocked after the other bands go idle, because a
++	 * blocked band cannot consume the token that would trigger the next
++	 * re-evaluation. Keep the shared pool for that band instead; the
++	 * reservation is only a guarantee, not a cap.
++	 */
++	if (limit <= MT76_TOKEN_FREE_THR)
++		limit = dev->token_size;
++
++	return limit;
++}
++
++static bool mt76_token_band_blocked(struct mt76_dev *dev, int band)
++{
++	u32 limit = dev->token_size;
++
++	if (READ_ONCE(dev->token_quota))
++		limit = mt76_token_band_limit(dev, band);
++
++	return limit <= MT76_TOKEN_FREE_THR ||
++	       dev->token_count >= limit - MT76_TOKEN_FREE_THR;
++}
++
++/*
++ * Re-evaluates the blocked state of one band and returns true if it just
++ * became unblocked. The caller must hold @dev->token_lock.
++ */
++static bool mt76_token_band_update(struct mt76_dev *dev, int band)
++{
++	struct mt76_queue *q = mt76_token_band_queue(dev, band);
++	bool blocked;
++
++	if (!q)
++		return false;
++
++	blocked = mt76_token_band_blocked(dev, band);
++	if (q->blocked == blocked)
++		return false;
+ 
+ 	q->blocked = blocked;
++	if (blocked) {
++		dev->token_band_blocked[band]++;
++		return false;
++	}
++
++	return true;
++}
++
++static bool mt76_token_quota_refresh(struct mt76_dev *dev)
++{
++	bool wake = false;
++	int i;
++
++	for (i = 0; i < __MT_MAX_BAND; i++)
++		wake |= mt76_token_band_update(dev, i);
++
++	return wake;
++}
++
++int mt76_token_set_reserved(struct mt76_dev *dev, unsigned int band,
++			    unsigned int reserved)
++{
++	u32 old_total, total = 0;
++	bool wake;
++	int i;
++
++	if (band >= __MT_MAX_BAND)
++		return -EINVAL;
++
++	spin_lock_bh(&dev->token_lock);
++
++	if (reserved > dev->token_size)
++		goto out;
++
++	for (i = 0; i < __MT_MAX_BAND; i++) {
++		u32 val = i == band ? reserved :
++			  READ_ONCE(dev->token_reserved[i]);
++
++		if (val > dev->token_size || total > dev->token_size - val)
++			goto out;
++		total += val;
++	}
++
++	old_total = total - reserved + READ_ONCE(dev->token_reserved[band]);
++
++	/*
++	 * An increase has to leave two free thresholds in the pool, so that
++	 * every band keeps a limit above MT76_TOKEN_FREE_THR and the blocked
++	 * state can always be left again. A decrease or clearing is always
++	 * accepted so a reservation can be backed out after WED shrank the
++	 * pool or after an over-commit was configured.
++	 */
++	if (dev->token_size <= 2 * MT76_TOKEN_FREE_THR ||
++	    (total > dev->token_size - 2 * MT76_TOKEN_FREE_THR &&
++	     total > old_total))
++		goto out;
++
++	WRITE_ONCE(dev->token_reserved[band], reserved);
++	WRITE_ONCE(dev->token_quota, total != 0);
++
++	wake = mt76_token_quota_refresh(dev);
++
++	spin_unlock_bh(&dev->token_lock);
++
++	if (wake)
++		mt76_worker_schedule(&dev->tx_worker);
+ 
+-	phy = dev->phys[MT_BAND1];
+-	if (phy) {
++	return 0;
++
++out:
++	spin_unlock_bh(&dev->token_lock);
++
++	return -EINVAL;
++}
++EXPORT_SYMBOL_GPL(mt76_token_set_reserved);
++
++void __mt76_set_tx_blocked(struct mt76_dev *dev, bool blocked)
++{
++	struct mt76_phy *phy;
++	struct mt76_queue *q;
++	int i;
++
++	/*
++	 * Without a reservation the pool has no per-band split: keep the
++	 * original global code path untouched.
++	 */
++	if (!READ_ONCE(dev->token_quota)) {
++		phy = &dev->phy;
+ 		q = phy->q_tx[0];
++
++		if (blocked == q->blocked)
++			return;
++
+ 		q->blocked = blocked;
++
++		phy = dev->phys[MT_BAND1];
++		if (phy) {
++			q = phy->q_tx[0];
++			q->blocked = blocked;
++		}
++		phy = dev->phys[MT_BAND2];
++		if (phy) {
++			q = phy->q_tx[0];
++			q->blocked = blocked;
++		}
++
++		if (!blocked)
++			mt76_worker_schedule(&dev->tx_worker);
++
++		return;
+ 	}
+-	phy = dev->phys[MT_BAND2];
+-	if (phy) {
+-		q = phy->q_tx[0];
+-		q->blocked = blocked;
++
++	if (blocked) {
++		for (i = 0; i < __MT_MAX_BAND; i++) {
++			q = mt76_token_band_queue(dev, i);
++			if (!q || q->blocked)
++				continue;
++
++			q->blocked = true;
++			dev->token_band_blocked[i]++;
++		}
++
++		return;
+ 	}
+ 
+-	if (!blocked)
+-		mt76_worker_schedule(&dev->tx_worker);
++	/*
++	 * mt76_token_release() may already have cleared the blocked flag of
++	 * the band that made progress, so the refresh below can find nothing
++	 * to change. The worker still has to run to drain the queues that
++	 * were waiting on it.
++	 */
++	mt76_token_quota_refresh(dev);
++	mt76_worker_schedule(&dev->tx_worker);
+ }
+ EXPORT_SYMBOL_GPL(__mt76_set_tx_blocked);
+ 
+ int mt76_token_consume(struct mt76_dev *dev, struct mt76_txwi_cache **ptxwi)
+ {
+ 	int token;
++	int band = (*ptxwi)->phy_idx;
++
++	if (band >= __MT_MAX_BAND)
++		band = MT_BAND0;
+ 
+ 	spin_lock_bh(&dev->token_lock);
+ 
+@@ -960,6 +1189,7 @@
+ 			  GFP_ATOMIC);
+ 	if (token >= dev->token_start) {
+ 		dev->token_count++;
++		dev->token_band_used[band]++;
+ 
+ 		if ((*ptxwi)->qid == MT_TXQ_PSD) {
+ 			struct mt76_phy *mphy = mt76_dev_phy(dev, (*ptxwi)->phy_idx);
+@@ -973,7 +1203,9 @@
+ 		dev->wed_token_count++;
+ #endif
+ 
+-	if (dev->token_count >= dev->token_size - MT76_TOKEN_FREE_THR)
++	if (READ_ONCE(dev->token_quota))
++		mt76_token_band_update(dev, band);
++	else if (dev->token_count >= dev->token_size - MT76_TOKEN_FREE_THR)
+ 		__mt76_set_tx_blocked(dev, true);
+ 
+ 	spin_unlock_bh(&dev->token_lock);
+@@ -1004,12 +1236,20 @@
+ mt76_token_release(struct mt76_dev *dev, int token, bool *wake)
+ {
+ 	struct mt76_txwi_cache *txwi;
++	bool unblocked = false;
+ 
+ 	spin_lock_bh(&dev->token_lock);
+ 
+ 	txwi = idr_remove(&dev->token, token);
+ 	if (txwi) {
++		int band = txwi->phy_idx;
++
++		if (band >= __MT_MAX_BAND)
++			band = MT_BAND0;
++
+ 		dev->token_count--;
++		if (dev->token_band_used[band])
++			dev->token_band_used[band]--;
+ 
+ 		if (txwi->qid == MT_TXQ_PSD) {
+ 			struct mt76_phy *mphy = mt76_dev_phy(dev, txwi->phy_idx);
+@@ -1025,12 +1265,26 @@
+ #endif
+ 	}
+ 
+-	if (wake && dev->token_count < dev->token_size - MT76_TOKEN_FREE_THR &&
+-	    dev->phy.q_tx[0]->blocked)
++	if (READ_ONCE(dev->token_quota)) {
++		/*
++		 * Called with a NULL wake pointer, e.g. when a failed TX
++		 * preparation returns a token, the caller will not issue the
++		 * unblock request; schedule the worker here instead.
++		 */
++		unblocked = mt76_token_quota_refresh(dev);
++		if (unblocked && wake)
++			*wake = true;
++	} else if (wake && dev->token_count <
++		   dev->token_size - MT76_TOKEN_FREE_THR &&
++		   dev->phy.q_tx[0]->blocked) {
+ 		*wake = true;
++	}
+ 
+ 	spin_unlock_bh(&dev->token_lock);
+ 
++	if (unblocked && !wake)
++		mt76_worker_schedule(&dev->tx_worker);
++
+ 	return txwi;
+ }
+ EXPORT_SYMBOL_GPL(mt76_token_release);
+--- a/mt76_connac_mac.c
++++ b/mt76_connac_mac.c
+@@ -1224,6 +1224,8 @@
+ 		mt76_connac2_txwi_free(dev, txwi, NULL, NULL);
+ 		dev->token_count--;
+ 	}
++	memset(dev->token_band_used, 0, sizeof(dev->token_band_used));
++	memset(dev->token_band_active, 0, sizeof(dev->token_band_active));
+ 	spin_unlock_bh(&dev->token_lock);
+ 	idr_destroy(&dev->token);
+ 
+--- a/mt7925/pci_mac.c
++++ b/mt7925/pci_mac.c
+@@ -64,6 +64,9 @@
+ 		mt7925_txwi_free(dev, txwi, NULL, NULL, NULL);
+ 		dev->mt76.token_count--;
+ 	}
++	memset(dev->mt76.token_band_used, 0, sizeof(dev->mt76.token_band_used));
++	memset(dev->mt76.token_band_active, 0,
++	       sizeof(dev->mt76.token_band_active));
+ 	spin_unlock_bh(&dev->mt76.token_lock);
+ 	idr_destroy(&dev->mt76.token);
+ }
+--- a/mt7996/mac.c
++++ b/mt7996/mac.c
+@@ -2140,6 +2140,9 @@
+ 		mt7996_txwi_free(dev, txwi, NULL, NULL, NULL);
+ 		dev->mt76.token_count--;
+ 	}
++	memset(dev->mt76.token_band_used, 0, sizeof(dev->mt76.token_band_used));
++	memset(dev->mt76.token_band_active, 0,
++	       sizeof(dev->mt76.token_band_active));
+ 	spin_unlock_bh(&dev->mt76.token_lock);
+ 	idr_destroy(&dev->mt76.token);
+ 
+--- a/mt7996/debugfs.c
++++ b/mt7996/debugfs.c
+@@ -1151,6 +1151,78 @@
+ 	return 0;
+ }
+ 
++static ssize_t
++mt7996_token_quota_read(struct file *file, char __user *user_buf,
++			size_t count, loff_t *ppos)
++{
++	struct mt7996_dev *dev = file->private_data;
++	struct mt76_dev *mdev = &dev->mt76;
++	u16 used[__MT_MAX_BAND], reserved[__MT_MAX_BAND];
++	u32 blocked[__MT_MAX_BAND];
++	bool quota;
++	u16 tokens, size;
++	char buf[512];
++	int i, len = 0;
++
++	spin_lock_bh(&mdev->token_lock);
++	for (i = 0; i < __MT_MAX_BAND; i++) {
++		used[i] = mdev->token_band_used[i];
++		reserved[i] = mdev->token_reserved[i];
++		blocked[i] = mdev->token_band_blocked[i];
++	}
++	tokens = mdev->token_count;
++	size = mdev->token_size;
++	quota = mdev->token_quota;
++	spin_unlock_bh(&mdev->token_lock);
++
++	len += scnprintf(buf + len, sizeof(buf) - len,
++			 " band |   used | reserved | blocked\n");
++	for (i = 0; i < __MT_MAX_BAND; i++)
++		len += scnprintf(buf + len, sizeof(buf) - len,
++				 " %4d | %6u | %8u | %7u\n",
++				 i, used[i], reserved[i], blocked[i]);
++	len += scnprintf(buf + len, sizeof(buf) - len,
++			 "\n pool: %u of %u in flight, quota %s\n",
++			 tokens, size, quota ? "on" : "off");
++
++	return simple_read_from_buffer(user_buf, count, ppos, buf, len);
++}
++
++/*
++ * Set the per-band token reservation: echo "<band> <tokens>" > token_quota.
++ * The sum of the reservations must leave MT76_TOKEN_FREE_THR entries free.
++ */
++static ssize_t
++mt7996_token_quota_write(struct file *file, const char __user *user_buf,
++			 size_t count, loff_t *ppos)
++{
++	struct mt7996_dev *dev = file->private_data;
++	unsigned int band, reserved;
++	char buf[32];
++
++	if (count >= sizeof(buf))
++		return -EINVAL;
++
++	if (copy_from_user(buf, user_buf, count))
++		return -EFAULT;
++
++	buf[count] = '\0';
++	if (sscanf(buf, "%u %u", &band, &reserved) != 2)
++		return -EINVAL;
++
++	if (mt76_token_set_reserved(&dev->mt76, band, reserved))
++		return -EINVAL;
++
++	return count;
++}
++
++static const struct file_operations mt7996_token_quota_ops = {
++	.write = mt7996_token_quota_write,
++	.read = mt7996_token_quota_read,
++	.open = simple_open,
++	.llseek = default_llseek,
++};
++
+ int mt7996_init_debugfs(struct mt7996_dev *dev)
+ {
+ 	struct dentry *dir;
+@@ -1186,6 +1258,8 @@
+ 				    mt7996_rdd_monitor);
+ 	debugfs_create_devm_seqfile(dev->mt76.dev, "token_info", dir,
+ 				    mt7996_token_info_read);
++	debugfs_create_file("token_quota", 0600, dir, dev,
++			    &mt7996_token_quota_ops);
+ 
+ 	dev->debugfs_dir = dir;
+ 
