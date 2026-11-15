@@ -15,12 +15,20 @@ a full pool shows up as rx_fc_drops and nothing else.  Reading a reserve
 means writing the port/queue index first, so this is deliberately not a
 fast path, and it only exists with debugfs compiled in.
 
+The weight behind each reserve is also only visible in the source: the
+init path asks pse_port_weight[] for a per-queue weight and
+airoha_pse_tune_port() caps that against the pool.  Add pse/weights
+reporting the table, so the policy can be compared with the result
+without looking up the numbers in the driver.  The queue count now comes
+from the same table the tuner uses, instead of a second copy that could
+drift.
+
 Signed-off-by: OpenWrt <openwrt@example.org>
 ---
 
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -643,7 +643,11 @@
+@@ -673,7 +673,11 @@
  		   fq_limit ? all_rsv * 100 / fq_limit : 0);
  	seq_printf(m, "shared   %u pages (%u KiB)\n", fq_limit - all_rsv,
  		   (fq_limit - all_rsv) * 128 / 1024);
@@ -33,7 +41,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	seq_printf(m, "  high %u\n", hthd);
  	seq_printf(m, "  mid  %u\n", mthd);
  	seq_printf(m, "  low  %u\n", lthd);
-@@ -652,11 +656,71 @@
+@@ -682,11 +686,83 @@
  }
  DEFINE_SHOW_ATTRIBUTE(airoha_pse_debugfs);
  
@@ -51,20 +59,6 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +	[FE_PSE_PORT_CDM5] = "cdm5",
 +};
 +
-+static const u8 airoha_pse_port_queues[] = {
-+	[FE_PSE_PORT_CDM1] = 6,
-+	[FE_PSE_PORT_GDM1] = 6,
-+	[FE_PSE_PORT_GDM2] = 32,
-+	[FE_PSE_PORT_GDM3] = 6,
-+	[FE_PSE_PORT_PPE1] = 4,
-+	[FE_PSE_PORT_CDM2] = 6,
-+	[FE_PSE_PORT_CDM3] = 8,
-+	[FE_PSE_PORT_CDM4] = 10,
-+	[FE_PSE_PORT_PPE2] = 4,
-+	[FE_PSE_PORT_GDM4] = 2,
-+	[FE_PSE_PORT_CDM5] = 2,
-+};
-+
 +/* Reading a per-queue reserve means writing the port/queue index first, so
 + * it is not a plain load. The reservation code only writes during probe and
 + * on link up/down, well before this file is of any use, so a reader here
@@ -80,7 +74,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +		if (!airoha_pse_port_names[port])
 +			continue;
 +
-+		for (q = 0; q < airoha_pse_port_queues[port]; q++) {
++		for (q = 0; q < pse_port_num_queues[port]; q++) {
 +			u32 pages = airoha_fe_get_pse_queue_rsv_pages(eth, port,
 +								      q);
 +
@@ -95,6 +89,30 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +}
 +DEFINE_SHOW_ATTRIBUTE(airoha_pse_debugfs_queues);
 +
++/* The per-queue weight the init path asks for.  GDM4's request is capped by
++ * the pool in airoha_pse_tune_port(), so pse/queues can show a smaller
++ * reserve than this table; reading both shows the cap at work.
++ */
++static int airoha_pse_debugfs_weights_show(struct seq_file *m, void *private)
++{
++	u32 port;
++
++	seq_puts(m, "port weight_pages weight_KiB\n");
++	for (port = 0; port <= FE_PSE_PORT_CDM5; port++) {
++		u32 weight = pse_port_weight[port];
++
++		if (!airoha_pse_port_names[port] || !weight)
++			continue;
++
++		seq_printf(m, "%-4s %12u %10u\n",
++			   airoha_pse_port_names[port], weight,
++			   weight * 128 / 1024);
++	}
++
++	return 0;
++}
++DEFINE_SHOW_ATTRIBUTE(airoha_pse_debugfs_weights);
++
  static void airoha_pse_debugfs_init(struct airoha_eth *eth)
  {
  	eth->debugfs_dir = debugfs_create_dir("pse", NULL);
@@ -102,6 +120,8 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  			    &airoha_pse_debugfs_fops);
 +	debugfs_create_file("queues", 0444, eth->debugfs_dir, eth,
 +			    &airoha_pse_debugfs_queues_fops);
++	debugfs_create_file("weights", 0444, eth->debugfs_dir, eth,
++			    &airoha_pse_debugfs_weights_fops);
  }
  #else
  static void airoha_pse_debugfs_init(struct airoha_eth *eth) {}
