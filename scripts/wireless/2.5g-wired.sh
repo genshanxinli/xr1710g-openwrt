@@ -121,10 +121,12 @@ Device selection:
   --device USER@IPV4         SSH target on the management network (lan3
                              by convention; default: root@192.168.1.1,
                              env DEVICE)
-  --dev-lan10g-if NAME       device netdev for lan10g (default: lan10g).
-                             The stock tree calls this port lan2.
-  --dev-wan10g-if NAME       device netdev for wan10g (default: wan10g).
-                             The stock tree calls this port wan.
+  --dev-lan10g-if NAME       device netdev for the 10G LAN port (default:
+                             lan10g).  A lab image exposes it as lan10g; the
+                             base tree names it lan2, which sits in br-lan
+                             and is refused here as a data port.
+  --dev-wan10g-if NAME       device netdev for the 10G WAN port (default:
+                             wan10g; the base tree names it wan).
   --ports both|lan10g|wan10g ports to test (default: both)
 
 Bench-host NICs (one per selected device port):
@@ -195,10 +197,10 @@ Examples:
   sudo ./scripts/wireless/2.5g-wired.sh --device root@192.168.1.1 \
       --ports lan10g --host-lan10g-if enp9s0 --proto tcp
 
-  # Stock netdev names before the 10G lab rename.
-  sudo ./scripts/wireless/2.5g-wired.sh \
-      --dev-lan10g-if lan2 --dev-wan10g-if wan \
-      --host-lan10g-if enp9s0 --host-wan10g-if enp10s0
+  # Base-tree names: wan is usable, but lan2 is inside br-lan and is
+  # refused; the lab image must expose the 10G LAN port outside the bridge.
+  sudo ./scripts/wireless/2.5g-wired.sh --ports wan10g \
+      --dev-wan10g-if wan --host-wan10g-if enp10s0
 EOF
 }
 
