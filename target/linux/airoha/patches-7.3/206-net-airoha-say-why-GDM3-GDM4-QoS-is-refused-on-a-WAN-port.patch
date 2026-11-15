@@ -21,7 +21,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -3234,10 +3234,23 @@
+@@ -3743,10 +3743,23 @@ static int airoha_enable_qos_for_gdm34(s
  
  	wan_dev = airoha_get_wan_gdm_dev(eth);
  	if (wan_dev) {

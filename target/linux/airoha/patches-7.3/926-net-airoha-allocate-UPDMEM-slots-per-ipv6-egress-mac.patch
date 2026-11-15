@@ -47,7 +47,7 @@ Signed-off-by: airola <airola@example.org>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -658,6 +658,9 @@
+@@ -655,6 +655,9 @@ struct airoha_gdm_port {
  	int id;
  	int users;
  
@@ -57,7 +57,7 @@ Signed-off-by: airola <airola@example.org>
  	/* protect concurrent hw_stats and frag register accesses */
  	spinlock_t lock;
  
-@@ -743,9 +746,24 @@
+@@ -740,9 +743,24 @@ struct airoha_eth {
  	struct airoha_qdma qdma[AIROHA_MAX_NUM_QDMA];
  	struct airoha_gdm_port *ports[AIROHA_MAX_NUM_GDM_PORTS];
  
@@ -84,7 +84,7 @@ Signed-off-by: airola <airola@example.org>
  u32 airoha_rmw(void __iomem *base, u32 offset, u32 mask, u32 val);
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -426,6 +426,123 @@
+@@ -464,6 +464,123 @@ static void airoha_ppe_foe_set_bridge_ad
  	br->src_mac_lo = get_unaligned_be32(eh->h_source + 2);
  }
  
@@ -208,7 +208,7 @@ Signed-off-by: airola <airola@example.org>
  static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
  					struct airoha_foe_entry *hwe,
  					struct net_device *netdev, int type,
-@@ -504,6 +621,15 @@
+@@ -541,6 +658,15 @@ static int airoha_ppe_foe_entry_prepare(
  						  dsa_port);
  
  			smac_id = port->id;
@@ -224,7 +224,7 @@ Signed-off-by: airola <airola@example.org>
  		}
  	}
  
-@@ -1033,6 +1159,13 @@
+@@ -1086,6 +1212,13 @@ static void airoha_ppe_foe_remove_l2_flo
  static void airoha_ppe_foe_flow_remove_entry(struct airoha_ppe *ppe,
  					     struct airoha_flow_table_entry *e)
  {
@@ -238,7 +238,7 @@ Signed-off-by: airola <airola@example.org>
  	spin_lock_bh(&ppe_lock);
  
  	if (e->type == FLOW_TYPE_L2)
-@@ -1041,6 +1174,9 @@
+@@ -1094,6 +1227,9 @@ static void airoha_ppe_foe_flow_remove_e
  		airoha_ppe_foe_remove_flow(ppe, e);
  
  	spin_unlock_bh(&ppe_lock);
@@ -248,7 +248,7 @@ Signed-off-by: airola <airola@example.org>
  }
  
  static int
-@@ -1466,14 +1602,17 @@
+@@ -1451,14 +1587,17 @@ static int airoha_ppe_flow_offload_repla
  	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_PORTS)) {
  		struct flow_match_ports ports;
  
@@ -269,7 +269,7 @@ Signed-off-by: airola <airola@example.org>
  	}
  
  	if (addr_type == FLOW_DISSECTOR_KEY_IPV4_ADDRS) {
-@@ -1499,8 +1638,10 @@
+@@ -1484,8 +1623,10 @@ static int airoha_ppe_flow_offload_repla
  		if (act->id != FLOW_ACTION_MANGLE)
  			continue;
  
@@ -282,7 +282,7 @@ Signed-off-by: airola <airola@example.org>
  
  		switch (act->mangle.htype) {
  		case FLOW_ACT_MANGLE_HDR_TYPE_TCP:
-@@ -1514,22 +1655,25 @@
+@@ -1499,22 +1640,25 @@ static int airoha_ppe_flow_offload_repla
  			/* handled earlier */
  			break;
  		default:
@@ -312,8 +312,8 @@ Signed-off-by: airola <airola@example.org>
 +	}
  
  	e->cookie = f->cookie;
- 	e->ingress_dev_idx = meta.key->ingress_ifindex;
-@@ -1542,15 +1686,19 @@
+ 	memcpy(&e->data, &hwe, sizeof(e->data));
+@@ -1525,15 +1669,19 @@ static int airoha_ppe_flow_offload_repla
  
  	err = rhashtable_insert_fast(&eth->flow_table, &e->node,
  				     airoha_flow_table_params);
@@ -337,7 +337,7 @@ Signed-off-by: airola <airola@example.org>
  
  	return err;
  }
-@@ -1809,24 +1957,39 @@
+@@ -1792,24 +1940,39 @@ void airoha_ppe_check_skb(struct airoha_
  	airoha_ppe_foe_insert_entry(ppe, skb, hash, rx_wlan);
  }
  
@@ -382,7 +382,7 @@ Signed-off-by: airola <airola@example.org>
  }
  
  struct airoha_ppe_dev *airoha_ppe_get_dev(struct device *dev)
-@@ -1933,6 +2096,8 @@
+@@ -1923,6 +2086,8 @@ int airoha_ppe_init(struct airoha_eth *e
  	if (err)
  		return err;
  

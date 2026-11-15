@@ -21,7 +21,7 @@ Ported from the out-of-tree W1700K 6.18 patch set (Gilly1970).
 ---
 --- a/drivers/net/pcs/airoha/pcs-airoha-common.c
 +++ b/drivers/net/pcs/airoha/pcs-airoha-common.c
-@@ -1213,7 +1213,8 @@
+@@ -1213,7 +1213,8 @@ static int airoha_pcs_probe(struct platf
  	 * manual rx calibration is needed. Extend the manual-calibration
  	 * threshold to include E2 silicon.
  	 */

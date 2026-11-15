@@ -22,7 +22,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -132,7 +132,18 @@
+@@ -132,7 +132,18 @@ static int airoha_ppe_debugfs_foe_show(s
  			break;
  		}
  
@@ -42,7 +42,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  			data = hwe->ipv6.data;
  			ib2 = hwe->ipv6.ib2;
  			l2 = &hwe->ipv6.l2;
-@@ -161,6 +172,54 @@
+@@ -161,6 +172,54 @@ static int airoha_ppe_debugfs_foe_show(s
  	return 0;
  }
  
@@ -97,7 +97,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static int airoha_ppe_debugfs_foe_all_show(struct seq_file *m, void *private)
  {
  	return airoha_ppe_debugfs_foe_show(m, private, false);
-@@ -180,6 +239,8 @@
+@@ -180,6 +239,8 @@ int airoha_ppe_debugfs_init(struct airoh
  			    &airoha_ppe_debugfs_foe_all_fops);
  	debugfs_create_file("bind", 0444, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_foe_bind_fops);

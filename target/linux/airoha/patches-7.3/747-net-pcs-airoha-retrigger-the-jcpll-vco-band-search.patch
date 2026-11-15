@@ -37,7 +37,7 @@ Signed-off-by: Gilly1970 <gilroyscott1970@gmail.com>
 ---
 --- a/drivers/net/pcs/airoha/pcs-airoha.h
 +++ b/drivers/net/pcs/airoha/pcs-airoha.h
-@@ -1260,6 +1260,8 @@
+@@ -1260,6 +1260,8 @@ struct airoha_pcs_match_data {
  		       int index, phy_interface_t interface);
  	void (*link_up)(struct airoha_pcs_priv *priv, int index);
  	int (*rxlock_workaround)(struct airoha_pcs_priv *priv, int index);
@@ -46,7 +46,7 @@ Signed-off-by: Gilly1970 <gilroyscott1970@gmail.com>
  };
  
  #define to_airoha_pcs_port(n) container_of(n, struct airoha_pcs_port, pcs)
-@@ -1274,6 +1276,8 @@
+@@ -1274,6 +1276,8 @@ int an7581_pcs_usb_bringup(struct airoha
  
  void an7581_pcs_phya_link_up(struct airoha_pcs_priv *priv, int index);
  int an7581_pcs_rxlock_workaround(struct airoha_pcs_priv *priv, int index);
@@ -55,7 +55,7 @@ Signed-off-by: Gilly1970 <gilroyscott1970@gmail.com>
  #else
  static inline int an7581_pcs_alloc_regmap_fields(struct airoha_pcs_priv *priv)
  {
-@@ -1307,4 +1311,10 @@
+@@ -1307,4 +1311,10 @@ static inline int an7581_pcs_rxlock_work
  {
  	return 0;
  }
@@ -68,7 +68,7 @@ Signed-off-by: Gilly1970 <gilroyscott1970@gmail.com>
  #endif
 --- a/drivers/net/pcs/airoha/pcs-airoha-common.c
 +++ b/drivers/net/pcs/airoha/pcs-airoha-common.c
-@@ -659,6 +659,9 @@
+@@ -659,6 +659,9 @@ static int airoha_pcs_config(struct phyl
  				AIROHA_PCS_XFI_TX_FC_EN | AIROHA_PCS_XFI_RX_FC_EN :
  				0);
  
@@ -78,7 +78,7 @@ Signed-off-by: Gilly1970 <gilroyscott1970@gmail.com>
  	return 0;
  }
  
-@@ -1266,6 +1269,7 @@
+@@ -1266,6 +1269,7 @@ static const struct airoha_pcs_match_dat
  	.bringup = an7581_pcs_bringup,
  	.link_up = an7581_pcs_phya_link_up,
  	.rxlock_workaround = an7581_pcs_rxlock_workaround,
@@ -88,7 +88,7 @@ Signed-off-by: Gilly1970 <gilroyscott1970@gmail.com>
  static const struct airoha_pcs_match_data an7581_pcs_pon = {
 --- a/drivers/net/pcs/airoha/pcs-an7581.c
 +++ b/drivers/net/pcs/airoha/pcs-an7581.c
-@@ -1906,6 +1906,27 @@
+@@ -1906,6 +1906,27 @@ retry_calibration:
  	return 0;
  }
  

@@ -32,7 +32,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -1197,20 +1197,29 @@
+@@ -1197,20 +1197,29 @@ static void airoha_ppe_foe_remove_flow(s
  	}
  }
  
@@ -66,7 +66,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static void airoha_ppe_foe_flow_remove_entry(struct airoha_ppe *ppe,
  					     struct airoha_flow_table_entry *e)
  {
-@@ -1393,31 +1402,45 @@
+@@ -1393,31 +1402,45 @@ airoha_ppe_foe_l2_flow_commit_entry(stru
  				    struct airoha_flow_table_entry *e)
  {
  	struct airoha_flow_table_entry *prev;

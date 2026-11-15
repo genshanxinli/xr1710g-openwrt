@@ -20,7 +20,8 @@ Assisted-by: Claude:claude-opus-5-5
 Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
 ---
 --- a/net/ipv4/ipmr.c
-@@ -1818,12 +1818,17 @@ static struct notifier_block ip_mr_notif
++++ b/net/ipv4/ipmr.c
+@@ -1836,12 +1836,17 @@ static struct notifier_block ip_mr_notif
   * This avoids tunnel drivers and other mess and gives us the speed so
   * important for multicast video.
   */
@@ -41,7 +42,7 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
  	skb_push(skb, sizeof(struct iphdr));
  	skb->transport_header = skb->network_header;
  	skb_reset_network_header(skb);
-@@ -1838,11 +1843,12 @@ static void ip_encap(struct net *net, st
+@@ -1856,11 +1861,12 @@ static void ip_encap(struct net *net, st
  	iph->protocol	=	IPPROTO_IPIP;
  	iph->ihl	=	5;
  	iph->tot_len	=	htons(skb->len);
@@ -55,7 +56,7 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
  }
  
  static inline int ipmr_forward_finish(struct net *net, struct sock *sk,
-@@ -1951,7 +1957,8 @@ static int ipmr_prepare_xmit(struct net
+@@ -1969,7 +1975,8 @@ static int ipmr_prepare_xmit(struct net
  	 * What do we do with netfilter? -- RR
  	 */
  	if (vif->flags & VIFF_TUNNEL) {

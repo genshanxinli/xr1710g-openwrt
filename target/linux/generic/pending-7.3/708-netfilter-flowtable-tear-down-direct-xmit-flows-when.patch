@@ -43,7 +43,7 @@ keeps applying, and rebase the hunks on top of pending-7.3/675-02]
 
 --- a/include/linux/netfilter.h
 +++ b/include/linux/netfilter.h
-@@ -67,6 +67,13 @@
+@@ -67,6 +67,13 @@ static inline void nf_inet_addr_mask(con
  #endif
  }
  
@@ -59,7 +59,7 @@ keeps applying, and rebase the hunks on top of pending-7.3/675-02]
  struct sk_buff;
 --- a/include/net/netfilter/nf_flow_table.h
 +++ b/include/net/netfilter/nf_flow_table.h
-@@ -152,6 +152,9 @@
+@@ -152,6 +152,9 @@ struct flow_offload_tuple {
  					xmit_type:3,
  					encap_num:2,
  					needs_gso_segment:1,
@@ -69,7 +69,7 @@ keeps applying, and rebase the hunks on top of pending-7.3/675-02]
  					tun_num:2,
  					in_vlan_ingress:2;
  	u16				mtu;
-@@ -234,7 +237,10 @@
+@@ -234,7 +237,10 @@ struct nf_flow_route {
  			u32			hw_ifindex;
  			u8			h_source[ETH_ALEN];
  			u8			h_dest[ETH_ALEN];
@@ -83,7 +83,7 @@ keeps applying, and rebase the hunks on top of pending-7.3/675-02]
  	} tuple[FLOW_OFFLOAD_DIR_MAX];
 --- a/net/bridge/Makefile
 +++ b/net/bridge/Makefile
-@@ -14,6 +14,8 @@
+@@ -14,6 +14,8 @@ bridge-$(CONFIG_SYSFS) += br_sysfs_if.o
  
  bridge-$(subst m,y,$(CONFIG_BRIDGE_NETFILTER)) += br_nf_core.o
  
@@ -94,7 +94,7 @@ keeps applying, and rebase the hunks on top of pending-7.3/675-02]
  obj-$(CONFIG_BRIDGE_NETFILTER) += br_netfilter.o
 --- a/net/bridge/br.c
 +++ b/net/bridge/br.c
-@@ -463,6 +463,7 @@
+@@ -463,6 +463,7 @@ static int __init br_init(void)
  		goto err_out6;
  
  	brioctl_set(br_ioctl_stub);
@@ -102,7 +102,7 @@ keeps applying, and rebase the hunks on top of pending-7.3/675-02]
  
  #if IS_MODULE(CONFIG_BRIDGE_NETFILTER)
  	pr_info("bridge: filtering via arp/ip/ip6tables is no longer available "
-@@ -491,6 +492,7 @@
+@@ -491,6 +492,7 @@ err_out:
  
  static void __exit br_deinit(void)
  {
@@ -112,7 +112,7 @@ keeps applying, and rebase the hunks on top of pending-7.3/675-02]
  	unregister_switchdev_blocking_notifier(&br_switchdev_blocking_notifier);
 --- a/net/bridge/br_private.h
 +++ b/net/bridge/br_private.h
-@@ -2013,6 +2013,19 @@
+@@ -2013,6 +2013,19 @@ struct nf_br_ops {
  };
  extern const struct nf_br_ops __rcu *nf_br_ops;
  
@@ -134,7 +134,7 @@ keeps applying, and rebase the hunks on top of pending-7.3/675-02]
  int br_nf_core_init(void);
 --- a/net/netfilter/core.c
 +++ b/net/netfilter/core.c
-@@ -798,6 +798,9 @@
+@@ -798,6 +798,9 @@ static struct pernet_operations netfilte
  	.exit = netfilter_net_exit,
  };
  
@@ -154,7 +154,7 @@ keeps applying, and rebase the hunks on top of pending-7.3/675-02]
  #include <linux/netdevice.h>
  #include <net/ip.h>
  #include <net/ip6_route.h>
-@@ -139,6 +140,9 @@
+@@ -139,6 +140,9 @@ static int flow_offload_fill_route(struc
  		memcpy(flow_tuple->out.h_source, route->tuple[dir].out.h_source,
  		       ETH_ALEN);
  		flow_tuple->out.ifidx = route->tuple[dir].out.ifindex;
@@ -164,7 +164,7 @@ keeps applying, and rebase the hunks on top of pending-7.3/675-02]
  		break;
  	case FLOW_OFFLOAD_XMIT_XFRM:
  	case FLOW_OFFLOAD_XMIT_NEIGH:
-@@ -572,6 +576,43 @@
+@@ -572,6 +576,43 @@ static void nf_flow_table_extend_ct_time
  	nf_ct_put(ct);
  }
  
@@ -208,7 +208,7 @@ keeps applying, and rebase the hunks on top of pending-7.3/675-02]
  static void nf_flow_offload_gc_step(struct nf_flowtable *flow_table,
  				    struct flow_offload *flow, void *data)
  {
-@@ -584,8 +625,8 @@
+@@ -584,8 +625,8 @@ static void nf_flow_offload_gc_step(stru
  
  	if (nf_flow_has_expired(flow) ||
  	    nf_ct_is_dying(flow->ct) ||
@@ -221,7 +221,7 @@ keeps applying, and rebase the hunks on top of pending-7.3/675-02]
  		teardown = true;
 --- a/net/netfilter/nf_flow_table_path.c
 +++ b/net/netfilter/nf_flow_table_path.c
-@@ -100,7 +100,10 @@
+@@ -100,7 +100,10 @@ struct nft_forward_info {
  	u8 ingress_vlans;
  	u8 h_source[ETH_ALEN];
  	u8 h_dest[ETH_ALEN];
@@ -233,7 +233,7 @@ keeps applying, and rebase the hunks on top of pending-7.3/675-02]
  	enum flow_offload_xmit_type xmit_type;
  };
  
-@@ -113,7 +116,7 @@
+@@ -113,7 +116,7 @@ static int nft_dev_path_info(struct net_
  			     struct nft_flowtable *ft)
  {
  	const struct net_device_path *path;
@@ -242,7 +242,7 @@ keeps applying, and rebase the hunks on top of pending-7.3/675-02]
  
  	memcpy(info->h_dest, ha, ETH_ALEN);
  
-@@ -154,6 +157,8 @@
+@@ -154,6 +157,8 @@ static int nft_dev_path_info(struct net_
  				info->encap[info->num_encaps].proto =
  					path->encap.proto;
  				info->num_encaps++;
@@ -251,7 +251,7 @@ keeps applying, and rebase the hunks on top of pending-7.3/675-02]
  			}
  			if (path->type == DEV_PATH_PPPOE) {
  				memcpy(info->h_dest, path->encap.h_dest, ETH_ALEN);
-@@ -189,6 +194,13 @@
+@@ -189,6 +194,13 @@ static int nft_dev_path_info(struct net_
  			case DEV_PATH_BR_VLAN_KEEP:
  				break;
  			}
@@ -265,7 +265,7 @@ keeps applying, and rebase the hunks on top of pending-7.3/675-02]
  			info->xmit_type = FLOW_OFFLOAD_XMIT_DIRECT;
  			break;
  		case DEV_PATH_MTK_WDMA:
-@@ -304,6 +316,9 @@
+@@ -304,6 +316,9 @@ static int nft_dev_forward_path(const st
  	if (info.xmit_type == FLOW_OFFLOAD_XMIT_DIRECT) {
  		memcpy(route->tuple[dir].out.h_source, info.h_source, ETH_ALEN);
  		memcpy(route->tuple[dir].out.h_dest, info.h_dest, ETH_ALEN);

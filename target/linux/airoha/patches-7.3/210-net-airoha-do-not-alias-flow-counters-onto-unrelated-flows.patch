@@ -36,7 +36,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -672,8 +672,18 @@
+@@ -631,8 +631,18 @@ static int airoha_ppe_foe_get_flow_stats
  	if (ppe_num_stats_entries < 0)
  		return ppe_num_stats_entries;
  

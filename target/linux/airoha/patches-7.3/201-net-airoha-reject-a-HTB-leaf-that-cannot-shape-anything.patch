@@ -27,7 +27,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -3327,6 +3394,28 @@
+@@ -3318,6 +3318,28 @@ static int airoha_tc_htb_alloc_leaf_queu
  	struct airoha_gdm_dev *dev = netdev_priv(netdev);
  	struct airoha_qdma *qdma;
  

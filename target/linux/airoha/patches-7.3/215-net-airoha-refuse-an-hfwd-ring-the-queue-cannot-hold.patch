@@ -24,7 +24,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -1690,6 +1690,12 @@
+@@ -1727,6 +1727,12 @@ static int airoha_qdma_init_hfwd_queues(
  		 * reserved memory size and the payload buffer size
  		 */
  		num_desc = div_u64(rmem->size, buf_size);

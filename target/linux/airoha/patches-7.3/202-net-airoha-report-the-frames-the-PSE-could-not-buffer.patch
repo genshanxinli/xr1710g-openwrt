@@ -25,7 +25,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -2117,6 +2117,14 @@
+@@ -2141,6 +2141,14 @@ static void airoha_update_hw_stats(struc
  	dev->stats.rx_over_errors += (u32)(val - dev->stats.mib_prev.rx_over_errors);
  	dev->stats.mib_prev.rx_over_errors = val;
  
@@ -40,7 +40,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	val = airoha_fe_rr(eth, REG_FE_GDM_RX_ETH_FRAG_CNT(port->id));
  	dev->stats.rx_fragment += (u32)(val - dev->stats.mib_prev.rx_fragment);
  	dev->stats.mib_prev.rx_fragment = val;
-@@ -2846,6 +2854,65 @@
+@@ -2855,6 +2863,65 @@ static const struct ethtool_rmon_hist_ra
  	{},
  };
  
@@ -106,7 +106,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static void
  airoha_ethtool_get_rmon_stats(struct net_device *netdev,
  			      struct ethtool_rmon_stats *stats,
-@@ -3761,6 +3850,9 @@
+@@ -3772,6 +3839,9 @@ static const struct net_device_ops airoh
  
  static const struct ethtool_ops airoha_ethtool_ops = {
  	.get_drvinfo		= airoha_ethtool_get_drvinfo,
@@ -115,10 +115,10 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +	.get_ethtool_stats	= airoha_ethtool_get_stats,
  	.get_eth_mac_stats      = airoha_ethtool_get_mac_stats,
  	.get_rmon_stats		= airoha_ethtool_get_rmon_stats,
- 	.get_link_ksettings	= airoha_ethtool_get_link_ksettings,
+ 	.get_link_ksettings	= phy_ethtool_get_link_ksettings,
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -264,6 +264,10 @@
+@@ -269,6 +269,10 @@ struct airoha_hw_stats {
  	u64 tx_drops;
  	u64 rx_crc_error;
  	u64 rx_over_errors;
@@ -129,7 +129,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	/* ethtool stats */
  	u64 tx_broadcast;
  	u64 tx_multicast;
-@@ -293,6 +297,7 @@
+@@ -298,6 +302,7 @@ struct airoha_hw_stats {
  		u32 rx_errors;
  		u32 rx_crc_error;
  		u32 rx_over_errors;

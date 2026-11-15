@@ -33,7 +33,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -323,21 +323,76 @@
+@@ -323,21 +323,76 @@ static int airoha_fe_set_pse_oq_rsv(stru
  	return 0;
  }
  
@@ -123,7 +123,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	int q;
  
  	if (airoha_ppe_is_enabled(eth, 1)) {
-@@ -352,59 +407,55 @@
+@@ -352,59 +407,55 @@ static void airoha_fe_pse_ports_init(str
  	}
  
  	/* CDM1 */

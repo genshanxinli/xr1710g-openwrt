@@ -28,7 +28,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -322,6 +322,49 @@
+@@ -322,6 +322,49 @@ static const struct file_operations airo
  	.release	= single_release,
  };
  
@@ -78,7 +78,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  {
  	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-@@ -335,6 +378,8 @@
+@@ -335,6 +378,8 @@ int airoha_ppe_debugfs_init(struct airoh
  			    &airoha_ppe_debugfs_foe_alias_fops);
  	debugfs_create_file("bind_rate", 0644, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_bind_rate_fops);

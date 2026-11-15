@@ -18,7 +18,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -162,11 +162,21 @@
+@@ -162,11 +162,21 @@ static int airoha_ppe_debugfs_foe_show(s
  		*((__be32 *)h_source) = cpu_to_be32(l2->src_mac_hi);
  
  		seq_printf(m, " eth=%pM->%pM etype=%04x data=%08x"
