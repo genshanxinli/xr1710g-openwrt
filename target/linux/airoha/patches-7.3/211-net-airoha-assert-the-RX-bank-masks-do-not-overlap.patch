@@ -24,7 +24,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -1285,6 +1285,20 @@
+@@ -1281,6 +1281,20 @@ static int airoha_qdma_init_rx(struct ai
  {
  	int i;
  

@@ -18,12 +18,11 @@ block, so the count is reported as unavailable rather than as zero.
 
 Signed-off-by: OpenWrt <openwrt@example.org>
 ---
-diff --git a/drivers/net/ethernet/airoha/airoha_npu.c b/drivers/net/ethernet/airoha/airoha_npu.c
 --- a/drivers/net/ethernet/airoha/airoha_npu.c
 +++ b/drivers/net/ethernet/airoha/airoha_npu.c
-@@ -31,6 +31,17 @@
+@@ -34,6 +34,17 @@
   */
- #define AIROHA_NPU_MBOX_SIZE			256
+ #define AIROHA_NPU_MBOX_SIZE			4416
  
 +/*
 + * ClankerNPU keeps a fixed field-debug block at the top of the NPU SRAM
@@ -39,7 +38,7 @@ diff --git a/drivers/net/ethernet/airoha/airoha_npu.c b/drivers/net/ethernet/air
  #define REG_NPU_LOCAL_SRAM		0x0
  
  #define NPU_PC_BASE_ADDR		0x305000
-@@ -222,8 +233,37 @@ static int airoha_npu_send_msg(struct airoha_npu *npu, int func_id,
+@@ -225,8 +236,37 @@ static int airoha_npu_send_msg(struct ai
  	return __airoha_npu_send_msg(npu, func_id, data, len, data, len);
  }
  
@@ -78,7 +77,7 @@ diff --git a/drivers/net/ethernet/airoha/airoha_npu.c b/drivers/net/ethernet/air
  {
  	const struct firmware *fw;
  	int ret;
-@@ -241,6 +281,9 @@ static int airoha_npu_load_firmware(struct device *dev, void __iomem *addr,
+@@ -244,6 +284,9 @@ static int airoha_npu_load_firmware(stru
  	}
  
  	memcpy_toio(addr, fw->data, fw->size);
@@ -88,7 +87,7 @@ diff --git a/drivers/net/ethernet/airoha/airoha_npu.c b/drivers/net/ethernet/air
  out:
  	release_firmware(fw);
  
-@@ -248,7 +291,8 @@ out:
+@@ -251,7 +294,8 @@ out:
  }
  
  static int
@@ -98,7 +97,7 @@ diff --git a/drivers/net/ethernet/airoha/airoha_npu.c b/drivers/net/ethernet/air
  				  void __iomem *base)
  {
  	const char *fw_names[2];
-@@ -261,17 +305,20 @@ airoha_npu_load_firmware_from_dts(struct device *dev, void __iomem *addr,
+@@ -264,17 +308,20 @@ airoha_npu_load_firmware_from_dts(struct
  				     "invalid firmware-name property\n");
  
  	ret = airoha_npu_load_firmware(dev, addr, fw_names[0],
@@ -123,7 +122,7 @@ diff --git a/drivers/net/ethernet/airoha/airoha_npu.c b/drivers/net/ethernet/air
  {
  	const struct airoha_npu_soc_data *soc;
  	void __iomem *addr;
-@@ -289,20 +336,92 @@ static int airoha_npu_run_firmware(struct device *dev, void __iomem *base,
+@@ -292,19 +339,91 @@ static int airoha_npu_run_firmware(struc
  	 * dts if available.
  	 */
  	if (of_find_property(dev->of_node, "firmware-name", NULL))
@@ -144,8 +143,8 @@ diff --git a/drivers/net/ethernet/airoha/airoha_npu.c b/drivers/net/ethernet/air
  					soc->fw_data.name,
 -					soc->fw_data.max_size);
 +					soc->fw_data.max_size, NULL, 0);
- }
- 
++}
++
 +#if IS_ENABLED(CONFIG_DEBUG_FS)
 +static bool airoha_npu_tunnel_count(struct airoha_npu *npu, u32 *count)
 +{
@@ -212,14 +211,13 @@ diff --git a/drivers/net/ethernet/airoha/airoha_npu.c b/drivers/net/ethernet/air
 +		seq_puts(m, "tunnel=unavailable\n");
 +
 +	return 0;
-+}
+ }
 +DEFINE_SHOW_ATTRIBUTE(airoha_npu_tunnel_probe);
 +#endif
-+
+ 
  static irqreturn_t airoha_npu_mbox_handler(int irq, void *npu_instance)
  {
- 	struct airoha_npu *npu = npu_instance;
-@@ -844,7 +963,7 @@ static int airoha_npu_probe(struct platform_device *pdev)
+@@ -1021,7 +1140,7 @@ static int airoha_npu_probe(struct platf
  			return -ENOMEM;
  	}
  
@@ -228,9 +226,9 @@ diff --git a/drivers/net/ethernet/airoha/airoha_npu.c b/drivers/net/ethernet/air
  	if (err)
  		return err;
  
-@@ -872,6 +991,17 @@ static int airoha_npu_probe(struct platform_device *pdev)
- 
- 	platform_set_drvdata(pdev, npu);
+@@ -1056,6 +1175,17 @@ static int airoha_npu_probe(struct platf
+ 	airoha_npu_debugfs_register(npu);
+ #endif
  
 +#if IS_ENABLED(CONFIG_DEBUG_FS)
 +	{
@@ -246,10 +244,9 @@ diff --git a/drivers/net/ethernet/airoha/airoha_npu.c b/drivers/net/ethernet/air
  	return 0;
  }
  
-diff --git a/include/linux/soc/airoha/airoha_offload.h b/include/linux/soc/airoha/airoha_offload.h
 --- a/include/linux/soc/airoha/airoha_offload.h
 +++ b/include/linux/soc/airoha/airoha_offload.h
-@@ -69,6 +69,7 @@ static inline void airoha_ppe_dev_check_skb(struct airoha_ppe_dev *dev,
+@@ -82,6 +82,7 @@ airoha_ppe_dev_get_l2_dual_window_ms(str
  #define NPU_NUM_IRQ		6
  #define NPU_RX0_DESC_NUM	512
  #define NPU_RX1_DESC_NUM	512
@@ -257,7 +254,7 @@ diff --git a/include/linux/soc/airoha/airoha_offload.h b/include/linux/soc/airoh
  
  /* CTRL */
  #define NPU_RX_DMA_DESC_LAST_MASK	BIT(29)
-@@ -182,6 +183,11 @@ struct airoha_npu {
+@@ -195,6 +196,11 @@ struct airoha_npu {
  
  	struct airoha_foe_stats __iomem *stats;
  

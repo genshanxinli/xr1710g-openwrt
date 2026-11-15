@@ -46,7 +46,7 @@ Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
 ---
 --- a/drivers/net/phy/realtek/phy_patch_rtl826x.c
 +++ b/drivers/net/phy/realtek/phy_patch_rtl826x.c
-@@ -117,6 +117,36 @@
+@@ -117,6 +117,36 @@ static int rtl826x_phy_patch_sds_modify(
  	return rtl826x_phy_patch_sds_set(phydev, sds_page, sds_reg, (ret & ~mask) | data);
  }
  
@@ -83,7 +83,7 @@ Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
  static int rtl826x_phy_patch_op(struct phy_device *phydev, const struct rtlgen_hwpatch *patch)
  {
  	u32 mask = GENMASK(patch->msb, patch->lsb);
-@@ -230,7 +260,7 @@
+@@ -230,7 +260,7 @@ static int rtl826x_phy_patch_db_init(str
  	struct rtlgen_phy_patch_db *patch_db;
  	struct rtlgen_hwpatch *patches;
  	const struct firmware *fw;
@@ -92,7 +92,7 @@ Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
  	int ret;
  
  	ret = request_firmware_direct(&fw, fw_name, dev);
-@@ -253,17 +283,43 @@
+@@ -253,17 +283,43 @@ static int rtl826x_phy_patch_db_init(str
  
  	patches = (struct rtlgen_hwpatch *)fw->data;
  	count = fw->size / sizeof(*patches);
@@ -140,7 +140,7 @@ Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
  
 --- a/drivers/net/phy/realtek/phy_patch_rtl826x.h
 +++ b/drivers/net/phy/realtek/phy_patch_rtl826x.h
-@@ -11,5 +11,6 @@
+@@ -11,5 +11,6 @@ int rtl826x_phy_patch_sds_set(struct phy
  
  int rtl8261n_phy_patch_db_init(struct phy_device *phydev);
  int rtl8264b_phy_patch_db_init(struct phy_device *phydev);
@@ -172,7 +172,7 @@ Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
  	bool sds_work_disabled;
 --- a/drivers/net/phy/realtek/realtek_main.c
 +++ b/drivers/net/phy/realtek/realtek_main.c
-@@ -365,9 +365,15 @@
+@@ -365,9 +365,15 @@ struct rtl8261x_fw_entry {
  #define   RTL826X_SDS_RESET_ASSERT		0x40
  #define   RTL826X_SDS_RESET_RELEASE		0xc0
  
@@ -188,7 +188,7 @@ Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
  #define RTL826X_VEND1_PKG_MODEL			0x103
  #define   RTL826X_VEND1_PKG_MODEL_8251		0x8251
  #define   RTL826X_VEND1_PKG_MODEL_8254		0x8254
-@@ -3745,7 +3751,11 @@
+@@ -3740,7 +3746,11 @@ static int rtl826x_probe(struct phy_devi
  		return -ENOMEM;
  
  	priv->enable_pma_low_power = device_property_read_bool(dev, "realtek,enable-pma-low-power");
@@ -200,7 +200,7 @@ Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
  	phydev->priv = priv;
  
  	INIT_DELAYED_WORK(&priv->sds_work, rtl826x_sds_reset_work);
-@@ -3773,6 +3783,39 @@
+@@ -3768,6 +3778,39 @@ static int rtl826x_probe(struct phy_devi
  	return 0;
  }
  
@@ -240,7 +240,7 @@ Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
  static int rtl826x_config_serdes_polarity(struct phy_device *phydev)
  {
  	struct device *dev = &phydev->mdio.dev;
-@@ -3849,6 +3892,10 @@
+@@ -3844,6 +3887,10 @@ static int rtl826x_config_init(struct ph
  		return ret;
  	}
  
@@ -251,7 +251,7 @@ Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
  	return rtl826x_config_serdes_polarity(phydev);
  }
  
-@@ -3902,11 +3949,17 @@
+@@ -3897,11 +3944,17 @@ static int rtl825xb_get_features(struct
  
  static int rtl826x_config_aneg(struct phy_device *phydev)
  {
@@ -269,7 +269,7 @@ Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
  	if (phydev->autoneg == AUTONEG_DISABLE)
  		return genphy_c45_pma_setup_forced(phydev);
  
-@@ -3936,8 +3989,33 @@
+@@ -3931,8 +3984,33 @@ static int rtl826x_config_aneg(struct ph
  	return genphy_c45_check_and_restart_aneg(phydev, changed);
  }
  
@@ -303,7 +303,7 @@ Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
  	int status;
  	int ret;
  
-@@ -3968,7 +4046,98 @@
+@@ -3963,7 +4041,98 @@ static int rtl826x_read_status(struct ph
  			return ret;
  	}
  

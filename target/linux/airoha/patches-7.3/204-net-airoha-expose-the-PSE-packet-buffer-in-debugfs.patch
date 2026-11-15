@@ -23,7 +23,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -621,6 +621,47 @@
+@@ -619,6 +619,47 @@ static void airoha_dev_lro_disable(struc
  	airoha_fe_lro_disable(eth, qdma_id);
  }
  
@@ -71,7 +71,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static int airoha_fe_init(struct airoha_eth *eth)
  {
  	airoha_fe_maccr_init(eth);
-@@ -1931,6 +1972,8 @@
+@@ -1923,6 +1964,8 @@ static int airoha_hw_init(struct platfor
  	if (err)
  		goto error;
  
@@ -80,7 +80,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	set_bit(DEV_STATE_INITIALIZED, &eth->state);
  
  	return 0;
-@@ -1948,6 +1991,7 @@
+@@ -1940,6 +1983,7 @@ static void airoha_hw_cleanup(struct air
  	for (i = 0; i < ARRAY_SIZE(eth->qdma); i++)
  		airoha_qdma_cleanup(eth, &eth->qdma[i]);
  	airoha_ppe_deinit(eth);
@@ -90,7 +90,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static void airoha_qdma_start_napi(struct airoha_qdma *qdma)
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -719,6 +719,8 @@
+@@ -718,6 +718,8 @@ struct airoha_eth {
  
  	struct airoha_qdma qdma[AIROHA_MAX_NUM_QDMA];
  	struct airoha_gdm_port *ports[AIROHA_MAX_NUM_GDM_PORTS];

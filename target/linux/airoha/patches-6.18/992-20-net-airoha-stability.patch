@@ -1,6 +1,6 @@
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -4250,8 +4250,10 @@ static int airoha_en7581_get_dev_from_sp
+@@ -4362,8 +4362,10 @@ static int airoha_en7581_get_dev_from_sp
  
  	*dev = 0;
  	switch (sport) {
@@ -13,7 +13,7 @@
  		break;
  	case 0x2 ... 0x4:
  		*port = sport - 1;
-@@ -4331,8 +4333,10 @@ static int airoha_an7583_get_dev_from_sp
+@@ -4443,8 +4445,10 @@ static int airoha_an7583_get_dev_from_sp
  
  	*dev = 0;
  	switch (sport) {
@@ -28,7 +28,7 @@
  		*port = sport - 1;
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -518,7 +518,7 @@ struct airoha_wdma_info {
+@@ -572,7 +572,7 @@ struct airoha_wdma_info {
  };
  
  /* RX queue to IRQ mapping: BIT(q) in IRQ(n) */

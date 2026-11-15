@@ -19,7 +19,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -610,6 +610,12 @@
+@@ -612,6 +612,12 @@ struct airoha_qdma {
  enum airoha_dev_flags {
  	AIROHA_DEV_F_WAN,
  	AIROHA_DEV_F_TX_QOS,
@@ -34,7 +34,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  struct airoha_gdm_dev {
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -563,8 +563,14 @@
+@@ -561,8 +561,14 @@ static void airoha_dev_lro_enable(struct
  	int qdma_id = qdma - &eth->qdma[0];
  	int i, lro_queue_index = 0;
  
@@ -51,7 +51,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	 */
  	qdma->lro_users++;
  
-@@ -595,6 +601,13 @@
+@@ -593,6 +599,13 @@ static void airoha_dev_lro_disable(struc
  	struct airoha_eth *eth = qdma->eth;
  	int qdma_id = qdma - &eth->qdma[0];
  

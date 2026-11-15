@@ -23,8 +23,6 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  drivers/net/ethernet/airoha/airoha_soe_probe.c | 106 +++++++++++++++++++++++++
  3 files changed, 121 insertions(+)
 
-diff --git a/drivers/net/ethernet/airoha/Kconfig b/drivers/net/ethernet/airoha/Kconfig
-index 7899065..62bd6d0 100644
 --- a/drivers/net/ethernet/airoha/Kconfig
 +++ b/drivers/net/ethernet/airoha/Kconfig
 @@ -32,4 +32,18 @@ config NET_AIROHA_FLOW_STATS
@@ -46,8 +44,6 @@ index 7899065..62bd6d0 100644
 +	  Say N unless you are bringing up SOE support.
 +
  endif #NET_VENDOR_AIROHA
-diff --git a/drivers/net/ethernet/airoha/Makefile b/drivers/net/ethernet/airoha/Makefile
-index 9446805..2763956 100644
 --- a/drivers/net/ethernet/airoha/Makefile
 +++ b/drivers/net/ethernet/airoha/Makefile
 @@ -6,4 +6,5 @@
@@ -56,9 +52,6 @@ index 9446805..2763956 100644
  airoha-eth-$(CONFIG_DEBUG_FS) += airoha_ppe_debugfs.o
 +obj-$(CONFIG_NET_AIROHA_SOE) += airoha_soe_probe.o
  obj-$(CONFIG_NET_AIROHA_NPU) += airoha_npu.o
-diff --git a/drivers/net/ethernet/airoha/airoha_soe_probe.c b/drivers/net/ethernet/airoha/airoha_soe_probe.c
-new file mode 100644
-index 0000000..9ab9136
 --- /dev/null
 +++ b/drivers/net/ethernet/airoha/airoha_soe_probe.c
 @@ -0,0 +1,106 @@

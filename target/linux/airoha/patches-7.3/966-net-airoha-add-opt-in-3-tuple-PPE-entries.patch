@@ -46,9 +46,9 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  #include <linux/ipv6.h>
 +#include <linux/module.h>
  #include <linux/of_platform.h>
+ #include <linux/moduleparam.h>
  #include <linux/platform_device.h>
- #include <linux/rhashtable.h>
-@@ -24,6 +25,22 @@
+@@ -25,6 +26,22 @@
  DEFINE_MUTEX(flow_offload_mutex);
  static DEFINE_SPINLOCK(ppe_lock);
  
@@ -71,7 +71,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static const struct rhashtable_params airoha_flow_table_params = {
  	.head_offset = offsetof(struct airoha_flow_table_entry, node),
  	.key_offset = offsetof(struct airoha_flow_table_entry, cookie),
-@@ -345,6 +362,17 @@
+@@ -346,6 +363,17 @@ static void airoha_ppe_hw_init(struct ai
  		airoha_fe_wr(eth, REG_PPE_HASH_SEED(i), PPE_HASH_SEED);
  		airoha_fe_clear(eth, REG_PPE_PPE_FLOW_CFG(i),
  				PPE_FLOW_CFG_IP6_6RD_MASK);
@@ -89,7 +89,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	}
  
  	for (i = 0; i < ARRAY_SIZE(eth->ports); i++) {
-@@ -779,9 +807,16 @@
+@@ -780,9 +808,16 @@ static int airoha_ppe_foe_entry_set_ipv4
  		}
  		fallthrough;
  	case PPE_PKT_TYPE_IPV4_DSLITE:
@@ -107,7 +107,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	default:
  		WARN_ON_ONCE(1);
  		return -EINVAL;
-@@ -1600,7 +1635,7 @@
+@@ -1647,7 +1682,7 @@ static int airoha_ppe_flow_offload_repla
  	u8 dsfield = 0, l4proto = 0;
  	struct airoha_foe_entry hwe;
  	struct net_device *indev;
@@ -116,7 +116,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	int err, i, offload_type;
  	u16 addr_type = 0;
  
-@@ -1641,6 +1676,9 @@
+@@ -1688,6 +1723,9 @@ static int airoha_ppe_flow_offload_repla
  		dsfield = match.key->tos;
  	}
  
@@ -126,7 +126,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	switch (addr_type) {
  	case 0:
  		offload_type = PPE_PKT_TYPE_BRIDGE;
-@@ -1655,10 +1693,12 @@
+@@ -1702,10 +1740,12 @@ static int airoha_ppe_flow_offload_repla
  		}
  		break;
  	case FLOW_DISSECTOR_KEY_IPV4_ADDRS:
@@ -141,7 +141,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  		break;
  	default:
  		return -EOPNOTSUPP;
-@@ -1730,7 +1770,7 @@
+@@ -1777,7 +1817,7 @@ static int airoha_ppe_flow_offload_repla
  	if (err)
  		return err;
  
@@ -150,7 +150,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  		struct flow_match_ports ports;
  
  		if (offload_type == PPE_PKT_TYPE_BRIDGE) {
-@@ -1741,7 +1781,12 @@
+@@ -1788,7 +1828,12 @@ static int airoha_ppe_flow_offload_repla
  		flow_rule_match_ports(rule, &ports);
  		data.src_port = ports.key->src;
  		data.dst_port = ports.key->dst;

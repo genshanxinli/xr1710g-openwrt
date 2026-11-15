@@ -47,7 +47,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  static int nf_flow_state_check(struct flow_offload *flow, int proto,
  			       struct sk_buff *skb, unsigned int thoff)
  {
-@@ -185,6 +188,7 @@
+@@ -186,6 +189,7 @@ static void nf_flow_tuple_encap(struct n
  		phdr = (struct pppoe_hdr *)skb_network_header(skb);
  		tuple->encap[i].id = ntohs(phdr->sid);
  		tuple->encap[i].proto = skb->protocol;
@@ -55,7 +55,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  		offset += PPPOE_SES_HLEN;
  		break;
  	}
-@@ -441,9 +445,13 @@
+@@ -442,9 +446,13 @@ static void nf_flow_encap_pop(struct nf_
  			skb_reset_network_header(skb);
  			break;
  		case htons(ETH_P_PPP_SES):
@@ -69,7 +69,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  			break;
  		}
  	}
---- a/include/trace/events/nf_flow_table.h
+--- /dev/null
 +++ b/include/trace/events/nf_flow_table.h
 @@ -0,0 +1,169 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */

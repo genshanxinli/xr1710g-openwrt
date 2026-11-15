@@ -31,7 +31,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -709,6 +709,14 @@
+@@ -709,6 +709,14 @@ struct airoha_ppe {
  	 */
  	enum airoha_ppe_entry_alias entry_alias;
  
@@ -46,7 +46,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	struct dentry *debugfs_dir;
  };
  
-@@ -859,6 +867,7 @@
+@@ -859,6 +867,7 @@ void airoha_ppe_foe_entry_get_stats(stru
  
  #ifdef CONFIG_DEBUG_FS
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe);
@@ -56,7 +56,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  {
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -228,6 +228,36 @@
+@@ -229,6 +229,36 @@ void airoha_ppe_set_mtu(struct airoha_gd
  		      __field_prep(FP_EGRESS_MTU_MASK(index), len));
  }
  
@@ -93,7 +93,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static void airoha_ppe_hw_init(struct airoha_ppe *ppe)
  {
  	u32 sram_ppe_num_data_entries = airoha_ppe_get_sram_num_entries(ppe);
-@@ -310,11 +332,7 @@
+@@ -311,11 +341,7 @@ static void airoha_ppe_hw_init(struct ai
  				 "PPE%u: DRAM table did not come up, %u entries unreachable\n",
  				 i + 1, PPE_DRAM_NUM_ENTRIES);
  
@@ -106,7 +106,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
  		airoha_fe_wr(eth, REG_PPE_HASH_SEED(i), PPE_HASH_SEED);
  		airoha_fe_clear(eth, REG_PPE_PPE_FLOW_CFG(i),
-@@ -2167,6 +2185,8 @@
+@@ -2215,6 +2241,8 @@ int airoha_ppe_init(struct airoha_eth *e
  	ppe->dev.priv = ppe;
  	ppe->eth = eth;
  	eth->ppe = ppe;
@@ -125,7 +125,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
  static void airoha_debugfs_ppe_print_tuple(struct seq_file *m,
  					   void *src_addr, void *dest_addr,
-@@ -265,6 +266,62 @@
+@@ -265,6 +266,62 @@ static int airoha_ppe_debugfs_foe_alias_
  }
  DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_foe_alias);
  
@@ -188,7 +188,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  {
  	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-@@ -276,6 +333,8 @@
+@@ -276,6 +333,8 @@ int airoha_ppe_debugfs_init(struct airoh
  			    &airoha_ppe_debugfs_foe_usage_fops);
  	debugfs_create_file("entry_alias", 0444, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_foe_alias_fops);
@@ -197,4 +197,3 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
  	return 0;
  }
-

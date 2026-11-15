@@ -37,7 +37,7 @@ Signed-off-by: Lorenzo Bianconi <lorenzo@kernel.org>
  			struct dst_entry *dst_cache;
 --- a/net/netfilter/nf_flow_table_ip.c
 +++ b/net/netfilter/nf_flow_table_ip.c
-@@ -385,6 +385,7 @@ static int nf_flow_offload_forward(struc
+@@ -413,6 +413,7 @@ static int nf_flow_offload_forward(struc
  	struct flow_offload *flow;
  	unsigned int thoff, mtu;
  	struct iphdr *iph;
@@ -45,7 +45,7 @@ Signed-off-by: Lorenzo Bianconi <lorenzo@kernel.org>
  
  	dir = tuplehash->tuple.dir;
  	flow = container_of(tuplehash, struct flow_offload, tuplehash[dir]);
-@@ -414,6 +415,12 @@ static int nf_flow_offload_forward(struc
+@@ -443,6 +444,12 @@ static int nf_flow_offload_forward(struc
  	iph = ip_hdr(skb);
  	nf_flow_nat_ip(flow, skb, thoff, dir, iph);
  
@@ -58,7 +58,7 @@ Signed-off-by: Lorenzo Bianconi <lorenzo@kernel.org>
  	ip_decrease_ttl(iph);
  	skb_clear_tstamp(skb);
  
-@@ -674,6 +681,7 @@ static int nf_flow_offload_ipv6_forward(
+@@ -703,6 +710,7 @@ static int nf_flow_offload_ipv6_forward(
  	struct flow_offload *flow;
  	unsigned int thoff, mtu;
  	struct ipv6hdr *ip6h;
@@ -66,7 +66,7 @@ Signed-off-by: Lorenzo Bianconi <lorenzo@kernel.org>
  
  	dir = tuplehash->tuple.dir;
  	flow = container_of(tuplehash, struct flow_offload, tuplehash[dir]);
-@@ -702,6 +710,12 @@ static int nf_flow_offload_ipv6_forward(
+@@ -732,6 +740,12 @@ static int nf_flow_offload_ipv6_forward(
  	ip6h = ipv6_hdr(skb);
  	nf_flow_nat_ipv6(flow, skb, dir, ip6h);
  
@@ -110,7 +110,7 @@ Signed-off-by: Lorenzo Bianconi <lorenzo@kernel.org>
  #include <net/ip.h>
  #include <net/flow.h>
  #include <net/netfilter/nf_tables.h>
-@@ -20,6 +21,27 @@ struct nft_flow_offload {
+@@ -21,6 +22,27 @@ struct nft_flow_offload {
  	struct nft_flowtable	*flowtable;
  };
  
@@ -138,7 +138,7 @@ Signed-off-by: Lorenzo Bianconi <lorenzo@kernel.org>
  static bool nft_flow_offload_skip(struct sk_buff *skb, int family)
  {
  	if (skb_sec_path(skb))
-@@ -112,6 +134,9 @@ static void nft_flow_offload_eval(const
+@@ -189,6 +211,9 @@ static void nft_flow_offload_eval(const
  	if (!flow)
  		goto err_flow_alloc;
  

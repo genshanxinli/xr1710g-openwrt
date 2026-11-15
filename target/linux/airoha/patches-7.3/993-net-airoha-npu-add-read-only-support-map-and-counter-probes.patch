@@ -57,7 +57,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
  #define REG_NPU_LOCAL_SRAM		0x0
  
-@@ -715,6 +718,180 @@
+@@ -715,6 +718,180 @@ void airoha_npu_put(struct airoha_npu *n
  }
  EXPORT_SYMBOL_GPL(airoha_npu_put);
  
@@ -238,7 +238,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static const struct airoha_npu_soc_data en7581_npu_soc_data = {
  	.fw_rv32 = {
  		.name = NPU_EN7581_FIRMWARE_RV32,
-@@ -872,6 +1049,13 @@
+@@ -872,6 +1049,13 @@ static int airoha_npu_probe(struct platf
  
  	platform_set_drvdata(pdev, npu);
  

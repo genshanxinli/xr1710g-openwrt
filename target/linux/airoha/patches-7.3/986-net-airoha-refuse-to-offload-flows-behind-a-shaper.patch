@@ -37,7 +37,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -608,19 +608,70 @@ static void airoha_ppe_foe_entry_put_smac_id(struct airoha_eth *eth,
+@@ -637,19 +637,70 @@ static void airoha_ppe_foe_entry_put_sma
  					      hwe->ipv6.l2.src_mac_hi));
  }
  

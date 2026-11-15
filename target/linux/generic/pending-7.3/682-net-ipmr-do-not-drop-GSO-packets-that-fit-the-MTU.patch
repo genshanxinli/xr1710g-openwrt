@@ -27,7 +27,7 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
 
 --- a/net/ipv4/ipmr.c
 +++ b/net/ipv4/ipmr.c
-@@ -1908,6 +1908,7 @@ static int ipmr_prepare_xmit(struct net
+@@ -1915,6 +1915,7 @@ static int ipmr_prepare_xmit(struct net
  	struct rtable *rt;
  	struct flowi4 fl4;
  	int    encap = 0;
@@ -35,7 +35,7 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
  
  	vif_dev = vif_dev_read(vif);
  	if (!vif_dev)
-@@ -1940,7 +1941,10 @@ static int ipmr_prepare_xmit(struct net
+@@ -1947,7 +1948,10 @@ static int ipmr_prepare_xmit(struct net
  			return -1;
  	}
  

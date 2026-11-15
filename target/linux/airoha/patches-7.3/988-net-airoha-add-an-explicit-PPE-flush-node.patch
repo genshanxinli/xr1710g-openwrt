@@ -61,7 +61,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -18,6 +18,11 @@
+@@ -20,6 +20,11 @@
  #include "airoha_regs.h"
  #include "airoha_eth.h"
  
@@ -73,7 +73,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  /* Serialize airoha_gdm_dev flags, QDMA pointer and PPE CPU port
   * configuration.
   */
-@@ -1951,6 +1956,67 @@
+@@ -2094,6 +2099,67 @@ static int airoha_ppe_flush_sram_entries
  	return 0;
  }
  
@@ -155,9 +155,9 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static void airoha_debugfs_ppe_print_tuple(struct seq_file *m,
  					   void *src_addr, void *dest_addr,
  					   u16 *src_port, u16 *dest_port,
-@@ -365,6 +370,53 @@
+@@ -418,6 +423,53 @@ static int airoha_ppe_debugfs_l2b_show(s
  }
- DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_tb_regs);
+ DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_l2b);
  
 +/* Write-only (0200) node that returns both PPE tables to the state they have
 + * after probe, so a repeated fill experiment can start from bound 0 again.
@@ -209,10 +209,10 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  {
  	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-@@ -380,6 +432,8 @@
- 			    &airoha_ppe_debugfs_bind_rate_fops);
- 	debugfs_create_file("tb_regs", 0444, ppe->debugfs_dir, ppe,
+@@ -435,6 +487,8 @@ int airoha_ppe_debugfs_init(struct airoh
  			    &airoha_ppe_debugfs_tb_regs_fops);
+ 	debugfs_create_file("l2b", 0444, ppe->debugfs_dir, ppe,
+ 			    &airoha_ppe_debugfs_l2b_fops);
 +	debugfs_create_file("flush", 0200, ppe->debugfs_dir, ppe,
 +			    &airoha_ppe_debugfs_flush_fops);
  

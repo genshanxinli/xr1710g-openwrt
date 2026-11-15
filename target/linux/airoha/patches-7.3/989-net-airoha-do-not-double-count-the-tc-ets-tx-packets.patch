@@ -32,7 +32,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -3197,12 +3197,20 @@ static int airoha_qdma_get_tx_ets_stats(struct net_device *netdev, int channel,
+@@ -3197,12 +3197,20 @@ static int airoha_qdma_get_tx_ets_stats(
  	cpu_tx_packets = airoha_qdma_rr(qdma, REG_CNTR_VAL(channel << 1));
  	fwd_tx_packets = airoha_qdma_rr(qdma,
  					REG_CNTR_VAL((channel << 1) + 1));
