@@ -1,0 +1,287 @@
+From 46332225df31af29480fba651134411a75d43671 Mon Sep 17 00:00:00 2001
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Sun, 15 Nov 2026 04:17:41 +0800
+Subject: [PATCH] wifi: mt76: histogram TX bursts and make the non-AQL cap a
+ runtime knob
+
+The per-WCID non-AQL in-flight cap is a compile-time constant, so it can
+only be changed with a rebuild; the local 0017-style burst logging
+experiment printed the average size with pr_info from the TX worker, and at
+~240k MSDUs/s with one frame per burst that is ~900 lines/s on this 1.2 GHz
+A53, which is itself a measurement artefact.
+
+Account the number of frames that one mt76_txq_send_burst() call hands to
+the hardware in a per-device histogram. The table has an exact bucket for
+every count from 0 to MT_MAX_NON_AQL_PKT plus one overflow bucket; bucket 0
+counts calls that delivered no frame (cap hit, PS pending or empty queue).
+The TX hot path only does one atomic64_inc() and takes no lock. The
+read-only debugfs file "tx_burst" sums the buckets and prints each bucket
+with its count and percentage.
+
+Turn the cap into dev->non_aql_limit, where 0 means the MT_MAX_NON_AQL_PKT
+default, and expose it through the 0600 debugfs file "non_aql_limit". A
+write takes dev->mutex and rejects values above MT_MAX_NON_AQL_PKT with
+-EINVAL; the TX and TX-completion paths read the field with READ_ONCE(), so
+the cap can be A/B tested under running traffic without a reload. With both
+files untouched the effective cap stays 16 and behaviour is unchanged.
+
+No printk is added in the TX path: the histogram replaces the local burst
+log instead of extending it.
+
+Read:
+  /sys/kernel/debug/ieee80211/phy0/mt76/tx_burst
+  /sys/kernel/debug/ieee80211/phy0/mt76/non_aql_limit
+
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+ debugfs.c  | 64 ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ mac80211.c |  2 ++
+ mt76.h     | 27 +++++++++++++++++++++++
+ tx.c       | 34 ++++++++++++++++++++++-------
+ 4 files changed, 119 insertions(+), 8 deletions(-)
+
+diff --git a/debugfs.c b/debugfs.c
+index 41d1d48..9c3bb24 100644
+--- a/debugfs.c
++++ b/debugfs.c
+@@ -100,6 +100,66 @@ void mt76_seq_puts_array(struct seq_file *file, const char *str,
+ }
+ EXPORT_SYMBOL_GPL(mt76_seq_puts_array);
+ 
++static int
++mt76_tx_burst_read(struct seq_file *s, void *data)
++{
++	struct mt76_dev *dev = dev_get_drvdata(s->private);
++	u64 hist[MT_TX_BURST_BUCKETS];
++	u64 total = 0;
++	int i;
++
++	/* read each counter once so the total and the rows agree */
++	for (i = 0; i < MT_TX_BURST_BUCKETS; i++) {
++		hist[i] = atomic64_read(&dev->tx_burst_hist[i]);
++		total += hist[i];
++	}
++
++	seq_puts(s, "frames delivered per mt76_txq_send_burst() (0 = empty burst)\n");
++	seq_puts(s, "frames        count   percent\n");
++	for (i = 0; i < MT_TX_BURST_BUCKETS; i++) {
++		u64 count = hist[i];
++		u64 pct = total ? count * 10000 / total : 0;
++
++		if (i == MT_TX_BURST_OVERFLOW)
++			seq_printf(s, ">%5u %12llu   %5llu.%02llu%%\n",
++				   MT_MAX_NON_AQL_PKT, count, pct / 100,
++				   pct % 100);
++		else
++			seq_printf(s, "%6d %12llu   %5llu.%02llu%%\n", i, count,
++				   pct / 100, pct % 100);
++	}
++	seq_printf(s, "total: %llu bursts\n", total);
++
++	return 0;
++}
++
++static int
++mt76_non_aql_limit_get(void *data, u64 *val)
++{
++	struct mt76_dev *dev = data;
++
++	*val = mt76_non_aql_limit(dev);
++
++	return 0;
++}
++
++static int
++mt76_non_aql_limit_set(void *data, u64 val)
++{
++	struct mt76_dev *dev = data;
++
++	if (val > MT_MAX_NON_AQL_PKT)
++		return -EINVAL;
++
++	mutex_lock(&dev->mutex);
++	WRITE_ONCE(dev->non_aql_limit, val);
++	mutex_unlock(&dev->mutex);
++
++	return 0;
++}
++DEFINE_DEBUGFS_ATTRIBUTE(fops_non_aql_limit, mt76_non_aql_limit_get,
++			 mt76_non_aql_limit_set, "%llu\n");
++
+ struct dentry *
+ mt76_register_debugfs_fops(struct mt76_phy *phy,
+ 			   const struct file_operations *ops)
+@@ -120,6 +180,10 @@ mt76_register_debugfs_fops(struct mt76_phy *phy,
+ 		debugfs_create_blob("otp", 0400, dir, &dev->otp);
+ 	debugfs_create_devm_seqfile(dev->dev, "rx-queues", dir,
+ 				    mt76_rx_queues_read);
++	debugfs_create_devm_seqfile(dev->dev, "tx_burst", dir,
++				    mt76_tx_burst_read);
++	debugfs_create_file_unsafe("non_aql_limit", 0600, dir, dev,
++				   &fops_non_aql_limit);
+ 
+ 	return dir;
+ }
+diff --git a/mac80211.c b/mac80211.c
+index 41d3636..65b747e 100644
+--- a/mac80211.c
++++ b/mac80211.c
+@@ -730,6 +730,8 @@ mt76_alloc_device(struct device *pdev, unsigned int size,
+ 	INIT_LIST_HEAD(&dev->txwi_cache);
+ 	INIT_LIST_HEAD(&dev->rxwi_cache);
+ 	dev->token_size = dev->drv->token_size;
++	/* 0 keeps the MT_MAX_NON_AQL_PKT default until debugfs changes it */
++	dev->non_aql_limit = 0;
+ 	spin_lock_init(&dev->scan_lock);
+ 
+ 	for (i = 0; i < ARRAY_SIZE(dev->q_rx); i++)
+diff --git a/mt76.h b/mt76.h
+index 63ba188..524ce67 100644
+--- a/mt76.h
++++ b/mt76.h
+@@ -32,6 +32,15 @@
+ #define MT_MAX_NON_AQL_PKT	16
+ #define MT_TXQ_FREE_THR		32
+ 
++/*
++ * Frames delivered by one mt76_txq_send_burst() pass, indexed by the number
++ * of frames handed to the hardware.  The table has an exact bucket for every
++ * count from 0 to MT_MAX_NON_AQL_PKT and one overflow bucket; the non-AQL
++ * cap bounds a real burst, so the overflow bucket only guards the unexpected.
++ */
++#define MT_TX_BURST_OVERFLOW	(MT_MAX_NON_AQL_PKT + 1)
++#define MT_TX_BURST_BUCKETS	(MT_TX_BURST_OVERFLOW + 1)
++
+ #define MT76_TOKEN_FREE_THR	64
+ 
+ #define MT76_WED_WDS_MIN	256
+@@ -995,6 +1004,16 @@ struct mt76_dev {
+ 	struct idr rx_token;
+ 	u16 rx_token_size;
+ 
++	/*
++	 * Runtime non-AQL in-flight cap per WCID. 0 means "use the built-in
++	 * MT_MAX_NON_AQL_PKT default".  Writes are serialized by dev->mutex;
++	 * the TX hot path reads it with READ_ONCE().
++	 */
++	unsigned int non_aql_limit;
++
++	/* Frames handed to the hardware by mt76_txq_send_burst() */
++	atomic64_t tx_burst_hist[MT_TX_BURST_BUCKETS];
++
+ 	wait_queue_head_t tx_wait;
+ 	/* spinclock used to protect wcid pktid linked list */
+ 	spinlock_t status_lock;
+@@ -1056,6 +1075,14 @@ struct mt76_dev {
+ 	atomic_t bus_hung;
+ };
+ 
++static inline unsigned int
++mt76_non_aql_limit(struct mt76_dev *dev)
++{
++	unsigned int limit = READ_ONCE(dev->non_aql_limit);
++
++	return limit ? limit : MT_MAX_NON_AQL_PKT;
++}
++
+ /* per-phy stats.  */
+ struct mt76_mib_stats {
+ 	u32 ack_fail_cnt;
+diff --git a/tx.c b/tx.c
+index dc6a65d..7e1213c 100644
+--- a/tx.c
++++ b/tx.c
+@@ -233,6 +233,7 @@ mt76_tx_check_non_aql(struct mt76_dev *dev, struct mt76_wcid *wcid,
+ {
+ 	struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
+ 	struct ieee80211_sta *sta;
++	unsigned int limit;
+ 	int pending;
+ 	int i;
+ 
+@@ -246,7 +247,8 @@ mt76_tx_check_non_aql(struct mt76_dev *dev, struct mt76_wcid *wcid,
+ 		atomic_cmpxchg(&wcid->non_aql_packets, pending, 0);
+ 
+ 	sta = wcid_to_sta(wcid);
+-	if (!sta || pending != MT_MAX_NON_AQL_PKT - 1)
++	limit = mt76_non_aql_limit(dev);
++	if (!sta || pending != limit - 1)
+ 		return;
+ 
+ 	for (i = 0; i < ARRAY_SIZE(sta->txq); i++) {
+@@ -353,7 +355,7 @@ __mt76_tx_queue_skb(struct mt76_phy *phy, int qid, struct sk_buff *skb,
+ 
+ 	/* the hardware can report the completion on a different link */
+ 	pending = atomic_inc_return(&mt76_wcid_primary(wcid)->non_aql_packets);
+-	if (stop && pending >= MT_MAX_NON_AQL_PKT)
++	if (stop && pending >= mt76_non_aql_limit(dev))
+ 		*stop = true;
+ 
+ 	return idx;
+@@ -494,6 +496,15 @@ mt76_txq_stopped(struct mt76_queue *q)
+ 	       q->queued + MT_TXQ_FREE_THR >= q->ndesc;
+ }
+ 
++static void
++mt76_tx_burst_account(struct mt76_dev *dev, unsigned int n_frames)
++{
++	unsigned int bucket = min_t(unsigned int, n_frames,
++				    MT_TX_BURST_BUCKETS - 1);
++
++	atomic64_inc(&dev->tx_burst_hist[bucket]);
++}
++
+ static int
+ mt76_txq_send_burst(struct mt76_phy *phy, struct mt76_queue *q,
+ 		    struct mt76_txq *mtxq, struct mt76_wcid *wcid)
+@@ -509,18 +520,18 @@ mt76_txq_send_burst(struct mt76_phy *phy, struct mt76_queue *q,
+ 
+ 	if (test_bit(MT_WCID_FLAG_PS, &wcid->flags)) {
+ 		if (!(dev->drv->drv_flags & MT_DRV_HW_PS_BUFFERING))
+-			return 0;
++			goto out_no_frames;
+ 		if (ieee80211_txq_aql_pending(phy->hw, txq))
+-			return 0;
++			goto out_no_frames;
+ 	}
+ 
+ 	if (atomic_read(&mt76_wcid_primary(wcid)->non_aql_packets) >=
+-	    MT_MAX_NON_AQL_PKT)
+-		return 0;
++	    mt76_non_aql_limit(dev))
++		goto out_no_frames;
+ 
+ 	skb = mt76_txq_dequeue(phy, mtxq);
+ 	if (!skb)
+-		return 0;
++		goto out_no_frames;
+ 
+ 	info = IEEE80211_SKB_CB(skb);
+ 	if (!(wcid->tx_info & MT_WCID_TX_INFO_SET))
+@@ -566,7 +577,14 @@ out:
+ 	dev->queue_ops->kick(dev, q);
+ 	spin_unlock(&q->lock);
+ 
++	mt76_tx_burst_account(dev, n_frames);
++
+ 	return n_frames;
++
++out_no_frames:
++	mt76_tx_burst_account(dev, 0);
++
++	return 0;
+ }
+ 
+ static int
+@@ -625,7 +643,7 @@ mt76_txq_schedule_list(struct mt76_phy *phy, enum mt76_txq_id qid)
+ 		}
+ 
+ 		if (atomic_read(&mt76_wcid_primary(wcid)->non_aql_packets) >=
+-		    MT_MAX_NON_AQL_PKT)
++		    mt76_non_aql_limit(dev))
+ 			continue;
+ 		if (dev->queue_ops->tx_cleanup &&
+ 		    q->queued + 2 * MT_TXQ_FREE_THR >= q->ndesc) {
+-- 
+2.56.0
+
