@@ -1,0 +1,170 @@
+From: OpenWrt <openwrt@example.org>
+Date: Sun, 15 Nov 2026 04:20:00 +0800
+Subject: [PATCH] net: airoha: carry the nft L2-bridged signal to the PPE
+
+Patch 963 decides whether a flow is bridged within one bridge from the
+ingress and egress netdevs.  That is a heuristic: a routed flow between
+two VLAN subinterfaces of the same physical port can resolve to the same
+bridge port on both ends, and nft_flow_route() already knows whether the
+original skb arrived through a bridge (is_bridging).  The PPE then
+cleared BIND_TTL on a routed flow, or kept it on a bridged one, so the
+hardware TTL accounting was wrong in exactly the cases 963 was meant to
+fix.
+
+Export the authoritative signal instead of re-deriving it: add
+bridge_input to struct flow_offload_tuple and struct nf_flow_route, set
+it from is_bridging in nft_flow_route(), copy it into the offloaded tuple
+in flow_offload_fill_route() and export it as
+flow_cls_offload.bridge_input in nf_flow_offload_init().  The airoha PPE
+driver reads that field instead of comparing bridge masters.
+
+Keep the bridged_force module parameter for A/B: -1 uses the kernel
+signal (default), 0 forces routed (TTL decrement) and 1 forces L2-bridged
+(no decrement).
+
+Only the AIROHA_FOE_IB1_BIND_TTL bit of a routed or bridged flow changes;
+packet types, NAT and MAC rewriting are untouched.  The software
+flowtable path still has its own check, and the generic flowtable
+behaviour is not modified.
+
+Note: CONFIG_NET_AIROHA=y and airoha-eth is built in, so bridged_force
+only exists after one kernel rebuild/flash.  Once that image is running,
+runtime A/B needs no further reflash.  Hardware A/B of the TTL bit is a
+separate follow-up; this patch is verified by compilation and patch
+application only.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+ include/net/netfilter/nf_flow_table.h              |  2 ++
+ net/netfilter/nf_flow_table_path.c                 | 10 ++++++++++
+ net/netfilter/nf_flow_table_core.c                 |  1 +
+ include/net/flow_offload.h                         |  1 +
+ net/netfilter/nf_flow_table_offload.c              |  1 +
+ drivers/net/ethernet/airoha/airoha_ppe.c           | 27 +++++++++++++++-----------
+ 6 files changed, 31 insertions(+), 11 deletions(-)
+
+--- a/include/net/netfilter/nf_flow_table.h
++++ b/include/net/netfilter/nf_flow_table.h
+@@ -164,6 +164,7 @@
+ 					encap_num:2,
+ 					needs_gso_segment:1,
+ 					bridge_path:1,
++					bridge_input:1,
+ 					bridge_vlan:1,
+ 					port_vlans:2,
+ 					tun_num:2,
+@@ -251,6 +252,7 @@
+ 			u8			h_dest[ETH_ALEN];
+ 			u8			needs_gso_segment:1,
+ 						bridge_path:1,
++						bridge_input:1,
+ 						bridge_vlan:1,
+ 						port_vlans:2;
+ 		} out;
+--- a/net/netfilter/nf_flow_table_path.c
++++ b/net/netfilter/nf_flow_table_path.c
+@@ -403,6 +403,16 @@
+ 	nft_default_forward_path(route, this_dst, dir);
+ 	nft_default_forward_path(route, other_dst, !dir);
+ 
++	/* is_bridging is true only when the first packet arrived through a
++	 * bridge port and the route was resolved through the bridge device:
++	 * the flow is switched at L2 and must not consume an IP TTL.  The
++	 * existing bridge_path bit cannot be used for this, because it only
++	 * says that the egress path contains a DEV_PATH_BRIDGE, which is
++	 * also true for a routed flow whose destination is on the LAN.
++	 */
++	route->tuple[dir].out.bridge_input = is_bridging;
++	route->tuple[!dir].out.bridge_input = is_bridging;
++
+ 	if (route->tuple[dir].xmit_type	== FLOW_OFFLOAD_XMIT_NEIGH &&
+ 	    nft_dev_forward_path(pkt, is_bridging, route, ct, dir, dir, ft) &&
+ 	    is_bridging)
+--- a/net/netfilter/nf_flow_table_core.c
++++ b/net/netfilter/nf_flow_table_core.c
+@@ -154,6 +154,7 @@
+ 		       ETH_ALEN);
+ 		flow_tuple->out.ifidx = route->tuple[dir].out.ifindex;
+ 		flow_tuple->bridge_path = route->tuple[dir].out.bridge_path;
++		flow_tuple->bridge_input = route->tuple[dir].out.bridge_input;
+ 		flow_tuple->bridge_vlan = route->tuple[dir].out.bridge_vlan;
+ 		flow_tuple->port_vlans = route->tuple[dir].out.port_vlans;
+ 		break;
+--- a/include/net/flow_offload.h
++++ b/include/net/flow_offload.h
+@@ -696,6 +696,7 @@
+ 	enum flow_cls_command command;
+ 	bool use_act_stats;
+ 	unsigned long cookie;
++	bool bridge_input;	/* flow is L2-switched, not routed */
+ 	struct flow_rule *rule;
+ 	struct flow_stats stats;
+ 	u32 classid;
+--- a/net/netfilter/nf_flow_table_offload.c
++++ b/net/netfilter/nf_flow_table_offload.c
+@@ -901,6 +901,7 @@
+ 	cls_flow->common.extack = extack;
+ 	cls_flow->command = cmd;
+ 	cls_flow->cookie = (unsigned long)tuple;
++	cls_flow->bridge_input = tuple->bridge_input;
+ }
+ 
+ static int nf_flow_offload_tuple(struct nf_flowtable *flowtable,
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -6,6 +6,7 @@
+ 
+ #include <linux/ip.h>
+ #include <linux/ipv6.h>
++#include <linux/module.h>
+ #include <linux/of_platform.h>
+ #include <linux/platform_device.h>
+ #include <linux/rhashtable.h>
+@@ -24,6 +25,13 @@
+ DEFINE_MUTEX(flow_offload_mutex);
+ static DEFINE_SPINLOCK(ppe_lock);
+ 
++/* -1: use the kernel bridge_input signal (default)
++ *  0: force "routed" (TTL decrement) for A/B testing
++ *  1: force "L2-bridged" (no TTL decrement) for A/B testing
++ */
++static int airoha_ppe_bridged_force = -1;
++module_param_named(bridged_force, airoha_ppe_bridged_force, int, 0644);
++
+ static const struct rhashtable_params airoha_flow_table_params = {
+ 	.head_offset = offsetof(struct airoha_flow_table_entry, node),
+ 	.key_offset = offsetof(struct airoha_flow_table_entry, cookie),
+@@ -1599,7 +1607,6 @@
+ 	struct flow_match_meta meta;
+ 	u8 dsfield = 0, l4proto = 0;
+ 	struct airoha_foe_entry hwe;
+-	struct net_device *indev;
+ 	bool bridged;
+ 	int err, i, offload_type;
+ 	u16 addr_type = 0;
+@@ -1713,17 +1720,15 @@
+ 	 * This cannot be told from the dissector keys: bridged packets reach
+ 	 * the inet flowtable through br_netfilter and are encoded as
+ 	 * IPV4_HNAPT, exactly like routed ones.
++	 *
++	 * Do not infer it from the ingress/egress netdevs either: a routed
++	 * flow between two VLAN subinterfaces of the same physical port
++	 * resolves to one bridge port on both ends.  nft_flow_route() sees
++	 * the original skb and exports the only reliable answer.
+ 	 */
+-	bridged = false;
+-	if (odev && netif_is_bridge_port(odev)) {
+-		rcu_read_lock();
+-		indev = dev_get_by_index_rcu(dev_net(odev),
+-					     meta.key->ingress_ifindex);
+-		bridged = indev && netif_is_bridge_port(indev) &&
+-			  netdev_master_upper_dev_get_rcu(indev) ==
+-			  netdev_master_upper_dev_get_rcu(odev);
+-		rcu_read_unlock();
+-	}
++	bridged = f->bridge_input;
++	if (airoha_ppe_bridged_force >= 0)
++		bridged = !!airoha_ppe_bridged_force;
+ 
+ 	err = airoha_ppe_foe_entry_prepare(eth, &hwe, odev, offload_type,
+ 					   &data, l4proto, dsfield, bridged);
