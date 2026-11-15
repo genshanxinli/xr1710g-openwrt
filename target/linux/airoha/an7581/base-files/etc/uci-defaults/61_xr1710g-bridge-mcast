@@ -1,0 +1,84 @@
+#!/bin/sh
+#
+# Turn on bridge IGMP/MLD snooping for br-lan on the Gemtek XR1710G.
+#
+# Roadmap I17 (docs/SOC-CEILING-ROADMAP-2026-11-14.md, section 6): every
+# multicast group is flooded to every LAN port because the LAN bridge has
+# snooping off. The kernel half is already there -- CONFIG_BRIDGE_IGMP_SNOOPING
+# is enabled in target/linux/generic/config-7.3 -- and netifd knows the
+# option, but its bridge defaults set cfg->igmp_snoop to false and the
+# netlink bridge request always carries IFLA_BR_MCAST_SNOOPING, so a bridge
+# with no explicit option is created with snooping disabled. Writing the
+# option into /etc/config/network is all that is missing.
+#
+# Only the existing `config device` section for br-lan is touched. An
+# explicit value from the owner always wins: when one is found the script
+# leaves the value alone, logs it and does nothing else, so a deliberate
+# "0" can never be flipped back on.
+#
+# The sysfs write is the runtime half. netifd reads the option only when it
+# creates or reloads the bridge, so a manual run on a live system would
+# otherwise wait for the next network reload. It is best effort and never
+# blocks boot. On a normal first boot the uci-defaults run (from
+# /etc/init.d/boot, START=10) happens before network starts (START=20), so
+# the bridge does not exist yet; the log line is expected there and the UCI
+# option is what takes effect moments later.
+#
+# This deliberately does not touch the PPE multicast table, any register,
+# any zone, flowtable or other interface. Reversible with
+# `uci revert network.<section>.igmp_snooping` and, on a live system,
+# `echo 0 > /sys/class/net/br-lan/bridge/multicast_snooping`.
+
+. /lib/functions.sh
+
+case "$(board_name)" in
+gemtek,xr1710g-ubi) ;;
+*) exit 0 ;;
+esac
+
+snooping_file=/sys/class/net/br-lan/bridge/multicast_snooping
+
+# Section reference of the `config device` whose name is br-lan, if any.
+# `uci show` prints "network.<section>.name='br-lan'" for anonymous
+# (@device[0]) and named sections alike.
+find_br_lan_section() {
+	uci -q show network | sed -n "s/^network\.\([^.=']*\)\.name='br-lan'$/\1/p" | head -n 1
+}
+
+br_lan_section=$(find_br_lan_section)
+
+if [ -n "$br_lan_section" ]; then
+	cur=$(uci -q get "network.$br_lan_section.igmp_snooping")
+
+	if [ -n "$cur" ]; then
+		logger -t bridge-mcast "br-lan igmp_snooping is '$cur', leaving it alone"
+		exit 0
+	fi
+
+	uci -q set "network.$br_lan_section.igmp_snooping='1'"
+else
+	# A first-boot config always gets this section from
+	# /bin/config_generate and from the legacy bridge migration, so this
+	# branch is a safety net. It has to say type='bridge': igmp_snooping
+	# is a bridge option, and a plain device section would quietly leave
+	# netifd's default in place.
+	logger -t bridge-mcast "br-lan has no device section, adding one"
+	uci -q batch <<-EOF
+		add network device
+		set network.@device[-1].name='br-lan'
+		set network.@device[-1].type='bridge'
+		set network.@device[-1].igmp_snooping='1'
+	EOF
+fi
+
+uci commit network
+
+if [ -e "$snooping_file" ]; then
+	[ "$(cat "$snooping_file" 2>/dev/null)" = 1 ] || \
+		echo 1 > "$snooping_file" 2>/dev/null || \
+		logger -t bridge-mcast "failed to set $snooping_file"
+else
+	logger -t bridge-mcast "br-lan is not up yet, netifd will apply igmp_snooping"
+fi
+
+exit 0
