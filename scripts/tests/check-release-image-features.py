@@ -90,6 +90,11 @@ void airoha_qdma_tx_bql_flush(void) {}
 int main(void) { return 0; }
 """
 
+STUB_NO_BQL = r"""
+const char kernel_version[] = "Linux version 7.3 test-build";
+int main(void) { return 0; }
+"""
+
 FAILURES: list[str] = []
 
 
@@ -129,7 +134,7 @@ def make_repo(root: Path, patches: bool = True, bad_patches: bool = False) -> Pa
 
 
 def make_build(root: Path, source: str = SOURCE_968_974, header: str = HEADER_BQL,
-               stale: bool = False) -> Path:
+               stale: bool = False, bql_symbols: bool = True) -> Path:
     if CC is None:
         raise RuntimeError("a C compiler is needed for the build fixture")
     build = root / "build"
@@ -138,7 +143,8 @@ def make_build(root: Path, source: str = SOURCE_968_974, header: str = HEADER_BQ
     write(driver / "airoha_eth.c", source)
     write(driver / "airoha_eth.h", header)
     write(kernel / ".config", "CONFIG_BQL=y\n")
-    write(root / "stub.c", STUB_C)
+    stub = STUB_C if bql_symbols else STUB_NO_BQL
+    write(root / "stub.c", stub)
     subprocess.run([CC, "-c", str(root / "stub.c"), "-o", str(driver / "airoha_eth.o")],
                    check=True, capture_output=True)
     subprocess.run([CC, str(root / "stub.c"), "-o", str(kernel / "vmlinux")],
@@ -277,6 +283,13 @@ def test_build() -> None:
         rc, out = run_gate("--repo", str(repo), "--build-dir", str(build), "--skip-image")
         check("missing 974 source fails", rc == 1 and "974" in out, out[-400:])
 
+        # Source carries the code, but the compiled object does not: this is a
+        # kernel that was not rebuilt after the patch was added.
+        build = make_build(root / "nosymobj", bql_symbols=False)
+        rc, out = run_gate("--repo", str(repo), "--build-dir", str(build), "--skip-image")
+        check("974 symbols missing from the object fail",
+              rc == 1 and "missing symbol" in out, out[-400:])
+
 
 def test_image() -> None:
     print("image checks")
@@ -306,6 +319,18 @@ def test_image() -> None:
         check("FIT without kernel node fails", rc != 0, out[-300:])
 
 
+def test_usage() -> None:
+    print("usage checks")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo = make_repo(root)
+        rc, out = run_gate("--repo", str(repo), "--image-dir", str(root / "none"))
+        check("missing image directory is a usage error", rc == 2, out[-300:])
+
+        rc, out = run_gate("--repo", str(repo), "--skip-source", "--skip-build", "--skip-image")
+        check("no requested check is a usage error", rc == 2, out[-300:])
+
+
 def test_capture() -> None:
     print("capture checks")
     with tempfile.TemporaryDirectory() as tmp:
@@ -330,6 +355,7 @@ def main() -> int:
     test_source()
     test_build()
     test_image()
+    test_usage()
     test_capture()
     print()
     if FAILURES:

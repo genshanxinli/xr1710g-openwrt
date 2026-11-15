@@ -276,8 +276,10 @@ def fdt_string(node: dict, name: str) -> str:
 
 
 def patch_has_968(text: str) -> bool:
+    """The 968 patch converts the two poll sites; require both conversions."""
     added = [line for line in text.splitlines() if line.startswith("+") and SIG_968.search(line)]
-    return len(added) >= 2
+    removed = [line for line in text.splitlines() if line.startswith("-") and SIG_968_OLD.search(line)]
+    return len(added) >= 2 and len(removed) >= 2
 
 
 def patch_has_974(text: str) -> bool:
