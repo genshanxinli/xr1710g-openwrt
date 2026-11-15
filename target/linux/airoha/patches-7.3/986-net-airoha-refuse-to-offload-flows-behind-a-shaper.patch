@@ -1,0 +1,111 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Subject: [PATCH] net: airoha: refuse to offload flows behind a shaping qdisc
+
+The PPE entry's shaper-id field is hardcoded to 0x7f, the fqos table's
+"no shaper" entry: the driver never programs an fqos table, so every
+offloaded flow is forwarded as unshaped, even when the egress netdev has
+a tc qdisc that is supposed to rate limit it.  On the XR1710G the
+jitter-paced WAN tbf is exactly that case: the cap only holds the packets
+that still take the software path, while the flows that go through the
+PPE -- the ones filling the slow egress queues -- ignore it.
+
+The offload path never sees an skb: netfilter builds the flow rule from
+conntrack, does not pass skb->priority, and the rule carries no per-flow
+shaper-id metadata.  With no way to tell which tc class a flow belongs
+to, the closest signal is the egress netdev's root qdisc: when it is a
+rate limiter (tbf, htb, hfsc, cake, netem, mqprio, cbs), every flow that
+egresses there is refused with -EOPNOTSUPP, so the flow stays in the
+software path and the qdisc keeps shaping it.  Refusing all of them is
+deliberate -- offloading one past the qdisc is the correctness bug, and
+the shaper-id field cannot encode an unshaped exception either.
+
+Flows whose egress root qdisc is a queue-management or scheduling qdisc
+(fq_codel, sfq, mq, prio, ...) are not rate limited, keep the 0x7f default
+and stay offloadable.  No table geometry, BND_AGE, PPPoE or L2B code is
+touched.
+
+This is a correctness fix, not a throughput optimisation: a shaped egress
+runs through the CPU.  The decision is taken at offload time, so an entry
+that is already resident when a qdisc is installed keeps forwarding in
+hardware until it ages out; the qdisc-change path has no hook into the
+driver.
+
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+ drivers/net/ethernet/airoha/airoha_ppe.c | 53 ++++++++++++++++++++++++++++++++-
+ 1 file changed, 52 insertions(+), 1 deletion(-)
+
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -608,19 +608,70 @@ static void airoha_ppe_foe_entry_put_smac_id(struct airoha_eth *eth,
+ 					      hwe->ipv6.l2.src_mac_hi));
+ }
+ 
++/* Rate-shaping qdiscs whose egress the PPE cannot represent.  A PPE entry
++ * names a shaper through the fqos table (AIROHA_FOE_SHAPER_ID), but this
++ * driver does not program that table: 0x7f is its "no shaper" entry.  A
++ * flow that the qdisc would rate limit must not be offloaded with 0x7f, or
++ * it would bypass its own limit.
++ *
++ * Read the qdisc attached to the egress device instead of a driver flag:
++ * netfilter passes no skb to the offload driver (and hence no
++ * skb->priority/classid), so the qdisc is the only place the tc shaping
++ * request is visible.  Only rate limiters are listed; queue-management and
++ * scheduling qdiscs do not limit the rate and keep their flows offloadable.
++ */
++static const char *const airoha_ppe_shaping_qdiscs[] = {
++	"tbf", "htb", "hfsc", "cake", "cake_mq", "netem", "mqprio", "cbs",
++};
++
++static bool airoha_ppe_netdev_is_shaped(struct net_device *netdev)
++{
++	struct Qdisc *qdisc;
++	bool shaped = false;
++	int i;
++
++	if (!netdev)
++		return false;
++
++	rcu_read_lock();
++	qdisc = rcu_dereference(netdev->qdisc);
++	if (qdisc) {
++		for (i = 0; i < ARRAY_SIZE(airoha_ppe_shaping_qdiscs); i++) {
++			if (!strcmp(qdisc->ops->id,
++				    airoha_ppe_shaping_qdiscs[i])) {
++				shaped = true;
++				break;
++			}
++		}
++	}
++	rcu_read_unlock();
++
++	return shaped;
++}
++
+ static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
+ 					struct airoha_foe_entry *hwe,
+ 					struct net_device *netdev, int type,
+ 					struct airoha_flow_data *data,
+ 					int l4proto, u8 dsfield, bool bridged)
+ {
+-	u32 qdata = FIELD_PREP(AIROHA_FOE_SHAPER_ID, 0x7f), ports_pad, val;
++	u32 qdata, ports_pad, val;
++	struct net_device *egress = netdev;
+ 	int wlan_etype = -EINVAL, dsa_port = airoha_get_dsa_port(&netdev);
+ 	struct airoha_foe_mac_info_common *l2;
+ 	u8 smac_id = 0xf;
+ 
+ 	memset(hwe, 0, sizeof(*hwe));
+ 
++	/* Leave a flow that its egress qdisc would shape to the software
++	 * path.  qdata can only name an fqos shaper this driver does not
++	 * program, and the 0x7f "no shaper" entry would bypass the limit.
++	 */
++	if (airoha_ppe_netdev_is_shaped(egress))
++		return -EOPNOTSUPP;
++
++	qdata = FIELD_PREP(AIROHA_FOE_SHAPER_ID, 0x7f);
++
+ 	val = FIELD_PREP(AIROHA_FOE_IB1_BIND_STATE, AIROHA_FOE_STATE_BIND) |
+ 	      FIELD_PREP(AIROHA_FOE_IB1_BIND_PACKET_TYPE, type) |
+ 	      FIELD_PREP(AIROHA_FOE_IB1_BIND_UDP, l4proto == IPPROTO_UDP) |
