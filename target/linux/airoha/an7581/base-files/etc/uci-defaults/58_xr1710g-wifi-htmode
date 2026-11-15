@@ -1,0 +1,53 @@
+#!/bin/sh
+#
+# 5 GHz htmode follow-up for the Gemtek XR1710G (MT7996, 2.4/5/6 GHz).
+#
+# 51_wireless-tuning decides the 5 GHz channel. It leaves the band on
+# channel 149 by default. 149-165 is UNII-3, only 80 MHz wide, and many
+# clients reject HE160 there, so this script narrows EHT160 to EHT80 once
+# the channel is final.
+#
+# wireless.radio1.xr1710g_5g160=1 is the opt-in profile that keeps the
+# band on 36-64 instead; 51_wireless-tuning restores EHT160 there. 36-64
+# is UNII-1/UNII-2A, where 160 MHz is legal, so this script leaves EHT160
+# alone and logs that the channel is not UNII-3 rather than exiting
+# silently.
+#
+# The marker is only read, never written. With it unset or 0 the boot
+# order (51, then 58) produces the 149/EHT80 default exactly as before.
+# Every write is a plain UCI setting, reversible with
+# `uci revert wireless; reboot`; nothing here touches the EEPROM, the
+# regdb, the SKU table or the calibration data.
+#
+# Runs from /etc/init.d/boot (START=10) after 51_wireless-tuning and before
+# wifi starts. The ordering comes from the file names.
+
+. /lib/functions.sh
+
+[ -e /etc/config/wireless ] || exit 0
+
+case "$(board_name)" in
+gemtek,xr1710g-ubi)
+	channel=$(uci -q get wireless.radio1.channel)
+	htmode=$(uci -q get wireless.radio1.htmode)
+
+	# EHT80 is already the width this script would write, and HE160/VHT160
+	# are out of scope: only EHT160 needs narrowing.
+	[ "$htmode" = "EHT160" ] || exit 0
+
+	case "$channel" in
+	149|153|157|161|165)
+		uci -q set wireless.radio1.htmode=EHT80
+		uci -q commit wireless
+		logger -t xr1710g-wifi-htmode \
+			"channel $channel is UNII-3 (149-165), narrowed EHT160 to EHT80"
+		;;
+	*)
+		logger -t xr1710g-wifi-htmode \
+			"channel ${channel:-auto} is not UNII-3 (149-165), leaving EHT160 alone"
+		;;
+	esac
+	;;
+esac
+
+exit 0
