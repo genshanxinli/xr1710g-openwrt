@@ -1,0 +1,351 @@
+#!/bin/sh
+#
+# xr1710g-lan10g-diag - read-only 2.5G/10G link diagnostic.
+#
+# The historical 2.5G one-way result between the LAN and WAN 10G ports cannot
+# be attributed from throughput numbers alone.  This script separates the two
+# layers that can cause it: PHY/link negotiation (speed, duplex, advertised
+# and link-partner modes, ethtool counters) and traffic/PPE behaviour (ip -s
+# link packet/error/drop counters).
+#
+# It is read-only.  It changes no address, route, bridge, firewall or module
+# state; the only write is the report under /var/log (or /tmp).  It refuses to
+# run unless /etc/xr1710g-10g-lab.enable exists, so it is inert on a normal
+# deployment.
+#
+# The lab names the two USXGMII ports lan10g and wan10g.  On this board the
+# same ports are the netdevs lan2 (GDM4/phy5) and wan (GDM2/phy8); a lab tree
+# may instead have netdevs or UCI interfaces carrying the lab names.  Each
+# name is therefore resolved in this order: the literal netdev, the netdev
+# behind the UCI interface of that name (network.<name>.device), then the
+# board's physical netdev.  Every resolution is a read.
+#
+# Report: /var/log/lan10g-diag.log, or /tmp/lan10g-diag.log when /var/log is
+# not writable (it is a symlink to /tmp on OpenWrt, so normally the former).
+#
+# Verdict: one line on stdout when exactly one port negotiated 2.5G or when
+# either port reports non-zero RX/TX errors or drops; otherwise the result is
+# only recorded in the log.
+
+MARKER=/etc/xr1710g-10g-lab.enable
+PRIMARY_LOG=/var/log/lan10g-diag.log
+FALLBACK_LOG=/tmp/lan10g-diag.log
+LOG_PATH=
+
+# Helpers.  Only log_init runs before the marker check, and it just opens the
+# report file; every probe below is read-only.
+
+log_init() {
+	LOG_PATH=$PRIMARY_LOG
+	if [ ! -d /var/log ] || [ ! -w /var/log ]; then
+		LOG_PATH=$FALLBACK_LOG
+	fi
+	if ! : >> "$LOG_PATH" 2>/dev/null; then
+		LOG_PATH=$FALLBACK_LOG
+		if ! : >> "$LOG_PATH" 2>/dev/null; then
+			printf '%s\n' "xr1710g-lan10g-diag: cannot write $LOG_PATH" >&2
+			exit 1
+		fi
+	fi
+}
+
+log() {
+	printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >> "$LOG_PATH"
+}
+
+# Append one captured command output as an indented block under its heading.
+log_block() {
+	log "$1"
+	if [ -n "$2" ]; then
+		printf '%s\n' "$2" | sed 's/^/    /' >> "$LOG_PATH"
+	else
+		log "    (no output)"
+	fi
+}
+
+# Resolve a lab name to a netdev.  Sets PORT_DEV; returns 1 when nothing on
+# the system matches.  All probes are read-only.
+resolve_dev() {
+	PORT_DEV=
+
+	if ip link show "$1" >/dev/null 2>&1; then
+		PORT_DEV=$1
+		return 0
+	fi
+
+	p_uci_dev=$(uci -q get "network.$1.device" 2>/dev/null)
+	if [ -n "$p_uci_dev" ] && ip link show "$p_uci_dev" >/dev/null 2>&1; then
+		PORT_DEV=$p_uci_dev
+		return 0
+	fi
+
+	case $1 in
+	lan10g) p_board_dev=lan2 ;;
+	wan10g) p_board_dev=wan ;;
+	*) p_board_dev= ;;
+	esac
+	if [ -z "$p_board_dev" ]; then
+		return 1
+	fi
+	if ! ip link show "$p_board_dev" >/dev/null 2>&1; then
+		return 1
+	fi
+	PORT_DEV=$p_board_dev
+}
+
+# "2500Mb/s", "2.5Gb/s", ... -> integer Mb/s.  Empty when ethtool says
+# Unknown! or when the line is missing.
+ethtool_speed() {
+	printf '%s\n' "$1" | awk -F: '
+		/^[ \t]*Speed:/ {
+			v = $2
+			gsub(/^[ \t]+|[ \t]+$/, "", v)
+			sub(/\/s$/, "", v)
+			if (v ~ /Gb$/) {
+				sub(/Gb$/, "", v)
+				printf "%.0f\n", v * 1000
+			} else if (v ~ /Mb$/) {
+				sub(/Mb$/, "", v)
+				printf "%.0f\n", v
+			} else if (v ~ /Kb$/) {
+				sub(/Kb$/, "", v)
+				printf "%.0f\n", v / 1000
+			}
+			exit
+		}'
+}
+
+# Value of a "Key: value" line from ethtool output, empty when absent.
+field_value() {
+	printf '%s\n' "$1" | awk -v key="$2" '
+		{
+			line = $0
+			sub(/^[ \t]+/, "", line)
+			if (index(line, key ":") == 1) {
+				value = substr(line, length(key) + 2)
+				sub(/^[ \t]+/, "", value)
+				print value
+				exit
+			}
+		}'
+}
+
+# RX/TX errors and drops from an `ip -s link show` capture.  Prints
+# "rx_errors rx_dropped tx_errors tx_dropped" when the counters are present.
+ip_stats() {
+	printf '%s\n' "$1" | awk '
+		$1 == "RX:" { mode = "rx"; next }
+		$1 == "TX:" { mode = "tx"; next }
+		mode == "rx" && $1 ~ /^[0-9]+$/ {
+			rxe = $3
+			rxd = $4
+			mode = ""
+		}
+		mode == "tx" && $1 ~ /^[0-9]+$/ {
+			txe = $3
+			txd = $4
+			mode = ""
+		}
+		END {
+			if (rxe == "" || txe == "") {
+				exit 0
+			}
+			printf "%s %s %s %s\n", rxe, rxd, txe, txd
+		}'
+}
+
+# Same counters from sysfs, used when `ip -s link` is unsupported (the
+# busybox ip applet has no -s).
+sysfs_stats() {
+	p_stats=
+	for p_file in rx_errors rx_dropped tx_errors tx_dropped; do
+		p_value=$(cat "/sys/class/net/$1/statistics/$p_file" 2>/dev/null)
+		if [ -z "$p_value" ]; then
+			return 0
+		fi
+		p_stats="$p_stats $p_value"
+	done
+	printf '%s\n' "${p_stats# }"
+}
+
+# Negotiated speed from sysfs, in Mb/s; empty when unavailable or down.
+sysfs_speed() {
+	p_value=$(cat "/sys/class/net/$1/speed" 2>/dev/null)
+	case $p_value in
+	'' | *[!0-9]* | 0)
+		printf ''
+		;;
+	*)
+		printf '%s\n' "$p_value"
+		;;
+	esac
+}
+
+stats_display() {
+	printf '%s\n' "$1" | awk '
+		NF == 4 { printf "rx=%s/%s tx=%s/%s", $1, $2, $3, $4; next }
+		{ printf "unknown" }'
+}
+
+# Classify a stats string as bad, clean or unknown.  Anything unknown must
+# not be reported as an error, and anything non-zero must be.
+counter_state() {
+	awk -v s="$1" 'BEGIN {
+		n = split(s, a, " ")
+		if (n < 4) {
+			print "unknown"
+			exit
+		}
+		if (a[1] + 0 != 0 || a[2] + 0 != 0 || a[3] + 0 != 0 || a[4] + 0 != 0) {
+			print "bad"
+		} else {
+			print "clean"
+		}
+	}'
+}
+
+# Gather and record everything for one lab port.  Sets PORT_* globals and
+# returns 1 when the port does not exist.
+scan_port() {
+	PORT_DEV=
+	PORT_LINK=
+	PORT_SPEED=
+	PORT_DUPLEX=
+	PORT_ADVERTISED=
+	PORT_PARTNER=
+	PORT_STATS=
+
+	if ! resolve_dev "$1"; then
+		log "$1: no matching netdev (tried $1, network.$1.device and the board port)"
+		return 1
+	fi
+
+	if [ "$PORT_DEV" = "$1" ]; then
+		log "=== $1 ($PORT_DEV) ==="
+	else
+		log "=== $1 (resolved to netdev $PORT_DEV) ==="
+	fi
+
+	p_out=$(ip -s link show "$PORT_DEV" 2>&1)
+	log_block "ip -s link show $PORT_DEV" "$p_out"
+	PORT_STATS=$(ip_stats "$p_out")
+	if [ -z "$PORT_STATS" ]; then
+		PORT_STATS=$(sysfs_stats "$PORT_DEV")
+		if [ -n "$PORT_STATS" ]; then
+			log "counters: from sysfs (ip -s link unusable)"
+		else
+			log "counters: unavailable (neither ip -s link nor sysfs)"
+		fi
+	fi
+	if [ -n "$PORT_STATS" ]; then
+		log "counters: $(stats_display "$PORT_STATS")"
+	fi
+
+	if [ "$HAVE_ETHTOOL" = 0 ]; then
+		log "ethtool: not installed, speed/duplex/partner modes unavailable"
+		return 0
+	fi
+
+	p_out=$(ethtool "$PORT_DEV" 2>&1)
+	log_block "ethtool $PORT_DEV" "$p_out"
+	PORT_LINK=$(field_value "$p_out" "Link detected")
+	PORT_SPEED=$(ethtool_speed "$p_out")
+	PORT_DUPLEX=$(field_value "$p_out" "Duplex")
+	PORT_ADVERTISED=$(field_value "$p_out" "Advertised link modes")
+	PORT_PARTNER=$(field_value "$p_out" "Link partner advertised link modes")
+	if [ -z "$PORT_SPEED" ]; then
+		PORT_SPEED=$(sysfs_speed "$PORT_DEV")
+	fi
+
+	p_link=unknown
+	if [ -n "$PORT_LINK" ]; then
+		p_link=$PORT_LINK
+	fi
+	p_speed=unknown
+	if [ -n "$PORT_SPEED" ]; then
+		p_speed="${PORT_SPEED}Mb/s"
+	fi
+	p_duplex=unknown
+	if [ -n "$PORT_DUPLEX" ]; then
+		p_duplex=$PORT_DUPLEX
+	fi
+	log "link: speed=$p_speed duplex=$p_duplex detected=$p_link"
+	p_advertised=not-reported
+	if [ -n "$PORT_ADVERTISED" ]; then
+		p_advertised=$PORT_ADVERTISED
+	fi
+	log "advertised modes: $p_advertised"
+	p_partner=not-reported
+	if [ -n "$PORT_PARTNER" ]; then
+		p_partner=$PORT_PARTNER
+	fi
+	log "link partner advertised modes: $p_partner"
+
+	p_out=$(ethtool -S "$PORT_DEV" 2>&1)
+	log_block "ethtool -S $PORT_DEV" "$p_out"
+}
+
+main() {
+	log_init
+
+	if [ ! -e "$MARKER" ]; then
+		log "not enabled: $MARKER absent, diagnostic skipped"
+		exit 0
+	fi
+
+	log "=== xr1710g-lan10g-diag: 2.5G/10G link diagnostic ==="
+
+	HAVE_ETHTOOL=0
+	if command -v ethtool >/dev/null 2>&1; then
+		HAVE_ETHTOOL=1
+	fi
+
+	LAN_SPEED=
+	LAN_STATS=
+	scan_port lan10g
+	LAN_SPEED=$PORT_SPEED
+	LAN_STATS=$PORT_STATS
+
+	WAN_SPEED=
+	WAN_STATS=
+	scan_port wan10g
+	WAN_SPEED=$PORT_SPEED
+	WAN_STATS=$PORT_STATS
+
+	p_reasons=
+	p_lan25=0
+	p_wan25=0
+	if [ -n "$LAN_SPEED" ] && [ "$LAN_SPEED" = 2500 ]; then
+		p_lan25=1
+	fi
+	if [ -n "$WAN_SPEED" ] && [ "$WAN_SPEED" = 2500 ]; then
+		p_wan25=1
+	fi
+	if [ -n "$LAN_SPEED" ] && [ -n "$WAN_SPEED" ] && [ "$p_lan25" -ne "$p_wan25" ]; then
+		p_reasons="only one port negotiated 2.5G: lan10g=${LAN_SPEED}Mb/s wan10g=${WAN_SPEED}Mb/s"
+	fi
+
+	p_lan_state=$(counter_state "$LAN_STATS")
+	p_wan_state=$(counter_state "$WAN_STATS")
+	if [ "$p_lan_state" = bad ] || [ "$p_wan_state" = bad ]; then
+		p_counts="lan10g $(stats_display "$LAN_STATS") wan10g $(stats_display "$WAN_STATS")"
+		if [ -n "$p_reasons" ]; then
+			p_reasons="$p_reasons; errors/drops non-zero: $p_counts"
+		else
+			p_reasons="errors/drops non-zero: $p_counts"
+		fi
+	fi
+
+	if [ -n "$p_reasons" ]; then
+		printf 'VERDICT: %s\n' "$p_reasons" | tee -a "$LOG_PATH"
+	elif [ -z "$LAN_SPEED" ] || [ -z "$WAN_SPEED" ] || \
+		[ "$p_lan_state" = unknown ] || [ "$p_wan_state" = unknown ]; then
+		log "verdict: inconclusive (missing port, speed or counters; see above)"
+	else
+		log "verdict: none (lan10g=${LAN_SPEED}Mb/s wan10g=${WAN_SPEED}Mb/s, lan10g counters=$p_lan_state wan10g counters=$p_wan_state)"
+	fi
+
+	exit 0
+}
+
+main "$@"
