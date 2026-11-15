@@ -336,7 +336,12 @@ def test_capture() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         good = root / "good.txt"
-        good.write_text("cpu/tx-16 l=210290 i=116038\nmax_inflight=116038\n")
+        # The probe script emits "max_inflight = 116038" with spaces; keep that
+        # exact shape so the parser is tested against the real capture format.
+        good.write_text(
+            "@@@BQL shrink\n"
+            "cpu/tx-16   min_limit = 210290   max_limit = 529246   max_inflight = 116038\n"
+        )
         rc, out = run_gate("--capture", str(good), "--skip-source", "--skip-build", "--skip-image")
         check("inflight >= 64 KiB passes", rc == 0, out[-300:])
 

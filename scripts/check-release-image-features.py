@@ -664,6 +664,7 @@ def check_capture_stage(capture: Path, min_inflight: int, report: Report) -> boo
     values: list[tuple[int, str]] = []
     limits: list[int] = []
     ethtool_hits: list[str] = []
+    ethtool_seen = False
 
     for path in iter_capture_files(capture):
         try:
@@ -688,6 +689,7 @@ def check_capture_stage(capture: Path, min_inflight: int, report: Report) -> boo
         for match in LIMIT_RE.finditer(raw):
             limits.append(int(match.group(1)))
         if "ethtool" in path.name.lower() or "NIC statistics" in raw:
+            ethtool_seen = True
             for line in raw.splitlines():
                 if BQL_STAT_RE.search(line):
                     ethtool_hits.append(f"{path.name}: {line.strip()}")
@@ -704,11 +706,13 @@ def check_capture_stage(capture: Path, min_inflight: int, report: Report) -> boo
         report.note(f"observed BQL limit up to {max(limits)} bytes")
     if ethtool_hits:
         report.note(f"ethtool -S BQL-looking counters: {len(ethtool_hits)} (e.g. {ethtool_hits[0]})")
-    else:
+    elif ethtool_seen:
         report.note(
             "no BQL counter in the ethtool -S capture; this driver exposes BQL in sysfs, "
             "which is the authoritative signal used below"
         )
+    else:
+        report.note("no ethtool -S capture provided; BQL is read from the sysfs samples")
     if maximum < min_inflight:
         report.fail(
             f"max inflight {maximum} bytes ({where}) is below {min_inflight} bytes "
