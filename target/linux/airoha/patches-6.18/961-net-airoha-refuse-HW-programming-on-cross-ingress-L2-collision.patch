@@ -1,6 +1,6 @@
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -499,6 +499,9 @@
+@@ -553,6 +553,9 @@ struct airoha_flow_table_entry {
  
  	struct airoha_foe_stats64 stats;
  	enum airoha_flow_entry_type type;
@@ -10,18 +10,20 @@
  
  	struct rhash_head node;
  	unsigned long cookie;
-
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -9,6 +9,7 @@
+@@ -7,8 +7,10 @@
+ #include <linux/ip.h>
+ #include <linux/ipv6.h>
  #include <linux/of_platform.h>
++#include <linux/moduleparam.h>
  #include <linux/platform_device.h>
  #include <linux/rhashtable.h>
 +#include <net/dst_metadata.h>
  #include <net/ipv6.h>
- #include <linux/if_vlan.h>
  #include <net/pkt_cls.h>
-@@ -908,6 +909,59 @@
+ #include <net/route.h>
+@@ -915,6 +917,105 @@ airoha_ppe_foe_commit_subflow_entry(struct airoha_ppe *ppe,
  	return 0;
  }
  
@@ -42,7 +44,52 @@
 +	return ndev ? ndev->ifindex : 0;
 +}
 +
-+#define AIROHA_L2_DUAL_WINDOW	msecs_to_jiffies(10000)
++#define AIROHA_L2_DUAL_WINDOW_MIN_MS	1000U
++#define AIROHA_L2_DUAL_WINDOW_MAX_MS	60000U
++#define AIROHA_L2_DUAL_WINDOW_DEFAULT_MS	10000U
++
++static unsigned int dual_window_ms = AIROHA_L2_DUAL_WINDOW_DEFAULT_MS;
++
++static unsigned int airoha_ppe_dual_window_ms(void)
++{
++	return clamp(dual_window_ms, AIROHA_L2_DUAL_WINDOW_MIN_MS,
++		     AIROHA_L2_DUAL_WINDOW_MAX_MS);
++}
++
++static int airoha_ppe_dual_window_ms_set(const char *val,
++					 const struct kernel_param *kp)
++{
++	unsigned int ms;
++	int err;
++
++	err = kstrtouint(val, 0, &ms);
++	if (err)
++		return err;
++
++	*(unsigned int *)kp->arg = clamp(ms, AIROHA_L2_DUAL_WINDOW_MIN_MS,
++					 AIROHA_L2_DUAL_WINDOW_MAX_MS);
++	return 0;
++}
++
++static const struct kernel_param_ops airoha_ppe_dual_window_ms_ops = {
++	.set = airoha_ppe_dual_window_ms_set,
++	.get = param_get_uint,
++};
++
++module_param_cb(dual_window_ms, &airoha_ppe_dual_window_ms_ops,
++		&dual_window_ms, 0644);
++MODULE_PARM_DESC(dual_window_ms,
++		 "Airoha PPE L2 dual-ingress window in milliseconds (1000-60000)");
++
++static unsigned long airoha_l2_dual_window(void)
++{
++	return msecs_to_jiffies(airoha_ppe_dual_window_ms());
++}
++
++static u32 airoha_ppe_get_l2_dual_window_ms(struct airoha_ppe_dev *dev)
++{
++	return airoha_ppe_dual_window_ms();
++}
 +
 +static bool airoha_ppe_foe_l2_claim(struct airoha_ppe *ppe,
 +				    struct airoha_flow_table_entry *e,
@@ -51,16 +98,17 @@
 +	struct airoha_flow_table_entry *f;
 +	struct hlist_node *n;
 +	unsigned long now = jiffies;
++	unsigned long window = airoha_l2_dual_window();
 +	bool dual;
 +
 +	if (e->no_hw_since &&
-+	    time_after(now, e->no_hw_since + AIROHA_L2_DUAL_WINDOW))
++	    time_after(now, e->no_hw_since + window))
 +		e->no_hw_since = 0;
 +
 +	dual = e->no_hw_since ||
 +	       (ingress && e->ingress_dev_idx &&
 +		ingress != e->ingress_dev_idx &&
-+		time_before(now, e->ingress_stamp + AIROHA_L2_DUAL_WINDOW));
++		time_before(now, e->ingress_stamp + window));
 +	if (dual) {
 +		hlist_for_each_entry_safe(f, n, &e->l2_flows,
 +					  l2_subflow_node)
@@ -81,7 +129,7 @@
  static void airoha_ppe_foe_insert_entry(struct airoha_ppe *ppe,
  					struct sk_buff *skb,
  					u32 hash, bool rx_wlan)
-@@ -917,7 +987,7 @@
+@@ -924,7 +1025,7 @@ static void airoha_ppe_foe_insert_entry(struct airoha_ppe *ppe,
  	struct airoha_foe_entry *hwe;
  	bool commit_done = false;
  	struct hlist_node *n;
@@ -90,7 +138,7 @@
  
  	spin_lock_bh(&ppe_lock);
  
-@@ -954,7 +1024,7 @@
+@@ -961,7 +1062,7 @@ static void airoha_ppe_foe_insert_entry(struct airoha_ppe *ppe,
  	airoha_ppe_foe_set_bridge_addrs(&br, eth_hdr(skb));
  	e = rhashtable_lookup_fast(&ppe->l2_flows, &br,
  				   airoha_l2_flow_table_params);
@@ -99,7 +147,7 @@
  		airoha_ppe_foe_commit_subflow_entry(ppe, e, hash, rx_wlan);
  unlock:
  	spin_unlock_bh(&ppe_lock);
-@@ -965,8 +1035,20 @@
+@@ -972,8 +1073,20 @@ airoha_ppe_foe_l2_flow_commit_entry(struct airoha_ppe *ppe,
  				    struct airoha_flow_table_entry *e)
  {
  	struct airoha_flow_table_entry *prev;
@@ -120,15 +168,15 @@
  	prev = rhashtable_lookup_get_insert_fast(&ppe->l2_flows, &e->l2_node,
  						 airoha_l2_flow_table_params);
  	if (!prev)
-@@ -1102,6 +1184,7 @@
+@@ -1109,6 +1222,7 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
  	struct airoha_flow_data data = {};
  	struct net_device *odev = NULL;
  	struct flow_action_entry *act;
 +	struct flow_match_meta meta;
- 	struct airoha_foe_entry hwe;
  	u8 dsfield = 0, l4proto = 0;
+ 	struct airoha_foe_entry hwe;
  	int err, i, offload_type;
-@@ -1114,6 +1197,8 @@
+@@ -1121,6 +1235,8 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
  	if (!flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_META))
  		return -EOPNOTSUPP;
  
@@ -137,7 +185,7 @@
  	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_CONTROL)) {
  		struct flow_match_control match;
  
-@@ -1280,6 +1365,8 @@
+@@ -1287,6 +1403,8 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
  		return -ENOMEM;
  
  	e->cookie = f->cookie;
@@ -146,3 +194,47 @@
  	memcpy(&e->data, &hwe, sizeof(e->data));
  
  	err = airoha_ppe_foe_flow_commit_entry(eth->ppe, e);
+@@ -1649,6 +1767,7 @@ int airoha_ppe_init(struct airoha_eth *eth)
+ 
+ 	ppe->dev.ops.setup_tc_block_cb = airoha_ppe_setup_tc_block_cb;
+ 	ppe->dev.ops.check_skb = airoha_ppe_check_skb;
++	ppe->dev.ops.get_l2_dual_window_ms = airoha_ppe_get_l2_dual_window_ms;
+ 	ppe->dev.priv = ppe;
+ 	ppe->eth = eth;
+ 	eth->ppe = ppe;
+--- a/include/linux/soc/airoha/airoha_offload.h
++++ b/include/linux/soc/airoha/airoha_offload.h
+@@ -21,6 +21,7 @@ struct airoha_ppe_dev {
+ 		void (*check_skb)(struct airoha_ppe_dev *dev,
+ 				  struct sk_buff *skb, u16 hash,
+ 				  bool rx_wlan);
++		u32 (*get_l2_dual_window_ms)(struct airoha_ppe_dev *dev);
+ 	} ops;
+ 
+ 	void *priv;
+@@ -42,6 +43,12 @@ static inline void airoha_ppe_dev_check_skb(struct airoha_ppe_dev *dev,
+ {
+ 	dev->ops.check_skb(dev, skb, hash, rx_wlan);
+ }
++
++static inline u32
++airoha_ppe_dev_get_l2_dual_window_ms(struct airoha_ppe_dev *dev)
++{
++	return dev->ops.get_l2_dual_window_ms(dev);
++}
+ #else
+ static inline struct airoha_ppe_dev *airoha_ppe_get_dev(struct device *dev)
+ {
+@@ -63,6 +70,12 @@ static inline void airoha_ppe_dev_check_skb(struct airoha_ppe_dev *dev,
+ 					    bool rx_wlan)
+ {
+ }
++
++static inline u32
++airoha_ppe_dev_get_l2_dual_window_ms(struct airoha_ppe_dev *dev)
++{
++	return 0;
++}
+ #endif
+ 
+ #define NPU_NUM_CORES		8
