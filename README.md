@@ -110,12 +110,21 @@ boot the other board's device tree.
 Use the CI in [`genshanxinli/xr1710g-builds`](https://github.com/genshanxinli/xr1710g-builds),
 which also publishes images to releases. To build by hand:
 
+The build embeds the worktree path in the host staging pkg-config files; a
+non-ASCII path makes meson fail in an unrelated host package before the
+requested target is built. Use a pure-ASCII path such as `/xr/xr1710g`, and
+run `scripts/build-preflight.sh` before `make`:
+
 ```sh
 git clone -b xr1710g https://github.com/genshanxinli/xr1710g-openwrt.git openwrt
 cd openwrt
 ./scripts/feeds update -a && ./scripts/feeds install -a
+./scripts/build-preflight.sh
 make menuconfig   # Target: Airoha -> AN7581 -> Gemtek XR1710G
 make -j$(nproc)
 ```
+
+`SKIP_PATH_CHECK=1 ./scripts/build-preflight.sh` reports the problem as a
+warning and exits 0; the build will still fail.
 
 Output is under `bin/targets/airoha/an7581/`.
