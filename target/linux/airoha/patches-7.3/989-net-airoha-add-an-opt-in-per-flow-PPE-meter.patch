@@ -39,14 +39,9 @@ register value, so the next person can tell "never programmed" from
 
 Signed-off-by: OpenWrt <openwrt@example.org>
 ---
- drivers/net/ethernet/airoha/airoha_eth.h           |  59 ++++++++++++++
- drivers/net/ethernet/airoha/airoha_ppe.c           | 343 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++---
- drivers/net/ethernet/airoha/airoha_ppe_debugfs.c   |  40 ++++++++++++++
- 3 files changed, 438 insertions(+), 4 deletions(-)
-
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -394,6 +394,36 @@
+@@ -394,6 +394,36 @@ struct airoha_foe_mac_info {
  #define AIROHA_FOE_METER_GRP3			GENMASK(8, 5)
  #define AIROHA_FOE_METER_GRP2			GENMASK(4, 0)
  
@@ -83,7 +78,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  struct airoha_foe_bridge {
  	u32 dest_mac_hi;
  
-@@ -536,6 +566,12 @@
+@@ -536,6 +566,12 @@ struct airoha_flow_data {
  		u16 sid;
  		u8 num;
  	} pppoe;
@@ -96,7 +91,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  };
  
  enum airoha_flow_entry_type {
-@@ -558,6 +594,12 @@
+@@ -558,6 +594,12 @@ struct airoha_flow_table_entry {
  
  	struct airoha_foe_stats64 stats;
  	enum airoha_flow_entry_type type;
@@ -109,7 +104,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	u32 ingress_dev_idx;
  	unsigned long ingress_stamp;
  	unsigned long no_hw_since;
-@@ -682,6 +724,13 @@
+@@ -682,6 +724,13 @@ enum airoha_ppe_entry_alias {
  	AIROHA_PPE_ENTRY_ALIAS_FAILED,
  };
  
@@ -123,7 +118,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  struct airoha_ppe {
  	struct airoha_ppe_dev dev;
  	struct airoha_eth *eth;
-@@ -717,6 +766,16 @@
+@@ -717,6 +766,16 @@ struct airoha_ppe {
  	u32 bind_rate_l3;
  	u32 bind_rate_l2b;
  
@@ -142,15 +137,15 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -6,6 +6,7 @@
- 
+@@ -7,6 +7,7 @@
  #include <linux/ip.h>
  #include <linux/ipv6.h>
+ #include <linux/module.h>
 +#include <linux/moduleparam.h>
  #include <linux/of_platform.h>
  #include <linux/platform_device.h>
  #include <linux/rhashtable.h>
-@@ -38,6 +39,300 @@
+@@ -59,6 +60,300 @@ static const struct rhashtable_params airoha_l2_flow_table_params = {
  	.automatic_shrinking = true,
  };
  
@@ -451,16 +446,16 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  /* How many counter slots per PPE this build could ask the NPU for.  This is
   * a property of the build and the SoC, not of what the NPU ended up agreeing
   * to, and it has to stay that way: the counter buffer is allocated in
-@@ -614,7 +909,7 @@
- 					struct airoha_flow_data *data,
- 					int l4proto, u8 dsfield, bool bridged)
- {
--	u32 qdata = FIELD_PREP(AIROHA_FOE_SHAPER_ID, 0x7f), ports_pad, val;
-+	u32 qdata = FIELD_PREP(AIROHA_FOE_SHAPER_ID, data->meter), ports_pad, val;
- 	int wlan_etype = -EINVAL, dsa_port = airoha_get_dsa_port(&netdev);
- 	struct airoha_foe_mac_info_common *l2;
- 	u8 smac_id = 0xf;
-@@ -1272,6 +1567,13 @@
+@@ -674,7 +969,7 @@ static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
+ 	if (airoha_ppe_netdev_is_shaped(egress))
+ 		return -EOPNOTSUPP;
+ 
+-	qdata = FIELD_PREP(AIROHA_FOE_SHAPER_ID, 0x7f);
++	qdata = FIELD_PREP(AIROHA_FOE_SHAPER_ID, data->meter);
+ 
+ 	val = FIELD_PREP(AIROHA_FOE_IB1_BIND_STATE, AIROHA_FOE_STATE_BIND) |
+ 	      FIELD_PREP(AIROHA_FOE_IB1_BIND_PACKET_TYPE, type) |
+@@ -1334,6 +1629,13 @@ static void airoha_ppe_foe_flow_remove_entry(struct airoha_ppe *ppe,
  
  	if (type >= PPE_PKT_TYPE_IPV6_ROUTE_3T)
  		airoha_ppe_put_smac_id(ppe->eth, smac_id);
@@ -474,7 +469,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  }
  
  static int
-@@ -1593,11 +1895,14 @@
+@@ -1655,11 +1957,14 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
  {
  	struct flow_rule *rule = flow_cls_offload_flow_rule(f);
  	struct airoha_flow_table_entry *e;
@@ -490,8 +485,8 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +	u8 dsfield = 0, l4proto = 0, meter = AIROHA_PPE_METER_NONE;
  	struct airoha_foe_entry hwe;
  	struct net_device *indev;
- 	bool bridged;
-@@ -1696,6 +2001,18 @@
+ 	bool bridged, has_ports, use_3t;
+@@ -1763,6 +2068,18 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
  			data.pppoe.sid = act->pppoe.sid;
  			data.pppoe.num++;
  			break;
@@ -510,7 +505,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  		default:
  			return -EOPNOTSUPP;
  		}
-@@ -1705,6 +2022,19 @@
+@@ -1772,6 +2089,19 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
  	    !is_valid_ether_addr(data.eth.h_dest))
  		return -EINVAL;
  
@@ -530,16 +525,16 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	/* A flow whose ingress and egress devices are both ports of the same
  	 * bridge never leaves L2, so the PPE must forward it without touching
  	 * the IP TTL.  Routing -- including entering or leaving the bridge --
-@@ -1728,7 +2058,7 @@
+@@ -1795,7 +2125,7 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
  	err = airoha_ppe_foe_entry_prepare(eth, &hwe, odev, offload_type,
  					   &data, l4proto, dsfield, bridged);
  	if (err)
 -		return err;
 +		goto put_smac;
  
- 	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_PORTS)) {
+ 	if (has_ports) {
  		struct flow_match_ports ports;
-@@ -1807,6 +2137,7 @@
+@@ -1879,6 +2209,7 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
  	}
  
  	e->cookie = f->cookie;
@@ -547,7 +542,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	e->ingress_dev_idx = meta.key->ingress_ifindex;
  	e->ingress_stamp = jiffies;
  	memcpy(&e->data, &hwe, sizeof(e->data));
-@@ -1831,6 +2162,9 @@
+@@ -1903,6 +2234,9 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
  put_smac:
  	airoha_ppe_foe_entry_put_smac_id(eth, &hwe);
  
@@ -557,7 +552,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	return err;
  }
  
-@@ -2195,6 +2529,7 @@
+@@ -2328,6 +2662,7 @@ int airoha_ppe_init(struct airoha_eth *eth)
  	eth->ppe = ppe;
  	ppe->bind_rate_l3 = AIROHA_PPE_DEFAULT_BIND_RATE;
  	ppe->bind_rate_l2b = AIROHA_PPE_DEFAULT_BIND_RATE;
@@ -567,9 +562,9 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	foe_size = ppe_num_entries * sizeof(struct airoha_foe_entry);
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -365,6 +365,44 @@
- }
- DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_tb_regs);
+@@ -470,6 +470,44 @@ static const struct file_operations airoha_ppe_debugfs_flush_fops = {
+ 	.write		= airoha_ppe_debugfs_flush_write,
+ };
  
 +/* Read-only view of the opt-in per-flow meters.  The software record is
 + * what was requested; the register value next to it is what the PPE
@@ -612,12 +607,12 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  {
  	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-@@ -380,6 +418,8 @@
+@@ -485,6 +523,8 @@ int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  			    &airoha_ppe_debugfs_bind_rate_fops);
  	debugfs_create_file("tb_regs", 0444, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_tb_regs_fops);
 +	debugfs_create_file("meter", 0444, ppe->debugfs_dir, ppe,
 +			    &airoha_ppe_debugfs_meter_fops);
+ 	debugfs_create_file("l2b", 0444, ppe->debugfs_dir, ppe,
+ 			    &airoha_ppe_debugfs_l2b_fops);
  
- 	return 0;
- }

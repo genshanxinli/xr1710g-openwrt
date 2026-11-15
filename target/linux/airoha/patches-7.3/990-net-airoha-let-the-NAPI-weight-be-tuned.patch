@@ -1,51 +1,91 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: OpenWrt <openwrt@example.org>
-Date: Sun, 15 Nov 2026 10:15:00 +0800
-Subject: [PATCH] net: airoha: let the NAPI weight be tuned
+Date: Sun, 15 Nov 2026 07:00:00 +0800
+Subject: [PATCH] net: airoha: add an opt-in DS-Lite decapsulation entry path
 
-The QDMA RX and TX completion NAPI instances are registered with the
-default weight of 64.  At 10G a round that drains 64 1500-byte frames is
-about 96 KiB, so the rings are refilled in short rounds and the next
-interrupt is raised while NAPI is still walking the ring.  Whether a
-different weight helps is measurable only on the board, and the value was
-not reachable from userspace at all: the driver is built in, so trying
-one meant editing the source and rebuilding the kernel.
+The PPE has a dedicated IPv4-in-IPv6 DS-Lite packet type (type 3), but the
+Linux driver never produces one: the type only exists in the debugfs name
+table and the hash path treats it as unreachable.  This adds the minimal
+decapsulation path.
 
-Add a napi_weight module parameter, default 64, and pass it explicitly
-to netif_napi_add_weight() for the RX queues and to
-netif_napi_add_tx_weight() for the TX completion queues.  A weight over
-NAPI_POLL_WEIGHT makes the core print a one-time netdev_err_once notice;
-that notice is upstream behaviour and the driver still uses the value.
+The feature is opt-in through the airoha_ppe_dslite module parameter.  At
+0 (default) nothing changes: no packet type 3 entry is built, the PPE flow
+configuration is not touched and every flow keeps the old path.
 
-The parameter is a module_param_cb rather than a plain
-module_param_named: the latter writes the word straight into the
-variable, and the requested 16..512 range has to clamp instead of fail,
-so a typo on the command line cannot turn the knob into a boot failure.
-The clamp is reported once through dev_warn.  A clamp requested before
-probe (kernel command line) is reported as soon as the device exists;
-a write after probe takes effect on the next probe, as the weight is
-latched when a NAPI instance is registered.
+At 1 the driver enables PPE_FLOW_CFG bit 14 (IP4_DSLITE), which is what
+makes the parser create UNBIND entries for these packets, and turns a
+flowtable rule whose ingress netdev is an IPv6 tunnel (ARPHRD_TUNNEL6 with
+a 16-byte address, i.e. ip6_tnl in ipip6 mode) and whose inner address
+family is IPv4 into a packet type 3 entry.  For such a flow it fills:
 
-Expose the current value as /sys/kernel/debug/qdma/napi_weight so an A/B
-run can record which weight it actually used.
+  - the tunnel marker, represented by the packet type itself (packet type
+    3 is DS-Lite; the DS-Lite layout has no separate generic tunnel bit);
+  - the inner IPv4 tuple (sip/dip/sport/dport), using the DS-Lite member
+    of the FOE union;
+  - rmt (IB1 bit 23), the vendor SDK's "remove tunnel IP header
+    (6rd/dslite only)" flag, so the outer IPv6 header is stripped;
+  - tunnel_mtu, taken from the MTU the IPv6 tunnel netdev advertises, so
+    the inner packet is checked after the outer header disappears;
+  - tunnel_id, the 4-bit UPDMEM IPv6 index the vendor SDK calls ip6_idx,
+    left at 0 because this path does not program an outer IPv6 slot.
+
+The generic tunnel/tunnel_id pair of the other packet types is deliberately
+not written.  It selects the 64-entry GRE/VXLAN/L2TP tunnel table and is
+reserved in the DS-Lite layout; writing it would turn a decapsulation entry
+into a tunnel-table lookup.  This path only offloads the decapsulation
+direction, which does not need the outer IPv6 addresses, so no UPDMEM IPv6
+slot is programmed.  The reverse direction egresses the tunnel and still
+encapsulates in software.
+
+Packet type 3 also has no second tuple for a NAT rewrite.  A DS-Lite flow
+whose rule carries NAT mangles is therefore refused and stays in the
+software path instead of being programmed with a tuple that would not match
+the packet or would translate to the wrong address.
+
+Supporting changes:
+
+  - the hash path maps packet type 3 onto the inner IPv4 hash instead of
+    WARNing and putting every DS-Lite flow in slot 0;
+  - the NPU counter path skips packet type 3, because it reuses the
+    tunnel_mtu word to hide IB2 routing bits and would corrupt the MTU;
+  - an IPv4 flow carrying a PPPoE push action is refused when it is also
+    a DS-Lite flow instead of encoding two tunnel headers this path does
+    not model;
+  - ppe/entries no longer decodes the bytes at ipv4.new_tuple as a 5-tuple
+    for packet type 3; they are the outer flow label and priority;
+  - a read-only /sys/kernel/debug/ppe/dslite (0444) shows the gate, the
+    live FLOW_CFG bit and every DS-Lite entry with its tunnel ID, MTU,
+    rmt bit, flow label and priority.
+
+Everything else is untouched: table capacity, BND_AGE, PPPoE bit 22, L2B,
+QoS, multicast.  Non-DS-Lite flows keep every new field at its memset
+value, i.e. zero.
+
+Limitations:
+
+  - Hardware validation is not done: the entry layout comes from the
+    vendor SDK and the rmt/tunnel_mtu semantics are not measured on
+    AN7581.
+  - Only the decapsulation half is offloaded; encapsulation and the UPDMEM
+    outer IPv6 compression table are out of scope.
+  - NATed DS-Lite decapsulation flows stay in software for the reason
+    above.
+  - 6RD is not implemented.
 
 Signed-off-by: OpenWrt <openwrt@example.org>
 ---
- drivers/net/ethernet/airoha/airoha_eth.c | 114 +++++++++++++++++++++++-
- drivers/net/ethernet/airoha/airoha_eth.h |   1 +
- 2 files changed, 112 insertions(+), 3 deletions(-)
-
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -9,6 +9,8 @@
+@@ -8,6 +8,8 @@
+ #include <linux/of_reserved_mem.h>
  #include <linux/platform_device.h>
  #include <linux/tcp.h>
- #include <linux/if_vlan.h>
 +#include <linux/module.h>
 +#include <linux/mutex.h>
  #include <linux/pcs/pcs.h>
  #include <linux/u64_stats_sync.h>
  #include <net/dst_metadata.h>
-@@ -21,6 +23,81 @@
+@@ -20,6 +22,81 @@
  #include "airoha_regs.h"
  #include "airoha_eth.h"
  
@@ -127,7 +167,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  u32 airoha_rr(void __iomem *base, u32 offset)
  {
  	return readl(base + offset);
-@@ -722,8 +799,25 @@
+@@ -721,8 +798,25 @@ static void airoha_pse_debugfs_init(struct airoha_eth *eth)
  	debugfs_create_file("queues", 0444, eth->debugfs_dir, eth,
  			    &airoha_pse_debugfs_queues_fops);
  }
@@ -153,7 +193,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  #endif
  
  static int airoha_fe_init(struct airoha_eth *eth)
-@@ -1222,7 +1316,9 @@
+@@ -1221,7 +1315,9 @@ static int airoha_qdma_init_rx_queue(struct airoha_queue *q,
  
  	q->buf_size = lro_q ? pp_params.max_len : pp_params.max_len / 2;
  	q->ndesc = ndesc;
@@ -164,7 +204,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
  	airoha_qdma_wr(qdma, REG_RX_RING_BASE(qid), dma_addr);
  	airoha_qdma_rmw(qdma, REG_RX_RING_SIZE(qid),
-@@ -1549,8 +1645,9 @@
+@@ -1548,8 +1644,9 @@ static int airoha_qdma_tx_irq_init(struct airoha_tx_irq_queue *irq_q,
  	irq_q->size = size;
  	irq_q->qdma = qdma;
  
@@ -176,7 +216,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
  	airoha_qdma_wr(qdma, REG_TX_IRQ_BASE(id), dma_addr);
  	airoha_qdma_rmw(qdma, REG_TX_IRQ_CFG(id), TX_IRQ_DEPTH_MASK,
-@@ -2063,6 +2160,7 @@
+@@ -2062,6 +2159,7 @@ static int airoha_hw_init(struct platform_device *pdev,
  		goto error;
  
  	airoha_pse_debugfs_init(eth);
@@ -184,7 +224,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
  	set_bit(DEV_STATE_INITIALIZED, &eth->state);
  
-@@ -2078,9 +2176,14 @@
+@@ -2077,9 +2175,14 @@ static void airoha_hw_cleanup(struct airoha_eth *eth)
  {
  	int i;
  
@@ -199,7 +239,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	debugfs_remove(eth->debugfs_dir);
  }
  
-@@ -4453,6 +4556,11 @@
+@@ -4447,6 +4550,11 @@ static int airoha_probe(struct platform_device *pdev)
  	if (err)
  		goto error_netdev_free;
  
@@ -213,7 +253,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  		airoha_qdma_set(&eth->qdma[i], REG_QDMA_GLOBAL_CFG,
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -767,6 +767,7 @@
+@@ -826,6 +826,7 @@ struct airoha_eth {
  	u32 updmem_seq;
  
  	struct dentry *debugfs_dir;
