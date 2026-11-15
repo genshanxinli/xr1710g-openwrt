@@ -1,0 +1,152 @@
+From: genshanxinli <genshanxinli@users.noreply.github.com>
+Date: Sat, 15 Nov 2026 08:00:00 +0800
+Subject: [PATCH] wifi: mt76: mt7996: tell the NPU when a station is removed
+
+The Airoha NPU offload path keeps per-WCID state for stations it has
+seen. When a station is removed, mt7996 frees the WCID in the WTBL but
+never tells the NPU, so the stale state stays behind and a later station
+that reuses the same WCID index can inherit the old forwarding state.
+On the AN7581 this shows up as a station that reconnects with the same
+MAC address downloading at a crawl until it is forgotten and re-added
+with a new private MAC address.
+
+Send WLAN_FUNC_SET_WAIT_DEL_STA through the existing NPU mailbox from
+mt7996_mac_sta_remove(), before each link is torn down, passing the band
+and the WCID index being retired. Only notify the NPU when the NPU is
+present; a mailbox error is logged once at debug level and never fails
+the station removal. Link teardown during roaming, MLO link changes and
+full-chip reset is deliberately left alone.
+
+While here, print the effective Airoha PPE L2 dual-ingress window in the
+existing hw-queues debugfs file so the dual-window A/B test can see the
+value in use from the same place as the station queues.
+
+Signed-off-by: genshanxinli <genshanxinli@users.noreply.github.com>
+diff --git a/mt7996/debugfs.c b/mt7996/debugfs.c
+index 3780760..6fd5ca3 100644
+--- a/mt7996/debugfs.c
++++ b/mt7996/debugfs.c
+@@ -827,11 +827,28 @@ mt7996_sta_hw_queue_read(void *data, struct ieee80211_sta *sta)
+ 	rcu_read_unlock();
+ }
+ 
++#ifdef CONFIG_MT76_NPU
++static void mt7996_dual_window_show(struct seq_file *s, struct mt7996_dev *dev)
++{
++	struct airoha_ppe_dev *ppe_dev;
++
++	rcu_read_lock();
++	ppe_dev = rcu_dereference(dev->mt76.mmio.ppe_dev);
++	if (ppe_dev)
++		seq_printf(s, "Airoha PPE L2 dual window: %u ms\n",
++			   airoha_ppe_dev_get_l2_dual_window_ms(ppe_dev));
++	rcu_read_unlock();
++}
++#endif
++
+ static int
+ mt7996_hw_queues_show(struct seq_file *s, void *data)
+ {
+ 	struct mt7996_dev *dev = s->private;
+ 
++#ifdef CONFIG_MT76_NPU
++	mt7996_dual_window_show(s, dev);
++#endif
+ 	seq_puts(s, "PLE page info:\n");
+ 	mt7996_freepg_show(s, mt76_rr(dev, MT_PLE_FREEPG_CNT),
+ 			   mt76_rr(dev, MT_PLE_FREEPG_HEAD_TAIL));
+diff --git a/mt7996/main.c b/mt7996/main.c
+index 741cb6b..04b8bb9 100644
+--- a/mt7996/main.c
++++ b/mt7996/main.c
+@@ -1898,8 +1898,15 @@ mt7996_mac_sta_remove(struct mt7996_dev *dev, struct ieee80211_vif *vif,
+ 	int i;
+ 
+ 	mutex_lock(&dev->mt76.mutex);
+-	for (i = 0; i < ARRAY_SIZE(msta->link); i++)
++	for (i = 0; i < ARRAY_SIZE(msta->link); i++) {
++		struct mt7996_sta_link *msta_link;
++
++		msta_link = mt76_dereference(msta->link[i], &dev->mt76);
++		if (msta_link)
++			mt7996_npu_del_sta(dev, msta_link->wcid.phy_idx,
++					   msta_link->wcid.idx);
+ 		mt7996_mac_sta_remove_link(dev, sta, i, true);
++	}
+ 	mutex_unlock(&dev->mt76.mutex);
+ }
+ 
+diff --git a/mt7996/mt7996.h b/mt7996/mt7996.h
+index 69dff43..f16d0df 100644
+--- a/mt7996/mt7996.h
++++ b/mt7996/mt7996.h
+@@ -562,6 +562,7 @@ struct mt7996_dev {
+ 	} wed_rro;
+ 
+ 	dma_addr_t npu_txd_addr[2 * MT7996_NPU_TXD_SIZE];
++	bool npu_del_sta_error;
+ 
+ 	bool ibf;
+ 	u8 fw_debug_wm;
+@@ -1056,6 +1057,7 @@ int __mt7996_npu_hw_init(struct mt7996_dev *dev);
+ int mt7996_npu_hw_init(struct mt7996_dev *dev);
+ int mt7996_npu_hw_stop(struct mt7996_dev *dev);
+ int mt7996_npu_rx_queues_init(struct mt7996_dev *dev);
++void mt7996_npu_del_sta(struct mt7996_dev *dev, u8 band_idx, u16 wcid_idx);
+ #else
+ static inline int __mt7996_npu_hw_init(struct mt7996_dev *dev)
+ {
+@@ -1076,6 +1078,11 @@ static inline int mt7996_npu_rx_queues_init(struct mt7996_dev *dev)
+ {
+ 	return 0;
+ }
++
++static inline void mt7996_npu_del_sta(struct mt7996_dev *dev, u8 band_idx,
++				      u16 wcid_idx)
++{
++}
+ #endif /* CONFIG_MT7996_NPU */
+ 
+ #endif
+diff --git a/mt7996/npu.c b/mt7996/npu.c
+index 3fb9f39..86d2a48 100644
+--- a/mt7996/npu.c
++++ b/mt7996/npu.c
+@@ -239,6 +239,37 @@ static int mt7996_npu_offload_init(struct mt7996_dev *dev,
+ 	return 0;
+ }
+ 
++void mt7996_npu_del_sta(struct mt7996_dev *dev, u8 band_idx, u16 wcid_idx)
++{
++	struct mt76_dev *mdev = &dev->mt76;
++	struct airoha_npu *npu;
++	int err;
++
++	/*
++	 * The NPU keeps per-WCID state for offloaded stations. Tell it when a
++	 * WCID is retired so that a later station reusing the index cannot
++	 * inherit stale forwarding state. Best effort only: a missing or older
++	 * NPU firmware must not fail station removal.
++	 */
++	if (!mt76_npu_device_active(mdev))
++		return;
++
++	rcu_read_lock();
++	npu = rcu_dereference(mdev->mmio.npu);
++	if (npu) {
++		err = mt76_npu_send_msg(npu, band_idx,
++					WLAN_FUNC_SET_WAIT_DEL_STA, wcid_idx,
++					GFP_ATOMIC);
++		if (err && !dev->npu_del_sta_error) {
++			dev->npu_del_sta_error = true;
++			dev_dbg(mdev->dev,
++				"failed to notify the NPU of WCID %u removal: %d\n",
++				wcid_idx, err);
++		}
++	}
++	rcu_read_unlock();
++}
++
+ static int mt7992_npu_rxd_init(struct mt7996_dev *dev, struct airoha_npu *npu)
+ {
+ 	u32 val;
