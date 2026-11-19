@@ -1,0 +1,120 @@
+From: XR1710G lab <lab@xr1710g.local>
+Subject: [PATCH] procd: leave STATE_UBUS after a deadline instead of hanging forever
+
+STATE_UBUS has exactly one exit: procd_state_ubus_connect(), called only
+from the success branch of ubus_connect_cb().  When ubus_connect() keeps
+failing, timeout_retry() just doubles the retry interval up to 1 s and
+tries again, forever.  Nothing else ever advances the state machine, so
+"- init -" is never reached and the board silently stops at "- ubus -".
+
+The failure is silent by design: the log line is DEBUG(4, ...) and debug
+defaults to 0, so a normal boot prints nothing at all.  Together with a
+watchdog that cannot be armed, the device neither boots, reboots, nor
+explains itself.
+
+Observed on a Gemtek XR1710G (Airoha AN7581) running OpenWrt 7.3.4: the
+console ends at "[13.184096] procd: - ubus -" and stays there forever.
+The AN7581 wdt driver does not implement WDIOC_SETTIMEOUT, so
+watchdog_init() logs "WDT failed to set timeout 30s: Invalid argument"
+and leaves the timer off, which is why the hang never self-heals.  Worse,
+the system never reaches STATE_INIT, so /etc/config/system is never
+generated and uci reports no compat_version; fwtool.sh then falls back to
+1.0 while the image metadata says 2.0, and sysupgrade refuses to run.
+
+Give the state a deadline.  After 10 s the system moves on to STATE_INIT
+with a loud error instead of hanging.  Services that need ubus fail on
+their own and say so; a system that can be logged into and inspected is
+strictly better than one that freezes before init.  The retry loop keeps
+running in the background, so if ubusd appears later the objects get
+registered and services recover.
+
+The deadline is taken from the kernel command line, so it can be tuned
+from U-Boot bootargs on a board that is already soft-bricked, without
+rebuilding anything:
+
+  procd_ubus_timeout=<seconds>   default 10, clamped to 300
+  procd_ubus_timeout=0           disable the deadline (old behaviour)
+
+The timer is cancelled as soon as the connection succeeds, so the normal
+path is unchanged.  procd_state_ubus_connect() is a no-op unless the state
+is still STATE_UBUS, which makes the callback safe to call unconditionally
+and also keeps it inert on the reconnect path after init.
+
+Signed-off-by: XR1710G lab <lab@xr1710g.local>
+---
+--- a/ubus.c
++++ b/ubus.c
+@@ -18,10 +18,15 @@
+ #include <signal.h>
+ 
+ #include "procd.h"
++#include "utils/utils.h"
++
++#define UBUS_STATE_TIMEOUT_DEFAULT_MS	10000
+ 
+ const char *ubus_socket = NULL;
+ static struct ubus_context *ctx;
+ static struct uloop_timeout ubus_timer;
++static struct uloop_timeout ubus_state_timer;
++static unsigned int ubus_state_timeout;
+ static int timeout;
+ static struct udebug_ubus udebug;
+ 
+@@ -83,14 +88,57 @@
+ 
+ 	DEBUG(2, "Connected to ubus, id=%08x\n", ctx->local_id);
+ 	reset_timeout();
++	uloop_timeout_cancel(&ubus_state_timer);
+ 	ubus_add_uloop(ctx);
+ 	procd_state_ubus_connect();
+ }
+ 
++static void
++ubus_state_timeout_cb(struct uloop_timeout *t)
++{
++	/*
++	 * STATE_UBUS only leaves through procd_state_ubus_connect(), which is
++	 * called from the success path of ubus_connect_cb().  If ubusd never
++	 * answers, that success never happens and the state machine stops for
++	 * good: no init, no login, nothing.  procd_state_ubus_connect() is a
++	 * no-op unless the state is still STATE_UBUS, so it is safe to call
++	 * here unconditionally.
++	 */
++	ERROR("- ubus - no connection after %u ms, continuing without it\n",
++	       ubus_state_timeout);
++	procd_state_ubus_connect();
++}
++
++static unsigned int
++ubus_state_timeout_from_cmdline(void)
++{
++	char line[32];
++	char *v;
++	unsigned int ms;
++
++	v = get_cmdline_val("procd_ubus_timeout", line, sizeof(line));
++	if (!v || !*v)
++		return UBUS_STATE_TIMEOUT_DEFAULT_MS;
++
++	/* 0 disables the deadline, for anyone who wants the old behaviour */
++	ms = (unsigned int)strtoul(v, NULL, 10) * 1000;
++	if (ms > 300000)
++		ms = 300000;
++
++	return ms;
++}
++
+ void
+ procd_connect_ubus(void)
+ {
+ 	ubus_timer.cb = ubus_connect_cb;
+ 	reset_timeout();
+ 	timeout_retry();
++
++	ubus_state_timeout = ubus_state_timeout_from_cmdline();
++	if (!ubus_state_timeout)
++		return;
++
++	ubus_state_timer.cb = ubus_state_timeout_cb;
++	uloop_timeout_set(&ubus_state_timer, ubus_state_timeout);
+ }
