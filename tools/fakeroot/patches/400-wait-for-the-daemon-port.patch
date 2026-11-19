@@ -1,0 +1,23 @@
+--- a/scripts/fakeroot.in
++++ b/scripts/fakeroot.in
+@@ -142,6 +142,20 @@
+ FAKEROOTKEY=`echo $KEY_PID|cut -d: -f1`
+ PID=`echo $KEY_PID|cut -d: -f2`
+ 
++# The daemon prints its key as soon as it has bound the loopback port, but on
++# a fast host the fork that reaches get_msg() can still be behind us, so the
++# first client dies with "libfakeroot: connect: Connection refused" and
++# apk mkpkg then fails the package build.  Wait, bounded, for the port to
++# accept before handing the key to the child.
++if test -n "$FAKEROOTKEY"; then
++  i=0
++  while test $i -lt 200; do
++    if (exec 3<>/dev/tcp/127.0.0.1/$FAKEROOTKEY) 2>/dev/null; then break; fi
++    i=$((i+1))
++    sleep 0.01
++  done
++fi
++
+ if [ "$WAITINTRAP" -eq 0 ]; then
+   trap "kill -s @signal@ $PID" EXIT INT
+ else
