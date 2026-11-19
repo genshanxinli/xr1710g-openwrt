@@ -71,7 +71,7 @@ Assisted-by: LLM
  
  #define RTL8261C_CE_FW_NAME	"rtl_nic/rtl8261c.bin"
  MODULE_FIRMWARE(RTL8261C_CE_FW_NAME);
-@@ -2271,6 +2280,215 @@ static int rtl822xb_led_brightness_set(s
+@@ -2271,6 +2275,215 @@ static int rtl822xb_led_brightness_set(s
  					  RTL822X_VND2_LED_POLAR(index));
  }
  
@@ -287,7 +287,7 @@ Assisted-by: LLM
  static int rtl822xb_led_hw_is_supported(struct phy_device *phydev, u8 index,
  					unsigned long rules)
  {
-@@ -3218,6 +3436,11 @@ static struct phy_driver realtek_drvs[]
+@@ -3218,6 +3431,11 @@ static struct phy_driver realtek_drvs[]
  		.soft_reset		= genphy_c45_pma_soft_reset,
  		.suspend		= genphy_c45_pma_suspend,
  		.resume			= genphy_c45_pma_resume,
@@ -299,7 +299,7 @@ Assisted-by: LLM
  	}, {
  		PHY_ID_MATCH_EXACT(RTL_8261CE_CG),
  		.name			= "Realtek RTL8261CE 10Gbps PHY",
-@@ -3231,6 +3454,11 @@ static struct phy_driver realtek_drvs[]
+@@ -3231,6 +3449,11 @@ static struct phy_driver realtek_drvs[]
  		.soft_reset		= genphy_c45_pma_soft_reset,
  		.suspend		= genphy_c45_pma_suspend,
  		.resume			= genphy_c45_pma_resume,
