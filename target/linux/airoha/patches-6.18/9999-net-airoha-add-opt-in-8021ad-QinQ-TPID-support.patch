@@ -1,0 +1,166 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: add opt-in 802.1ad/QinQ TPID support
+
+The PPE flow path accepts at most two FLOW_ACTION_VLAN_PUSH actions but
+rejects any push whose proto is not ETH_P_8021Q, so 802.1ad/QinQ tags
+never reach the hardware and stay in the software path.
+
+The PPE has a programmable VLAN TPID register (REG_PPE_VLAN_TPID,
+0x1fb50f18) and already encodes up to two VLAN ids (vlan_layer/VPM).
+Program it to 0x88a8 and accept ETH_P_8021AD pushes when the new
+airoha_ppe_qinq module parameter is enabled.  The parameter defaults to
+0: only 802.1Q pushes are accepted and the TPID register is not written.
+
+When enabled, the original register value is saved at PPE init and
+written back at PPE teardown.  The two-tag limit is unchanged, VLAN pop
+encoding is untouched and the existing PPPoE-over-VLAN refusal stays in
+place.
+
+The wire behaviour of a 0x88a8 push through the PPE is unverified and
+the hardware has not been tested with this mode, hence the default-off
+parameter.  /sys/kernel/debug/ppe/tpid reads the register back.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+
+ drivers/net/ethernet/airoha/airoha_eth.h          |  5 +++++
+ drivers/net/ethernet/airoha/airoha_ppe.c          | 34 +++++++++++++++++++++++++++++++++-
+ drivers/net/ethernet/airoha/airoha_ppe_debugfs.c  | 14 ++++++++++++++
+ drivers/net/ethernet/airoha/airoha_regs.h         |  6 ++++++
+ 4 files changed, 58 insertions(+), 1 deletions(-)
+
+--- a/drivers/net/ethernet/airoha/airoha_eth.h
++++ b/drivers/net/ethernet/airoha/airoha_eth.h
+@@ -683,6 +683,11 @@ struct airoha_ppe {
+ 	 */
+ 	bool foe_stats_enabled;
+ 
++	/* Saved PPE_VLAN_TPID value, restored when the QinQ parameter is
++	 * enabled and the PPE is torn down.
++	 */
++	u32 vlan_tpid;
++
+ 	struct dentry *debugfs_dir;
+ };
+ 
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -24,6 +24,17 @@
+ DEFINE_MUTEX(flow_offload_mutex);
+ static DEFINE_SPINLOCK(ppe_lock);
+ 
++/* 802.1ad/QinQ: the PPE has a programmable VLAN TPID (REG_PPE_VLAN_TPID),
++ * but pushing a 0x88a8 tag through the hardware is not verified, so the
++ * support is opt-in.  The parameter belongs to the airoha_eth module; when
++ * the driver is built in it can be enabled from the kernel command line as
++ * airoha_eth.airoha_ppe_qinq=1.
++ */
++static bool airoha_ppe_qinq;
++module_param(airoha_ppe_qinq, bool, 0444);
++MODULE_PARM_DESC(airoha_ppe_qinq,
++		 "Enable 802.1ad/QinQ TPID support in the PPE flow path");
++
+ static const struct rhashtable_params airoha_flow_table_params = {
+ 	.head_offset = offsetof(struct airoha_flow_table_entry, node),
+ 	.key_offset = offsetof(struct airoha_flow_table_entry, cookie),
+@@ -1219,6 +1230,18 @@ static int airoha_ppe_entry_idle_time(st
+ 	return airoha_ppe_get_entry_idle_time(ppe, e->data.ib1);
+ }
+ 
++/* The PPE only inserts a tag whose EtherType it recognises.  0x88a8 is
++ * accepted only when QinQ support was enabled, which also programs the
++ * matching TPID in REG_PPE_VLAN_TPID.
++ */
++static bool airoha_ppe_vlan_push_supported(__be16 proto)
++{
++	if (proto == htons(ETH_P_8021Q))
++		return true;
++
++	return airoha_ppe_qinq && proto == htons(ETH_P_8021AD);
++}
++
+ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
+ 					   struct flow_cls_offload *f)
+ {
+@@ -1309,7 +1332,7 @@ static int airoha_ppe_flow_offload_repla
+ 			break;
+ 		case FLOW_ACTION_VLAN_PUSH:
+ 			if (data.vlan.num == 2 ||
+-			    act->vlan.proto != htons(ETH_P_8021Q))
++			    !airoha_ppe_vlan_push_supported(act->vlan.proto))
+ 				return -EOPNOTSUPP;
+ 
+ 			data.vlan.hdr[data.vlan.num].id = act->vlan.vid;
+@@ -1822,6 +1845,12 @@ int airoha_ppe_init(struct airoha_eth *e
+ 	if (err)
+ 		goto error_l2_flow_table_destroy;
+ 
++	if (airoha_ppe_qinq) {
++		ppe->vlan_tpid = airoha_fe_rr(eth, REG_PPE_VLAN_TPID);
++		airoha_fe_rmw(eth, REG_PPE_VLAN_TPID, PPE_VLAN_TPID_MASK,
++			      ETH_P_8021AD);
++	}
++
+ 	return 0;
+ 
+ error_l2_flow_table_destroy:
+@@ -1851,4 +1880,7 @@ void airoha_ppe_deinit(struct airoha_eth
+ 	rhashtable_destroy(&eth->ppe->l2_flows);
+ 	rhashtable_destroy(&eth->flow_table);
+ 	debugfs_remove(eth->ppe->debugfs_dir);
++
++	if (airoha_ppe_qinq)
++		airoha_fe_wr(eth, REG_PPE_VLAN_TPID, eth->ppe->vlan_tpid);
+ }
+--- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include "airoha_eth.h"
++#include "airoha_regs.h"
+ 
+ static void airoha_debugfs_ppe_print_tuple(struct seq_file *m,
+ 					   void *src_addr, void *dest_addr,
+@@ -173,6 +174,17 @@ static int airoha_ppe_debugfs_foe_bind_s
+ }
+ DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_foe_bind);
+ 
++static int airoha_ppe_debugfs_tpid_show(struct seq_file *m, void *private)
++{
++	struct airoha_ppe *ppe = m->private;
++
++	seq_printf(m, "PPE_VLAN_TPID %08x\n",
++		   airoha_fe_rr(ppe->eth, REG_PPE_VLAN_TPID));
++
++	return 0;
++}
++DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_tpid);
++
+ int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
+ {
+ 	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
+@@ -180,6 +192,8 @@ int airoha_ppe_debugfs_init(struct airoh
+ 			    &airoha_ppe_debugfs_foe_all_fops);
+ 	debugfs_create_file("bind", 0444, ppe->debugfs_dir, ppe,
+ 			    &airoha_ppe_debugfs_foe_bind_fops);
++	debugfs_create_file("tpid", 0444, ppe->debugfs_dir, ppe,
++			    &airoha_ppe_debugfs_tpid_fops);
+ 
+ 	return 0;
+ }
+--- a/drivers/net/ethernet/airoha/airoha_regs.h
++++ b/drivers/net/ethernet/airoha/airoha_regs.h
+@@ -349,6 +349,12 @@
+ #define REG_PPE_MTU(_m, _n)			(REG_PPE_MTU_BASE(_m) + (((_n) / 2) << 2))
+ #define FP_EGRESS_MTU_MASK(_n)			GENMASK(13 + (((_n) % 2) << 4), ((_n) % 2) << 4)
+ 
++/* TPID the PPE recognises as a VLAN tag; both PPE instances share it.  It
++ * lives in the PPE1 block at 0x1fb50f18 on the AN7581 and is 16 bits wide.
++ */
++#define REG_PPE_VLAN_TPID			(PPE1_BASE + 0x318)
++#define PPE_VLAN_TPID_MASK			GENMASK(15, 0)
++
+ #define REG_PPE_RAM_CTRL(_n)			(((_n) ? PPE2_BASE : PPE1_BASE) + 0x31c)
+ #define PPE_SRAM_CTRL_ACK_MASK			BIT(31)
+ #define PPE_SRAM_CTRL_DUAL_SUCESS_MASK		BIT(30)
