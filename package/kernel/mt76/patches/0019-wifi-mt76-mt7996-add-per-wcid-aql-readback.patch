@@ -22,12 +22,9 @@ paths. With no station associated it prints the header only.
 
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
- mt7996/debugfs.c | 64 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 64 insertions(+)
-
 --- a/mt7996/debugfs.c
 +++ b/mt7996/debugfs.c
-@@ -997,6 +997,70 @@
+@@ -1016,6 +1016,70 @@
  }
  DEFINE_SHOW_ATTRIBUTE(mt7996_txpower);
  
@@ -98,11 +95,11 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  static int
  mt7996_twt_stats(struct seq_file *s, void *data)
  {
-@@ -1162,6 +1226,7 @@
+@@ -1416,6 +1480,7 @@
  	debugfs_create_file("xmit-queues", 0400, dir, dev,
  			    &mt7996_xmit_queues_fops);
  	debugfs_create_file("tx_stats", 0400, dir, dev, &mt7996_tx_stats_fops);
 +	debugfs_create_file("aql", 0400, dir, dev, &mt7996_aql_fops);
+ 	debugfs_create_file("npu_band1_tx", 0400, dir, dev,
+ 			    &mt7996_npu_band1_tx_fops);
  	debugfs_create_file("sys_recovery", 0600, dir, dev,
- 			    &mt7996_sys_recovery_ops);
- 	debugfs_create_file("fw_debug_wm", 0600, dir, dev, &fops_fw_debug_wm);

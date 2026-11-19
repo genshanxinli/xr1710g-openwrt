@@ -27,27 +27,19 @@ testing.
 
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
- mt7996/debugfs.c | 15 +++++++++
- mt7996/mt7996.h  |  8 +++++
- mt7996/pci.c     | 83 ++++++++++++++++++++++++++++++++++++++++++------
- mt7996/regs.h    |  1 +
- 4 files changed, 98 insertions(+), 9 deletions(-)
-
-diff --git a/mt7996/debugfs.c b/mt7996/debugfs.c
-index 3780760a..9b047788 100644
 --- a/mt7996/debugfs.c
 +++ b/mt7996/debugfs.c
-@@ -4,6 +4,7 @@
-  */
+@@ -5,6 +5,7 @@
  
+ #include <linux/ktime.h>
  #include <linux/relay.h>
 +#include <linux/seq_file.h>
  #include "mt7996.h"
+ #include "../dma.h"
  #include "eeprom.h"
- #include "mcu.h"
-@@ -990,6 +991,19 @@ static int mt7996_vow_atf_get(void *data, u64 *val)
- DEFINE_DEBUGFS_ATTRIBUTE(fops_vow_atf, mt7996_vow_atf_get, mt7996_vow_atf_set,
- 			 "%lld\n");
+@@ -1469,6 +1470,19 @@
+ 	return 0;
+ }
  
 +static int mt7996_msix_show(struct seq_file *s, void *data)
 +{
@@ -65,20 +57,18 @@ index 3780760a..9b047788 100644
  int mt7996_init_debugfs(struct mt7996_dev *dev)
  {
  	struct dentry *dir;
-@@ -1001,6 +1015,7 @@ int mt7996_init_debugfs(struct mt7996_dev *dev)
- 	debugfs_create_file("xmit-queues", 0400, dir, dev,
+@@ -1481,6 +1495,7 @@
  			    &mt7996_xmit_queues_fops);
  	debugfs_create_file("tx_stats", 0400, dir, dev, &mt7996_tx_stats_fops);
+ 	debugfs_create_file("aql", 0400, dir, dev, &mt7996_aql_fops);
 +	debugfs_create_file("msix", 0400, dir, dev, &mt7996_msix_fops);
+ 	debugfs_create_file("npu_band1_tx", 0400, dir, dev,
+ 			    &mt7996_npu_band1_tx_fops);
  	debugfs_create_file("sys_recovery", 0600, dir, dev,
- 			    &mt7996_sys_recovery_ops);
- 	debugfs_create_file("fw_debug_wm", 0600, dir, dev, &fops_fw_debug_wm);
-diff --git a/mt7996/mt7996.h b/mt7996/mt7996.h
-index 69dff43c..553a4e4f 100644
 --- a/mt7996/mt7996.h
 +++ b/mt7996/mt7996.h
-@@ -466,6 +466,13 @@ struct mt7996_phy {
- 	bool rdd_tx_paused;
+@@ -473,6 +473,13 @@
+ 	bool sku_path_en;
  };
  
 +#define MT7996_MAX_MSI_VECTORS	8
@@ -91,7 +81,7 @@ index 69dff43c..553a4e4f 100644
  struct mt7996_dev {
  	union { /* must be first */
  		struct mt76_dev mt76;
-@@ -478,6 +485,7 @@ struct mt7996_dev {
+@@ -485,6 +492,7 @@
  	struct mac_address radio_addrs[MT7996_MAX_RADIOS];
  
  	struct mt7996_hif *hif2;
@@ -99,8 +89,6 @@ index 69dff43c..553a4e4f 100644
  	struct mt7996_reg_desc reg;
  	u8 q_id[MT7996_MAX_QUEUE];
  	u32 q_int_mask[MT7996_MAX_QUEUE];
-diff --git a/mt7996/pci.c b/mt7996/pci.c
-index a7c23b33..643dd4b8 100644
 --- a/mt7996/pci.c
 +++ b/mt7996/pci.c
 @@ -4,6 +4,7 @@
@@ -111,7 +99,7 @@ index a7c23b33..643dd4b8 100644
  #include <linux/module.h>
  #include <linux/pci.h>
  
-@@ -102,6 +103,66 @@ static int mt7996_pci_hif2_probe(struct pci_dev *pdev)
+@@ -102,6 +103,66 @@
  	return 0;
  }
  
@@ -178,7 +166,7 @@ index a7c23b33..643dd4b8 100644
  static int mt7996_pci_probe(struct pci_dev *pdev,
  			    const struct pci_device_id *id)
  {
-@@ -154,17 +215,19 @@ static int mt7996_pci_probe(struct pci_dev *pdev,
+@@ -154,17 +215,19 @@
  		goto free_wed_or_irq_vector;
  
  	if (!ret) {
@@ -205,7 +193,7 @@ index a7c23b33..643dd4b8 100644
  
  	mt76_wr(dev, MT_INT_MASK_CSR, 0);
  	/* master switch of PCIe interrupt enable */
-@@ -217,13 +280,15 @@ free_hif2_wed_irq_vector:
+@@ -217,13 +280,15 @@
  free_hif2:
  	if (dev->hif2)
  		put_device(dev->hif2->dev);
@@ -223,11 +211,9 @@ index a7c23b33..643dd4b8 100644
  	mt76_free_device(&dev->mt76);
  
  	return ret;
-diff --git a/mt7996/regs.h b/mt7996/regs.h
-index 6df6e4c3..ae77c8a4 100644
 --- a/mt7996/regs.h
 +++ b/mt7996/regs.h
-@@ -508,6 +508,7 @@ enum offs_rev {
+@@ -508,6 +508,7 @@
  
  #define MT_WFDMA_HOST_CONFIG			MT_WFDMA_EXT_CSR(0x30)
  #define MT_WFDMA_HOST_CONFIG_PDMA_BAND		BIT(0)
@@ -235,6 +221,3 @@ index 6df6e4c3..ae77c8a4 100644
  #define MT_WFDMA_HOST_CONFIG_BAND0_PCIE1	BIT(20)
  #define MT_WFDMA_HOST_CONFIG_BAND1_PCIE1	BIT(21)
  #define MT_WFDMA_HOST_CONFIG_BAND2_PCIE1	BIT(22)
--- 
-2.56.0
-
