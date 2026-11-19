@@ -21,7 +21,7 @@ Signed-off-by: Hauke Mehrtens <hauke@hauke-m.de>
 ---
 --- a/net/dsa/dsa.c
 +++ b/net/dsa/dsa.c
-@@ -511,7 +511,10 @@
+@@ -511,7 +511,10 @@ static int dsa_port_setup(struct dsa_por
  
  		break;
  	case DSA_PORT_TYPE_USER:
@@ -33,7 +33,7 @@ Signed-off-by: Hauke Mehrtens <hauke@hauke-m.de>
  		err = dsa_user_create(dp);
  		break;
  	}
-@@ -752,6 +755,8 @@
+@@ -752,6 +755,8 @@ static int dsa_tree_setup_ports(struct d
  	list_for_each_entry(dp, &dst->ports, list) {
  		if (dsa_port_is_user(dp) || dsa_port_is_unused(dp)) {
  			err = dsa_port_setup(dp);

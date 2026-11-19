@@ -16,7 +16,7 @@ mode is not supported, as the Serdes mode can't be validated.
 
 Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
 ---
---- a/Documentation/devicetree/bindings/phy/airoha,an7581-usb-phy.yaml
+--- /dev/null
 +++ b/Documentation/devicetree/bindings/phy/airoha,an7581-usb-phy.yaml
 @@ -0,0 +1,83 @@
 +# SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause
@@ -104,7 +104,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
 +
 --- a/MAINTAINERS
 +++ b/MAINTAINERS
-@@ -805,6 +805,13 @@
+@@ -805,6 +805,13 @@ S:	Maintained
  F:	Documentation/devicetree/bindings/spi/airoha,en7581-snand.yaml
  F:	drivers/spi/spi-airoha-snfi.c
  
@@ -118,7 +118,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  AIRSPY MEDIA DRIVER
  L:	linux-media@vger.kernel.org
  S:	Orphan
---- a/include/dt-bindings/phy/airoha,an7581-usb-phy.h
+--- /dev/null
 +++ b/include/dt-bindings/phy/airoha,an7581-usb-phy.h
 @@ -0,0 +1,11 @@
 +/* SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause */

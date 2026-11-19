@@ -8,7 +8,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
 ---
 --- a/drivers/mtd/spi-nor/eon.c
 +++ b/drivers/mtd/spi-nor/eon.c
-@@ -23,6 +23,10 @@
+@@ -23,6 +23,10 @@ static const struct flash_info eon_nor_p
  		.size = SZ_16M,
  		.no_sfdp_flags = SECT_4K,
  	}, {

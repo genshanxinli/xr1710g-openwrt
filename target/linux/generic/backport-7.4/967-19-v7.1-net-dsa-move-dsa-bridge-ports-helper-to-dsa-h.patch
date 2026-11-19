@@ -15,7 +15,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
 ---
 --- a/drivers/net/dsa/yt921x.c
 +++ b/drivers/net/dsa/yt921x.c
-@@ -2154,19 +2154,6 @@
+@@ -2154,19 +2154,6 @@ yt921x_bridge_join(struct yt921x_priv *p
  	return 0;
  }
  

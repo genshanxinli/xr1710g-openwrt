@@ -15,7 +15,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
 ---
 --- a/Documentation/devicetree/bindings/net/ethernet-controller.yaml
 +++ b/Documentation/devicetree/bindings/net/ethernet-controller.yaml
-@@ -85,8 +85,6 @@
+@@ -85,8 +85,6 @@ properties:
  
    pcs-handle:
      $ref: /schemas/types.yaml#/definitions/phandle-array

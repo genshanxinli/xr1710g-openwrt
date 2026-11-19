@@ -18,7 +18,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
 ---
 --- a/drivers/net/phy/as21xxx.c
 +++ b/drivers/net/phy/as21xxx.c
-@@ -670,7 +670,7 @@
+@@ -670,7 +670,7 @@ static int as21xxx_read_link(struct phy_
  
  static int as21xxx_read_c22_lpa(struct phy_device *phydev)
  {
@@ -27,7 +27,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  
  	/* MII_STAT1000 are only filled in the mapped C22
  	 * in C45, use that to fill lpagb values and check.
-@@ -697,12 +697,20 @@
+@@ -697,12 +697,20 @@ static int as21xxx_read_c22_lpa(struct p
  	mii_stat1000_mod_linkmode_lpa_t(phydev->lp_advertising,
  					lpagb);
  
@@ -48,7 +48,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  	int ret;
  
  	ret = as21xxx_read_link(phydev, &bmcr);
-@@ -719,58 +727,60 @@
+@@ -719,58 +727,60 @@ static int as21xxx_read_status(struct ph
  	phydev->asym_pause = 0;
  
  	if (phydev->autoneg == AUTONEG_ENABLE) {

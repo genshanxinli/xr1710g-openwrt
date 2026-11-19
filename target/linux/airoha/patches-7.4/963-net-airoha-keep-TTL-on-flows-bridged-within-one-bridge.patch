@@ -30,7 +30,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -559,7 +559,7 @@
+@@ -559,7 +559,7 @@ static int airoha_ppe_foe_entry_prepare(
  					struct airoha_foe_entry *hwe,
  					struct net_device *netdev, int type,
  					struct airoha_flow_data *data,
@@ -39,7 +39,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  {
  	u32 qdata = FIELD_PREP(AIROHA_FOE_SHAPER_ID, 0x7f), ports_pad, val;
  	int wlan_etype = -EINVAL, dsa_port = airoha_get_dsa_port(&netdev);
-@@ -574,7 +574,12 @@
+@@ -574,7 +574,12 @@ static int airoha_ppe_foe_entry_prepare(
  	      FIELD_PREP(AIROHA_FOE_IB1_BIND_VLAN_LAYER, data->vlan.num) |
  	      FIELD_PREP(AIROHA_FOE_IB1_BIND_VPM, data->vlan.num) |
  	      FIELD_PREP(AIROHA_FOE_IB1_BIND_PPPOE, data->pppoe.num);
@@ -53,7 +53,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  		val |= AIROHA_FOE_IB1_BIND_TTL;
  	hwe->ib1 = val;
  
-@@ -1541,6 +1546,8 @@
+@@ -1541,6 +1546,8 @@ static int airoha_ppe_flow_offload_repla
  	struct flow_match_meta meta;
  	u8 dsfield = 0, l4proto = 0;
  	struct airoha_foe_entry hwe;
@@ -62,7 +62,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	int err, i, offload_type;
  	u16 addr_type = 0;
  
-@@ -1646,8 +1653,28 @@
+@@ -1646,8 +1653,28 @@ static int airoha_ppe_flow_offload_repla
  	    !is_valid_ether_addr(data.eth.h_dest))
  		return -EINVAL;
  

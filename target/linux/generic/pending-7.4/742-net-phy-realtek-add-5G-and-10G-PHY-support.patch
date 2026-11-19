@@ -7,7 +7,7 @@
 +realtek-y			+= phy_patch_rtl826x.o
  realtek-$(CONFIG_REALTEK_PHY_HWMON) += realtek_hwmon.o
  obj-$(CONFIG_REALTEK_PHY)	+= realtek.o
---- a/drivers/net/phy/realtek/phy_patch.c
+--- /dev/null
 +++ b/drivers/net/phy/realtek/phy_patch.c
 @@ -0,0 +1,35 @@
 +// SPDX-License-Identifier: GPL-2.0
@@ -45,7 +45,7 @@
 +
 +	return 0;
 +}
---- a/drivers/net/phy/realtek/phy_patch.h
+--- /dev/null
 +++ b/drivers/net/phy/realtek/phy_patch.h
 @@ -0,0 +1,42 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
@@ -90,7 +90,7 @@
 +int rtlgen_phy_patch(struct phy_device *phydev);
 +
 +#endif
---- a/drivers/net/phy/realtek/phy_patch_rtl826x.c
+--- /dev/null
 +++ b/drivers/net/phy/realtek/phy_patch_rtl826x.c
 @@ -0,0 +1,287 @@
 +// SPDX-License-Identifier: GPL-2.0
@@ -380,7 +380,7 @@
 +
 +MODULE_FIRMWARE("rtl8261n.bin");
 +MODULE_FIRMWARE("rtl8264b.bin");
---- a/drivers/net/phy/realtek/phy_patch_rtl826x.h
+--- /dev/null
 +++ b/drivers/net/phy/realtek/phy_patch_rtl826x.h
 @@ -0,0 +1,11 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
@@ -423,7 +423,7 @@
  
  #define RTL8261C_CE_MODEL		0x00
  #define RTL8261D_MODEL			0x81
-@@ -364,6 +367,26 @@
+@@ -364,6 +367,26 @@ struct rtl8261x_fw_entry {
  /* RTL8211E and RTL8211F support up to three LEDs */
  #define RTL8211x_LED_COUNT			3
  
@@ -450,7 +450,7 @@
  MODULE_DESCRIPTION("Realtek PHY driver");
  MODULE_AUTHOR("Johnson Leung");
  MODULE_LICENSE("GPL");
-@@ -3338,6 +3361,125 @@
+@@ -3338,6 +3361,125 @@ static int rtl8251b_c45_match_phy_device
  	return rtlgen_is_c45_match(phydev, RTL_8251B, true);
  }
  
@@ -576,7 +576,7 @@
  static int rtlgen_resume(struct phy_device *phydev)
  {
  	int ret = genphy_resume(phydev);
-@@ -3588,6 +3730,485 @@
+@@ -3588,6 +3730,485 @@ static int rtl8365mb_read_status(struct
  	return genphy_read_status(phydev);
  }
  
@@ -1062,7 +1062,7 @@
  static struct phy_driver realtek_drvs[] = {
  	{
  		PHY_ID_MATCH_EXACT(0x00008201),
-@@ -3949,6 +4570,108 @@
+@@ -3949,6 +4570,108 @@ static struct phy_driver realtek_drvs[]
  		.led_hw_control_get	= rtl8261x_led_hw_control_get,
  		.led_hw_control_set	= rtl8261x_led_hw_control_set,
  		.led_polarity_set	= rtl8261x_led_polarity_set,

@@ -8,7 +8,7 @@
  #include <linux/platform_device.h>
  #include <linux/phy.h>
  #include <linux/phy/phy.h>
-@@ -152,6 +153,7 @@
+@@ -152,6 +153,7 @@ struct en_clk_priv {
  };
  
  struct en_clk_soc_data {
@@ -16,7 +16,7 @@
  	u32 num_clocks;
  	const struct clk_ops pcie_ops;
  	int (*hw_init)(struct platform_device *pdev,
-@@ -1400,7 +1402,17 @@
+@@ -1400,7 +1402,17 @@ static int en7523_clk_probe(struct platf
  	if (r)
  		return r;
  

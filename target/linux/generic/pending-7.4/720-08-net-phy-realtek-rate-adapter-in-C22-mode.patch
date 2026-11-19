@@ -1,6 +1,6 @@
 --- a/drivers/net/phy/realtek/realtek_main.c
 +++ b/drivers/net/phy/realtek/realtek_main.c
-@@ -2125,7 +2125,7 @@
+@@ -2125,7 +2125,7 @@ static int rtl822x_set_serdes_option_mod
  		return 0;
  
  	/* determine SerDes option mode */

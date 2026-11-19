@@ -71,7 +71,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static const struct rhashtable_params airoha_flow_table_params = {
  	.head_offset = offsetof(struct airoha_flow_table_entry, node),
  	.key_offset = offsetof(struct airoha_flow_table_entry, cookie),
-@@ -319,6 +336,17 @@
+@@ -319,6 +336,17 @@ static void airoha_ppe_hw_init(struct ai
  		airoha_fe_wr(eth, REG_PPE_HASH_SEED(i), PPE_HASH_SEED);
  		airoha_fe_clear(eth, REG_PPE_PPE_FLOW_CFG(i),
  				PPE_FLOW_CFG_IP6_6RD_MASK);
@@ -89,7 +89,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	}
  
  	for (i = 0; i < ARRAY_SIZE(eth->ports); i++) {
-@@ -752,9 +780,16 @@
+@@ -752,9 +780,16 @@ static int airoha_ppe_foe_entry_set_ipv4
  		}
  		fallthrough;
  	case PPE_PKT_TYPE_IPV4_DSLITE:
@@ -107,7 +107,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	default:
  		WARN_ON_ONCE(1);
  		return -EINVAL;
-@@ -1573,7 +1608,7 @@
+@@ -1573,7 +1608,7 @@ static int airoha_ppe_flow_offload_repla
  	u8 dsfield = 0, l4proto = 0;
  	struct airoha_foe_entry hwe;
  	struct net_device *indev;
@@ -116,7 +116,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	int err, i, offload_type;
  	u16 addr_type = 0;
  
-@@ -1614,6 +1649,9 @@
+@@ -1614,6 +1649,9 @@ static int airoha_ppe_flow_offload_repla
  		dsfield = match.key->tos;
  	}
  
@@ -126,7 +126,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	switch (addr_type) {
  	case 0:
  		offload_type = PPE_PKT_TYPE_BRIDGE;
-@@ -1628,10 +1666,12 @@
+@@ -1628,10 +1666,12 @@ static int airoha_ppe_flow_offload_repla
  		}
  		break;
  	case FLOW_DISSECTOR_KEY_IPV4_ADDRS:
@@ -141,7 +141,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  		break;
  	default:
  		return -EOPNOTSUPP;
-@@ -1704,7 +1744,7 @@
+@@ -1704,7 +1744,7 @@ static int airoha_ppe_flow_offload_repla
  	if (err)
  		return err;
  
@@ -150,7 +150,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  		struct flow_match_ports ports;
  
  		if (offload_type == PPE_PKT_TYPE_BRIDGE) {
-@@ -1715,7 +1755,12 @@
+@@ -1715,7 +1755,12 @@ static int airoha_ppe_flow_offload_repla
  		flow_rule_match_ports(rule, &ports);
  		data.src_port = ports.key->src;
  		data.dst_port = ports.key->dst;

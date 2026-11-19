@@ -57,7 +57,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -59,11 +59,27 @@
+@@ -59,11 +59,27 @@ static int airoha_ppe_get_total_num_stat
  	return num_stats;
  }
  
@@ -86,7 +86,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  }
  
  u32 airoha_ppe_get_total_num_entries(struct airoha_ppe *ppe)
-@@ -129,7 +145,8 @@
+@@ -129,7 +145,8 @@ void airoha_ppe_set_xmit_frame_size(stru
  
  static void airoha_ppe_hw_init(struct airoha_ppe *ppe)
  {
@@ -96,7 +96,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	u32 sram_tb_size, dram_num_entries;
  	struct airoha_eth *eth = ppe->eth;
  	int i, sram_num_stats_entries;
-@@ -139,8 +156,6 @@
+@@ -139,8 +156,6 @@ static void airoha_ppe_hw_init(struct ai
  	dram_num_entries = PPE_RAM_NUM_ENTRIES_SHIFT(PPE_DRAM_NUM_ENTRIES);
  
  	sram_num_stats_entries = airoha_ppe_get_num_stats_entries(ppe);
@@ -105,7 +105,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	sram_ppe_num_data_entries =
  		PPE_RAM_NUM_ENTRIES_SHIFT(sram_ppe_num_data_entries);
  
-@@ -552,7 +567,7 @@
+@@ -552,7 +567,7 @@ static u32 airoha_ppe_foe_get_entry_hash
  					 struct airoha_foe_entry *hwe)
  {
  	int type = FIELD_GET(AIROHA_FOE_IB1_BIND_PACKET_TYPE, hwe->ib1);
@@ -114,7 +114,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	u32 hash, hv1, hv2, hv3;
  
  	switch (type) {
-@@ -590,16 +605,21 @@
+@@ -590,16 +605,21 @@ static u32 airoha_ppe_foe_get_entry_hash
  	case PPE_PKT_TYPE_IPV6_6RD:
  	default:
  		WARN_ON_ONCE(1);
@@ -139,7 +139,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  }
  
  static int airoha_ppe_foe_get_flow_stats_index(struct airoha_ppe *ppe,
-@@ -708,7 +728,7 @@
+@@ -708,7 +728,7 @@ airoha_ppe_foe_get_entry_locked(struct a
  
  	if (hash < sram_num_entries) {
  		u32 *hwe = ppe->foe + hash * sizeof(struct airoha_foe_entry);
@@ -148,7 +148,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  		struct airoha_eth *eth = ppe->eth;
  		u32 val;
  		int i;
-@@ -763,7 +783,7 @@
+@@ -763,7 +783,7 @@ static bool airoha_ppe_foe_compare_entry
  static int airoha_ppe_foe_commit_sram_entry(struct airoha_ppe *ppe, u32 hash)
  {
  	struct airoha_foe_entry *hwe = ppe->foe + hash * sizeof(*hwe);
@@ -157,7 +157,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	u32 *ptr = (u32 *)hwe, val;
  	int i;
  
-@@ -1539,11 +1559,11 @@
+@@ -1539,11 +1559,11 @@ void airoha_ppe_check_skb(struct airoha_
  			  u16 hash, bool rx_wlan)
  {
  	struct airoha_ppe *ppe = dev->priv;

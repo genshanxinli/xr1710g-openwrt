@@ -9,7 +9,7 @@
  
  #include "gpiolib.h"
  #include "gpiolib-of.h"
-@@ -1096,3 +1098,65 @@
+@@ -1096,3 +1098,65 @@ bool of_gpiochip_instance_match(struct g
  
  	return false;
  }
@@ -77,7 +77,7 @@
 +#endif
 --- a/include/linux/gpio/consumer.h
 +++ b/include/linux/gpio/consumer.h
-@@ -714,18 +714,35 @@
+@@ -714,18 +714,35 @@ static inline int devm_acpi_dev_add_driv
  
  #if IS_ENABLED(CONFIG_GPIOLIB) && IS_ENABLED(CONFIG_GPIO_SYSFS)
  
@@ -115,7 +115,7 @@
  				    struct gpio_desc *desc)
 --- a/drivers/gpio/gpiolib-sysfs.c
 +++ b/drivers/gpio/gpiolib-sysfs.c
-@@ -724,7 +724,7 @@
+@@ -724,7 +724,7 @@ static void gpiod_attr_init(struct devic
   * Returns:
   * 0 on success, or negative errno on failure.
   */
@@ -124,7 +124,7 @@
  {
  	char *path __free(kfree) = NULL;
  	struct gpiodev_data *gdev_data;
-@@ -801,7 +801,7 @@
+@@ -801,7 +801,7 @@ int gpiod_export(struct gpio_desc *desc,
  	desc_data->dev = device_create_with_groups(&gpio_class, &gdev->dev,
  						   MKDEV(0, 0), desc_data,
  						   desc_data->class_attr_groups,
@@ -133,7 +133,7 @@
  						   desc_to_gpio(desc));
  	if (IS_ERR(desc_data->dev)) {
  		status = PTR_ERR(desc_data->dev);
-@@ -870,8 +870,21 @@
+@@ -870,8 +870,21 @@ err_clear_bit:
  	gpiod_dbg(desc, "%s: status %d\n", __func__, status);
  	return status;
  }

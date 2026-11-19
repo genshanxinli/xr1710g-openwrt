@@ -21,7 +21,7 @@ Tested-by: Martin Blumenstingl <martin.blumenstingl@googlemail.com>
 ---
 --- a/drivers/usb/serial/Kconfig
 +++ b/drivers/usb/serial/Kconfig
-@@ -112,6 +112,15 @@
+@@ -112,6 +112,15 @@ config USB_SERIAL_CH341
  	  To compile this driver as a module, choose M here: the
  	  module will be called ch341.
  
@@ -39,7 +39,7 @@ Tested-by: Martin Blumenstingl <martin.blumenstingl@googlemail.com>
  	select USB_EZUSB_FX2
 --- a/drivers/usb/serial/Makefile
 +++ b/drivers/usb/serial/Makefile
-@@ -15,6 +15,7 @@
+@@ -15,6 +15,7 @@ obj-$(CONFIG_USB_SERIAL_AIRCABLE)		+= ai
  obj-$(CONFIG_USB_SERIAL_ARK3116)		+= ark3116.o
  obj-$(CONFIG_USB_SERIAL_BELKIN)			+= belkin_sa.o
  obj-$(CONFIG_USB_SERIAL_CH341)			+= ch341.o
@@ -47,7 +47,7 @@ Tested-by: Martin Blumenstingl <martin.blumenstingl@googlemail.com>
  obj-$(CONFIG_USB_SERIAL_CP210X)			+= cp210x.o
  obj-$(CONFIG_USB_SERIAL_CYBERJACK)		+= cyberjack.o
  obj-$(CONFIG_USB_SERIAL_CYPRESS_M8)		+= cypress_m8.o
---- a/drivers/usb/serial/ch348.c
+--- /dev/null
 +++ b/drivers/usb/serial/ch348.c
 @@ -0,0 +1,725 @@
 +// SPDX-License-Identifier: GPL-2.0

@@ -14,7 +14,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
 ---
 --- a/drivers/net/ethernet/mediatek/Kconfig
 +++ b/drivers/net/ethernet/mediatek/Kconfig
-@@ -19,7 +19,6 @@
+@@ -19,7 +19,6 @@ config NET_MEDIATEK_SOC
  	select DIMLIB
  	select GENERIC_ALLOCATOR
  	select PAGE_POOL
@@ -24,7 +24,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  	help
 --- a/drivers/net/ethernet/mediatek/mtk_eth_soc.c
 +++ b/drivers/net/ethernet/mediatek/mtk_eth_soc.c
-@@ -4855,6 +4855,7 @@
+@@ -4855,6 +4855,7 @@ static int mtk_get_sset_count(struct net
  
  static void mtk_ethtool_pp_stats(struct mtk_eth *eth, u64 *data)
  {
@@ -32,7 +32,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  	struct page_pool_stats stats = {};
  	int i;
  
-@@ -4867,6 +4868,7 @@
+@@ -4867,6 +4868,7 @@ static void mtk_ethtool_pp_stats(struct
  		page_pool_get_stats(ring->page_pool, &stats);
  	}
  	page_pool_ethtool_stats_get(data, &stats);

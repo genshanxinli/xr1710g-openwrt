@@ -12,7 +12,7 @@ Signed-off-by: Paolo Abeni <pabeni@redhat.com>
 ---
 --- a/drivers/net/dsa/Kconfig
 +++ b/drivers/net/dsa/Kconfig
-@@ -177,6 +177,7 @@
+@@ -177,6 +177,7 @@ config NET_DSA_VITESSE_VSC73XX_PLATFORM
  config NET_DSA_YT921X
  	tristate "Motorcomm YT9215 ethernet switch chip support"
  	select NET_DSA_TAG_YT921X
@@ -42,7 +42,7 @@ Signed-off-by: Paolo Abeni <pabeni@redhat.com>
  
  #include "yt921x.h"
  
-@@ -1774,8 +1778,11 @@
+@@ -1774,8 +1778,11 @@ yt921x_vlan_aware_set(struct yt921x_priv
  {
  	u32 ctrl;
  
@@ -55,7 +55,7 @@ Signed-off-by: Paolo Abeni <pabeni@redhat.com>
  	else
  		ctrl = YT921X_PORT_IGR_TPIDn_CTAG(0);
  	return yt921x_reg_write(priv, YT921X_PORTn_IGR_TPID(port), ctrl);
-@@ -2396,6 +2403,122 @@
+@@ -2396,6 +2403,122 @@ yt921x_dsa_port_stp_state_set(struct dsa
  			port, res);
  }
  
@@ -178,7 +178,7 @@ Signed-off-by: Paolo Abeni <pabeni@redhat.com>
  static int yt921x_port_down(struct yt921x_priv *priv, int port)
  {
  	u32 mask;
-@@ -2720,6 +2843,13 @@
+@@ -2720,6 +2843,13 @@ static int yt921x_port_setup(struct yt92
  	if (res)
  		return res;
  
@@ -192,7 +192,7 @@ Signed-off-by: Paolo Abeni <pabeni@redhat.com>
  	if (dsa_is_cpu_port(ds, port)) {
  		/* Egress of CPU port is supposed to be completely controlled
  		 * via tagging, so set to oneway isolated (drop all packets
-@@ -2763,6 +2893,66 @@
+@@ -2763,6 +2893,66 @@ static int yt921x_dsa_port_setup(struct
  	return res;
  }
  
@@ -259,7 +259,7 @@ Signed-off-by: Paolo Abeni <pabeni@redhat.com>
  static int yt921x_edata_wait(struct yt921x_priv *priv, u32 *valp)
  {
  	u32 val = YT921X_EDATA_DATA_IDLE;
-@@ -2975,6 +3165,47 @@
+@@ -2975,6 +3165,47 @@ static int yt921x_chip_setup_dsa(struct
  	return 0;
  }
  
@@ -307,7 +307,7 @@ Signed-off-by: Paolo Abeni <pabeni@redhat.com>
  static int yt921x_chip_setup(struct yt921x_priv *priv)
  {
  	u32 ctrl;
-@@ -2989,6 +3220,12 @@
+@@ -2989,6 +3220,12 @@ static int yt921x_chip_setup(struct yt92
  	if (res)
  		return res;
  
@@ -320,7 +320,7 @@ Signed-off-by: Paolo Abeni <pabeni@redhat.com>
  	/* Clear MIB */
  	ctrl = YT921X_MIB_CTRL_CLEAN | YT921X_MIB_CTRL_ALL_PORT;
  	res = yt921x_reg_write(priv, YT921X_MIB_CTRL, ctrl);
-@@ -3104,10 +3341,23 @@
+@@ -3104,10 +3341,23 @@ static const struct dsa_switch_ops yt921
  	.port_mst_state_set	= yt921x_dsa_port_mst_state_set,
  	.vlan_msti_set		= yt921x_dsa_vlan_msti_set,
  	.port_stp_state_set	= yt921x_dsa_port_stp_state_set,
@@ -344,7 +344,7 @@ Signed-off-by: Paolo Abeni <pabeni@redhat.com>
  	/* chip */
  	.setup			= yt921x_dsa_setup,
  };
-@@ -3174,6 +3424,7 @@
+@@ -3174,6 +3424,7 @@ static int yt921x_mdio_probe(struct mdio
  	ds = &priv->ds;
  	ds->dev = dev;
  	ds->assisted_learning_on_cpu_port = true;
@@ -446,7 +446,7 @@ Signed-off-by: Paolo Abeni <pabeni@redhat.com>
  #define YT921X_PORTn_VLAN_CTRL1(port)	(0x230080 + 4 * (port))
  #define  YT921X_PORT_VLAN_CTRL1_VLAN_RANGE_EN	BIT(8)
  #define  YT921X_PORT_VLAN_CTRL1_VLAN_RANGE_PROFILE_ID_M	GENMASK(7, 4)
-@@ -478,6 +511,8 @@
+@@ -478,6 +511,8 @@ enum yt921x_fdb_entry_status {
  #define YT921X_LAG_NUM		2
  #define YT921X_LAG_PORT_NUM	4
  

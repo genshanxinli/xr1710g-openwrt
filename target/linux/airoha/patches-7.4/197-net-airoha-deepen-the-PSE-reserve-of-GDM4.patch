@@ -21,7 +21,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -338,11 +338,10 @@
+@@ -338,11 +338,10 @@ static void airoha_fe_pse_ports_init(str
  		[FE_PSE_PORT_GDM4] = 2,
  		[FE_PSE_PORT_CDM5] = 2,
  	};
@@ -34,7 +34,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  		/* hw misses PPE2 oq rsv */
  		all_rsv = airoha_fe_get_pse_all_rsv(eth);
  		all_rsv += PSE_RSV_PAGES *
-@@ -397,10 +396,30 @@
+@@ -397,10 +396,30 @@ static void airoha_fe_pse_ports_init(str
  							 q, 0);
  		}
  	}

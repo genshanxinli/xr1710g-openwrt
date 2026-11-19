@@ -32,7 +32,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 ---
 --- a/include/linux/netfilter.h
 +++ b/include/linux/netfilter.h
-@@ -67,6 +67,13 @@
+@@ -67,6 +67,13 @@ static inline void nf_inet_addr_mask(con
  #endif
  }
  
@@ -48,7 +48,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  struct sk_buff;
 --- a/include/net/netfilter/nf_flow_table.h
 +++ b/include/net/netfilter/nf_flow_table.h
-@@ -153,6 +153,9 @@
+@@ -153,6 +153,9 @@ struct flow_offload_tuple {
  					xmit_type:3,
  					encap_num:2,
  					needs_gso_segment:1,
@@ -58,7 +58,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  					tun_num:2,
  					in_vlan_ingress:2;
  	u16				mtu;
-@@ -236,7 +239,10 @@
+@@ -236,7 +239,10 @@ struct nf_flow_route {
  			u32			hw_ifindex;
  			u8			h_source[ETH_ALEN];
  			u8			h_dest[ETH_ALEN];
@@ -72,7 +72,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	} tuple[FLOW_OFFLOAD_DIR_MAX];
 --- a/net/bridge/Makefile
 +++ b/net/bridge/Makefile
-@@ -14,6 +14,8 @@
+@@ -14,6 +14,8 @@ bridge-$(CONFIG_SYSFS) += br_sysfs_if.o
  
  bridge-$(subst m,y,$(CONFIG_BRIDGE_NETFILTER)) += br_nf_core.o
  
@@ -83,7 +83,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  obj-$(CONFIG_BRIDGE_NETFILTER) += br_netfilter.o
 --- a/net/bridge/br.c
 +++ b/net/bridge/br.c
-@@ -458,6 +458,7 @@
+@@ -458,6 +458,7 @@ static int __init br_init(void)
  		goto err_out6;
  
  	brioctl_set(br_ioctl_stub);
@@ -91,7 +91,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  
  #if IS_MODULE(CONFIG_BRIDGE_NETFILTER)
  	pr_info("bridge: filtering via arp/ip/ip6tables is no longer available "
-@@ -486,6 +487,7 @@
+@@ -486,6 +487,7 @@ err_out:
  
  static void __exit br_deinit(void)
  {
@@ -99,7 +99,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	stp_proto_unregister(&br_stp_proto);
  	br_netlink_fini();
  	unregister_switchdev_blocking_notifier(&br_switchdev_blocking_notifier);
---- a/net/bridge/br_nf_utils.c
+--- /dev/null
 +++ b/net/bridge/br_nf_utils.c
 @@ -0,0 +1,38 @@
 +// SPDX-License-Identifier: GPL-2.0-only
@@ -142,7 +142,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 +}
 --- a/net/bridge/br_private.h
 +++ b/net/bridge/br_private.h
-@@ -2165,6 +2165,19 @@
+@@ -2165,6 +2165,19 @@ struct nf_br_ops {
  };
  extern const struct nf_br_ops __rcu *nf_br_ops;
  
@@ -164,7 +164,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  int br_nf_core_init(void);
 --- a/net/netfilter/core.c
 +++ b/net/netfilter/core.c
-@@ -814,6 +814,9 @@
+@@ -814,6 +814,9 @@ static struct pernet_operations netfilte
  	.exit = netfilter_net_exit,
  };
  
@@ -184,7 +184,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  #include <net/ip.h>
  #include <net/ip6_route.h>
  #include <net/netfilter/nf_tables.h>
-@@ -139,6 +140,9 @@
+@@ -139,6 +140,9 @@ static int flow_offload_fill_route(struc
  		memcpy(flow_tuple->out.h_source, route->tuple[dir].out.h_source,
  		       ETH_ALEN);
  		flow_tuple->out.ifidx = route->tuple[dir].out.ifindex;
@@ -194,7 +194,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  		break;
  	case FLOW_OFFLOAD_XMIT_XFRM:
  	case FLOW_OFFLOAD_XMIT_NEIGH:
-@@ -573,6 +577,43 @@
+@@ -573,6 +577,43 @@ static void nf_flow_table_extend_ct_time
  	nf_ct_put(ct);
  }
  
@@ -238,7 +238,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  static void nf_flow_offload_gc_step(struct nf_flowtable *flow_table,
  				    struct flow_offload *flow, void *data)
  {
-@@ -585,8 +626,8 @@
+@@ -585,8 +626,8 @@ static void nf_flow_offload_gc_step(stru
  
  	if (nf_flow_has_expired(flow) ||
  	    nf_ct_is_dying(flow->ct) ||
@@ -251,7 +251,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  		teardown = true;
 --- a/net/netfilter/nf_flow_table_path.c
 +++ b/net/netfilter/nf_flow_table_path.c
-@@ -100,7 +100,10 @@
+@@ -100,7 +100,10 @@ struct nft_forward_info {
  	u8 ingress_vlans;
  	u8 h_source[ETH_ALEN];
  	u8 h_dest[ETH_ALEN];
@@ -263,7 +263,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	enum flow_offload_xmit_type xmit_type;
  };
  
-@@ -113,7 +116,7 @@
+@@ -113,7 +116,7 @@ static int nft_dev_path_info(struct net_
  			     struct nft_flowtable *ft)
  {
  	const struct net_device_path *path;
@@ -272,7 +272,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  
  	memcpy(info->h_dest, ha, ETH_ALEN);
  
-@@ -155,6 +158,8 @@
+@@ -155,6 +158,8 @@ static int nft_dev_path_info(struct net_
  				info->encap[info->num_encaps].proto =
  					path->encap.proto;
  				info->num_encaps++;
@@ -281,7 +281,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  			}
  			if (path->type == DEV_PATH_PPPOE) {
  				memcpy(info->h_dest, path->encap.h_dest, ETH_ALEN);
-@@ -190,6 +195,13 @@
+@@ -190,6 +195,13 @@ static int nft_dev_path_info(struct net_
  			case DEV_PATH_BR_VLAN_KEEP:
  				break;
  			}
@@ -295,7 +295,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  			info->xmit_type = FLOW_OFFLOAD_XMIT_DIRECT;
  			break;
  		case DEV_PATH_MTK_WDMA:
-@@ -306,6 +318,9 @@
+@@ -306,6 +318,9 @@ static int nft_dev_forward_path(const st
  	if (info.xmit_type == FLOW_OFFLOAD_XMIT_DIRECT) {
  		memcpy(route->tuple[dir].out.h_source, info.h_source, ETH_ALEN);
  		memcpy(route->tuple[dir].out.h_dest, info.h_dest, ETH_ALEN);

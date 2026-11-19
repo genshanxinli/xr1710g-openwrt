@@ -12,7 +12,7 @@ Signed-off-by: Paolo Abeni <pabeni@redhat.com>
 ---
 --- a/drivers/net/dsa/yt921x.c
 +++ b/drivers/net/dsa/yt921x.c
-@@ -1117,6 +1117,188 @@
+@@ -1117,6 +1117,188 @@ yt921x_dsa_port_mirror_add(struct dsa_sw
  	return res;
  }
  
@@ -201,7 +201,7 @@ Signed-off-by: Paolo Abeni <pabeni@redhat.com>
  static int yt921x_fdb_wait(struct yt921x_priv *priv, u32 *valp)
  {
  	struct device *dev = to_device(priv);
-@@ -2880,6 +3062,9 @@
+@@ -2880,6 +3062,9 @@ static const struct dsa_switch_ops yt921
  	/* mirror */
  	.port_mirror_del	= yt921x_dsa_port_mirror_del,
  	.port_mirror_add	= yt921x_dsa_port_mirror_add,
@@ -211,7 +211,7 @@ Signed-off-by: Paolo Abeni <pabeni@redhat.com>
  	/* fdb */
  	.port_fdb_dump		= yt921x_dsa_port_fdb_dump,
  	.port_fast_age		= yt921x_dsa_port_fast_age,
-@@ -2976,6 +3161,7 @@
+@@ -2976,6 +3161,7 @@ static int yt921x_mdio_probe(struct mdio
  	ds->ageing_time_min = 1 * 5000;
  	ds->ageing_time_max = U16_MAX * 5000;
  	ds->phylink_mac_ops = &yt921x_phylink_mac_ops;
@@ -252,7 +252,7 @@ Signed-off-by: Paolo Abeni <pabeni@redhat.com>
  
  #define YT921X_PORTn_VLAN_CTRL(port)	(0x230010 + 4 * (port))
  #define  YT921X_PORT_VLAN_CTRL_SVLAN_PRI_EN	BIT(31)
-@@ -458,6 +475,9 @@
+@@ -458,6 +475,9 @@ enum yt921x_fdb_entry_status {
  
  #define YT921X_MSTI_NUM		16
  

@@ -17,7 +17,7 @@ Tested-by: Jonas Jelonek <jelonek.jonas@gmail.com>
 ---
 --- a/drivers/net/pse-pd/pse_core.c
 +++ b/drivers/net/pse-pd/pse_core.c
-@@ -1144,6 +1144,9 @@
+@@ -1144,6 +1144,9 @@ int pse_controller_register(struct pse_c
  	list_add(&pcdev->list, &pse_controller_list);
  	mutex_unlock(&pse_list_mutex);
  
@@ -27,7 +27,7 @@ Tested-by: Jonas Jelonek <jelonek.jonas@gmail.com>
  	return 0;
  }
  EXPORT_SYMBOL_GPL(pse_controller_register);
-@@ -1154,6 +1157,9 @@
+@@ -1154,6 +1157,9 @@ EXPORT_SYMBOL_GPL(pse_controller_registe
   */
  void pse_controller_unregister(struct pse_controller_dev *pcdev)
  {

@@ -37,7 +37,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -555,9 +555,17 @@
+@@ -555,9 +555,17 @@ struct airoha_foe_stats64 {
  	u64 packets;
  };
  
@@ -58,7 +58,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
   * word, and the tunnel-decap bit ("rmt") in information block 1.  The driver
   * only maps values the flow offload API reports; it does not create, program
   * or tear down the tunnel or its table.
-@@ -612,10 +620,16 @@
+@@ -612,10 +620,16 @@ struct airoha_flow_data {
  		u16 sid;
  		u8 num;
  	} pppoe;
@@ -78,7 +78,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	 * per-flow DS-Lite mark.
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -826,6 +826,97 @@
+@@ -826,6 +826,97 @@ static int airoha_get_dsa_port(struct ne
  #endif
  }
  
@@ -176,7 +176,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  static void airoha_ppe_foe_set_bridge_addrs(struct airoha_foe_bridge *br,
  					    struct ethhdr *eh)
  {
-@@ -1098,6 +1189,14 @@
+@@ -1098,6 +1189,14 @@ static int airoha_ppe_foe_entry_prepare(
  		}
  	}
  
@@ -191,7 +191,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	if (is_multicast_ether_addr(data->eth.h_dest))
  		val |= AIROHA_FOE_IB2_MULTICAST;
  
-@@ -1180,7 +1279,8 @@
+@@ -1180,7 +1279,8 @@ static int airoha_ppe_foe_entry_prepare(
  	if (wlan_etype >= 0) {
  		l2->etype = wlan_etype;
  	} else if (dsa_port >= 0) {
@@ -201,7 +201,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  		l2->etype |= !data->vlan.num ? BIT(15) : 0;
  	} else if (data->pppoe.num) {
  		l2->etype = ETH_P_PPP_SES;
-@@ -2370,12 +2470,29 @@
+@@ -2370,12 +2470,29 @@ static int airoha_ppe_flow_offload_repla
  	}
  
  	if (!is_valid_ether_addr(data.eth.h_source) ||
@@ -237,7 +237,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	if (police) {
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -383,9 +383,112 @@
+@@ -383,9 +383,112 @@ static int airoha_ppe_debugfs_tb_regs_sh
  }
  DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_tb_regs);
  
@@ -353,7 +353,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
   * "programmed with a rate the driver did not intend".
   */
  static int airoha_ppe_debugfs_meter_show(struct seq_file *m, void *private)
-@@ -558,11 +661,13 @@
+@@ -558,11 +661,13 @@ int airoha_ppe_debugfs_init(struct airoh
  			    &airoha_ppe_debugfs_bind_rate_fops);
  	debugfs_create_file("tb_regs", 0444, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_tb_regs_fops);

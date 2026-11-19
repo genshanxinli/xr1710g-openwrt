@@ -1,6 +1,6 @@
 --- a/include/net/cfg80211.h
 +++ b/include/net/cfg80211.h
-@@ -4182,6 +4182,141 @@
+@@ -4182,6 +4182,141 @@ struct cfg80211_nan_band_config {
  };
  
  /**

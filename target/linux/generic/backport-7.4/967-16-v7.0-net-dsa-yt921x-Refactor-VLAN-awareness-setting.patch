@@ -13,7 +13,7 @@ Signed-off-by: Paolo Abeni <pabeni@redhat.com>
 ---
 --- a/drivers/net/dsa/yt921x.c
 +++ b/drivers/net/dsa/yt921x.c
-@@ -1770,6 +1770,18 @@
+@@ -1770,6 +1770,18 @@ yt921x_dsa_port_mdb_add(struct dsa_switc
  }
  
  static int
@@ -32,7 +32,7 @@ Signed-off-by: Paolo Abeni <pabeni@redhat.com>
  yt921x_port_set_pvid(struct yt921x_priv *priv, int port, u16 vid)
  {
  	u32 mask;
-@@ -1818,14 +1830,7 @@
+@@ -1818,14 +1830,7 @@ yt921x_vlan_filtering(struct yt921x_priv
  	if (res)
  		return res;
  
@@ -48,7 +48,7 @@ Signed-off-by: Paolo Abeni <pabeni@redhat.com>
  	if (res)
  		return res;
  
-@@ -2022,8 +2027,7 @@
+@@ -2022,8 +2027,7 @@ static int yt921x_userport_standalone(st
  		return res;
  
  	/* Turn off VLAN awareness */

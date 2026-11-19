@@ -5,7 +5,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 ---
 --- a/drivers/mtd/ubi/build.c
 +++ b/drivers/mtd/ubi/build.c
-@@ -1279,6 +1279,80 @@
+@@ -1279,6 +1279,80 @@ static struct mtd_notifier ubi_mtd_notif
  	.remove = ubi_notify_remove,
  };
  
@@ -86,7 +86,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  static int __init ubi_init_attach(void)
  {
  	int err, i, k;
-@@ -1331,6 +1405,12 @@
+@@ -1331,6 +1405,12 @@ static int __init ubi_init_attach(void)
  		}
  	}
  

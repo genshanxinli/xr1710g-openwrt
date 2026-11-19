@@ -51,7 +51,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -35,7 +35,13 @@
+@@ -35,7 +35,13 @@ static const struct rhashtable_params ai
  	.automatic_shrinking = true,
  };
  
@@ -66,7 +66,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  {
  	if (!IS_ENABLED(CONFIG_NET_AIROHA_FLOW_STATS))
  		return -EOPNOTSUPP;
-@@ -46,9 +52,25 @@
+@@ -46,9 +52,25 @@ static int airoha_ppe_get_num_stats_entr
  	return PPE_STATS_NUM_ENTRIES;
  }
  
@@ -93,7 +93,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
  	if (num_stats > 0) {
  		struct airoha_eth *eth = ppe->eth;
-@@ -172,7 +194,7 @@
+@@ -172,7 +194,7 @@ void airoha_ppe_set_xmit_frame_size(stru
  static void airoha_ppe_hw_init(struct airoha_ppe *ppe)
  {
  	u32 sram_ppe_num_data_entries = airoha_ppe_get_sram_num_entries(ppe);
@@ -102,7 +102,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	u32 sram_tb_size, dram_num_entries;
  	struct airoha_eth *eth = ppe->eth;
  	int i, sram_num_stats_entries;
-@@ -212,6 +234,7 @@
+@@ -212,6 +234,7 @@ static void airoha_ppe_hw_init(struct ai
  			      PPE_SRAM_TABLE_EN_MASK |
  			      PPE_SRAM_HASH1_EN_MASK |
  			      PPE_DRAM_TABLE_EN_MASK |
@@ -110,7 +110,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  			      PPE_SRAM_HASH0_MODE_MASK |
  			      PPE_SRAM_HASH1_MODE_MASK |
  			      PPE_DRAM_HASH0_MODE_MASK |
-@@ -219,6 +242,8 @@
+@@ -219,6 +242,8 @@ static void airoha_ppe_hw_init(struct ai
  			      FIELD_PREP(PPE_SRAM_TABLE_EN_MASK, 1) |
  			      FIELD_PREP(PPE_SRAM_HASH1_EN_MASK, 1) |
  			      FIELD_PREP(PPE_SRAM_HASH1_MODE_MASK, 1) |
@@ -119,7 +119,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  			      FIELD_PREP(PPE_DRAM_HASH1_MODE_MASK, 3));
  
  		airoha_fe_rmw(eth, REG_PPE_TB_CFG(i),
-@@ -234,6 +259,20 @@
+@@ -234,6 +259,20 @@ static void airoha_ppe_hw_init(struct ai
  			      FIELD_PREP(PPE_DRAM_TB_NUM_ENTRY_MASK,
  					 dram_num_entries));
  
@@ -140,7 +140,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  		airoha_fe_rmw(eth, REG_PPE_BIND_RATE(i),
  			      PPE_BIND_RATE_L2B_BIND_MASK |
  			      PPE_BIND_RATE_BIND_MASK,
-@@ -925,12 +964,27 @@
+@@ -925,12 +964,27 @@ static int airoha_ppe_foe_commit_entry(s
  				       u32 hash, bool rx_wlan)
  {
  	u32 sram_num_entries = airoha_ppe_get_total_sram_num_entries(ppe);
@@ -169,7 +169,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	memcpy(&hwe->d, &e->d, sizeof(*hwe) - sizeof(hwe->ib1));
  	wmb();
  
-@@ -1813,6 +1867,13 @@
+@@ -1813,6 +1867,13 @@ int airoha_ppe_init(struct airoha_eth *e
  	if (!ppe->foe_check_time)
  		return -ENOMEM;
  

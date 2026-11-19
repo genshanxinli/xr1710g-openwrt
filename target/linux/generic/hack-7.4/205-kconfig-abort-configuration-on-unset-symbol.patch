@@ -16,7 +16,7 @@ Signed-off-by: David Bauer <mail@david-bauer.net>
 ---
 --- a/scripts/kconfig/conf.c
 +++ b/scripts/kconfig/conf.c
-@@ -324,6 +324,9 @@
+@@ -324,6 +324,9 @@ static int conf_askvalue(struct symbol *
  		}
  		/* fall through */
  	default:
@@ -26,7 +26,7 @@ Signed-off-by: David Bauer <mail@david-bauer.net>
  		fflush(stdout);
  		xfgets(line, sizeof(line), stdin);
  		break;
-@@ -502,6 +505,9 @@
+@@ -502,6 +505,9 @@ static void conf_choice(struct menu *men
  			}
  			/* fall through */
  		case oldaskconfig:

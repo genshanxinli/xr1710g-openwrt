@@ -11,7 +11,7 @@ Co-authored-by: Shiji Yang <yangshiji66@outlook.com>
 ---
 --- a/include/linux/moduleloader.h
 +++ b/include/linux/moduleloader.h
-@@ -122,4 +122,8 @@
+@@ -122,4 +122,8 @@ void module_arch_cleanup(struct module *
  /* Any cleanup before freeing mod->module_init */
  void module_arch_freeing_init(struct module *mod);
  
@@ -22,7 +22,7 @@ Co-authored-by: Shiji Yang <yangshiji66@outlook.com>
  #endif
 --- a/mm/execmem.c
 +++ b/mm/execmem.c
-@@ -453,7 +453,7 @@
+@@ -453,7 +453,7 @@ static bool execmem_cache_free(void *ptr
  }
  #endif /* CONFIG_ARCH_HAS_EXECMEM_ROX */
  
@@ -31,7 +31,7 @@ Co-authored-by: Shiji Yang <yangshiji66@outlook.com>
  {
  	struct execmem_range *range = &execmem_info->ranges[type];
  	bool use_rox_cache = range->flags & EXECMEM_ROX_CACHE;
-@@ -489,7 +489,12 @@
+@@ -489,7 +489,12 @@ void *execmem_alloc_rw(enum execmem_type
  	return no_free_ptr(p);
  }
  
@@ -45,7 +45,7 @@ Co-authored-by: Shiji Yang <yangshiji66@outlook.com>
  {
  	/*
  	 * This memory may be RO, and freeing RO memory in an interrupt is not
-@@ -506,6 +511,11 @@
+@@ -506,6 +511,11 @@ bool execmem_is_rox(enum execmem_type ty
  	return !!(execmem_info->ranges[type].flags & EXECMEM_ROX_CACHE);
  }
  

@@ -1,6 +1,6 @@
 --- a/drivers/clk/clk-en7523.c
 +++ b/drivers/clk/clk-en7523.c
-@@ -1473,8 +1473,13 @@
+@@ -1473,8 +1473,13 @@ static int en7581_clk_hw_init(struct pla
  
  	en7581_register_clocks(&pdev->dev, clk_data, map, base);
  

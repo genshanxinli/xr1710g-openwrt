@@ -128,7 +128,7 @@ Signed-off-by: Rosen Penev <rosenp@gmail.com>
  #define ADDC(sum,reg)						\
  	.set	push;						\
  	.set	noat;						\
-@@ -141,6 +178,9 @@
+@@ -141,6 +178,9 @@ EXPORT_SYMBOL(csum_partial)
  	bnez	t8, .Ldo_end_words
  	 move	t8, a1
  
@@ -138,7 +138,7 @@ Signed-off-by: Rosen Penev <rosenp@gmail.com>
  	andi	t8, src, 0x4
  	beqz	t8, .Lqword_align
  	 andi	t8, src, 0x8
-@@ -171,7 +211,7 @@
+@@ -171,7 +211,7 @@ EXPORT_SYMBOL(csum_partial)
  
  .Loword_align:
  	beqz	t8, .Lbegin_movement
@@ -147,7 +147,7 @@ Signed-off-by: Rosen Penev <rosenp@gmail.com>
  
  #ifdef USE_DOUBLE
  	ld	t0, 0x00(src)
-@@ -183,9 +223,40 @@
+@@ -183,9 +223,40 @@ EXPORT_SYMBOL(csum_partial)
  #endif
  	LONG_SUBU	a1, a1, 0x10
  	PTR_ADDU	src, src, 0x10
@@ -189,7 +189,7 @@ Signed-off-by: Rosen Penev <rosenp@gmail.com>
  	beqz	t8, 1f
  	 andi	t2, a1, 0x40
  
-@@ -217,6 +288,7 @@
+@@ -217,6 +288,7 @@ EXPORT_SYMBOL(csum_partial)
  	CSUM_BIGCHUNK(src, 0x00, sum, t0, t1, t3, t4)
  	andi	t8, a1, 0x1c
  	PTR_ADDU	src, src, 0x20

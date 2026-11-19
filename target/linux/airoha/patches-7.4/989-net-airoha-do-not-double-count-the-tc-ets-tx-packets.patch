@@ -29,7 +29,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -3157,12 +3157,20 @@
+@@ -3157,12 +3157,20 @@ static int airoha_qdma_get_tx_ets_stats(
  	cpu_tx_packets = airoha_qdma_rr(qdma, REG_CNTR_VAL(channel << 1));
  	fwd_tx_packets = airoha_qdma_rr(qdma,
  					REG_CNTR_VAL((channel << 1) + 1));

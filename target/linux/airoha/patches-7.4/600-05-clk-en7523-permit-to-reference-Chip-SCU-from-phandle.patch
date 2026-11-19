@@ -1,6 +1,6 @@
 --- a/drivers/clk/clk-en7523.c
 +++ b/drivers/clk/clk-en7523.c
-@@ -1231,12 +1231,17 @@
+@@ -1231,12 +1231,17 @@ static int en7581_clk_hw_init(struct pla
  			      struct clk_hw_onecell_data *clk_data)
  {
  	struct en_clk_priv *priv = platform_get_drvdata(pdev);

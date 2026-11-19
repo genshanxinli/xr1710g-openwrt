@@ -12,7 +12,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
 ---
 --- a/drivers/net/dsa/yt921x.c
 +++ b/drivers/net/dsa/yt921x.c
-@@ -263,6 +263,14 @@
+@@ -263,6 +263,14 @@ yt921x_reg_toggle_bits(struct yt921x_pri
   * eliminate potential issues, although partial reads/writes are also possible.
   */
  
@@ -27,7 +27,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
  static int
  yt921x_regs_read(struct yt921x_priv *priv, u32 reg, u32 *vals,
  		 unsigned int num_regs)
-@@ -373,6 +381,12 @@
+@@ -373,6 +381,12 @@ yt921x_reg64_clear_bits(struct yt921x_pr
  	return yt921x_regs_clear_bits(priv, reg, masks, 2);
  }
  
@@ -40,7 +40,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
  static int yt921x_reg_mdio_read(void *context, u32 reg, u32 *valp)
  {
  	struct yt921x_reg_mdio *mdio = context;
-@@ -1066,6 +1080,13 @@
+@@ -1066,6 +1080,13 @@ yt921x_dsa_set_mac_eee(struct dsa_switch
  	return res;
  }
  
@@ -54,7 +54,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
  static int
  yt921x_dsa_port_change_mtu(struct dsa_switch *ds, int port, int new_mtu)
  {
-@@ -1097,6 +1118,266 @@
+@@ -1097,6 +1118,266 @@ static int yt921x_dsa_port_max_mtu(struc
  	return YT921X_FRAME_SIZE_MAX - ETH_HLEN - ETH_FCS_LEN - YT921X_TAG_LEN;
  }
  
@@ -321,7 +321,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
  static int
  yt921x_mirror_del(struct yt921x_priv *priv, int port, bool ingress)
  {
-@@ -3051,6 +3332,7 @@
+@@ -3051,6 +3332,7 @@ static int yt921x_chip_detect(struct yt9
  	u32 chipid;
  	u32 major;
  	u32 mode;
@@ -329,7 +329,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
  	int res;
  
  	res = yt921x_reg_read(priv, YT921X_CHIP_ID, &chipid);
-@@ -3085,12 +3367,27 @@
+@@ -3085,12 +3367,27 @@ static int yt921x_chip_detect(struct yt9
  		return -ENODEV;
  	}
  
@@ -357,7 +357,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
  	return 0;
  }
  
-@@ -3212,6 +3509,23 @@
+@@ -3212,6 +3509,23 @@ static int yt921x_chip_setup_dsa(struct
  	return 0;
  }
  
@@ -381,7 +381,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
  static int __maybe_unused yt921x_chip_setup_qos(struct yt921x_priv *priv)
  {
  	u32 ctrl;
-@@ -3258,7 +3572,7 @@
+@@ -3258,7 +3572,7 @@ static int yt921x_chip_setup(struct yt92
  	u32 ctrl;
  	int res;
  
@@ -390,7 +390,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
  	res = yt921x_reg_set_bits(priv, YT921X_FUNC, ctrl);
  	if (res)
  		return res;
-@@ -3267,6 +3581,10 @@
+@@ -3267,6 +3581,10 @@ static int yt921x_chip_setup(struct yt92
  	if (res)
  		return res;
  
@@ -401,7 +401,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
  #if IS_ENABLED(CONFIG_DCB)
  	res = yt921x_chip_setup_qos(priv);
  	if (res)
-@@ -3358,6 +3676,9 @@
+@@ -3358,6 +3676,9 @@ static const struct dsa_switch_ops yt921
  	/* mtu */
  	.port_change_mtu	= yt921x_dsa_port_change_mtu,
  	.port_max_mtu		= yt921x_dsa_port_max_mtu,
@@ -433,7 +433,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
  
  #define YT921X_EXT_MBUS_OP		0x6a000
  #define YT921X_INT_MBUS_OP		0xf0000
-@@ -465,6 +471,39 @@
+@@ -465,6 +471,39 @@ enum yt921x_app_selector {
  #define  YT921X_LAG_HASH_MAC_DA			BIT(1)
  #define  YT921X_LAG_HASH_SRC_PORT		BIT(0)
  
@@ -473,7 +473,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
  #define YT921X_PORTn_VLAN_CTRL(port)	(0x230010 + 4 * (port))
  #define  YT921X_PORT_VLAN_CTRL_SVLAN_PRIO_EN	BIT(31)
  #define  YT921X_PORT_VLAN_CTRL_CVLAN_PRIO_EN	BIT(30)
-@@ -508,6 +547,16 @@
+@@ -508,6 +547,16 @@ enum yt921x_fdb_entry_status {
  
  #define YT921X_MSTI_NUM		16
  
@@ -490,7 +490,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
  #define YT921X_LAG_NUM		2
  #define YT921X_LAG_PORT_NUM	4
  
-@@ -602,8 +651,10 @@
+@@ -602,8 +651,10 @@ struct yt921x_priv {
  	struct dsa_switch ds;
  
  	const struct yt921x_info *info;

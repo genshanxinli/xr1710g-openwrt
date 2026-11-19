@@ -86,7 +86,7 @@ Signed-off-by: Simon Polack <spolack+git@mailbox.org>
  #define RTL8261X_INT_MASK_DEFAULT	(RTL8261X_INT_AUTONEG_DONE | \
  					 RTL8261X_INT_LINK_CHG | \
  					 RTL8261X_INT_AUTONEG_ERROR | \
-@@ -727,18 +742,147 @@
+@@ -727,18 +742,147 @@ static int rtl8261x_config_aneg(struct p
  	return 0;
  }
  
@@ -237,7 +237,7 @@ Signed-off-by: Simon Polack <spolack+git@mailbox.org>
  }
  
  static int rtl821x_probe(struct phy_device *phydev)
-@@ -2179,30 +2323,6 @@
+@@ -2179,30 +2323,6 @@ static int rtl822xb_config_init(struct p
  	return rtl822x_set_serdes_option_mode(phydev, false);
  }
  

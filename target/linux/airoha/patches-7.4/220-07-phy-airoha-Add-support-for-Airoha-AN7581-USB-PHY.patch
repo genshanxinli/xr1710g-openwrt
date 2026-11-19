@@ -1,6 +1,6 @@
 --- a/MAINTAINERS
 +++ b/MAINTAINERS
-@@ -810,6 +810,7 @@
+@@ -810,6 +810,7 @@ M:	Christian Marangi <ansuelsmth@gmail.c
  L:	linux-arm-kernel@lists.infradead.org (moderated for non-subscribers)
  S:	Maintained
  F:	Documentation/devicetree/bindings/phy/airoha,an7581-usb-phy.yaml
@@ -10,7 +10,7 @@
  AIRSPY MEDIA DRIVER
 --- a/drivers/phy/airoha/Kconfig
 +++ b/drivers/phy/airoha/Kconfig
-@@ -11,3 +11,13 @@
+@@ -11,3 +11,13 @@ config PHY_AIROHA_PCIE
  	  Say Y here to add support for Airoha PCIe PHY driver.
  	  This driver create the basic PHY instance and provides initialize
  	  callback for PCIe GEN3 port.
@@ -31,7 +31,7 @@
  
  obj-$(CONFIG_PHY_AIROHA_PCIE)		+= phy-airoha-pcie.o
 +obj-$(CONFIG_PHY_AIROHA_USB)		+= phy-airoha-usb.o
---- a/drivers/phy/airoha/phy-airoha-usb.c
+--- /dev/null
 +++ b/drivers/phy/airoha/phy-airoha-usb.c
 @@ -0,0 +1,596 @@
 +// SPDX-License-Identifier: GPL-2.0

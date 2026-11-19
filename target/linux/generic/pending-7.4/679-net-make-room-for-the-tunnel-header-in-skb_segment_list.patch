@@ -20,7 +20,7 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
 ---
 --- a/net/core/skbuff.c
 +++ b/net/core/skbuff.c
-@@ -4789,6 +4789,10 @@
+@@ -4789,6 +4789,10 @@ struct sk_buff *skb_segment_list(struct
  			}
  		}
  

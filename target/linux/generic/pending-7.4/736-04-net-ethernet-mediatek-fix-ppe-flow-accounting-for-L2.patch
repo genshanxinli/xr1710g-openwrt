@@ -13,7 +13,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
 ---
 --- a/drivers/net/ethernet/mediatek/mtk_ppe.c
 +++ b/drivers/net/ethernet/mediatek/mtk_ppe.c
-@@ -83,9 +83,9 @@
+@@ -83,9 +83,9 @@ static int mtk_ppe_mib_wait_busy(struct
  	int ret;
  	u32 val;
  
@@ -26,7 +26,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  
  	if (ret)
  		dev_err(ppe->dev, "MIB table busy");
-@@ -93,17 +93,31 @@
+@@ -93,17 +93,31 @@ static int mtk_ppe_mib_wait_busy(struct
  	return ret;
  }
  
@@ -60,7 +60,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  
  	cnt_r0 = readl(ppe->base + MTK_PPE_MIB_SER_R0);
  	cnt_r1 = readl(ppe->base + MTK_PPE_MIB_SER_R1);
-@@ -112,19 +126,19 @@
+@@ -112,19 +126,19 @@ static int mtk_mib_entry_read(struct mtk
  	if (mtk_is_netsys_v3_or_greater(ppe->eth)) {
  		/* 64 bit for each counter */
  		u32 cnt_r3 = readl(ppe->base + MTK_PPE_MIB_SER_R3);
@@ -85,7 +85,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  }
  
  static void mtk_ppe_cache_clear(struct mtk_ppe *ppe)
-@@ -522,14 +536,6 @@
+@@ -522,14 +536,6 @@ __mtk_foe_entry_clear(struct mtk_ppe *pp
  		hwe->ib1 |= FIELD_PREP(MTK_FOE_IB1_STATE, MTK_FOE_STATE_INVALID);
  		dma_wmb();
  		mtk_ppe_cache_clear(ppe);
@@ -100,7 +100,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  	}
  	entry->hash = 0xffff;
  
-@@ -554,11 +560,14 @@
+@@ -554,11 +560,14 @@ static int __mtk_foe_entry_idle_time(str
  }
  
  static bool
@@ -116,7 +116,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  	int len;
  
  	if (hash == 0xffff)
-@@ -569,18 +578,35 @@
+@@ -569,18 +578,35 @@ mtk_flow_entry_update(struct mtk_ppe *pp
  	memcpy(&foe, hwe, len);
  
  	if (!mtk_flow_entry_match(ppe->eth, entry, &foe, len) ||
@@ -155,7 +155,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  	struct mtk_flow_entry *cur;
  	struct hlist_node *tmp;
  	int idle;
-@@ -589,7 +615,9 @@
+@@ -589,7 +615,9 @@ mtk_flow_entry_update_l2(struct mtk_ppe
  	hlist_for_each_entry_safe(cur, tmp, &entry->l2_flows, l2_list) {
  		int cur_idle;
  
@@ -166,7 +166,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  			__mtk_foe_entry_clear(ppe, entry, false);
  			continue;
  		}
-@@ -604,10 +632,29 @@
+@@ -604,10 +632,29 @@ mtk_flow_entry_update_l2(struct mtk_ppe
  	}
  }
  
@@ -196,7 +196,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  	struct mtk_eth *eth = ppe->eth;
  	u16 timestamp = mtk_eth_timestamp(eth);
  	struct mtk_foe_entry *hwe;
-@@ -638,6 +685,12 @@
+@@ -638,6 +685,12 @@ __mtk_foe_entry_commit(struct mtk_ppe *p
  
  	dma_wmb();
  
@@ -209,7 +209,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  	mtk_ppe_cache_clear(ppe);
  }
  
-@@ -802,21 +855,6 @@
+@@ -802,21 +855,6 @@ out:
  	spin_unlock_bh(&ppe_lock);
  }
  
@@ -231,7 +231,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  int mtk_ppe_prepare_reset(struct mtk_ppe *ppe)
  {
  	if (!ppe)
-@@ -844,32 +882,6 @@
+@@ -844,32 +882,6 @@ int mtk_ppe_prepare_reset(struct mtk_ppe
  	return mtk_ppe_wait_busy(ppe);
  }
  
@@ -266,7 +266,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  	bool accounting = eth->soc->has_accounting;
 --- a/drivers/net/ethernet/mediatek/mtk_ppe.h
 +++ b/drivers/net/ethernet/mediatek/mtk_ppe.h
-@@ -304,6 +304,8 @@
+@@ -304,6 +304,8 @@ struct mtk_flow_entry {
  	struct mtk_foe_entry data;
  	struct rhash_head node;
  	unsigned long cookie;
@@ -275,7 +275,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  };
  
  struct mtk_mib_entry {
-@@ -349,6 +351,7 @@
+@@ -349,6 +351,7 @@ void mtk_ppe_update_mtu(struct mtk_ppe *
  void mtk_ppe_start(struct mtk_ppe *ppe);
  int mtk_ppe_stop(struct mtk_ppe *ppe);
  int mtk_ppe_prepare_reset(struct mtk_ppe *ppe);
@@ -283,7 +283,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  
  void __mtk_ppe_check_skb(struct mtk_ppe *ppe, struct sk_buff *skb, u16 hash);
  
-@@ -398,9 +401,8 @@
+@@ -398,9 +401,8 @@ int mtk_foe_entry_set_queue(struct mtk_e
  			    unsigned int queue);
  int mtk_foe_entry_commit(struct mtk_ppe *ppe, struct mtk_flow_entry *entry);
  void mtk_foe_entry_clear(struct mtk_ppe *ppe, struct mtk_flow_entry *entry);
@@ -297,7 +297,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  #endif
 --- a/drivers/net/ethernet/mediatek/mtk_ppe_debugfs.c
 +++ b/drivers/net/ethernet/mediatek/mtk_ppe_debugfs.c
-@@ -97,7 +97,7 @@
+@@ -97,7 +97,7 @@ mtk_ppe_debugfs_foe_show(struct seq_file
  		if (bind && state != MTK_FOE_STATE_BIND)
  			continue;
  
@@ -308,7 +308,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  		seq_printf(m, "%05x %s %7s", i,
 --- a/drivers/net/ethernet/mediatek/mtk_ppe_offload.c
 +++ b/drivers/net/ethernet/mediatek/mtk_ppe_offload.c
-@@ -551,24 +551,21 @@
+@@ -551,24 +551,21 @@ static int
  mtk_flow_offload_stats(struct mtk_eth *eth, struct flow_cls_offload *f)
  {
  	struct mtk_flow_entry *entry;

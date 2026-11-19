@@ -55,7 +55,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 ---
 --- a/drivers/net/dsa/mxl862xx/mxl862xx-api.h
 +++ b/drivers/net/dsa/mxl862xx/mxl862xx-api.h
-@@ -1197,6 +1197,715 @@
+@@ -1197,6 +1197,715 @@ struct mxl862xx_ctp_port_assignment {
  	__le16 bridge_port_id;
  } __packed;
  
@@ -803,7 +803,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  #include <linux/if_bridge.h>
  #include <linux/module.h>
  #include <linux/of_device.h>
-@@ -451,6 +452,173 @@
+@@ -451,6 +452,173 @@ static int mxl862xx_setup_drop_meter(str
  	return MXL862XX_API_WRITE(priv, MXL862XX_COMMON_REGISTERMOD, reg);
  }
  
@@ -977,7 +977,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  static int mxl862xx_set_bridge_port(struct dsa_switch *ds, int port)
  {
  	struct mxl862xx_bridge_port_config br_port_cfg = {};
-@@ -666,17 +834,23 @@
+@@ -666,17 +834,23 @@ static int mxl862xx_allocate_bridge(stru
  	return le16_to_cpu(br_alloc.bridge_id);
  }
  
@@ -1005,7 +1005,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	if (ret) {
  		dev_err(ds->dev, "failed to free fw bridge %u: %pe\n",
  			fw_id, ERR_PTR(ret));
-@@ -800,14 +974,42 @@
+@@ -800,14 +974,42 @@ static int mxl862xx_setup(struct dsa_swi
  	if (ret)
  		return ret;
  
@@ -1049,7 +1049,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  }
  
  static void mxl862xx_teardown(struct dsa_switch *ds)
-@@ -1527,6 +1729,15 @@
+@@ -1527,6 +1729,15 @@ static int mxl862xx_port_setup(struct ds
  	if (ret)
  		return ret;
  
@@ -1067,7 +1067,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	if (ret)
 --- a/drivers/net/dsa/mxl862xx/mxl862xx.h
 +++ b/drivers/net/dsa/mxl862xx/mxl862xx.h
-@@ -343,6 +343,13 @@
+@@ -343,6 +343,13 @@ struct mxl862xx_fw_version {
   * @rescue_failed:      (rescue_mode) the self-heal gave up; the loader needs a
   *                      power cycle and no flash can be accepted
   * @rescue_heal_work:   background self-heal draining a wedged download to READY
@@ -1081,7 +1081,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
   * @stats_work:         periodic work item that polls RMON hardware counters
   *                      and accumulates them into 64-bit per-port stats
   */
-@@ -369,6 +376,7 @@
+@@ -369,6 +376,7 @@ struct mxl862xx_priv {
  	bool rescue_mode;
  	bool rescue_ready;
  	bool rescue_failed;

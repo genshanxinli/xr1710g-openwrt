@@ -19,7 +19,7 @@ Signed-off-by: Carlo Szelinsky <github@szelinsky.de>
 ---
 --- a/drivers/net/pse-pd/pse_core.c
 +++ b/drivers/net/pse-pd/pse_core.c
-@@ -1114,9 +1114,9 @@
+@@ -1114,9 +1114,9 @@ EXPORT_SYMBOL_GPL(pse_controller_registe
  void pse_controller_unregister(struct pse_controller_dev *pcdev)
  {
  	pse_flush_pw_ds(pcdev);

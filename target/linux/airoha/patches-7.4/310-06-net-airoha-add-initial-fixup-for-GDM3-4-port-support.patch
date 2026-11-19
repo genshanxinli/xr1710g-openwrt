@@ -11,7 +11,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -791,8 +791,10 @@
+@@ -791,8 +791,10 @@ static int airoha_fe_init(struct airoha_
  		      FIELD_PREP(IP_ASSEMBLE_PORT_MASK, 0) |
  		      FIELD_PREP(IP_ASSEMBLE_NBQ_MASK, 22));
  
@@ -24,7 +24,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  
  	/* Enable split for MIB counters for GDM3 and GDM4 */
  	airoha_fe_set(eth, REG_FE_GDM_MIB_CFG(AIROHA_GDM3_IDX),
-@@ -2370,7 +2372,8 @@
+@@ -2370,7 +2372,8 @@ static int airoha_dev_open(struct net_de
  	if (err)
  		return err;
  

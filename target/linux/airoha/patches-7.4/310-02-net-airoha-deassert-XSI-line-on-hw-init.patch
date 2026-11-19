@@ -10,7 +10,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -2028,6 +2028,10 @@
+@@ -2028,6 +2028,10 @@ static int airoha_hw_init(struct platfor
  	if (err)
  		return err;
  

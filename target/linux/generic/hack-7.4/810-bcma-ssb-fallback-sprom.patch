@@ -6,7 +6,7 @@ Subject: [PATCH] ssb_sprom: add generic kernel support for Broadcom  Fallback SP
 ---
 --- a/drivers/bcma/Kconfig
 +++ b/drivers/bcma/Kconfig
-@@ -18,6 +18,10 @@
+@@ -18,6 +18,10 @@ config BCMA_BLOCKIO
  	bool
  	default y
  
@@ -19,7 +19,7 @@ Subject: [PATCH] ssb_sprom: add generic kernel support for Broadcom  Fallback SP
  	depends on PCI = y
 --- a/drivers/bcma/Makefile
 +++ b/drivers/bcma/Makefile
-@@ -11,6 +11,7 @@
+@@ -11,6 +11,7 @@ bcma-$(CONFIG_BCMA_DRIVER_PCI_HOSTMODE)
  bcma-$(CONFIG_BCMA_DRIVER_MIPS)		+= driver_mips.o
  bcma-$(CONFIG_BCMA_DRIVER_GMAC_CMN)	+= driver_gmac_cmn.o
  bcma-$(CONFIG_BCMA_DRIVER_GPIO)		+= driver_gpio.o
@@ -39,7 +39,7 @@ Subject: [PATCH] ssb_sprom: add generic kernel support for Broadcom  Fallback SP
  	dev_err((bus)->dev, "bus%d: " fmt, (bus)->num, ##__VA_ARGS__)
 --- a/drivers/bcma/main.c
 +++ b/drivers/bcma/main.c
-@@ -677,6 +677,14 @@
+@@ -677,6 +677,14 @@ static int __init bcma_modinit(void)
  {
  	int err;
  
@@ -56,7 +56,7 @@ Subject: [PATCH] ssb_sprom: add generic kernel support for Broadcom  Fallback SP
  		return err;
 --- a/drivers/bcma/sprom.c
 +++ b/drivers/bcma/sprom.c
-@@ -51,21 +51,26 @@
+@@ -51,21 +51,26 @@ static int bcma_fill_sprom_with_fallback
  {
  	int err;
  
@@ -94,7 +94,7 @@ Subject: [PATCH] ssb_sprom: add generic kernel support for Broadcom  Fallback SP
  /**************************************************
 --- a/drivers/ssb/Kconfig
 +++ b/drivers/ssb/Kconfig
-@@ -25,6 +25,11 @@
+@@ -25,6 +25,11 @@ if SSB
  config SSB_SPROM
  	bool
  
@@ -118,7 +118,7 @@ Subject: [PATCH] ssb_sprom: add generic kernel support for Broadcom  Fallback SP
  # host support
 --- a/drivers/ssb/main.c
 +++ b/drivers/ssb/main.c
-@@ -1289,6 +1289,14 @@
+@@ -1289,6 +1289,14 @@ static int __init ssb_modinit(void)
  {
  	int err;
  
@@ -135,7 +135,7 @@ Subject: [PATCH] ssb_sprom: add generic kernel support for Broadcom  Fallback SP
  	err = bus_register(&ssb_bustype);
 --- a/drivers/ssb/sprom.c
 +++ b/drivers/ssb/sprom.c
-@@ -180,10 +180,20 @@
+@@ -180,10 +180,20 @@ int ssb_arch_register_fallback_sprom(int
  
  int ssb_fill_sprom_with_fallback(struct ssb_bus *bus, struct ssb_sprom *out)
  {

@@ -16,7 +16,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 ---
 --- a/drivers/net/dsa/mxl862xx/mxl862xx-api.h
 +++ b/drivers/net/dsa/mxl862xx/mxl862xx-api.h
-@@ -2212,6 +2212,18 @@
+@@ -2212,6 +2212,18 @@ struct mxl862xx_sys_reg_rw {
  } __packed;
  
  /**
@@ -35,7 +35,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
   * enum mxl862xx_port_type - Port Type
   * @MXL862XX_LOGICAL_PORT: Logical Port
   * @MXL862XX_PHYSICAL_PORT: Physical Port
-@@ -2226,6 +2238,238 @@
+@@ -2226,6 +2238,238 @@ enum mxl862xx_port_type {
  };
  
  /**
@@ -295,7 +295,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  #define MXL862XX_XPCS_PCS_GET_STATE	(MXL862XX_XPCS_MAGIC + 0x2)
 --- a/drivers/net/dsa/mxl862xx/mxl862xx-phylink.c
 +++ b/drivers/net/dsa/mxl862xx/mxl862xx-phylink.c
-@@ -66,6 +66,153 @@
+@@ -66,6 +66,153 @@ static struct mxl862xx_pcs *pcs_to_mxl86
  	return container_of(pcs, struct mxl862xx_pcs, pcs);
  }
  
@@ -449,7 +449,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  static int mxl862xx_xpcs_if_mode(phy_interface_t interface)
  {
  	switch (interface) {
-@@ -380,7 +527,10 @@
+@@ -380,7 +527,10 @@ void mxl862xx_setup_pcs(struct mxl862xx_
  	pcs->slot = MXL862XX_SERDES_SLOT(port);
  	pcs->interface = PHY_INTERFACE_MODE_NA;
  

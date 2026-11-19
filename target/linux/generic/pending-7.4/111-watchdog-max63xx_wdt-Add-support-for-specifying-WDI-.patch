@@ -22,7 +22,7 @@ Signed-off-by: Pali Rohár <pali@kernel.org>
  #include <linux/stringify.h>
  
  #define DEFAULT_HEARTBEAT 60
-@@ -50,6 +51,9 @@
+@@ -50,6 +51,9 @@ struct max63xx_wdt {
  	void __iomem *base;
  	spinlock_t lock;
  
@@ -32,7 +32,7 @@ Signed-off-by: Pali Rohár <pali@kernel.org>
  	/* WDI and WSET bits write access routines */
  	void (*ping)(struct max63xx_wdt *wdt);
  	void (*set)(struct max63xx_wdt *wdt, u8 set);
-@@ -155,6 +159,17 @@
+@@ -155,6 +159,17 @@ static const struct watchdog_info max63x
  	.identity = "max63xx Watchdog",
  };
  
@@ -50,7 +50,7 @@ Signed-off-by: Pali Rohár <pali@kernel.org>
  static void max63xx_mmap_ping(struct max63xx_wdt *wdt)
  {
  	u8 val;
-@@ -222,10 +237,19 @@
+@@ -222,10 +237,19 @@ static int max63xx_wdt_probe(struct plat
  		return -EINVAL;
  	}
  

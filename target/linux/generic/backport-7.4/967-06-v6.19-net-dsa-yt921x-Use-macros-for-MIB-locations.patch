@@ -12,7 +12,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
 ---
 --- a/drivers/net/dsa/yt921x.c
 +++ b/drivers/net/dsa/yt921x.c
-@@ -39,60 +39,55 @@
+@@ -39,60 +39,55 @@ struct yt921x_mib_desc {
   * to perform 32bit MIB overflow wraparound.
   */
  static const struct yt921x_mib_desc yt921x_mib_descs[] = {

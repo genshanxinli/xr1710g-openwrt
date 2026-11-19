@@ -7,7 +7,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
 ---
 --- a/drivers/net/phy/Kconfig
 +++ b/drivers/net/phy/Kconfig
-@@ -76,6 +76,80 @@
+@@ -76,6 +76,80 @@ config SFP
  	depends on HWMON || HWMON=n
  	select MDIO_I2C
  
@@ -90,7 +90,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  config AS21XXX_PHY
 --- a/drivers/net/phy/Makefile
 +++ b/drivers/net/phy/Makefile
-@@ -21,6 +21,21 @@
+@@ -21,6 +21,21 @@ obj-$(CONFIG_PHYLIB)		+= libphy.o
  obj-$(CONFIG_PHYLIB)		+= mdio_devres.o
  obj-$(CONFIG_PHY_PACKAGE)	+= phy_package.o
  
@@ -114,7 +114,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  obj-$(CONFIG_SFP)		+= sfp.o
 --- a/include/linux/platform_data/b53.h
 +++ b/include/linux/platform_data/b53.h
-@@ -29,6 +29,9 @@
+@@ -29,6 +29,9 @@ struct b53_platform_data {
  	u32 chip_id;
  	u16 enabled_ports;
  

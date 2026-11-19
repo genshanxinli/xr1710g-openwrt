@@ -53,7 +53,7 @@ Signed-off-by: Thibaut VARÈNE <hacks+kernel@slashdirt.org>
 ---
 --- a/drivers/mtd/mtdcore.c
 +++ b/drivers/mtd/mtdcore.c
-@@ -209,6 +209,15 @@
+@@ -209,6 +209,15 @@ static ssize_t mtd_erasesize_show(struct
  }
  MTD_DEVICE_ATTR_RO(erasesize);
  
@@ -69,7 +69,7 @@ Signed-off-by: Thibaut VARÈNE <hacks+kernel@slashdirt.org>
  static ssize_t mtd_writesize_show(struct device *dev,
  		struct device_attribute *attr, char *buf)
  {
-@@ -354,6 +363,7 @@
+@@ -354,6 +363,7 @@ static struct attribute *mtd_attrs[] = {
  	&dev_attr_flags.attr,
  	&dev_attr_size.attr,
  	&dev_attr_erasesize.attr,
@@ -79,7 +79,7 @@ Signed-off-by: Thibaut VARÈNE <hacks+kernel@slashdirt.org>
  	&dev_attr_oobsize.attr,
 --- a/drivers/mtd/mtdpart.c
 +++ b/drivers/mtd/mtdpart.c
-@@ -48,6 +48,7 @@
+@@ -48,6 +48,7 @@ static struct mtd_info *allocate_partiti
  	struct mtd_info *master = mtd_get_master(parent);
  	int wr_alignment = (parent->flags & MTD_NO_ERASE) ?
  			   master->writesize : master->erasesize;
@@ -87,7 +87,7 @@ Signed-off-by: Thibaut VARÈNE <hacks+kernel@slashdirt.org>
  	u64 parent_size = mtd_is_partition(parent) ?
  			  parent->part.size : parent->size;
  	struct mtd_info *child;
-@@ -175,6 +176,7 @@
+@@ -175,6 +176,7 @@ static struct mtd_info *allocate_partiti
  	} else {
  		/* Single erase size */
  		child->erasesize = master->erasesize;
@@ -95,7 +95,7 @@ Signed-off-by: Thibaut VARÈNE <hacks+kernel@slashdirt.org>
  	}
  
  	/*
-@@ -182,26 +184,39 @@
+@@ -182,26 +184,39 @@ static struct mtd_info *allocate_partiti
  	 * exposes several regions with different erasesize. Adjust
  	 * wr_alignment accordingly.
  	 */
@@ -147,7 +147,7 @@ Signed-off-by: Thibaut VARÈNE <hacks+kernel@slashdirt.org>
  	child->size = child->part.size;
 --- a/drivers/mtd/spi-nor/Kconfig
 +++ b/drivers/mtd/spi-nor/Kconfig
-@@ -9,6 +9,16 @@
+@@ -9,6 +9,16 @@ menuconfig MTD_SPI_NOR
  
  if MTD_SPI_NOR
  
@@ -166,7 +166,7 @@ Signed-off-by: Thibaut VARÈNE <hacks+kernel@slashdirt.org>
  	default y
 --- a/drivers/mtd/spi-nor/core.c
 +++ b/drivers/mtd/spi-nor/core.c
-@@ -1106,6 +1106,8 @@
+@@ -1106,6 +1106,8 @@ static u8 spi_nor_convert_3to4_erase(u8
  
  static bool spi_nor_has_uniform_erase(const struct spi_nor *nor)
  {
@@ -175,7 +175,7 @@ Signed-off-by: Thibaut VARÈNE <hacks+kernel@slashdirt.org>
  	return !!nor->params->erase_map.uniform_region.erase_mask;
  }
  
-@@ -2483,6 +2485,7 @@
+@@ -2483,6 +2485,7 @@ static int spi_nor_select_erase(struct s
  {
  	struct spi_nor_erase_map *map = &nor->params->erase_map;
  	const struct spi_nor_erase_type *erase = NULL;
@@ -183,7 +183,7 @@ Signed-off-by: Thibaut VARÈNE <hacks+kernel@slashdirt.org>
  	struct mtd_info *mtd = &nor->mtd;
  	int i;
  
-@@ -2509,8 +2512,9 @@
+@@ -2509,8 +2512,9 @@ static int spi_nor_select_erase(struct s
  	 */
  	for (i = SNOR_ERASE_TYPE_MAX - 1; i >= 0; i--) {
  		if (map->erase_type[i].size) {
@@ -195,7 +195,7 @@ Signed-off-by: Thibaut VARÈNE <hacks+kernel@slashdirt.org>
  		}
  	}
  
-@@ -2518,6 +2522,9 @@
+@@ -2518,6 +2522,9 @@ static int spi_nor_select_erase(struct s
  		return -EINVAL;
  
  	mtd->erasesize = erase->size;
@@ -207,7 +207,7 @@ Signed-off-by: Thibaut VARÈNE <hacks+kernel@slashdirt.org>
  
 --- a/include/linux/mtd/mtd.h
 +++ b/include/linux/mtd/mtd.h
-@@ -245,6 +245,8 @@
+@@ -245,6 +245,8 @@ struct mtd_info {
  	 * information below if they desire
  	 */
  	uint32_t erasesize;

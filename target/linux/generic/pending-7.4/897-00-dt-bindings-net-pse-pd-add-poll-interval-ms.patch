@@ -13,7 +13,7 @@ Signed-off-by: Carlo Szelinsky <github@szelinsky.de>
 ---
 --- a/Documentation/devicetree/bindings/net/pse-pd/pse-controller.yaml
 +++ b/Documentation/devicetree/bindings/net/pse-pd/pse-controller.yaml
-@@ -27,6 +27,14 @@
+@@ -27,6 +27,14 @@ properties:
        subnode. This property is deprecated, please use pse-pis instead.
      enum: [0, 1]
  

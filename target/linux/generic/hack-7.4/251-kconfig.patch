@@ -7,7 +7,7 @@ Signed-off-by: John Crispin <john@phrozen.org>
 ---
 --- a/crypto/Kconfig
 +++ b/crypto/Kconfig
-@@ -53,7 +53,7 @@
+@@ -53,7 +53,7 @@ config CRYPTO_FIPS_VERSION
  	  By default the KERNELRELEASE value is used.
  
  config CRYPTO_ALGAPI
@@ -16,7 +16,7 @@ Signed-off-by: John Crispin <john@phrozen.org>
  	select CRYPTO_ALGAPI2
  	help
  	  This option provides the API for cryptographic algorithms.
-@@ -62,7 +62,7 @@
+@@ -62,7 +62,7 @@ config CRYPTO_ALGAPI2
  	tristate
  
  config CRYPTO_AEAD
@@ -25,7 +25,7 @@ Signed-off-by: John Crispin <john@phrozen.org>
  	select CRYPTO_AEAD2
  	select CRYPTO_ALGAPI
  
-@@ -80,7 +80,7 @@
+@@ -80,7 +80,7 @@ config CRYPTO_SIG2
  	select CRYPTO_ALGAPI2
  
  config CRYPTO_SKCIPHER
@@ -34,7 +34,7 @@ Signed-off-by: John Crispin <john@phrozen.org>
  	select CRYPTO_SKCIPHER2
  	select CRYPTO_ALGAPI
  	select CRYPTO_ECB
-@@ -90,7 +90,7 @@
+@@ -90,7 +90,7 @@ config CRYPTO_SKCIPHER2
  	select CRYPTO_ALGAPI2
  
  config CRYPTO_HASH
@@ -43,7 +43,7 @@ Signed-off-by: John Crispin <john@phrozen.org>
  	select CRYPTO_HASH2
  	select CRYPTO_ALGAPI
  
-@@ -99,7 +99,7 @@
+@@ -99,7 +99,7 @@ config CRYPTO_HASH2
  	select CRYPTO_ALGAPI2
  
  config CRYPTO_RNG
@@ -54,7 +54,7 @@ Signed-off-by: John Crispin <john@phrozen.org>
  
 --- a/drivers/bcma/Kconfig
 +++ b/drivers/bcma/Kconfig
-@@ -16,6 +16,7 @@
+@@ -16,6 +16,7 @@ if BCMA
  # Support for Block-I/O. SELECT this from the driver that needs it.
  config BCMA_BLOCKIO
  	bool
@@ -64,7 +64,7 @@ Signed-off-by: John Crispin <john@phrozen.org>
  	bool
 --- a/drivers/ssb/Kconfig
 +++ b/drivers/ssb/Kconfig
-@@ -29,6 +29,7 @@
+@@ -29,6 +29,7 @@ config SSB_SPROM
  config SSB_BLOCKIO
  	bool
  	depends on SSB
@@ -72,7 +72,7 @@ Signed-off-by: John Crispin <john@phrozen.org>
  
  config SSB_PCIHOST_POSSIBLE
  	bool
-@@ -49,7 +50,7 @@
+@@ -49,7 +50,7 @@ config SSB_PCIHOST
  config SSB_B43_PCI_BRIDGE
  	bool
  	depends on SSB_PCIHOST
@@ -83,7 +83,7 @@ Signed-off-by: John Crispin <john@phrozen.org>
  	bool
 --- a/lib/Kconfig
 +++ b/lib/Kconfig
-@@ -317,16 +317,16 @@
+@@ -317,16 +317,16 @@ config BCH_CONST_T
  # Textsearch support is select'ed if needed
  #
  config TEXTSEARCH
@@ -106,7 +106,7 @@ Signed-off-by: John Crispin <john@phrozen.org>
  	bool
 --- a/net/netfilter/Kconfig
 +++ b/net/netfilter/Kconfig
-@@ -22,7 +22,7 @@
+@@ -22,7 +22,7 @@ config NETFILTER_SKIP_EGRESS
  	def_bool NETFILTER_EGRESS && (NET_CLS_ACT || IFB)
  
  config NETFILTER_NETLINK
@@ -117,7 +117,7 @@ Signed-off-by: John Crispin <john@phrozen.org>
  	bool
 --- a/sound/core/Kconfig
 +++ b/sound/core/Kconfig
-@@ -17,7 +17,7 @@
+@@ -17,7 +17,7 @@ config SND_DMAENGINE_PCM
  	tristate
  
  config SND_HWDEP
@@ -126,7 +126,7 @@ Signed-off-by: John Crispin <john@phrozen.org>
  
  config SND_SEQ_DEVICE
  	tristate
-@@ -57,7 +57,7 @@
+@@ -57,7 +57,7 @@ config SND_CORE_TEST
  
  
  config SND_COMPRESS_OFFLOAD
@@ -137,7 +137,7 @@ Signed-off-by: John Crispin <john@phrozen.org>
  	bool
 --- a/net/Kconfig
 +++ b/net/Kconfig
-@@ -488,7 +488,7 @@
+@@ -488,7 +488,7 @@ config NET_DEVLINK
  	default n
  
  config PAGE_POOL
@@ -199,7 +199,7 @@ Signed-off-by: John Crispin <john@phrozen.org>
  	help
  	  The CRC-T10DIF library functions.  Select this if your module uses
  	  any of the functions from <linux/crc-t10dif.h>.
-@@ -54,7 +54,7 @@
+@@ -54,7 +54,7 @@ config CRC_T10DIF_ARCH
  	default y if X86
  
  config CRC32
@@ -208,7 +208,7 @@ Signed-off-by: John Crispin <john@phrozen.org>
  	select BITREVERSE
  	help
  	  The CRC32 library functions.  Select this if your module uses any of
-@@ -74,7 +74,7 @@
+@@ -74,7 +74,7 @@ config CRC32_ARCH
  	default y if X86
  
  config CRC64

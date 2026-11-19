@@ -23,7 +23,7 @@ Signed-off-by: Mark Mentovai <mark@mentovai.com>
  #include <objtool/builtin.h>
  #include <objtool/objtool.h>
  #include <objtool/warn.h>
-@@ -210,12 +212,28 @@
+@@ -210,12 +212,28 @@ static bool opts_valid(void)
  	return false;
  }
  
@@ -52,7 +52,7 @@ Signed-off-by: Mark Mentovai <mark@mentovai.com>
  
  	src_fd = open(src, O_RDONLY);
  	if (src_fd == -1) {
-@@ -240,11 +258,33 @@
+@@ -240,11 +258,33 @@ static int copy_file(const char *src, co
  	}
  
  	for (to_copy = stat.st_size; to_copy > 0; to_copy -= copied) {

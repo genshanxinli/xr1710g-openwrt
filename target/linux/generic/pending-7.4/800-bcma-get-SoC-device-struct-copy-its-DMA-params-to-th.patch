@@ -38,7 +38,7 @@ Signed-off-by: Rafał Miłecki <rafal@milecki.pl>
 ---
 --- a/drivers/bcma/host_soc.c
 +++ b/drivers/bcma/host_soc.c
-@@ -191,6 +191,8 @@
+@@ -191,6 +191,8 @@ int __init bcma_host_soc_init(struct bcm
  	struct bcma_bus *bus = &soc->bus;
  	int err;
  
@@ -49,7 +49,7 @@ Signed-off-by: Rafał Miłecki <rafal@milecki.pl>
  	if (err)
 --- a/drivers/bcma/main.c
 +++ b/drivers/bcma/main.c
-@@ -237,13 +237,17 @@
+@@ -237,13 +237,17 @@ EXPORT_SYMBOL(bcma_core_irq);
  
  void bcma_prepare_core(struct bcma_bus *bus, struct bcma_device *core)
  {

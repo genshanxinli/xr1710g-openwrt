@@ -18,7 +18,7 @@ Link: https://lore.kernel.org/linux-leds/20261027113349.383147-3-alexander.sverd
 ---
 --- a/drivers/leds/trigger/ledtrig-netdev.c
 +++ b/drivers/leds/trigger/ledtrig-netdev.c
-@@ -676,9 +676,12 @@
+@@ -676,9 +676,12 @@ static void netdev_trig_work(struct work
  	unsigned long interval;
  	int invert;
  
@@ -31,7 +31,7 @@ Link: https://lore.kernel.org/linux-leds/20261027113349.383147-3-alexander.sverd
  		return;
  	}
  
-@@ -686,8 +689,10 @@
+@@ -686,8 +689,10 @@ static void netdev_trig_work(struct work
  	if (!test_bit(TRIGGER_NETDEV_TX, &trigger_data->mode) &&
  	    !test_bit(TRIGGER_NETDEV_RX, &trigger_data->mode) &&
  	    !test_bit(TRIGGER_NETDEV_TX_ERR, &trigger_data->mode) &&
@@ -43,7 +43,7 @@ Link: https://lore.kernel.org/linux-leds/20261027113349.383147-3-alexander.sverd
  
  	dev_stats = dev_get_stats(trigger_data->net_dev, &temp);
  	new_activity =
-@@ -728,6 +733,8 @@
+@@ -728,6 +733,8 @@ static void netdev_trig_work(struct work
  
  	schedule_delayed_work(&trigger_data->work,
  			(atomic_read(&trigger_data->interval)*2));

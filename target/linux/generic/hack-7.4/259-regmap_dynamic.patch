@@ -18,7 +18,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  	help
  	  Enable support for the Register Map (regmap) access API.
  
-@@ -17,7 +16,7 @@
+@@ -17,7 +16,7 @@ config REGMAP
  
  config REGMAP_KUNIT
  	tristate "KUnit tests for regmap"
@@ -27,7 +27,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  	default KUNIT_ALL_TESTS
  	select REGMAP_RAM
  
-@@ -32,62 +31,78 @@
+@@ -32,62 +31,78 @@ config REGMAP_BUILD
  	  normally enabled.
  
  config REGMAP_AC97
@@ -133,7 +133,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  #include <linux/mutex.h>
  #include <linux/err.h>
  #include <linux/property.h>
-@@ -3484,3 +3485,5 @@
+@@ -3484,3 +3485,5 @@ static int __init regmap_initcall(void)
  	return 0;
  }
  postcore_initcall(regmap_initcall);
@@ -141,7 +141,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
 +MODULE_LICENSE("GPL");
 --- a/include/linux/regmap.h
 +++ b/include/linux/regmap.h
-@@ -210,7 +210,7 @@
+@@ -210,7 +210,7 @@ struct reg_sequence {
  	__ret ?: __tmp; \
  })
  

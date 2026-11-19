@@ -73,7 +73,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  pcs_xpcs-$(CONFIG_PCS_XPCS)	:= pcs-xpcs.o pcs-xpcs-nxp.o pcs-xpcs-wx.o
  
  obj-$(CONFIG_PCS_XPCS)		+= pcs_xpcs.o
---- a/drivers/net/pcs/pcs.c
+--- /dev/null
 +++ b/drivers/net/pcs/pcs.c
 @@ -0,0 +1,245 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
@@ -321,7 +321,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
 +	return found;
 +}
 +EXPORT_SYMBOL_GPL(fwnode_phylink_pcs_parse);
---- a/include/linux/pcs/pcs-provider.h
+--- /dev/null
 +++ b/include/linux/pcs/pcs-provider.h
 @@ -0,0 +1,70 @@
 +/* SPDX-License-Identifier: GPL-2.0-or-later */
@@ -394,7 +394,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
 +			     void *data);
 +
 +#endif /* __LINUX_PCS_PROVIDER_H */
---- a/include/linux/pcs/pcs.h
+--- /dev/null
 +++ b/include/linux/pcs/pcs.h
 @@ -0,0 +1,74 @@
 +/* SPDX-License-Identifier: GPL-2.0-or-later */

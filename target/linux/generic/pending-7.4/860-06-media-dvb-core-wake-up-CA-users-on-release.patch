@@ -22,7 +22,7 @@ Link: https://lore.kernel.org/all/20261004100741.71711-7-pepe.schlehofer@gmail.c
 ---
 --- a/drivers/media/dvb-core/dvb_ca_en50221.c
 +++ b/drivers/media/dvb-core/dvb_ca_en50221.c
-@@ -1353,6 +1353,9 @@
+@@ -1353,6 +1353,9 @@ static int dvb_ca_en50221_io_do_ioctl(st
  
  	dprintk("%s\n", __func__);
  
@@ -32,7 +32,7 @@ Link: https://lore.kernel.org/all/20261004100741.71711-7-pepe.schlehofer@gmail.c
  	if (mutex_lock_interruptible(&ca->ioctl_mutex))
  		return -ERESTARTSYS;
  
-@@ -1460,6 +1463,9 @@
+@@ -1460,6 +1463,9 @@ static ssize_t dvb_ca_en50221_io_write(s
  
  	dprintk("%s\n", __func__);
  
@@ -42,7 +42,7 @@ Link: https://lore.kernel.org/all/20261004100741.71711-7-pepe.schlehofer@gmail.c
  	/*
  	 * Incoming packet has a 2 byte header.
  	 * hdr[0] = slot_id, hdr[1] = connection_id
-@@ -1618,6 +1624,9 @@
+@@ -1618,6 +1624,9 @@ static ssize_t dvb_ca_en50221_io_read(st
  
  	dprintk("%s\n", __func__);
  
@@ -52,7 +52,7 @@ Link: https://lore.kernel.org/all/20261004100741.71711-7-pepe.schlehofer@gmail.c
  	/*
  	 * Outgoing packet has a 2 byte header.
  	 * hdr[0] = slot_id, hdr[1] = connection_id
-@@ -1635,8 +1644,11 @@
+@@ -1635,8 +1644,11 @@ static ssize_t dvb_ca_en50221_io_read(st
  		/* wait for some data */
  		status = wait_event_interruptible(ca->wait_queue,
  						  dvb_ca_en50221_io_read_condition
@@ -65,7 +65,7 @@ Link: https://lore.kernel.org/all/20261004100741.71711-7-pepe.schlehofer@gmail.c
  	if ((status < 0) || (result < 0)) {
  		if (result)
  			return result;
-@@ -1819,6 +1831,9 @@
+@@ -1819,6 +1831,9 @@ static __poll_t dvb_ca_en50221_io_poll(s
  
  	poll_wait(file, &ca->wait_queue, wait);
  
@@ -75,7 +75,7 @@ Link: https://lore.kernel.org/all/20261004100741.71711-7-pepe.schlehofer@gmail.c
  	if (dvb_ca_en50221_io_read_condition(ca, &result, &slot) == 1)
  		mask |= EPOLLIN;
  
-@@ -1965,6 +1980,13 @@
+@@ -1965,6 +1980,13 @@ void dvb_ca_en50221_release(struct dvb_c
  	ca->exit = 1;
  	mutex_unlock(&ca->remove_mutex);
  

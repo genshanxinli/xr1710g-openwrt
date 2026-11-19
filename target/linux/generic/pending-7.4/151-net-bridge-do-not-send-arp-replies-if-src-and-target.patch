@@ -14,7 +14,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
 ---
 --- a/net/bridge/br_arp_nd_proxy.c
 +++ b/net/bridge/br_arp_nd_proxy.c
-@@ -229,7 +229,10 @@
+@@ -229,7 +229,10 @@ void br_do_proxy_suppress_arp(struct sk_
  			if ((p && test_bit(BR_PROXYARP_BIT, &p->flags)) ||
  			    (dst && test_bit(BR_PROXYARP_WIFI_BIT, &dst->flags)) ||
  			    br_is_neigh_suppress_enabled_vid(dst, vid)) {
@@ -26,7 +26,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  					br_arp_send(br, p, skb->dev, sip, tip,
  						    sha, ha, sha, 0, 0);
  				else
-@@ -237,7 +240,6 @@
+@@ -237,7 +240,6 @@ void br_do_proxy_suppress_arp(struct sk_
  						    sha, ha, sha,
  						    skb->vlan_proto,
  						    skb_vlan_tag_get(skb));

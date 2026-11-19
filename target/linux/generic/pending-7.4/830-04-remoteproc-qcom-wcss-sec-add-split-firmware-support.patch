@@ -21,7 +21,7 @@ Signed-off-by: George Moussalem <george.moussalem@outlook.com>
  struct wcss_sec {
  	struct device *dev;
  	struct qcom_rproc_glink glink_subdev;
-@@ -35,6 +37,7 @@
+@@ -35,6 +37,7 @@ struct wcss_sec {
  	void *mem_region;
  	size_t mem_size;
  	const struct wcss_data *desc;
@@ -29,7 +29,7 @@ Signed-off-by: George Moussalem <george.moussalem@outlook.com>
  
  	struct mbox_client mbox_client;
  	struct mbox_chan *mbox_chan;
-@@ -137,7 +140,8 @@
+@@ -137,7 +140,8 @@ static int wcss_sec_load(struct rproc *r
  {
  	struct wcss_sec *wcss = rproc->priv;
  	struct device *dev = wcss->dev;
@@ -39,7 +39,7 @@ Signed-off-by: George Moussalem <george.moussalem@outlook.com>
  
  	if (wcss->desc->use_tmelcom) {
  		wcss->metadata = qcom_mdt_read_metadata(fw, &wcss->metadata_len,
-@@ -161,6 +165,28 @@
+@@ -161,6 +165,28 @@ static int wcss_sec_load(struct rproc *r
  				    wcss->mem_phys, wcss->mem_size, &wcss->mem_reloc);
  		if (ret)
  			return ret;
@@ -68,7 +68,7 @@ Signed-off-by: George Moussalem <george.moussalem@outlook.com>
  	}
  
  	qcom_pil_info_store("wcss", wcss->mem_phys, wcss->mem_size);
-@@ -291,17 +317,20 @@
+@@ -291,17 +317,20 @@ static int wcss_sec_probe(struct platfor
  	struct wcss_sec *wcss;
  	struct clk *sleep_clk;
  	struct clk *int_clk;
@@ -93,7 +93,7 @@ Signed-off-by: George Moussalem <george.moussalem@outlook.com>
  	if (!rproc) {
  		dev_err(&pdev->dev, "failed to allocate rproc\n");
  		return -ENOMEM;
-@@ -310,6 +339,7 @@
+@@ -310,6 +339,7 @@ static int wcss_sec_probe(struct platfor
  	wcss = rproc->priv;
  	wcss->dev = &pdev->dev;
  	wcss->desc = desc;

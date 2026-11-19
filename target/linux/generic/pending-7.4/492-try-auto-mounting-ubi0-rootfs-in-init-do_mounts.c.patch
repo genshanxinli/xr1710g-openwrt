@@ -5,7 +5,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 ---
 --- a/init/do_mounts.c
 +++ b/init/do_mounts.c
-@@ -243,7 +243,30 @@
+@@ -243,7 +243,30 @@ retry:
  out:
  	kfree(fs_names);
  }
@@ -37,7 +37,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  #ifdef CONFIG_ROOT_NFS
  
  #define NFSROOT_TIMEOUT_MIN	5
-@@ -380,6 +403,11 @@
+@@ -380,6 +403,11 @@ static inline void mount_block_root(char
  
  void __init mount_root(char *root_device_name)
  {

@@ -34,7 +34,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -609,19 +609,70 @@
+@@ -609,19 +609,70 @@ static void airoha_ppe_foe_entry_put_sma
  					      hwe->ipv6.l2.src_mac_hi));
  }
  

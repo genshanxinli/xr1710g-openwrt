@@ -18,7 +18,7 @@ Signed-off-by: Robert Marko <robert.marko@sartura.hr>
 ---
 --- a/drivers/mux/Kconfig
 +++ b/drivers/mux/Kconfig
-@@ -7,7 +7,7 @@
+@@ -7,7 +7,7 @@ config MULTIPLEXER
  	bool
  
  config MUX_CORE

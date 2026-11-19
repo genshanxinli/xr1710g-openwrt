@@ -17,7 +17,7 @@ header, as the values are identical on AN7583.
 
 Signed-off-by: Vitaliy Sochnev <sochnev.v.74@gmail.com>
 ---
---- a/Documentation/devicetree/bindings/phy/airoha,an7583-usb-phy.yaml
+--- /dev/null
 +++ b/Documentation/devicetree/bindings/phy/airoha,an7583-usb-phy.yaml
 @@ -0,0 +1,132 @@
 +# SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause
@@ -154,7 +154,7 @@ Signed-off-by: Vitaliy Sochnev <sochnev.v.74@gmail.com>
 +    };
 --- a/MAINTAINERS
 +++ b/MAINTAINERS
-@@ -810,6 +810,7 @@
+@@ -810,6 +810,7 @@ M:	Christian Marangi <ansuelsmth@gmail.c
  L:	linux-arm-kernel@lists.infradead.org (moderated for non-subscribers)
  S:	Maintained
  F:	Documentation/devicetree/bindings/phy/airoha,an7581-usb-phy.yaml

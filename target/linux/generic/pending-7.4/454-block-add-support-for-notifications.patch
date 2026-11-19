@@ -10,7 +10,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 ---
 --- a/block/Kconfig
 +++ b/block/Kconfig
-@@ -209,6 +209,12 @@
+@@ -209,6 +209,12 @@ config BLK_INLINE_ENCRYPTION_FALLBACK
  	  by falling back to the kernel crypto API when inline
  	  encryption hardware is not present.
  
@@ -25,12 +25,12 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  config BLK_PM
 --- a/block/Makefile
 +++ b/block/Makefile
-@@ -39,3 +39,4 @@
+@@ -39,3 +39,4 @@ obj-$(CONFIG_BLK_INLINE_ENCRYPTION)	+= b
  					   blk-crypto-sysfs.o
  obj-$(CONFIG_BLK_INLINE_ENCRYPTION_FALLBACK)	+= blk-crypto-fallback.o
  obj-$(CONFIG_BLOCK_HOLDER_DEPRECATED)	+= holder.o
 +obj-$(CONFIG_BLOCK_NOTIFIERS) += blk-notify.o
---- a/block/blk-notify.c
+--- /dev/null
 +++ b/block/blk-notify.c
 @@ -0,0 +1,107 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
@@ -142,7 +142,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 +device_initcall(blk_notifications_init);
 --- a/include/linux/blkdev.h
 +++ b/include/linux/blkdev.h
-@@ -1829,4 +1829,12 @@
+@@ -1829,4 +1829,12 @@ static inline unsigned int max_integrity
  
  #define DEFINE_IO_COMP_BATCH(name)	struct io_comp_batch name = { }
  

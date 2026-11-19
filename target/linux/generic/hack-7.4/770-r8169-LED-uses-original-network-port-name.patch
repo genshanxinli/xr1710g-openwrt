@@ -12,7 +12,7 @@ Signed-off-by: Chukun Pan <amadeus@jmu.edu.cn>
 ---
 --- a/drivers/net/ethernet/realtek/r8169.h
 +++ b/drivers/net/ethernet/realtek/r8169.h
-@@ -86,8 +86,6 @@
+@@ -86,8 +86,6 @@ u8 rtl8168d_efuse_read(struct rtl8169_pr
  void r8169_hw_phy_config(struct rtl8169_private *tp, struct phy_device *phydev,
  			 enum mac_version ver);
  
@@ -23,7 +23,7 @@ Signed-off-by: Chukun Pan <amadeus@jmu.edu.cn>
  struct r8169_led_classdev *rtl8168_init_leds(struct net_device *ndev);
 --- a/drivers/net/ethernet/realtek/r8169_leds.c
 +++ b/drivers/net/ethernet/realtek/r8169_leds.c
-@@ -130,13 +130,12 @@
+@@ -130,13 +130,12 @@ static struct device *
  static void rtl8168_setup_ldev(struct r8169_led_classdev *ldev,
  			       struct net_device *ndev, int index)
  {
@@ -38,7 +38,7 @@ Signed-off-by: Chukun Pan <amadeus@jmu.edu.cn>
  	led_cdev->name = ldev->name;
  	led_cdev->hw_control_trigger = "netdev";
  	led_cdev->flags |= LED_RETAIN_AT_SHUTDOWN;
-@@ -228,13 +227,12 @@
+@@ -228,13 +227,12 @@ static int rtl8125_led_hw_control_get(st
  static void rtl8125_setup_led_ldev(struct r8169_led_classdev *ldev,
  				   struct net_device *ndev, int index)
  {
@@ -55,7 +55,7 @@ Signed-off-by: Chukun Pan <amadeus@jmu.edu.cn>
  	led_cdev->flags |= LED_RETAIN_AT_SHUTDOWN;
 --- a/drivers/net/ethernet/realtek/r8169_main.c
 +++ b/drivers/net/ethernet/realtek/r8169_main.c
-@@ -1141,28 +1141,6 @@
+@@ -1141,28 +1141,6 @@ int rtl8125_get_led_mode(struct rtl8169_
  	return ret;
  }
  

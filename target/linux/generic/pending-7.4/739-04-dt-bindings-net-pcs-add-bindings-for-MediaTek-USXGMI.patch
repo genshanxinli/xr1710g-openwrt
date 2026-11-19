@@ -12,7 +12,7 @@ interface modes are also available.
 
 Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 ---
---- a/Documentation/devicetree/bindings/net/pcs/mediatek,usxgmii.yaml
+--- /dev/null
 +++ b/Documentation/devicetree/bindings/net/pcs/mediatek,usxgmii.yaml
 @@ -0,0 +1,63 @@
 +# SPDX-License-Identifier: (GPL-2.0 OR BSD-2-Clause)

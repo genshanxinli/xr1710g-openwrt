@@ -29,7 +29,7 @@ radio path.
 ---
 --- a/drivers/phy/airoha/phy-airoha-usb.c
 +++ b/drivers/phy/airoha/phy-airoha-usb.c
-@@ -418,10 +418,20 @@
+@@ -418,10 +418,20 @@ static int airoha_usb_phy_u3_set_mode(st
  {
  	u32 sel;
  

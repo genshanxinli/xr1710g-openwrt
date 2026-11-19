@@ -33,7 +33,7 @@ Signed-off-by: Mieczyslaw Nalewaj <namiltd@yahoo.com>
 ---
 --- a/drivers/leds/trigger/Kconfig
 +++ b/drivers/leds/trigger/Kconfig
-@@ -139,6 +139,15 @@
+@@ -139,6 +139,15 @@ config LEDS_TRIGGER_NETDEV
  	  This allows LEDs to be controlled by network device activity.
  	  If unsure, say Y.
  
@@ -51,7 +51,7 @@ Signed-off-by: Mieczyslaw Nalewaj <namiltd@yahoo.com>
  	help
 --- a/drivers/leds/trigger/Makefile
 +++ b/drivers/leds/trigger/Makefile
-@@ -16,3 +16,4 @@
+@@ -16,3 +16,4 @@ obj-$(CONFIG_LEDS_TRIGGER_NETDEV)	+= led
  obj-$(CONFIG_LEDS_TRIGGER_PATTERN)	+= ledtrig-pattern.o
  obj-$(CONFIG_LEDS_TRIGGER_TTY)		+= ledtrig-tty.o
  obj-$(CONFIG_LEDS_TRIGGER_INPUT_EVENTS)	+= ledtrig-input-events.o

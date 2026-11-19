@@ -6,7 +6,7 @@ Signed-off-by: Alexandros C. Couloumbis <alex@ozo.com>
 ---
 --- a/fs/jffs2/Kconfig
 +++ b/fs/jffs2/Kconfig
-@@ -136,6 +136,15 @@
+@@ -136,6 +136,15 @@ config JFFS2_LZO
  	  This feature was added in July, 2007. Say 'N' if you need
  	  compatibility with older bootloaders or kernels.
  
@@ -24,7 +24,7 @@ Signed-off-by: Alexandros C. Couloumbis <alex@ozo.com>
  	depends on JFFS2_FS
 --- a/fs/jffs2/Makefile
 +++ b/fs/jffs2/Makefile
-@@ -19,4 +19,7 @@
+@@ -19,4 +19,7 @@ jffs2-$(CONFIG_JFFS2_RUBIN)	+= compr_rub
  jffs2-$(CONFIG_JFFS2_RTIME)	+= compr_rtime.o
  jffs2-$(CONFIG_JFFS2_ZLIB)	+= compr_zlib.o
  jffs2-$(CONFIG_JFFS2_LZO)	+= compr_lzo.o
@@ -34,7 +34,7 @@ Signed-off-by: Alexandros C. Couloumbis <alex@ozo.com>
 +CFLAGS_compr_lzma.o += -Iinclude/linux -Ilib/lzma
 --- a/fs/jffs2/compr.c
 +++ b/fs/jffs2/compr.c
-@@ -381,6 +381,9 @@
+@@ -381,6 +381,9 @@ int __init jffs2_compressors_init(void)
  	ret = jffs2_lzo_init();
  	if (ret)
  		goto exit_dynrubin;
@@ -44,7 +44,7 @@ Signed-off-by: Alexandros C. Couloumbis <alex@ozo.com>
  
  
  /* Setting default compression mode */
-@@ -402,6 +405,8 @@
+@@ -402,6 +405,8 @@ int __init jffs2_compressors_init(void)
  #endif
  	return 0;
  
@@ -53,7 +53,7 @@ Signed-off-by: Alexandros C. Couloumbis <alex@ozo.com>
  exit_dynrubin:
  	jffs2_dynrubin_exit();
  exit_runinmips:
-@@ -417,6 +422,7 @@
+@@ -417,6 +422,7 @@ exit:
  int jffs2_compressors_exit(void)
  {
  /* Unregistering compressors */
@@ -76,7 +76,7 @@ Signed-off-by: Alexandros C. Couloumbis <alex@ozo.com>
  
  #define JFFS2_RUBINMIPS_DISABLED /* RUBINs will be used only */
  #define JFFS2_DYNRUBIN_DISABLED  /*	   for decompression */
-@@ -115,5 +115,12 @@
+@@ -115,5 +115,12 @@ extern void jffs2_lzo_exit(void);
  static inline int jffs2_lzo_init(void) { return 0; }
  static inline void jffs2_lzo_exit(void) {}
  #endif
@@ -89,7 +89,7 @@ Signed-off-by: Alexandros C. Couloumbis <alex@ozo.com>
 +#endif
  
  #endif /* __JFFS2_COMPR_H__ */
---- a/fs/jffs2/compr_lzma.c
+--- /dev/null
 +++ b/fs/jffs2/compr_lzma.c
 @@ -0,0 +1,128 @@
 +/*
@@ -222,7 +222,7 @@ Signed-off-by: Alexandros C. Couloumbis <alex@ozo.com>
 +}
 --- a/fs/jffs2/super.c
 +++ b/fs/jffs2/super.c
-@@ -376,14 +376,41 @@
+@@ -376,14 +376,41 @@ static int __init init_jffs2_fs(void)
  	BUILD_BUG_ON(sizeof(struct jffs2_raw_inode) != 68);
  	BUILD_BUG_ON(sizeof(struct jffs2_raw_summary) != 32);
  
@@ -267,7 +267,7 @@ Signed-off-by: Alexandros C. Couloumbis <alex@ozo.com>
  
  	jffs2_inode_cachep = kmem_cache_create("jffs2_i",
  					     sizeof(struct jffs2_inode_info),
---- a/include/linux/lzma.h
+--- /dev/null
 +++ b/include/linux/lzma.h
 @@ -0,0 +1,62 @@
 +#ifndef __LZMA_H__
@@ -332,7 +332,7 @@ Signed-off-by: Alexandros C. Couloumbis <alex@ozo.com>
 +static ISzAlloc lzma_alloc = { .Alloc = p_lzma_malloc, .Free = p_lzma_free };
 +
 +#endif
---- a/include/linux/lzma/LzFind.h
+--- /dev/null
 +++ b/include/linux/lzma/LzFind.h
 @@ -0,0 +1,115 @@
 +/* LzFind.h -- Match finder for LZ algorithms
@@ -450,7 +450,7 @@ Signed-off-by: Alexandros C. Couloumbis <alex@ozo.com>
 +#endif
 +
 +#endif
---- a/include/linux/lzma/LzHash.h
+--- /dev/null
 +++ b/include/linux/lzma/LzHash.h
 @@ -0,0 +1,54 @@
 +/* LzHash.h -- HASH functions for LZ algorithms
@@ -507,7 +507,7 @@ Signed-off-by: Alexandros C. Couloumbis <alex@ozo.com>
 +  hash4Value = (temp ^ ((UInt32)cur[2] << 8) ^ (p->crc[cur[3]] << 5)) & (kHash4Size - 1); }
 +
 +#endif
---- a/include/linux/lzma/LzmaDec.h
+--- /dev/null
 +++ b/include/linux/lzma/LzmaDec.h
 @@ -0,0 +1,231 @@
 +/* LzmaDec.h -- LZMA Decoder
@@ -741,7 +741,7 @@ Signed-off-by: Alexandros C. Couloumbis <alex@ozo.com>
 +#endif
 +
 +#endif
---- a/include/linux/lzma/LzmaEnc.h
+--- /dev/null
 +++ b/include/linux/lzma/LzmaEnc.h
 @@ -0,0 +1,80 @@
 +/*  LzmaEnc.h -- LZMA Encoder
@@ -824,7 +824,7 @@ Signed-off-by: Alexandros C. Couloumbis <alex@ozo.com>
 +#endif
 +
 +#endif
---- a/include/linux/lzma/Types.h
+--- /dev/null
 +++ b/include/linux/lzma/Types.h
 @@ -0,0 +1,227 @@
 +/* Types.h -- Basic types
@@ -1066,7 +1066,7 @@ Signed-off-by: Alexandros C. Couloumbis <alex@ozo.com>
  #define JFFS2_NODE_ACCURATE 0x2000
 --- a/lib/Kconfig
 +++ b/lib/Kconfig
-@@ -213,6 +213,12 @@
+@@ -213,6 +213,12 @@ config ZSTD_DECOMPRESS
  
  source "lib/xz/Kconfig"
  
@@ -1081,7 +1081,7 @@ Signed-off-by: Alexandros C. Couloumbis <alex@ozo.com>
  # ZLIB_INFLATE; DECOMPRESS_GZIP is just a wrapper.)
 --- a/lib/Makefile
 +++ b/lib/Makefile
-@@ -119,6 +119,16 @@
+@@ -119,6 +119,16 @@ CFLAGS_kobject.o += -DDEBUG
  CFLAGS_kobject_uevent.o += -DDEBUG
  endif
  
@@ -1098,7 +1098,7 @@ Signed-off-by: Alexandros C. Couloumbis <alex@ozo.com>
  obj-$(CONFIG_DEBUG_INFO_REDUCED) += debug_info.o
  CFLAGS_debug_info.o += $(call cc-option, -femit-struct-debug-detailed=any)
  
-@@ -168,6 +178,8 @@
+@@ -168,6 +178,8 @@ obj-$(CONFIG_LZ4_DECOMPRESS) += lz4/
  obj-$(CONFIG_ZSTD_COMPRESS) += zstd/
  obj-$(CONFIG_ZSTD_DECOMPRESS) += zstd/
  obj-$(CONFIG_XZ_DEC) += xz/
@@ -1107,7 +1107,7 @@ Signed-off-by: Alexandros C. Couloumbis <alex@ozo.com>
  
  lib-$(CONFIG_DECOMPRESS_GZIP) += decompress_inflate.o
  lib-$(CONFIG_DECOMPRESS_BZIP2) += decompress_bunzip2.o
---- a/lib/lzma/LzFind.c
+--- /dev/null
 +++ b/lib/lzma/LzFind.c
 @@ -0,0 +1,761 @@
 +/* LzFind.c -- Match finder for LZ algorithms
@@ -1871,7 +1871,7 @@ Signed-off-by: Alexandros C. Couloumbis <alex@ozo.com>
 +    vTable->Skip = (Mf_Skip_Func)Bt4_MatchFinder_Skip;
 +  }
 +}
---- a/lib/lzma/LzmaDec.c
+--- /dev/null
 +++ b/lib/lzma/LzmaDec.c
 @@ -0,0 +1,999 @@
 +/* LzmaDec.c -- LZMA Decoder
@@ -2873,7 +2873,7 @@ Signed-off-by: Alexandros C. Couloumbis <alex@ozo.com>
 +  LzmaDec_FreeProbs(&p, alloc);
 +  return res;
 +}
---- a/lib/lzma/LzmaEnc.c
+--- /dev/null
 +++ b/lib/lzma/LzmaEnc.c
 @@ -0,0 +1,2271 @@
 +/* LzmaEnc.c -- LZMA Encoder
@@ -5147,7 +5147,7 @@ Signed-off-by: Alexandros C. Couloumbis <alex@ozo.com>
 +  LzmaEnc_Destroy(p, alloc, allocBig);
 +  return res;
 +}
---- a/lib/lzma/Makefile
+--- /dev/null
 +++ b/lib/lzma/Makefile
 @@ -0,0 +1,7 @@
 +lzma_compress-objs := LzFind.o LzmaEnc.o

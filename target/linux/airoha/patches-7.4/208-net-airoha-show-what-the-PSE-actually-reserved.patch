@@ -19,7 +19,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -641,7 +641,11 @@
+@@ -641,7 +641,11 @@ static int airoha_pse_debugfs_show(struc
  		   fq_limit ? all_rsv * 100 / fq_limit : 0);
  	seq_printf(m, "shared   %u pages (%u KiB)\n", fq_limit - all_rsv,
  		   (fq_limit - all_rsv) * 128 / 1024);
@@ -32,7 +32,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	seq_printf(m, "  high %u\n", hthd);
  	seq_printf(m, "  mid  %u\n", mthd);
  	seq_printf(m, "  low  %u\n", lthd);
-@@ -650,11 +654,71 @@
+@@ -650,11 +654,71 @@ static int airoha_pse_debugfs_show(struc
  }
  DEFINE_SHOW_ATTRIBUTE(airoha_pse_debugfs);
  

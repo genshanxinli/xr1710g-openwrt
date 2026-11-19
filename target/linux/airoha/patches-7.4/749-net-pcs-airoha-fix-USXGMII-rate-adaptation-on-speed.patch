@@ -33,7 +33,7 @@ Signed-off-by: airola <airola@example.org>
 ---
 --- a/drivers/net/pcs/airoha/pcs-airoha-common.c
 +++ b/drivers/net/pcs/airoha/pcs-airoha-common.c
-@@ -749,63 +749,69 @@
+@@ -749,63 +749,69 @@ static void airoha_pcs_link_up(struct ph
  	maps = &priv->maps[port->index];
  	data = priv->data;
  

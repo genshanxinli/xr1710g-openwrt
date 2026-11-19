@@ -11,7 +11,7 @@ Signed-off-by: Maksim Dmitrichenko <dmitrmax@gmail.com>
 ---
 --- a/lib/vsprintf.c
 +++ b/lib/vsprintf.c
-@@ -985,8 +985,12 @@
+@@ -985,8 +985,12 @@ char *symbol_string(char *buf, char *end
  		    struct printf_spec spec, const char *fmt)
  {
  	unsigned long value;
@@ -25,7 +25,7 @@ Signed-off-by: Maksim Dmitrichenko <dmitrmax@gmail.com>
  #endif
  
  	if (fmt[1] == 'R')
-@@ -1007,8 +1011,16 @@
+@@ -1007,8 +1011,16 @@ char *symbol_string(char *buf, char *end
  
  	return string_nocheck(buf, end, sym, spec);
  #else

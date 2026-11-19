@@ -1,6 +1,6 @@
 --- a/drivers/clk/clk-en7523.c
 +++ b/drivers/clk/clk-en7523.c
-@@ -126,6 +126,12 @@
+@@ -126,6 +126,12 @@ struct en_clk_gate {
  	struct clk_hw hw;
  };
  
@@ -13,7 +13,7 @@
  struct en_rst_data {
  	const u16 *bank_ofs;
  	const u16 *idx_map;
-@@ -574,6 +580,204 @@
+@@ -574,6 +580,204 @@ static u32 en7523_get_div(const struct e
  	return (val + desc->div_offset) * desc->div_step;
  }
  
@@ -218,7 +218,7 @@
  static int en7523_pci_is_enabled(struct clk_hw *hw)
  {
  	struct en_clk_gate *cg = container_of(hw, struct en_clk_gate, hw);
-@@ -746,31 +950,12 @@
+@@ -746,31 +950,12 @@ static void en7581_register_clocks(struc
  				   struct regmap *map, void __iomem *base)
  {
  	struct clk_hw *hw;

@@ -1,6 +1,6 @@
 --- a/drivers/phy/airoha/Kconfig
 +++ b/drivers/phy/airoha/Kconfig
-@@ -12,6 +12,16 @@
+@@ -12,6 +12,16 @@ config PHY_AIROHA_PCIE
  	  This driver create the basic PHY instance and provides initialize
  	  callback for PCIe GEN3 port.
  
@@ -25,7 +25,7 @@
 +obj-$(CONFIG_PHY_AIROHA_AN7583_PCIE)	+= phy-an7583-pcie.o
  obj-$(CONFIG_PHY_AIROHA_PCIE)		+= phy-airoha-pcie.o
  obj-$(CONFIG_PHY_AIROHA_USB)		+= phy-airoha-usb.o
---- a/drivers/phy/airoha/phy-an7583-pcie-regs.h
+--- /dev/null
 +++ b/drivers/phy/airoha/phy-an7583-pcie-regs.h
 @@ -0,0 +1,377 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
@@ -405,7 +405,7 @@
 +#define PCIE_XTP_LN_RX_PDOWN_L1P2_EXIT_WAIT	GENMASK(7, 0)
 +
 +#endif /* _PHY_AN7583_PCIE_H */
---- a/drivers/phy/airoha/phy-an7583-pcie.c
+--- /dev/null
 +++ b/drivers/phy/airoha/phy-an7583-pcie.c
 @@ -0,0 +1,711 @@
 +// SPDX-License-Identifier: GPL-2.0-only

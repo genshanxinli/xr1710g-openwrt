@@ -25,7 +25,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
 ---
 --- a/drivers/net/phy/as21xxx.c
 +++ b/drivers/net/phy/as21xxx.c
-@@ -966,6 +966,21 @@
+@@ -966,6 +966,21 @@ out:
  	return ret;
  }
  
@@ -47,7 +47,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  static struct phy_driver as21xxx_drivers[] = {
  	{
  		/* PHY expose in C45 as 0x7500 0x9410
-@@ -983,6 +998,7 @@
+@@ -983,6 +998,7 @@ static struct phy_driver as21xxx_drivers
  		.probe		= as21xxx_probe,
  		.match_phy_device = as21xxx_match_phy_device,
  		.read_status	= as21xxx_read_status,
@@ -55,7 +55,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  		.led_brightness_set = as21xxx_led_brightness_set,
  		.led_hw_is_supported = as21xxx_led_hw_is_supported,
  		.led_hw_control_set = as21xxx_led_hw_control_set,
-@@ -996,6 +1012,7 @@
+@@ -996,6 +1012,7 @@ static struct phy_driver as21xxx_drivers
  		.probe		= as21xxx_probe,
  		.match_phy_device = as21xxx_match_phy_device,
  		.read_status	= as21xxx_read_status,
@@ -63,7 +63,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  		.led_brightness_set = as21xxx_led_brightness_set,
  		.led_hw_is_supported = as21xxx_led_hw_is_supported,
  		.led_hw_control_set = as21xxx_led_hw_control_set,
-@@ -1009,6 +1026,7 @@
+@@ -1009,6 +1026,7 @@ static struct phy_driver as21xxx_drivers
  		.probe		= as21xxx_probe,
  		.match_phy_device = as21xxx_match_phy_device,
  		.read_status	= as21xxx_read_status,
@@ -71,7 +71,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  		.led_brightness_set = as21xxx_led_brightness_set,
  		.led_hw_is_supported = as21xxx_led_hw_is_supported,
  		.led_hw_control_set = as21xxx_led_hw_control_set,
-@@ -1022,6 +1040,7 @@
+@@ -1022,6 +1040,7 @@ static struct phy_driver as21xxx_drivers
  		.probe		= as21xxx_probe,
  		.match_phy_device = as21xxx_match_phy_device,
  		.read_status	= as21xxx_read_status,
@@ -79,7 +79,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  		.led_brightness_set = as21xxx_led_brightness_set,
  		.led_hw_is_supported = as21xxx_led_hw_is_supported,
  		.led_hw_control_set = as21xxx_led_hw_control_set,
-@@ -1035,6 +1054,7 @@
+@@ -1035,6 +1054,7 @@ static struct phy_driver as21xxx_drivers
  		.probe		= as21xxx_probe,
  		.match_phy_device = as21xxx_match_phy_device,
  		.read_status	= as21xxx_read_status,
@@ -87,7 +87,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  		.led_brightness_set = as21xxx_led_brightness_set,
  		.led_hw_is_supported = as21xxx_led_hw_is_supported,
  		.led_hw_control_set = as21xxx_led_hw_control_set,
-@@ -1048,6 +1068,7 @@
+@@ -1048,6 +1068,7 @@ static struct phy_driver as21xxx_drivers
  		.probe		= as21xxx_probe,
  		.match_phy_device = as21xxx_match_phy_device,
  		.read_status	= as21xxx_read_status,
@@ -95,7 +95,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  		.led_brightness_set = as21xxx_led_brightness_set,
  		.led_hw_is_supported = as21xxx_led_hw_is_supported,
  		.led_hw_control_set = as21xxx_led_hw_control_set,
-@@ -1061,6 +1082,7 @@
+@@ -1061,6 +1082,7 @@ static struct phy_driver as21xxx_drivers
  		.probe		= as21xxx_probe,
  		.match_phy_device = as21xxx_match_phy_device,
  		.read_status	= as21xxx_read_status,
@@ -103,7 +103,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  		.led_brightness_set = as21xxx_led_brightness_set,
  		.led_hw_is_supported = as21xxx_led_hw_is_supported,
  		.led_hw_control_set = as21xxx_led_hw_control_set,
-@@ -1074,6 +1096,7 @@
+@@ -1074,6 +1096,7 @@ static struct phy_driver as21xxx_drivers
  		.probe		= as21xxx_probe,
  		.match_phy_device = as21xxx_match_phy_device,
  		.read_status	= as21xxx_read_status,
@@ -111,7 +111,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  		.led_brightness_set = as21xxx_led_brightness_set,
  		.led_hw_is_supported = as21xxx_led_hw_is_supported,
  		.led_hw_control_set = as21xxx_led_hw_control_set,
-@@ -1087,6 +1110,7 @@
+@@ -1087,6 +1110,7 @@ static struct phy_driver as21xxx_drivers
  		.probe		= as21xxx_probe,
  		.match_phy_device = as21xxx_match_phy_device,
  		.read_status	= as21xxx_read_status,
@@ -119,7 +119,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  		.led_brightness_set = as21xxx_led_brightness_set,
  		.led_hw_is_supported = as21xxx_led_hw_is_supported,
  		.led_hw_control_set = as21xxx_led_hw_control_set,
-@@ -1100,6 +1124,7 @@
+@@ -1100,6 +1124,7 @@ static struct phy_driver as21xxx_drivers
  		.probe		= as21xxx_probe,
  		.match_phy_device = as21xxx_match_phy_device,
  		.read_status	= as21xxx_read_status,

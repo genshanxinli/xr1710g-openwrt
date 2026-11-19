@@ -7,7 +7,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
 ---
 --- a/include/net/netfilter/nf_flow_table.h
 +++ b/include/net/netfilter/nf_flow_table.h
-@@ -348,6 +348,16 @@
+@@ -348,6 +348,16 @@ void nf_flow_table_free(struct nf_flowta
  
  void flow_offload_teardown(struct flow_offload *flow);
  
@@ -24,7 +24,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  void nf_flow_snat_port(const struct flow_offload *flow,
  		       struct sk_buff *skb, unsigned int thoff,
  		       u8 protocol, enum flow_offload_tuple_dir dir);
---- a/include/uapi/linux/netfilter/xt_FLOWOFFLOAD.h
+--- /dev/null
 +++ b/include/uapi/linux/netfilter/xt_FLOWOFFLOAD.h
 @@ -0,0 +1,34 @@
 +/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
@@ -63,7 +63,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
 +#endif /* _XT_FLOWOFFLOAD_H */
 --- a/net/netfilter/Kconfig
 +++ b/net/netfilter/Kconfig
-@@ -712,7 +712,6 @@
+@@ -712,7 +712,6 @@ config NF_FLOW_TABLE
  	tristate "Netfilter flow table module"
  	depends on NETFILTER_INGRESS
  	depends on NF_CONNTRACK
@@ -71,7 +71,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  	help
  	  This option adds the flow table core infrastructure.
  
-@@ -1018,6 +1017,24 @@
+@@ -1018,6 +1017,24 @@ config NETFILTER_XT_TARGET_NOTRACK
  	depends on NETFILTER_ADVANCED
  	select NETFILTER_XT_TARGET_CT
  
@@ -98,7 +98,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  	depends on NETFILTER_ADVANCED
 --- a/net/netfilter/Makefile
 +++ b/net/netfilter/Makefile
-@@ -168,6 +168,7 @@
+@@ -168,6 +168,7 @@ obj-$(CONFIG_NETFILTER_XT_TARGET_CLASSIF
  obj-$(CONFIG_NETFILTER_XT_TARGET_CONNSECMARK) += xt_CONNSECMARK.o
  obj-$(CONFIG_NETFILTER_XT_TARGET_CT) += xt_CT.o
  obj-$(CONFIG_NETFILTER_XT_TARGET_DSCP) += xt_DSCP.o
@@ -108,7 +108,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  obj-$(CONFIG_NETFILTER_XT_TARGET_LED) += xt_LED.o
 --- a/net/netfilter/nf_flow_table_core.c
 +++ b/net/netfilter/nf_flow_table_core.c
-@@ -462,8 +462,7 @@
+@@ -462,8 +462,7 @@ flow_offload_lookup(struct nf_flowtable
  }
  EXPORT_SYMBOL_GPL(flow_offload_lookup);
  
@@ -118,7 +118,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  		      void (*iter)(struct nf_flowtable *flowtable,
  				   struct flow_offload *flow, void *data),
  		      void *data)
-@@ -681,6 +680,7 @@
+@@ -681,6 +680,7 @@ static void nf_flow_offload_gc_step(stru
  		nf_flow_offload_stats(flow_table, flow);
  	}
  }
@@ -126,7 +126,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  
  void nf_flow_table_gc_run(struct nf_flowtable *flow_table)
  {
---- a/net/netfilter/xt_FLOWOFFLOAD.c
+--- /dev/null
 +++ b/net/netfilter/xt_FLOWOFFLOAD.c
 @@ -0,0 +1,734 @@
 +/*

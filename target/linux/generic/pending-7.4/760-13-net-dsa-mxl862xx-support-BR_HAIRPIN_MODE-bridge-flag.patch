@@ -20,7 +20,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 ---
 --- a/drivers/net/dsa/mxl862xx/mxl862xx.c
 +++ b/drivers/net/dsa/mxl862xx/mxl862xx.c
-@@ -844,6 +844,10 @@
+@@ -844,6 +844,10 @@ static int __mxl862xx_set_bridge_port(st
  		}
  		mxl862xx_fw_portmap_set_bit(br_port_cfg.bridge_port_map,
  					    mxl862xx_cpu_bridge_port_id(ds, port));
@@ -31,7 +31,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	} else {
  		mxl862xx_fw_portmap_set_bit(br_port_cfg.bridge_port_map,
  					    mxl862xx_cpu_bridge_port_id(ds, port));
-@@ -4072,7 +4076,7 @@
+@@ -4072,7 +4076,7 @@ static int mxl862xx_port_pre_bridge_flag
  					  struct netlink_ext_ack *extack)
  {
  	if (flags.mask & ~(BR_FLOOD | BR_MCAST_FLOOD | BR_BCAST_FLOOD |
@@ -40,7 +40,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  		return -EINVAL;
  
  	return 0;
-@@ -4114,7 +4118,11 @@
+@@ -4114,7 +4118,11 @@ static int mxl862xx_port_bridge_flags(st
  	if (flags.mask & BR_LEARNING)
  		priv->ports[port].learning = !!(flags.val & BR_LEARNING);
  
@@ -55,7 +55,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  		if (ret)
 --- a/drivers/net/dsa/mxl862xx/mxl862xx.h
 +++ b/drivers/net/dsa/mxl862xx/mxl862xx.h
-@@ -249,6 +249,10 @@
+@@ -249,6 +249,10 @@ struct mxl862xx_port_stats {
   * @stats_lock:          protects accumulator reads in .get_stats64 against
   *                       concurrent updates from the polling work
   * @tag_8021q_vid:       currently assigned tag_8021q management VID
@@ -66,7 +66,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
   * @ingress_mirror:      true when ingress mirroring is active on this port
   * @egress_mirror:       true when egress mirroring is active on this port
   * @lag:                 non-NULL when port is member of a LAG group;
-@@ -278,6 +282,7 @@
+@@ -278,6 +282,7 @@ struct mxl862xx_port {
  	struct work_struct host_flood_work;
  	u16 tag_8021q_vid;
  	struct mxl862xx_evlan_block cpu_egress_evlan;

@@ -1,6 +1,6 @@
 --- a/drivers/clk/clk-en7523.c
 +++ b/drivers/clk/clk-en7523.c
-@@ -1090,7 +1090,7 @@
+@@ -1090,7 +1090,7 @@ static void en7581_pci_disable(struct cl
  	mask = REG_PCI_CONTROL_REFCLK_EN0 | REG_PCI_CONTROL_REFCLK_EN1;
  	val = readl(np_base + REG_PCI_CONTROL);
  	writel(val & ~mask, np_base + REG_PCI_CONTROL);

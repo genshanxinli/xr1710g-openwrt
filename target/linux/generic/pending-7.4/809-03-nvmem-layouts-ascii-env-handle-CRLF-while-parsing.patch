@@ -17,7 +17,7 @@ Signed-off-by: George Moussalem <george.moussalem@outlook.com>
 ---
 --- a/drivers/nvmem/layouts/ascii-env.c
 +++ b/drivers/nvmem/layouts/ascii-env.c
-@@ -25,18 +25,20 @@
+@@ -25,18 +25,20 @@ struct ascii_env_match_data {
  static int ascii_env_parse_cells(struct device *dev, struct nvmem_device *nvmem, uint8_t *buf,
  				 size_t data_len, const char delim)
  {
@@ -40,7 +40,7 @@ Signed-off-by: George Moussalem <george.moussalem@outlook.com>
  
  		eq = strchr(var, delim);
  		if (!eq)
-@@ -49,6 +51,15 @@
+@@ -49,6 +51,15 @@ static int ascii_env_parse_cells(struct
  		if (!lf)
  			break;
  		*lf = '\0';

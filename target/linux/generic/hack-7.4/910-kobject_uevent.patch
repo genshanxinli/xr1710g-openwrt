@@ -7,7 +7,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
 ---
 --- a/include/linux/kobject.h
 +++ b/include/linux/kobject.h
-@@ -286,4 +286,6 @@
+@@ -286,4 +286,6 @@ int kobject_synth_uevent(struct kobject
  __printf(2, 3)
  int add_uevent_var(struct kobj_uevent_env *env, const char *format, ...);
  
@@ -16,7 +16,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  #endif /* _KOBJECT_H_ */
 --- a/lib/kobject_uevent.c
 +++ b/lib/kobject_uevent.c
-@@ -178,6 +178,12 @@
+@@ -178,6 +178,12 @@ out:
  	return r;
  }
  

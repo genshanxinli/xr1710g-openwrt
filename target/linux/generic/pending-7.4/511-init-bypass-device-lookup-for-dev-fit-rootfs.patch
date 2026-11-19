@@ -10,7 +10,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 ---
 --- a/init/do_mounts.c
 +++ b/init/do_mounts.c
-@@ -458,7 +458,8 @@
+@@ -458,7 +458,8 @@ static dev_t __init parse_root_device(ch
  	int error;
  	dev_t dev;
  

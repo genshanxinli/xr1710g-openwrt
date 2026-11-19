@@ -14,7 +14,7 @@ Link: https://lore.kernel.org/linux-leds/20261027113349.383147-2-alexander.sverd
 ---
 --- a/drivers/leds/trigger/ledtrig-netdev.c
 +++ b/drivers/leds/trigger/ledtrig-netdev.c
-@@ -776,8 +776,10 @@
+@@ -776,8 +776,10 @@ static int netdev_trig_activate(struct l
  	led_set_trigger_data(led_cdev, trigger_data);
  
  	rc = register_netdevice_notifier(&trigger_data->notifier);

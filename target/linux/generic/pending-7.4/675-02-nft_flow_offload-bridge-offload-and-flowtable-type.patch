@@ -1,6 +1,6 @@
 --- a/net/netfilter/nf_flow_table_inet.c
 +++ b/net/netfilter/nf_flow_table_inet.c
-@@ -75,6 +75,8 @@
+@@ -75,6 +75,8 @@ static struct nf_flowtable_type flowtabl
  	.owner		= THIS_MODULE,
  };
  
@@ -9,7 +9,7 @@
  static struct nf_flowtable_type flowtable_ipv4 = {
  	.family		= NFPROTO_IPV4,
  	.init		= nf_flow_table_init,
-@@ -97,15 +99,19 @@
+@@ -97,15 +99,19 @@ static struct nf_flowtable_type flowtabl
  
  static int __init nf_flow_inet_module_init(void)
  {
@@ -29,7 +29,7 @@
  	nft_unregister_flowtable_type(&flowtable_inet);
  	nft_unregister_flowtable_type(&flowtable_ipv6);
  	nft_unregister_flowtable_type(&flowtable_ipv4);
-@@ -119,4 +125,5 @@
+@@ -119,4 +125,5 @@ MODULE_AUTHOR("Pablo Neira Ayuso <pablo@
  MODULE_ALIAS_NF_FLOWTABLE(AF_INET);
  MODULE_ALIAS_NF_FLOWTABLE(AF_INET6);
  MODULE_ALIAS_NF_FLOWTABLE(1); /* NFPROTO_INET */
@@ -37,7 +37,7 @@
  MODULE_DESCRIPTION("Netfilter flow table mixed IPv4/IPv6 module");
 --- a/net/netfilter/nft_flow_offload.c
 +++ b/net/netfilter/nft_flow_offload.c
-@@ -142,6 +142,7 @@
+@@ -142,6 +142,7 @@ static int nft_flow_offload_validate(con
  
  	if (ctx->family != NFPROTO_IPV4 &&
  	    ctx->family != NFPROTO_IPV6 &&
@@ -58,7 +58,7 @@
  
  static enum flow_offload_xmit_type nft_xmit_type(struct dst_entry *dst)
  {
-@@ -42,7 +46,8 @@
+@@ -42,7 +46,8 @@ static bool nft_is_valid_ether_device(co
  	return true;
  }
  
@@ -68,7 +68,7 @@
  				     const struct nf_conn *ct,
  				     enum ip_conntrack_dir dir,
  				     u8 *ha, __be16 ether_type,
-@@ -50,11 +55,6 @@
+@@ -50,11 +55,6 @@ static int nft_dev_fill_forward_path(con
  {
  	const void *daddr = &ct->tuplehash[!dir].tuple.src.u3;
  	struct net_device *dev = dst_cache->dev;
@@ -80,7 +80,7 @@
  	struct neighbour *n;
  	u8 nud_state;
  
-@@ -63,6 +63,9 @@
+@@ -63,6 +63,9 @@ static int nft_dev_fill_forward_path(con
  		goto out;
  	}
  
@@ -90,7 +90,7 @@
  	n = dst_neigh_lookup(dst_cache, daddr);
  	if (!n)
  		return -1;
-@@ -77,9 +80,11 @@
+@@ -77,9 +80,11 @@ static int nft_dev_fill_forward_path(con
  		return -1;
  
  out:
@@ -104,7 +104,7 @@
  }
  
  struct nft_forward_info {
-@@ -104,7 +109,8 @@
+@@ -104,7 +109,8 @@ static bool nft_flowtable_find_dev(const
  
  static int nft_dev_path_info(struct net_device_path_stack *stack,
  			     struct nft_forward_info *info,
@@ -114,7 +114,7 @@
  {
  	const struct net_device_path *path;
  	int i;
-@@ -113,6 +119,7 @@
+@@ -113,6 +119,7 @@ static int nft_dev_path_info(struct net_
  
  	for (i = 0; i < stack->num_paths; i++) {
  		path = &stack->path[i];
@@ -122,7 +122,7 @@
  		switch (path->type) {
  		case DEV_PATH_ETHERNET:
  		case DEV_PATH_IEEE80211:
-@@ -120,7 +127,6 @@
+@@ -120,7 +127,6 @@ static int nft_dev_path_info(struct net_
  		case DEV_PATH_VLAN:
  		case DEV_PATH_PPPOE:
  		case DEV_PATH_TUN:
@@ -130,7 +130,7 @@
  			if (is_zero_ether_addr(info->h_source))
  				memcpy(info->h_source, path->dev->dev_addr, ETH_ALEN);
  
-@@ -176,8 +182,8 @@
+@@ -176,8 +182,8 @@ static int nft_dev_path_info(struct net_
  				info->num_encaps++;
  				break;
  			case DEV_PATH_BR_VLAN_UNTAG:
@@ -141,7 +141,7 @@
  
  				info->num_encaps--;
  				break;
-@@ -186,6 +192,11 @@
+@@ -186,6 +192,11 @@ static int nft_dev_path_info(struct net_
  			}
  			info->xmit_type = FLOW_OFFLOAD_XMIT_DIRECT;
  			break;
@@ -153,7 +153,7 @@
  		default:
  			goto err_out;
  		}
-@@ -195,7 +206,7 @@
+@@ -195,7 +206,7 @@ static int nft_dev_path_info(struct net_
  	    nft_is_valid_ether_device(info->dev))
  		info->xmit_type = FLOW_OFFLOAD_XMIT_DIRECT;
  
@@ -162,7 +162,7 @@
  		goto err_out;
  
  	return 0;
-@@ -223,19 +234,52 @@
+@@ -223,19 +234,52 @@ static bool nft_flowtable_find_dev(const
  }
  
  static int nft_dev_forward_path(const struct nft_pktinfo *pkt,
@@ -220,7 +220,7 @@
  		return -ENOENT;
  
  	route->tuple[!dir].in.ifindex = info.dev->ifindex;
-@@ -273,11 +317,44 @@
+@@ -273,11 +317,44 @@ int nft_flow_route(const struct nft_pkti
  		   struct nf_flow_route *route, enum ip_conntrack_dir dir,
  		   struct nft_flowtable *ft)
  {
@@ -269,7 +269,7 @@
  	switch (nft_pf(pkt)) {
  	case NFPROTO_IPV4:
  		fl.u.ip4.daddr = ct->tuplehash[dir].tuple.src.u3.ip;
-@@ -308,15 +385,19 @@
+@@ -308,15 +385,19 @@ int nft_flow_route(const struct nft_pkti
  		return -ENOENT;
  	}
  

@@ -6,7 +6,7 @@ Subject: [PATCH] mtd/nand: add MediaTek NAND bad block managment table
 ---
 --- a/drivers/mtd/nand/Kconfig
 +++ b/drivers/mtd/nand/Kconfig
-@@ -46,6 +46,10 @@
+@@ -46,6 +46,10 @@ config MTD_NAND_ECC_SW_BCH
  	  ECC codes. They are used with NAND devices requiring more than 1 bit
  	  of error correction.
  

@@ -57,7 +57,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  #include "tag.h"
  
  #define MXL862_NAME	"mxl862xx"
-@@ -56,6 +63,84 @@
+@@ -56,6 +63,84 @@ static struct sk_buff *mxl862_tag_xmit(s
  	return skb;
  }
  
@@ -142,7 +142,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  static struct sk_buff *mxl862_tag_rcv(struct sk_buff *skb,
  				      struct net_device *dev)
  {
-@@ -89,7 +174,8 @@
+@@ -89,7 +174,8 @@ static struct sk_buff *mxl862_tag_rcv(st
  		return NULL;
  	}
  

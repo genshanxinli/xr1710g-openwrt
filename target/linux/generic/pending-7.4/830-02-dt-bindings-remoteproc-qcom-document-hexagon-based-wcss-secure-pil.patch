@@ -14,7 +14,7 @@ Reviewed-by: Krzysztof Kozlowski <krzysztof.kozlowski@linaro.org>
 Signed-off-by: Manikanta Mylavarapu <quic_mmanikan@quicinc.com>
 Signed-off-by: Gokul Sriram Palanisamy <quic_gokulsri@quicinc.com>
 ---
---- a/Documentation/devicetree/bindings/remoteproc/qcom,wcss-sec-pil.yaml
+--- /dev/null
 +++ b/Documentation/devicetree/bindings/remoteproc/qcom,wcss-sec-pil.yaml
 @@ -0,0 +1,135 @@
 +# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)

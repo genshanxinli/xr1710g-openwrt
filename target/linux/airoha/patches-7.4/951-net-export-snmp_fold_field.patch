@@ -1,6 +1,6 @@
 --- a/net/ipv4/af_inet.c
 +++ b/net/ipv4/af_inet.c
-@@ -1665,6 +1665,8 @@
+@@ -1665,6 +1665,8 @@ unsigned long snmp_fold_field(void __per
  	return res;
  }
  
@@ -9,7 +9,7 @@
  #if BITS_PER_LONG==32
  
  u64 snmp_get_cpu_field64(void __percpu *mib, int cpu, int offt,
-@@ -1697,6 +1699,10 @@
+@@ -1697,6 +1699,10 @@ u64 snmp_fold_field64(void __percpu *mib
  }
  #endif
  

@@ -1,6 +1,6 @@
 --- a/drivers/net/loopback.c
 +++ b/drivers/net/loopback.c
-@@ -198,6 +198,9 @@
+@@ -198,6 +198,9 @@ static void gen_lo_setup(struct net_devi
  	dev->priv_destructor	= dev_destructor;
  
  	netif_set_tso_max_size(dev, GSO_MAX_SIZE);

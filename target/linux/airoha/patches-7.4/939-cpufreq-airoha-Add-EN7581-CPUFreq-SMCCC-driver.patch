@@ -28,7 +28,7 @@ Signed-off-by: Viresh Kumar <viresh.kumar@linaro.org>
  	struct platform_device *cpufreq_dt;
  };
  
-@@ -29,24 +30,19 @@
+@@ -29,24 +30,19 @@ static int airoha_cpufreq_config_clks_no
  }
  
  static const char * const airoha_cpufreq_clk_names[] = { "cpu", NULL };
@@ -59,7 +59,7 @@ Signed-off-by: Viresh Kumar <viresh.kumar@linaro.org>
  
  	/* CPUs refer to the same OPP table */
  	cpu_dev = get_cpu_device(0);
-@@ -62,17 +58,66 @@
+@@ -62,17 +58,66 @@ static int airoha_cpufreq_probe(struct p
  	if (priv->opp_token < 0)
  		return dev_err_probe(dev, priv->opp_token, "Failed to set OPP config\n");
  
@@ -132,7 +132,7 @@ Signed-off-by: Viresh Kumar <viresh.kumar@linaro.org>
  	}
  
  	priv->cpufreq_dt = cpufreq_dt;
-@@ -80,9 +125,15 @@
+@@ -80,9 +125,15 @@ static int airoha_cpufreq_probe(struct p
  
  	return 0;
  
@@ -151,7 +151,7 @@ Signed-off-by: Viresh Kumar <viresh.kumar@linaro.org>
  	dev_pm_opp_clear_config(priv->opp_token);
  
  	return ret;
-@@ -91,12 +142,18 @@
+@@ -91,12 +142,18 @@ clear_opp_config:
  static void airoha_cpufreq_remove(struct platform_device *pdev)
  {
  	struct airoha_cpufreq_priv *priv = platform_get_drvdata(pdev);
@@ -172,7 +172,7 @@ Signed-off-by: Viresh Kumar <viresh.kumar@linaro.org>
  }
  
  static struct platform_driver airoha_cpufreq_driver = {
-@@ -110,6 +167,7 @@
+@@ -110,6 +167,7 @@ static struct platform_driver airoha_cpu
  static const struct of_device_id airoha_cpufreq_match_list[] __initconst = {
  	{ .compatible = "airoha,an7583" },
  	{ .compatible = "airoha,en7581" },
@@ -182,7 +182,7 @@ Signed-off-by: Viresh Kumar <viresh.kumar@linaro.org>
  MODULE_DEVICE_TABLE(of, airoha_cpufreq_match_list);
 --- a/drivers/cpufreq/cpufreq-dt-platdev.c
 +++ b/drivers/cpufreq/cpufreq-dt-platdev.c
-@@ -108,6 +108,7 @@
+@@ -108,6 +108,7 @@ static const struct of_device_id allowli
  static const struct of_device_id blocklist[] __initconst = {
  	{ .compatible = "airoha,an7583", },
  	{ .compatible = "airoha,en7581", },

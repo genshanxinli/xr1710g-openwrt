@@ -1,6 +1,6 @@
 --- a/drivers/net/ethernet/mediatek/mtk_wed.c
 +++ b/drivers/net/ethernet/mediatek/mtk_wed.c
-@@ -622,7 +622,7 @@
+@@ -622,7 +622,7 @@ mtk_wed_amsdu_init(struct mtk_wed_device
  
  	/* init partial amsdu offload txd src */
  	wed_set(dev, MTK_WED_AMSDU_HIFTXD_CFG,
@@ -9,7 +9,7 @@
  
  	/* init qmem */
  	wed_set(dev, MTK_WED_AMSDU_PSE, MTK_WED_AMSDU_PSE_RESET);
-@@ -1136,6 +1136,18 @@
+@@ -1136,6 +1136,18 @@ mtk_wed_deinit(struct mtk_wed_device *de
  	}
  }
  
@@ -28,7 +28,7 @@
  static void
  __mtk_wed_detach(struct mtk_wed_device *dev)
  {
-@@ -1169,8 +1181,7 @@
+@@ -1169,8 +1181,7 @@ __mtk_wed_detach(struct mtk_wed_device *
  					   BIT(hw->index), BIT(hw->index));
  	}
  
@@ -38,7 +38,7 @@
  		mtk_eth_set_dma_device(hw->eth, hw->eth->dev);
  
  	memset(dev, 0, sizeof(*dev));
-@@ -2481,7 +2492,7 @@
+@@ -2481,7 +2492,7 @@ mtk_wed_attach(struct mtk_wed_device *de
  			 "mtk_wed_attach without holding the RCU read lock");
  
  	if ((dev->wlan.bus_type == MTK_WED_BUS_PCIE &&

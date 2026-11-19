@@ -17,7 +17,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 ---
 --- a/drivers/net/pse-pd/pse_core.c
 +++ b/drivers/net/pse-pd/pse_core.c
-@@ -753,18 +753,19 @@
+@@ -753,18 +753,19 @@ static int _pse_pi_delivery_power_sw_pw_
  
  #if IS_ENABLED(CONFIG_LEDS_TRIGGERS)
  /**
@@ -39,7 +39,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  {
  	struct pse_pw_status pw_status = {};
  	struct pse_admin_state admin_state = {};
-@@ -785,6 +786,10 @@
+@@ -785,6 +786,10 @@ static int pse_pi_get_states(struct pse_
  		ETHTOOL_C33_PSE_ADMIN_STATE_ENABLED ||
  		admin_state.podl_admin_state ==
  		ETHTOOL_PODL_PSE_ADMIN_STATE_ENABLED;
@@ -50,7 +50,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  
  	return 0;
  }
-@@ -803,7 +808,7 @@
+@@ -803,7 +808,7 @@ static int pse_pi_get_states(struct pse_
  static void pse_led_update(struct pse_controller_dev *pcdev, int id)
  {
  	struct pse_pi_led_triggers *trigs;
@@ -59,7 +59,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  
  	if (!pcdev->pi_led_trigs)
  		return;
-@@ -812,7 +817,7 @@
+@@ -812,7 +817,7 @@ static void pse_led_update(struct pse_co
  	if (!trigs->delivering.name)
  		return;
  
@@ -68,7 +68,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  		return;
  
  	if (trigs->last_delivering != delivering) {
-@@ -826,6 +831,11 @@
+@@ -826,6 +831,11 @@ static void pse_led_update(struct pse_co
  		led_trigger_event(&trigs->enabled,
  				  enabled ? LED_FULL : LED_OFF);
  	}
@@ -80,7 +80,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  }
  
  /* Sync a freshly-bound LED to the cached trigger state. Without these
-@@ -855,6 +865,15 @@
+@@ -855,6 +865,15 @@ static int pse_led_enabled_activate(stru
  	return 0;
  }
  
@@ -96,7 +96,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  static int pse_led_triggers_register(struct pse_controller_dev *pcdev)
  {
  	struct device *dev = pcdev->dev;
-@@ -901,6 +920,18 @@
+@@ -901,6 +920,18 @@ static int pse_led_triggers_register(str
  			trigs->enabled.name = NULL;
  			return ret;
  		}
@@ -117,7 +117,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	return 0;
 --- a/include/linux/pse-pd/pse.h
 +++ b/include/linux/pse-pd/pse.h
-@@ -273,14 +273,18 @@
+@@ -273,14 +273,18 @@ struct pse_pi {
   *
   * @delivering: LED trigger for power delivering state
   * @enabled: LED trigger for admin enabled state

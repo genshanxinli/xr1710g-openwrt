@@ -18,7 +18,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
 ---
 --- a/drivers/net/ethernet/mediatek/mtk_wed.c
 +++ b/drivers/net/ethernet/mediatek/mtk_wed.c
-@@ -1405,6 +1405,8 @@
+@@ -1405,6 +1405,8 @@ mtk_wed_rro_hw_init(struct mtk_wed_devic
  
  	wed_w32(dev, MTK_WED_RROQM_RST_IDX, 0);
  	wed_w32(dev, MTK_WED_RROQM_MIOD_CTRL2, MTK_WED_MIOD_CNT - 1);
@@ -27,7 +27,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  	wed_set(dev, MTK_WED_CTRL, MTK_WED_CTRL_RX_RRO_QM_EN);
  }
  
-@@ -1432,6 +1434,10 @@
+@@ -1432,6 +1434,10 @@ mtk_wed_route_qm_hw_init(struct mtk_wed_
  			FIELD_PREP(MTK_WED_RTQM_ENQ_CFG_TXDMAD_FPORT,
  				   0x3 + dev->hw->index));
  	}
@@ -40,7 +40,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  }
 --- a/drivers/net/ethernet/mediatek/mtk_wed_regs.h
 +++ b/drivers/net/ethernet/mediatek/mtk_wed_regs.h
-@@ -529,6 +529,8 @@
+@@ -529,6 +529,8 @@ struct mtk_wdma_desc {
  #define MTK_WED_RTQM_IGRS0_I2H_PKT_CNT(_n)		(0xb2c + (_n) * 0x4)
  #define MTK_WED_RTQM_IGRS0_FDROP_CNT			0xb34
  
@@ -49,7 +49,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  #define MTK_WED_RTQM_IGRS1_I2HW_DMAD_CNT		0xb44
  #define MTK_WED_RTQM_IGRS1_I2H_DMAD_CNT(_n)		(0xb48 + (_n) * 0x4)
  #define MTK_WED_RTQM_IGRS1_I2HW_PKT_CNT			0xb50
-@@ -574,6 +576,7 @@
+@@ -574,6 +576,7 @@ struct mtk_wdma_desc {
  #define MTK_WED_RTQM_DEQ_ERR_CNT			0xbec
  
  #define MTK_WED_RROQM_GLO_CFG				0xc04

@@ -28,7 +28,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
 ---
 --- a/drivers/net/pcs/pcs.c
 +++ b/drivers/net/pcs/pcs.c
-@@ -69,6 +69,10 @@
+@@ -69,6 +69,10 @@ fwnode_pcs_add_provider(struct fwnode_ha
  
  	mutex_unlock(&fwnode_pcs_mutex);
  
@@ -39,7 +39,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  	pr_debug("Added pcs provider from %pfwf\n", fwnode);
  
  	return pp;
-@@ -201,6 +205,24 @@
+@@ -201,6 +205,24 @@ struct phylink_pcs *fwnode_pcs_get(const
  }
  EXPORT_SYMBOL_GPL(fwnode_pcs_get);
  
@@ -66,7 +66,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  				 struct phylink_pcs *pl_pcs)
 --- a/drivers/net/phy/phylink.c
 +++ b/drivers/net/phy/phylink.c
-@@ -1992,6 +1992,27 @@
+@@ -1992,6 +1992,27 @@ int phylink_set_fixed_link(struct phylin
  }
  EXPORT_SYMBOL_GPL(phylink_set_fixed_link);
  
@@ -94,7 +94,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  static int phylink_fill_available_pcs(struct phylink *pl,
  				      struct phylink_config *config)
  {
-@@ -2024,7 +2045,7 @@
+@@ -2024,7 +2045,7 @@ static int phylink_fill_available_pcs(st
  		if (!pcs)
  			continue;
  
@@ -103,7 +103,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  	}
  
  out:
-@@ -2070,27 +2091,57 @@
+@@ -2070,27 +2091,57 @@ static int pcs_provider_notify(struct no
  	struct fwnode_pcs_provider *pp = data;
  	struct phylink_pcs *pcs, *tmp;
  	bool resolve = false;
@@ -172,7 +172,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  		return NOTIFY_DONE;
  	}
  
-@@ -2104,7 +2155,8 @@
+@@ -2104,7 +2155,8 @@ static int pcs_provider_notify(struct no
  
  	mutex_unlock(&pl->state_mutex);
  
@@ -182,7 +182,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  
  	phylink_run_resolve(pl);
  
-@@ -2332,10 +2384,6 @@
+@@ -2332,10 +2384,6 @@ struct phylink *phylink_create(struct ph
  
  	mutex_lock(&pl->state_mutex);
  
@@ -203,7 +203,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  	FWNODE_PCS_PROVIDER_DEL,
  };
  
-@@ -51,6 +52,28 @@
+@@ -51,6 +52,28 @@ struct phylink_pcs *fwnode_pcs_get(const
  				   unsigned int index);
  
  /**
@@ -232,7 +232,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
   * fwnode_pcs_matches_provider() - Check whether a PCS belongs to a provider
   * @provider: PCS provider to check
   * @fwnode: firmware node containing the PCS references
-@@ -119,6 +142,14 @@
+@@ -119,6 +142,14 @@ static inline struct phylink_pcs *fwnode
  {
  	return ERR_PTR(-ENOENT);
  }

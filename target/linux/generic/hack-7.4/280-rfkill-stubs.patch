@@ -9,7 +9,7 @@ Signed-off-by: John Crispin <john@phrozen.org>
 ---
 --- a/include/linux/rfkill.h
 +++ b/include/linux/rfkill.h
-@@ -64,7 +64,7 @@
+@@ -64,7 +64,7 @@ struct rfkill_ops {
  	int	(*set_block)(void *data, bool blocked);
  };
  
@@ -20,7 +20,7 @@ Signed-off-by: John Crispin <john@phrozen.org>
   * @name: name of the struct -- the string is not copied internally
 --- a/net/Makefile
 +++ b/net/Makefile
-@@ -47,7 +47,7 @@
+@@ -47,7 +47,7 @@ obj-$(CONFIG_TIPC)		+= tipc/
  obj-$(CONFIG_NETLABEL)		+= netlabel/
  obj-$(CONFIG_IUCV)		+= iucv/
  obj-$(CONFIG_SMC)		+= smc/
@@ -44,7 +44,7 @@ Signed-off-by: John Crispin <john@phrozen.org>
  	tristate "RF switch subsystem support"
  	help
  	  Say Y here if you want to have control over RF switches
-@@ -14,19 +18,19 @@
+@@ -14,19 +18,19 @@ menuconfig RFKILL
  # LED trigger support
  config RFKILL_LEDS
  	bool

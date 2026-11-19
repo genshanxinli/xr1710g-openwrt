@@ -7,7 +7,7 @@ Document virtual mtd-concat device bindings.
 
 Signed-off-by: Bernhard Frauendienst <kernel@nospam.obeliks.de>
 ---
---- a/Documentation/devicetree/bindings/mtd/mtd-concat.txt
+--- /dev/null
 +++ b/Documentation/devicetree/bindings/mtd/mtd-concat.txt
 @@ -0,0 +1,36 @@
 +Virtual MTD concat device

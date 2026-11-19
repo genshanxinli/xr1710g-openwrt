@@ -47,7 +47,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  #include <linux/of_net.h>
  #include <linux/of_platform.h>
  #include <linux/of_reserved_mem.h>
-@@ -225,8 +236,37 @@
+@@ -225,8 +236,37 @@ static int airoha_npu_send_msg(struct ai
  	return __airoha_npu_send_msg(npu, func_id, data, len, data, len);
  }
  
@@ -86,7 +86,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  {
  	const struct firmware *fw;
  	int ret;
-@@ -244,6 +284,9 @@
+@@ -244,6 +284,9 @@ static int airoha_npu_load_firmware(stru
  	}
  
  	memcpy_toio(addr, fw->data, fw->size);
@@ -96,7 +96,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  out:
  	release_firmware(fw);
  
-@@ -251,7 +294,8 @@
+@@ -251,7 +294,8 @@ out:
  }
  
  static int
@@ -106,7 +106,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  				  void __iomem *base)
  {
  	const char *fw_names[2];
-@@ -264,17 +308,20 @@
+@@ -264,17 +308,20 @@ airoha_npu_load_firmware_from_dts(struct
  				     "invalid firmware-name property\n");
  
  	ret = airoha_npu_load_firmware(dev, addr, fw_names[0],
@@ -131,7 +131,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  {
  	const struct airoha_npu_soc_data *soc;
  	void __iomem *addr;
-@@ -292,20 +339,92 @@
+@@ -292,20 +339,92 @@ static int airoha_npu_run_firmware(struc
  	 * dts if available.
  	 */
  	if (of_find_property(dev->of_node, "firmware-name", NULL))
@@ -227,7 +227,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static irqreturn_t airoha_npu_mbox_handler(int irq, void *npu_instance)
  {
  	struct airoha_npu *npu = npu_instance;
-@@ -1021,7 +1140,7 @@
+@@ -1021,7 +1140,7 @@ static int airoha_npu_probe(struct platf
  			return -ENOMEM;
  	}
  
@@ -236,7 +236,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	if (err)
  		return err;
  
-@@ -1050,8 +1169,19 @@
+@@ -1050,8 +1169,19 @@ static int airoha_npu_probe(struct platf
  	platform_set_drvdata(pdev, npu);
  
  #if IS_ENABLED(CONFIG_DEBUG_FS)
@@ -260,7 +260,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  #endif
 --- a/include/linux/soc/airoha/airoha_offload.h
 +++ b/include/linux/soc/airoha/airoha_offload.h
-@@ -69,6 +69,7 @@
+@@ -69,6 +69,7 @@ static inline void airoha_ppe_dev_check_
  #define NPU_NUM_IRQ		6
  #define NPU_RX0_DESC_NUM	512
  #define NPU_RX1_DESC_NUM	512
@@ -268,7 +268,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
  /* CTRL */
  #define NPU_RX_DMA_DESC_LAST_MASK	BIT(29)
-@@ -182,6 +183,11 @@
+@@ -182,6 +183,11 @@ struct airoha_npu {
  
  	struct airoha_foe_stats __iomem *stats;
  

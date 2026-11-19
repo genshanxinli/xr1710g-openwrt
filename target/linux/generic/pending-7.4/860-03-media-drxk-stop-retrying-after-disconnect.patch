@@ -20,7 +20,7 @@ Link: https://lore.kernel.org/all/20261004100741.71711-4-pepe.schlehofer@gmail.c
 ---
 --- a/drivers/media/dvb-frontends/drxk_hard.c
 +++ b/drivers/media/dvb-frontends/drxk_hard.c
-@@ -467,9 +467,9 @@
+@@ -467,9 +467,9 @@ static int power_up_device(struct drxk_s
  				continue;
  			status = i2c_read1(state, state->demod_address,
  					   &data);
@@ -32,7 +32,7 @@ Link: https://lore.kernel.org/all/20261004100741.71711-4-pepe.schlehofer@gmail.c
  			goto error;
  	}
  
-@@ -992,7 +992,8 @@
+@@ -992,7 +992,8 @@ static int hi_command(struct drxk_state
  			retry_count += 1;
  			status = read16(state, SIO_HI_RA_RAM_CMD__A,
  					  &wait_cmd);
@@ -42,7 +42,7 @@ Link: https://lore.kernel.org/all/20261004100741.71711-4-pepe.schlehofer@gmail.c
  		if (status < 0)
  			goto error;
  		status = read16(state, SIO_HI_RA_RAM_RES__A, p_result);
-@@ -3199,8 +3200,10 @@
+@@ -3199,8 +3200,10 @@ static int dvbt_sc_command(struct drxk_s
  		usleep_range(1000, 2000);
  		status = read16(state, OFDM_SC_RA_RAM_CMD__A, &cur_cmd);
  		retry_cnt++;
@@ -55,7 +55,7 @@ Link: https://lore.kernel.org/all/20261004100741.71711-4-pepe.schlehofer@gmail.c
  		goto error;
  
  	/* Write sub-command */
-@@ -3252,8 +3255,10 @@
+@@ -3252,8 +3255,10 @@ static int dvbt_sc_command(struct drxk_s
  		usleep_range(1000, 2000);
  		status = read16(state, OFDM_SC_RA_RAM_CMD__A, &cur_cmd);
  		retry_cnt++;

@@ -68,7 +68,7 @@ Signed-off-by: Carlo Szelinsky <github@szelinsky.de>
  static DEFINE_MUTEX(pse_list_mutex);
  static LIST_HEAD(pse_controller_list);
  static DEFINE_XARRAY_ALLOC(pse_pw_d_map);
-@@ -1193,6 +1200,15 @@
+@@ -1193,6 +1200,15 @@ int pse_controller_register(struct pse_c
  	blocking_notifier_call_chain(&pse_controller_notifier,
  				     PSE_REGISTERED, pcdev);
  
@@ -84,7 +84,7 @@ Signed-off-by: Carlo Szelinsky <github@szelinsky.de>
  	return 0;
  }
  EXPORT_SYMBOL_GPL(pse_controller_register);
-@@ -1209,6 +1225,8 @@
+@@ -1209,6 +1225,8 @@ void pse_controller_unregister(struct ps
  	pse_flush_pw_ds(pcdev);
  	if (pcdev->irq)
  		disable_irq(pcdev->irq);
@@ -93,7 +93,7 @@ Signed-off-by: Carlo Szelinsky <github@szelinsky.de>
  	pse_release_pis(pcdev);
  	cancel_work_sync(&pcdev->ntf_work);
  	kfifo_free(&pcdev->ntf_fifo);
-@@ -1331,66 +1349,104 @@
+@@ -1331,66 +1349,104 @@ static int pse_set_config_isr(struct pse
  }
  
  /**
@@ -229,7 +229,7 @@ Signed-off-by: Carlo Szelinsky <github@szelinsky.de>
  /**
   * devm_pse_irq_helper - Register IRQ based PSE event notifier
   * @pcdev: a pointer to the PSE
-@@ -1447,6 +1503,61 @@
+@@ -1447,6 +1503,61 @@ int devm_pse_irq_helper(struct pse_contr
  }
  EXPORT_SYMBOL_GPL(devm_pse_irq_helper);
  
@@ -293,7 +293,7 @@ Signed-off-by: Carlo Szelinsky <github@szelinsky.de>
  static void __pse_control_release(struct kref *kref)
 --- a/include/linux/pse-pd/pse.h
 +++ b/include/linux/pse-pd/pse.h
-@@ -293,6 +293,12 @@
+@@ -293,6 +293,12 @@ struct pse_ntf {
   * @pi: table of PSE PIs described in this controller device
   * @no_of_pse_pi: flag set if the pse_pis devicetree node is not used
   * @irq: PSE interrupt
@@ -306,7 +306,7 @@ Signed-off-by: Carlo Szelinsky <github@szelinsky.de>
   * @pis_prio_max: Maximum value allowed for the PSE PIs priority
   * @supp_budget_eval_strategies: budget evaluation strategies supported
   *				 by the PSE
-@@ -313,6 +319,12 @@
+@@ -313,6 +319,12 @@ struct pse_controller_dev {
  	struct pse_pi *pi;
  	bool no_of_pse_pi;
  	int irq;
@@ -319,7 +319,7 @@ Signed-off-by: Carlo Szelinsky <github@szelinsky.de>
  	unsigned int pis_prio_max;
  	u32 supp_budget_eval_strategies;
  	struct work_struct ntf_work;
-@@ -364,6 +376,8 @@
+@@ -364,6 +376,8 @@ int devm_pse_controller_register(struct
  				 struct pse_controller_dev *pcdev);
  int devm_pse_irq_helper(struct pse_controller_dev *pcdev, int irq,
  			int irq_flags, const struct pse_irq_desc *d);

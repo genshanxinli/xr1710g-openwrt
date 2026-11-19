@@ -6,7 +6,7 @@ Subject: Add an OSX specific patch to make the kernel be compiled
 lede-commit: 3fc2a24f0422b2f55f9ed43f116db3111f700526
 Signed-off-by: Florian Fainelli <f.fainelli@gmail.com>
 ---
---- a/scripts/mod/elf.h
+--- /dev/null
 +++ b/scripts/mod/elf.h
 @@ -0,0 +1,3007 @@
 +/* This file defines standard ELF types, structures, and macros.

@@ -36,7 +36,7 @@ Signed-off-by: Kyle Switch <kyle.switch@motor-comm.com>
 ---
 --- a/drivers/net/phy/Kconfig
 +++ b/drivers/net/phy/Kconfig
-@@ -361,6 +361,7 @@
+@@ -361,6 +361,7 @@ config MICROSEMI_PHY
  
  config MOTORCOMM_PHY
  	tristate "Motorcomm PHYs"
@@ -116,7 +116,7 @@ Signed-off-by: Kyle Switch <kyle.switch@motor-comm.com>
  struct yt8521_priv {
  	/* combo_advertising is used for case of YT8521 in combo mode,
  	 * this means that yt8521 may work in utp or fiber mode which depends
-@@ -416,6 +444,12 @@
+@@ -416,6 +444,12 @@ struct yt8521_priv {
  	u8 reg_page;
  };
  
@@ -129,7 +129,7 @@ Signed-off-by: Kyle Switch <kyle.switch@motor-comm.com>
  /**
   * ytphy_read_ext() - read a PHY's extended register
   * @phydev: a pointer to a &struct phy_device
-@@ -455,6 +489,70 @@
+@@ -455,6 +489,70 @@ static int ytphy_read_ext_with_lock(stru
  }
  
  /**
@@ -200,7 +200,7 @@ Signed-off-by: Kyle Switch <kyle.switch@motor-comm.com>
   * ytphy_write_ext() - write a PHY's extended register
   * @phydev: a pointer to a &struct phy_device
   * @regnum: register number to write
-@@ -650,6 +748,988 @@
+@@ -650,6 +748,988 @@ err_restore_page:
  	return phy_restore_page(phydev, old_page, ret);
  }
  
@@ -1189,7 +1189,7 @@ Signed-off-by: Kyle Switch <kyle.switch@motor-comm.com>
  static int yt8531_set_wol(struct phy_device *phydev,
  			  struct ethtool_wolinfo *wol)
  {
-@@ -3241,6 +4321,426 @@
+@@ -3241,6 +4321,426 @@ static int yt8821_resume(struct phy_devi
  	return yt8821_modify_utp_fiber_bmcr(phydev, BMCR_PDOWN, 0);
  }
  
@@ -1616,7 +1616,7 @@ Signed-off-by: Kyle Switch <kyle.switch@motor-comm.com>
  static struct phy_driver motorcomm_phy_drvs[] = {
  	{
  		PHY_ID_MATCH_EXACT(PHY_ID_YT8511),
-@@ -3338,13 +4838,29 @@
+@@ -3338,13 +4838,29 @@ static struct phy_driver motorcomm_phy_d
  		.suspend		= yt8821_suspend,
  		.resume			= yt8821_resume,
  	},
@@ -1647,7 +1647,7 @@ Signed-off-by: Kyle Switch <kyle.switch@motor-comm.com>
  MODULE_LICENSE("GPL");
  
  static const struct mdio_device_id __maybe_unused motorcomm_tbl[] = {
-@@ -3355,6 +4871,7 @@
+@@ -3355,6 +4871,7 @@ static const struct mdio_device_id __may
  	{ PHY_ID_MATCH_EXACT(PHY_ID_YT8531S) },
  	{ PHY_ID_MATCH_EXACT(PHY_ID_INT861X) },
  	{ PHY_ID_MATCH_EXACT(PHY_ID_YT8821) },
@@ -1657,7 +1657,7 @@ Signed-off-by: Kyle Switch <kyle.switch@motor-comm.com>
  
 --- a/drivers/net/phy/phy-c45.c
 +++ b/drivers/net/phy/phy-c45.c
-@@ -1445,6 +1445,61 @@
+@@ -1445,6 +1445,61 @@ int genphy_c45_fast_retrain(struct phy_d
  EXPORT_SYMBOL_GPL(genphy_c45_fast_retrain);
  
  /**
@@ -1721,7 +1721,7 @@ Signed-off-by: Kyle Switch <kyle.switch@motor-comm.com>
   * @plca_cfg: output structure to store the PLCA configuration
 --- a/include/linux/phy.h
 +++ b/include/linux/phy.h
-@@ -2374,6 +2374,7 @@
+@@ -2374,6 +2374,7 @@ int genphy_c45_loopback(struct phy_devic
  int genphy_c45_pma_resume(struct phy_device *phydev);
  int genphy_c45_pma_suspend(struct phy_device *phydev);
  int genphy_c45_fast_retrain(struct phy_device *phydev, bool enable);

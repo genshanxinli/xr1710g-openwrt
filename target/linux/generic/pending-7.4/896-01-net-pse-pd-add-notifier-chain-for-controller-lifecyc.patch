@@ -36,7 +36,7 @@ Tested-by: Jonas Jelonek <jelonek.jonas@gmail.com>
  #include <linux/of.h>
  #include <linux/phy.h>
  #include <linux/pse-pd/pse.h>
-@@ -23,6 +24,39 @@
+@@ -23,6 +24,39 @@ static LIST_HEAD(pse_controller_list);
  static DEFINE_XARRAY_ALLOC(pse_pw_d_map);
  static DEFINE_MUTEX(pse_pw_d_mutex);
  
@@ -78,7 +78,7 @@ Tested-by: Jonas Jelonek <jelonek.jonas@gmail.com>
   * @pcdev: a pointer to the PSE controller device
 --- a/include/linux/pse-pd/pse.h
 +++ b/include/linux/pse-pd/pse.h
-@@ -21,6 +21,7 @@
+@@ -21,6 +21,7 @@ struct net_device;
  struct phy_device;
  struct pse_controller_dev;
  struct netlink_ext_ack;
@@ -86,7 +86,7 @@ Tested-by: Jonas Jelonek <jelonek.jonas@gmail.com>
  
  /* C33 PSE extended state and substate. */
  struct ethtool_c33_pse_ext_state_info {
-@@ -337,6 +338,24 @@
+@@ -337,6 +338,24 @@ enum pse_budget_eval_strategies {
  	PSE_BUDGET_EVAL_STRAT_DYNAMIC	= 1 << 2,
  };
  
@@ -111,7 +111,7 @@ Tested-by: Jonas Jelonek <jelonek.jonas@gmail.com>
  #if IS_ENABLED(CONFIG_PSE_CONTROLLER)
  int pse_controller_register(struct pse_controller_dev *pcdev);
  void pse_controller_unregister(struct pse_controller_dev *pcdev);
-@@ -366,6 +385,9 @@
+@@ -366,6 +385,9 @@ int pse_ethtool_set_prio(struct pse_cont
  bool pse_has_podl(struct pse_control *psec);
  bool pse_has_c33(struct pse_control *psec);
  
@@ -121,7 +121,7 @@ Tested-by: Jonas Jelonek <jelonek.jonas@gmail.com>
  #else
  
  static inline struct pse_control *of_pse_control_get(struct device_node *node,
-@@ -416,6 +438,16 @@
+@@ -416,6 +438,16 @@ static inline bool pse_has_c33(struct ps
  	return false;
  }
  

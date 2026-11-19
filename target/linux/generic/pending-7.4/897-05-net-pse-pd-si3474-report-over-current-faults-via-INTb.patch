@@ -86,7 +86,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  };
  
  static struct si3474_priv *to_si3474_priv(struct pse_controller_dev *pcdev)
-@@ -159,10 +192,15 @@
+@@ -159,10 +192,15 @@ static void si3474_get_channels(struct s
  	*chan1 = priv->pi[id].chan[1];
  }
  
@@ -103,7 +103,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  }
  
  static int si3474_pi_get_admin_state(struct pse_controller_dev *pcdev, int id,
-@@ -216,11 +254,15 @@
+@@ -216,11 +254,15 @@ static int si3474_pi_get_pw_status(struc
  
  	delivering = ret & (CHAN_UPPER_BIT(chan0) | CHAN_UPPER_BIT(chan1));
  
@@ -121,7 +121,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  
  	return 0;
  }
-@@ -319,6 +361,8 @@
+@@ -319,6 +361,8 @@ static int si3474_pi_enable(struct pse_c
  	if (ret)
  		return ret;
  
@@ -130,7 +130,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	/* DETECT_CLASS_ENABLE must be set when using AUTO mode,
  	 * otherwise PI does not power up - datasheet section 2.10.2
  	 */
-@@ -334,6 +378,8 @@
+@@ -334,6 +378,8 @@ static int si3474_pi_enable(struct pse_c
  	if (ret)
  		return ret;
  
@@ -139,7 +139,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	return 0;
  }
  
-@@ -468,6 +514,128 @@
+@@ -468,6 +514,128 @@ static int si3474_pi_get_actual_pw(struc
  	return DIV_ROUND_CLOSEST_ULL(tmp_64, 1000000000);
  }
  
@@ -268,7 +268,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  static const struct pse_controller_ops si3474_ops = {
  	.setup_pi_matrix = si3474_setup_pi_matrix,
  	.pi_enable = si3474_pi_enable,
-@@ -558,7 +726,10 @@
+@@ -558,7 +726,10 @@ static int si3474_i2c_probe(struct i2c_c
  		return dev_err_probe(dev, ret,
  				     "Failed to register PSE controller\n");
  

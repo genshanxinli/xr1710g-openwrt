@@ -8,7 +8,7 @@
  #include <dt-bindings/clock/econet,en751221-scu.h>
  #include <dt-bindings/reset/econet,en751221-scu.h>
  #include <dt-bindings/soc/airoha,scu-ssr.h>
-@@ -171,6 +172,14 @@
+@@ -171,6 +172,14 @@ static const u32 bus7581_base[] = { 6000
  static const u32 npu7581_base[] = { 800000000, 750000000, 720000000, 600000000 };
  static const u32 crypto_base[] = { 540000000, 480000000 };
  static const u32 emmc7581_base[] = { 200000000, 150000000 };
@@ -23,7 +23,7 @@
  /* EN751221 */
  static const u32 gsw751221_base[] = { 500000000, 250000000, 400000000, 200000000 };
  
-@@ -375,6 +384,138 @@
+@@ -375,6 +384,138 @@ static const struct en_clk_desc en7581_b
  	}
  };
  
@@ -162,7 +162,7 @@
  static const u16 en7581_rst_ofs[] = {
  	REG_RST_CTRL2,
  	REG_RST_CTRL1,
-@@ -498,6 +639,60 @@
+@@ -498,6 +639,60 @@ static const u16 en7581_rst_map[] = {
  	[EN7581_PCIC_PERSTOUT2_RST]	= 2 * RST_NR_PER_BANK + 16,
  };
  
@@ -223,7 +223,7 @@
  static const u16 en751221_rst_map[] = {
  	/* RST_CTRL2 */
  	[EN751221_XPON_PHY_RST]		= 0,
-@@ -971,6 +1166,29 @@
+@@ -971,6 +1166,29 @@ static void en7581_register_clocks(struc
  	clk_data->hws[EN7523_CLK_PCIE] = hw;
  }
  
@@ -253,7 +253,7 @@
  static int en7523_reset_update(struct reset_controller_dev *rcdev,
  			       unsigned long id, bool assert)
  {
-@@ -1353,6 +1571,52 @@
+@@ -1353,6 +1571,52 @@ static void en751221_register_clocks(str
  				  gsw751221_base[rate]);
  }
  
@@ -306,7 +306,7 @@
  static int en751221_clk_hw_init(struct platform_device *pdev,
  				struct clk_hw_onecell_data *clk_data)
  {
-@@ -1436,6 +1700,18 @@
+@@ -1436,6 +1700,18 @@ static const struct en_clk_soc_data en75
  	.hw_init = en7581_clk_hw_init,
  };
  
@@ -325,7 +325,7 @@
  static const struct en_clk_soc_data en751221_data = {
  	.num_clocks = EN751221_MAX_CLKS,
  	.pcie_ops = {
-@@ -1449,6 +1725,7 @@
+@@ -1449,6 +1725,7 @@ static const struct en_clk_soc_data en75
  static const struct of_device_id of_match_clk_en7523[] = {
  	{ .compatible = "airoha,en7523-scu", .data = &en7523_data },
  	{ .compatible = "airoha,en7581-scu", .data = &en7581_data },

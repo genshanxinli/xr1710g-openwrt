@@ -41,7 +41,7 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
 ---
 --- a/net/dsa/port.c
 +++ b/net/dsa/port.c
-@@ -457,7 +457,13 @@
+@@ -457,7 +457,13 @@ static void dsa_port_bridge_destroy(stru
  {
  	struct dsa_bridge *bridge = dp->bridge;
  
@@ -56,7 +56,7 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
  
  	if (!refcount_dec_and_test(&bridge->refcount))
  		return;
-@@ -528,7 +534,9 @@
+@@ -528,7 +534,9 @@ out_rollback_unoffload:
  					&dsa_user_switchdev_blocking_notifier);
  	dsa_flush_workqueue();
  out_rollback_unbridge:
@@ -66,7 +66,7 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
  out_rollback:
  	dsa_port_bridge_destroy(dp, br);
  	return err;
-@@ -1040,13 +1048,14 @@
+@@ -1040,13 +1048,14 @@ int dsa_port_standalone_host_fdb_add(str
  	return dsa_port_host_fdb_add(dp, addr, vid, db);
  }
  
@@ -84,7 +84,7 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
  	};
  	int err;
  
-@@ -1066,6 +1075,12 @@
+@@ -1066,6 +1075,12 @@ int dsa_port_bridge_host_fdb_add(struct
  	return dsa_port_host_fdb_add(dp, addr, vid, db);
  }
  
@@ -97,7 +97,7 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
  static int dsa_port_host_fdb_del(struct dsa_port *dp,
  				 const unsigned char *addr, u16 vid,
  				 struct dsa_db db)
-@@ -1091,13 +1106,14 @@
+@@ -1091,13 +1106,14 @@ int dsa_port_standalone_host_fdb_del(str
  	return dsa_port_host_fdb_del(dp, addr, vid, db);
  }
  
@@ -115,7 +115,7 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
  	};
  	int err;
  
-@@ -1113,6 +1129,12 @@
+@@ -1113,6 +1129,12 @@ int dsa_port_bridge_host_fdb_del(struct
  	return dsa_port_host_fdb_del(dp, addr, vid, db);
  }
  
@@ -130,7 +130,7 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
  {
 --- a/net/dsa/port.h
 +++ b/net/dsa/port.h
-@@ -54,8 +54,14 @@
+@@ -54,8 +54,14 @@ int dsa_port_standalone_host_fdb_add(str
  				     const unsigned char *addr, u16 vid);
  int dsa_port_standalone_host_fdb_del(struct dsa_port *dp,
  				     const unsigned char *addr, u16 vid);
@@ -147,7 +147,7 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
  int dsa_port_lag_fdb_add(struct dsa_port *dp, const unsigned char *addr,
 --- a/net/dsa/user.c
 +++ b/net/dsa/user.c
-@@ -43,6 +43,8 @@
+@@ -43,6 +43,8 @@ struct dsa_switchdev_event_work {
  	unsigned char addr[ETH_ALEN];
  	u16 vid;
  	bool host_addr;
@@ -156,7 +156,7 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
  };
  
  enum dsa_standalone_event {
-@@ -2813,6 +2815,7 @@
+@@ -2813,6 +2815,7 @@ int dsa_user_create(struct dsa_port *por
  
  	p->dp = port;
  	INIT_LIST_HEAD(&p->mall_tc_list);
@@ -164,7 +164,7 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
  	port->user = user_dev;
  	dsa_user_setup_tagger(user_dev);
  
-@@ -3627,6 +3630,22 @@
+@@ -3627,6 +3630,22 @@ static int dsa_user_netdevice_event(stru
  	return NOTIFY_DONE;
  }
  
@@ -187,7 +187,7 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
  static void
  dsa_fdb_offload_notify(struct dsa_switchdev_event_work *switchdev_work)
  {
-@@ -3639,6 +3658,170 @@
+@@ -3639,6 +3658,170 @@ dsa_fdb_offload_notify(struct dsa_switch
  				 switchdev_work->orig_dev, &info.info, NULL);
  }
  
@@ -358,7 +358,7 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
  static void dsa_user_switchdev_event_work(struct work_struct *work)
  {
  	struct dsa_switchdev_event_work *switchdev_work =
-@@ -3653,6 +3836,12 @@
+@@ -3653,6 +3836,12 @@ static void dsa_user_switchdev_event_wor
  	dp = dsa_user_to_port(dev);
  	ds = dp->ds;
  
@@ -371,7 +371,7 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
  	switch (switchdev_work->event) {
  	case SWITCHDEV_FDB_ADD_TO_DEVICE:
  		if (switchdev_work->host_addr)
-@@ -3689,22 +3878,6 @@
+@@ -3689,22 +3878,6 @@ static void dsa_user_switchdev_event_wor
  	kfree(switchdev_work);
  }
  
@@ -394,7 +394,7 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
  static int dsa_user_fdb_event(struct net_device *dev,
  			      struct net_device *orig_dev,
  			      unsigned long event, const void *ctx,
-@@ -3723,7 +3896,9 @@
+@@ -3723,7 +3896,9 @@ static int dsa_user_fdb_event(struct net
  
  	if (switchdev_fdb_is_dynamically_learned(fdb_info)) {
  		if (dsa_port_offloads_bridge_port(dp, orig_dev))
@@ -405,7 +405,7 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
  
  		/* FDB entries learned by the software bridge or by foreign
  		 * bridge ports should be installed as host addresses only if
-@@ -3768,9 +3943,15 @@
+@@ -3768,9 +3943,15 @@ static int dsa_user_fdb_event(struct net
  	ether_addr_copy(switchdev_work->addr, fdb_info->addr);
  	switchdev_work->vid = fdb_info->vid;
  	switchdev_work->host_addr = host_addr;
@@ -423,7 +423,7 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
  
 --- a/net/dsa/user.h
 +++ b/net/dsa/user.h
-@@ -33,6 +33,12 @@
+@@ -33,6 +33,12 @@ struct dsa_user_priv {
  
  	/* TC context */
  	struct list_head	mall_tc_list;
@@ -436,7 +436,7 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
  };
  
  void dsa_user_mii_bus_init(struct dsa_switch *ds);
-@@ -47,6 +53,8 @@
+@@ -47,6 +53,8 @@ void dsa_user_host_uc_uninstall(struct n
  void dsa_user_sync_ha(struct net_device *dev);
  void dsa_user_unsync_ha(struct net_device *dev);
  void dsa_user_setup_tagger(struct net_device *user);

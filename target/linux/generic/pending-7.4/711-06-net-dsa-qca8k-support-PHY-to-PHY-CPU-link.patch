@@ -11,7 +11,7 @@ Signed-off-by: Ziyang Huang <hzyitc@outlook.com>
 ---
 --- a/drivers/net/dsa/qca/qca8k-8xxx.c
 +++ b/drivers/net/dsa/qca/qca8k-8xxx.c
-@@ -1026,7 +1026,7 @@
+@@ -1026,7 +1026,7 @@ qca8k_setup_mdio_bus(struct qca8k_priv *
  			return ret;
  		}
  
@@ -20,7 +20,7 @@ Signed-off-by: Ziyang Huang <hzyitc@outlook.com>
  			continue;
  
  		of_get_phy_mode(port, &mode);
-@@ -1101,17 +1101,19 @@
+@@ -1101,17 +1101,19 @@ qca8k_setup_mac_pwr_sel(struct qca8k_pri
  
  static int qca8k_find_cpu_port(struct dsa_switch *ds)
  {
@@ -44,7 +44,7 @@ Signed-off-by: Ziyang Huang <hzyitc@outlook.com>
  	return -EINVAL;
  }
  
-@@ -1972,7 +1974,7 @@
+@@ -1972,7 +1974,7 @@ qca8k_setup(struct dsa_switch *ds)
  
  	cpu_port = qca8k_find_cpu_port(ds);
  	if (cpu_port < 0) {

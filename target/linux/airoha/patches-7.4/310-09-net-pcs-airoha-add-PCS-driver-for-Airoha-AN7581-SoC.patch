@@ -14,7 +14,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
 ---
 --- a/drivers/net/pcs/Kconfig
 +++ b/drivers/net/pcs/Kconfig
-@@ -77,4 +77,6 @@
+@@ -77,4 +77,6 @@ config PCS_RZN1_MIIC
  	  Renesas RZ/N1, RZ/N2H, and RZ/T2H SoCs. This PCS converts MII to
  	  RMII/RGMII, or can be set in pass-through mode for MII.
  
@@ -23,12 +23,12 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  endmenu
 --- a/drivers/net/pcs/Makefile
 +++ b/drivers/net/pcs/Makefile
-@@ -11,3 +11,4 @@
+@@ -11,3 +11,4 @@ obj-$(CONFIG_PCS_LYNX)		+= pcs-lynx.o
  obj-$(CONFIG_PCS_MTK_LYNXI)	+= pcs-mtk-lynxi.o
  obj-$(CONFIG_PCS_MTK_USXGMII)	+= pcs-mtk-usxgmii.o
  obj-$(CONFIG_PCS_RZN1_MIIC)	+= pcs-rzn1-miic.o
 +obj-$(CONFIG_PCS_AIROHA)	+= airoha/
---- a/drivers/net/pcs/airoha/Kconfig
+--- /dev/null
 +++ b/drivers/net/pcs/airoha/Kconfig
 @@ -0,0 +1,12 @@
 +# SPDX-License-Identifier: GPL-2.0-only
@@ -43,7 +43,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
 +	help
 +	  This module provides helper to phylink for managing the Airoha
 +	  AN7581 PCS for SoC Ethernet and PON SERDES.
---- a/drivers/net/pcs/airoha/Makefile
+--- /dev/null
 +++ b/drivers/net/pcs/airoha/Makefile
 @@ -0,0 +1,7 @@
 +# SPDX-License-Identifier: GPL-2.0
@@ -53,7 +53,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
 +ifdef CONFIG_PCS_AIROHA_AN7581
 +pcs-airoha-objs			+= pcs-an7581.o
 +endif
---- a/drivers/net/pcs/airoha/pcs-airoha-common.c
+--- /dev/null
 +++ b/drivers/net/pcs/airoha/pcs-airoha-common.c
 @@ -0,0 +1,1297 @@
 +// SPDX-License-Identifier: GPL-2.0
@@ -1353,7 +1353,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
 +MODULE_LICENSE("GPL");
 +MODULE_DESCRIPTION("Airoha PCS driver");
 +MODULE_AUTHOR("Christian Marangi <ansuelsmth@gmail.com>");
---- a/drivers/net/pcs/airoha/pcs-airoha.h
+--- /dev/null
 +++ b/drivers/net/pcs/airoha/pcs-airoha.h
 @@ -0,0 +1,1309 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
@@ -2665,7 +2665,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
 +	return 0;
 +}
 +#endif
---- a/drivers/net/pcs/airoha/pcs-an7581.c
+--- /dev/null
 +++ b/drivers/net/pcs/airoha/pcs-an7581.c
 @@ -0,0 +1,2093 @@
 +// SPDX-License-Identifier: GPL-2.0

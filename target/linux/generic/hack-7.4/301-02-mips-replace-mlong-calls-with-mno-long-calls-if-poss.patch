@@ -24,7 +24,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
 ---
 --- a/arch/mips/Makefile
 +++ b/arch/mips/Makefile
-@@ -97,8 +97,18 @@
+@@ -97,8 +97,18 @@ all-$(CONFIG_SYS_SUPPORTS_ZBOOT)+= vmlin
  cflags-y			+= -G 0 -mno-abicalls -fno-pic -pipe -mno-branch-likely
  cflags-y			+= -msoft-float -Wa,-msoft-float
  LDFLAGS_vmlinux			+= -G 0 -static -n -nostdlib
@@ -45,7 +45,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  
 --- a/arch/mips/include/asm/module.h
 +++ b/arch/mips/include/asm/module.h
-@@ -12,6 +12,11 @@
+@@ -12,6 +12,11 @@ struct mod_arch_specific {
  	const struct exception_table_entry *dbe_start;
  	const struct exception_table_entry *dbe_end;
  	struct mips_hi16 *r_mips_hi16_list;
@@ -75,7 +75,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  #include <asm/jump_label.h>
  
  struct mips_hi16 {
-@@ -30,14 +32,254 @@
+@@ -30,14 +32,254 @@ struct mips_hi16 {
  static LIST_HEAD(dbe_list);
  static DEFINE_SPINLOCK(dbe_lock);
  
@@ -330,7 +330,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  	if (v % 4) {
  		pr_err("module %s: dangerous R_MIPS_26 relocation\n",
  		       me->name);
-@@ -45,13 +287,17 @@
+@@ -45,13 +287,17 @@ static int apply_r_mips_26(struct module
  	}
  
  	if ((v & 0xf0000000) != (((unsigned long)location + 4) & 0xf0000000)) {
@@ -352,7 +352,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  
  	return 0;
  }
-@@ -431,9 +677,36 @@
+@@ -431,9 +677,36 @@ int module_finalize(const Elf_Ehdr *hdr,
  		list_add(&me->arch.dbe_list, &dbe_list);
  		spin_unlock_irq(&dbe_lock);
  	}

@@ -1,6 +1,6 @@
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -558,6 +558,9 @@
+@@ -558,6 +558,9 @@ struct airoha_flow_table_entry {
  
  	struct airoha_foe_stats64 stats;
  	enum airoha_flow_entry_type type;
@@ -25,7 +25,7 @@
  
  #include "airoha_regs.h"
  #include "airoha_eth.h"
-@@ -1255,6 +1256,59 @@
+@@ -1255,6 +1256,59 @@ airoha_ppe_foe_commit_subflow_entry(stru
  	return 0;
  }
  
@@ -85,7 +85,7 @@
  static void airoha_ppe_foe_insert_entry(struct airoha_ppe *ppe,
  					struct sk_buff *skb,
  					u32 hash, bool rx_wlan)
-@@ -1264,7 +1318,7 @@
+@@ -1264,7 +1318,7 @@ static void airoha_ppe_foe_insert_entry(
  	struct airoha_foe_entry *hwe;
  	bool commit_done = false;
  	struct hlist_node *n;
@@ -94,7 +94,7 @@
  
  	spin_lock_bh(&ppe_lock);
  
-@@ -1301,7 +1355,7 @@
+@@ -1301,7 +1355,7 @@ static void airoha_ppe_foe_insert_entry(
  	airoha_ppe_foe_set_bridge_addrs(&br, eth_hdr(skb));
  	e = rhashtable_lookup_fast(&ppe->l2_flows, &br,
  				   airoha_l2_flow_table_params);
@@ -103,7 +103,7 @@
  		airoha_ppe_foe_commit_subflow_entry(ppe, e, hash, rx_wlan);
  unlock:
  	spin_unlock_bh(&ppe_lock);
-@@ -1312,8 +1366,20 @@
+@@ -1312,8 +1366,20 @@ airoha_ppe_foe_l2_flow_commit_entry(stru
  				    struct airoha_flow_table_entry *e)
  {
  	struct airoha_flow_table_entry *prev;
@@ -124,7 +124,7 @@
  	prev = rhashtable_lookup_get_insert_fast(&ppe->l2_flows, &e->l2_node,
  						 airoha_l2_flow_table_params);
  	if (!prev)
-@@ -1449,6 +1515,7 @@
+@@ -1449,6 +1515,7 @@ static int airoha_ppe_flow_offload_repla
  	struct airoha_flow_data data = {};
  	struct net_device *odev = NULL;
  	struct flow_action_entry *act;
@@ -132,7 +132,7 @@
  	u8 dsfield = 0, l4proto = 0;
  	struct airoha_foe_entry hwe;
  	int err, i, offload_type;
-@@ -1461,6 +1528,8 @@
+@@ -1461,6 +1528,8 @@ static int airoha_ppe_flow_offload_repla
  	if (!flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_META))
  		return -EOPNOTSUPP;
  
@@ -141,7 +141,7 @@
  	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_CONTROL)) {
  		struct flow_match_control match;
  
-@@ -2015,10 +2084,12 @@
+@@ -2015,10 +2084,12 @@ int airoha_ppe_init(struct airoha_eth *e
  	if (!ppe)
  		return -ENOMEM;
  

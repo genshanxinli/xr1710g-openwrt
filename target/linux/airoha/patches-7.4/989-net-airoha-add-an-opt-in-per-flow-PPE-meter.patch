@@ -41,7 +41,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -394,6 +394,36 @@
+@@ -394,6 +394,36 @@ struct airoha_foe_mac_info {
  #define AIROHA_FOE_METER_GRP3			GENMASK(8, 5)
  #define AIROHA_FOE_METER_GRP2			GENMASK(4, 0)
  
@@ -78,7 +78,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  struct airoha_foe_bridge {
  	u32 dest_mac_hi;
  
-@@ -536,6 +566,12 @@
+@@ -536,6 +566,12 @@ struct airoha_flow_data {
  		u16 sid;
  		u8 num;
  	} pppoe;
@@ -91,7 +91,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  };
  
  enum airoha_flow_entry_type {
-@@ -558,6 +594,12 @@
+@@ -558,6 +594,12 @@ struct airoha_flow_table_entry {
  
  	struct airoha_foe_stats64 stats;
  	enum airoha_flow_entry_type type;
@@ -104,7 +104,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	u32 ingress_dev_idx;
  	unsigned long ingress_stamp;
  	unsigned long no_hw_since;
-@@ -682,6 +724,13 @@
+@@ -682,6 +724,13 @@ enum airoha_ppe_entry_alias {
  	AIROHA_PPE_ENTRY_ALIAS_FAILED,
  };
  
@@ -118,7 +118,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  struct airoha_ppe {
  	struct airoha_ppe_dev dev;
  	struct airoha_eth *eth;
-@@ -725,6 +774,16 @@
+@@ -725,6 +774,16 @@ struct airoha_ppe {
  	u32 bind_rate_l3;
  	u32 bind_rate_l2b;
  
@@ -150,7 +150,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  #include <net/dst_metadata.h>
  #include <net/ipv6.h>
  #include <net/pkt_cls.h>
-@@ -60,6 +61,300 @@
+@@ -60,6 +61,300 @@ static const struct rhashtable_params ai
  	.automatic_shrinking = true,
  };
  
@@ -451,7 +451,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  /* How many counter slots per PPE this build could ask the NPU for.  This is
   * a property of the build and the SoC, not of what the NPU ended up agreeing
   * to, and it has to stay that way: the counter buffer is allocated in
-@@ -661,11 +956,11 @@
+@@ -661,11 +956,11 @@ static int airoha_ppe_foe_entry_prepare(
  					struct airoha_flow_data *data,
  					int l4proto, u8 dsfield, bool bridged)
  {
@@ -465,7 +465,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
  	memset(hwe, 0, sizeof(*hwe));
  
-@@ -1336,6 +1631,13 @@
+@@ -1336,6 +1631,13 @@ static void airoha_ppe_foe_flow_remove_e
  
  	if (type >= PPE_PKT_TYPE_IPV6_ROUTE_3T)
  		airoha_ppe_put_smac_id(ppe->eth, smac_id);
@@ -479,7 +479,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  }
  
  static int
-@@ -1657,14 +1959,17 @@
+@@ -1657,14 +1959,17 @@ static int airoha_ppe_flow_offload_repla
  {
  	struct flow_rule *rule = flow_cls_offload_flow_rule(f);
  	struct airoha_flow_table_entry *e;
@@ -500,7 +500,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	int err, i, offload_type;
  	u16 addr_type = 0;
  
-@@ -1766,6 +2071,18 @@
+@@ -1766,6 +2071,18 @@ static int airoha_ppe_flow_offload_repla
  			data.pppoe.sid = act->pppoe.sid;
  			data.pppoe.num++;
  			break;
@@ -519,7 +519,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  		default:
  			return -EOPNOTSUPP;
  		}
-@@ -1775,6 +2092,19 @@
+@@ -1775,6 +2092,19 @@ static int airoha_ppe_flow_offload_repla
  	    !is_valid_ether_addr(data.eth.h_dest))
  		return -EINVAL;
  
@@ -539,7 +539,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	/* A flow whose ingress and egress devices are both ports of the same
  	 * bridge never leaves L2, so the PPE must forward it without touching
  	 * the IP TTL.  Routing -- including entering or leaving the bridge --
-@@ -1798,9 +2128,9 @@
+@@ -1798,9 +2128,9 @@ static int airoha_ppe_flow_offload_repla
  	err = airoha_ppe_foe_entry_prepare(eth, &hwe, odev, offload_type,
  					   &data, l4proto, dsfield, bridged);
  	if (err)
@@ -551,7 +551,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  		struct flow_match_ports ports;
  
  		if (offload_type == PPE_PKT_TYPE_BRIDGE) {
-@@ -1882,9 +2212,10 @@
+@@ -1882,9 +2212,10 @@ static int airoha_ppe_flow_offload_repla
  	}
  
  	e->cookie = f->cookie;
@@ -564,7 +564,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	if (err)
  		goto free_entry;
  
-@@ -1904,6 +2235,9 @@
+@@ -1904,6 +2235,9 @@ free_entry:
  put_smac:
  	airoha_ppe_foe_entry_put_smac_id(eth, &hwe);
  
@@ -574,7 +574,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	return err;
  }
  
-@@ -2331,6 +2665,7 @@
+@@ -2331,6 +2665,7 @@ int airoha_ppe_init(struct airoha_eth *e
  	eth->ppe = ppe;
  	ppe->bind_rate_l3 = AIROHA_PPE_DEFAULT_BIND_RATE;
  	ppe->bind_rate_l2b = AIROHA_PPE_DEFAULT_BIND_RATE;
@@ -584,7 +584,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	foe_size = ppe_num_entries * sizeof(struct airoha_foe_entry);
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -370,9 +370,47 @@
+@@ -370,9 +370,47 @@ static int airoha_ppe_debugfs_tb_regs_sh
  }
  DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_tb_regs);
  
@@ -635,7 +635,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
   * interpreted, because a typo must not clear the hardware in the middle of
   * an experiment.  A read would report nothing useful, so the file has no
   * read side at all.
-@@ -485,10 +523,12 @@
+@@ -485,10 +523,12 @@ int airoha_ppe_debugfs_init(struct airoh
  			    &airoha_ppe_debugfs_bind_rate_fops);
  	debugfs_create_file("tb_regs", 0444, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_tb_regs_fops);

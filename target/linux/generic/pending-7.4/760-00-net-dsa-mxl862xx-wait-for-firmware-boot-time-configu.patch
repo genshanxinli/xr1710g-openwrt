@@ -42,7 +42,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 ---
 --- a/drivers/net/dsa/mxl862xx/mxl862xx-api.h
 +++ b/drivers/net/dsa/mxl862xx/mxl862xx-api.h
-@@ -21,6 +21,19 @@
+@@ -21,6 +21,19 @@ struct mdio_relay_data {
  } __packed;
  
  /**
@@ -74,7 +74,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  #define MXL862XX_COMMON_REGISTERMOD	(MXL862XX_COMMON_MAGIC + 0x11)
 --- a/drivers/net/dsa/mxl862xx/mxl862xx.c
 +++ b/drivers/net/dsa/mxl862xx/mxl862xx.c
-@@ -227,6 +227,7 @@
+@@ -227,6 +227,7 @@ static int mxl862xx_wait_ready(struct ds
  	struct mxl862xx_sys_fw_image_version ver = {};
  	unsigned long start = jiffies, timeout;
  	struct mxl862xx_priv *priv = ds->priv;
@@ -82,7 +82,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	struct mxl862xx_cfg cfg = {};
  	int ret;
  
-@@ -238,7 +239,7 @@
+@@ -238,7 +239,7 @@ static int mxl862xx_wait_ready(struct ds
  			goto not_ready_yet;
  
  		/* being able to perform CFGGET indicates that
@@ -91,7 +91,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  		 */
  		ret = MXL862XX_API_READ_QUIET(priv,
  					      MXL862XX_COMMON_CFGGET,
-@@ -246,6 +247,23 @@
+@@ -246,6 +247,23 @@ static int mxl862xx_wait_ready(struct ds
  		if (ret)
  			goto not_ready_yet;
  

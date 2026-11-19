@@ -15,7 +15,7 @@ Link: https://lore.kernel.org/linux-leds/20261027113349.383147-5-alexander.sverd
 ---
 --- a/drivers/leds/trigger/ledtrig-netdev.c
 +++ b/drivers/leds/trigger/ledtrig-netdev.c
-@@ -502,12 +502,13 @@
+@@ -502,12 +502,13 @@ static ssize_t interval_store(struct dev
  		return ret;
  
  	/* impose some basic bounds on the timer interval */

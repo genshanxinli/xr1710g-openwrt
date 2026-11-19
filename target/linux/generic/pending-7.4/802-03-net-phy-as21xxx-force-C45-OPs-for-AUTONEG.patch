@@ -15,7 +15,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
 ---
 --- a/drivers/net/phy/as21xxx.c
 +++ b/drivers/net/phy/as21xxx.c
-@@ -615,6 +615,13 @@
+@@ -615,6 +615,13 @@ static int as21xxx_probe(struct phy_devi
  	if (ret)
  		return ret;
  

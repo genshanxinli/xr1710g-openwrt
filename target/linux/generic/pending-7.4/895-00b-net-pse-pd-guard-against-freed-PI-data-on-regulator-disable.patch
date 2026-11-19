@@ -24,7 +24,7 @@ Signed-off-by: Carlo Szelinsky <github@szelinsky.de>
 ---
 --- a/drivers/net/pse-pd/pse_core.c
 +++ b/drivers/net/pse-pd/pse_core.c
-@@ -145,6 +145,7 @@
+@@ -145,6 +145,7 @@ static void pse_release_pis(struct pse_c
  		of_node_put(pcdev->pi[i].np);
  	}
  	kfree(pcdev->pi);
@@ -32,7 +32,7 @@ Signed-off-by: Carlo Szelinsky <github@szelinsky.de>
  }
  
  /**
-@@ -702,15 +703,21 @@
+@@ -702,15 +703,21 @@ static int pse_pi_enable(struct regulato
  static int pse_pi_disable(struct regulator_dev *rdev)
  {
  	struct pse_controller_dev *pcdev = rdev_get_drvdata(rdev);

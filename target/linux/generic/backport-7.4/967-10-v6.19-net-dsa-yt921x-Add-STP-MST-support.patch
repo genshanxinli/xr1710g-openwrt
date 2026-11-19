@@ -13,7 +13,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
 ---
 --- a/drivers/net/dsa/yt921x.c
 +++ b/drivers/net/dsa/yt921x.c
-@@ -2098,6 +2098,117 @@
+@@ -2098,6 +2098,117 @@ yt921x_dsa_port_bridge_join(struct dsa_s
  	return res;
  }
  
@@ -131,7 +131,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
  static int yt921x_port_down(struct yt921x_priv *priv, int port)
  {
  	u32 mask;
-@@ -2783,6 +2894,10 @@
+@@ -2783,6 +2894,10 @@ static const struct dsa_switch_ops yt921
  	.port_bridge_flags	= yt921x_dsa_port_bridge_flags,
  	.port_bridge_leave	= yt921x_dsa_port_bridge_leave,
  	.port_bridge_join	= yt921x_dsa_port_bridge_join,
@@ -158,7 +158,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
  #define YT921X_PORTn_LEARN(port)	(0x1803d0 + 4 * (port))
  #define  YT921X_PORT_LEARN_VID_LEARN_MULTI_EN	BIT(22)
  #define  YT921X_PORT_LEARN_VID_LEARN_MODE	BIT(21)
-@@ -449,6 +456,8 @@
+@@ -449,6 +456,8 @@ enum yt921x_fdb_entry_status {
  	YT921X_FDB_ENTRY_STATUS_STATIC = 7,
  };
  

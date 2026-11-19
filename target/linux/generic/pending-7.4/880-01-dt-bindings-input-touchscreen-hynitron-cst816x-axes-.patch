@@ -16,7 +16,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 ---
 --- a/Documentation/devicetree/bindings/input/touchscreen/hynitron,cst816x.yaml
 +++ b/Documentation/devicetree/bindings/input/touchscreen/hynitron,cst816x.yaml
-@@ -41,7 +41,10 @@
+@@ -41,7 +41,10 @@ required:
    - reg
    - interrupts
  
@@ -28,7 +28,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  
  examples:
    - |
-@@ -59,6 +62,7 @@
+@@ -59,6 +62,7 @@ examples:
              reset-gpios = <&gpio 17 GPIO_ACTIVE_LOW>;
              linux,keycodes = <KEY_UP>, <KEY_DOWN>, <KEY_LEFT>, <KEY_RIGHT>,
                               <BTN_TOOL_TRIPLETAP>;

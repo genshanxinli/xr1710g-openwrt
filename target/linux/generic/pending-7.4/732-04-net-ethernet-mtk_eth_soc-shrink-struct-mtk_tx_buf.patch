@@ -10,7 +10,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
 ---
 --- a/drivers/net/ethernet/mediatek/mtk_eth_soc.c
 +++ b/drivers/net/ethernet/mediatek/mtk_eth_soc.c
-@@ -1414,32 +1414,19 @@
+@@ -1414,32 +1414,19 @@ static int txd_to_idx(struct mtk_tx_ring
  static void mtk_tx_unmap(struct mtk_eth *eth, struct mtk_tx_buf *tx_buf,
  			 struct xdp_frame_bulk *bq, bool napi)
  {
@@ -55,7 +55,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  	}
  
  	if (tx_buf->data && tx_buf->data != (void *)MTK_DMA_DUMMY_DESC) {
-@@ -1461,7 +1448,6 @@
+@@ -1461,7 +1448,6 @@ static void mtk_tx_unmap(struct mtk_eth
  				xdp_return_frame(xdpf);
  		}
  	}
@@ -63,7 +63,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  	tx_buf->data = NULL;
  }
  
-@@ -1626,7 +1612,6 @@
+@@ -1626,7 +1612,6 @@ static int mtk_tx_map(struct sk_buff *sk
  
  	mtk_tx_set_dma_desc(dev, itxd, &txd_info);
  
@@ -71,7 +71,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  	itx_buf->mac_id = mac->id;
  	setup_tx_buf(eth, itx_buf, itxd_pdma, txd_info.addr, txd_info.size,
  		     k++);
-@@ -1674,7 +1659,6 @@
+@@ -1674,7 +1659,6 @@ static int mtk_tx_map(struct sk_buff *sk
  			if (new_desc)
  				memset(tx_buf, 0, sizeof(*tx_buf));
  			tx_buf->data = (void *)MTK_DMA_DUMMY_DESC;
@@ -79,7 +79,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  			tx_buf->mac_id = mac->id;
  
  			setup_tx_buf(eth, tx_buf, txd_pdma, txd_info.addr,
-@@ -2007,8 +1991,6 @@
+@@ -2007,8 +1991,6 @@ static int mtk_xdp_frame_map(struct mtk_
  						txd_info->size, DMA_TO_DEVICE);
  		if (unlikely(dma_mapping_error(eth->dma_dev, txd_info->addr)))
  			return -ENOMEM;
@@ -90,7 +90,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  
 --- a/drivers/net/ethernet/mediatek/mtk_eth_soc.h
 +++ b/drivers/net/ethernet/mediatek/mtk_eth_soc.h
-@@ -728,14 +728,6 @@
+@@ -728,14 +728,6 @@ struct mtk_hw_stats {
  	struct u64_stats_sync	syncp;
  };
  
@@ -105,7 +105,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  /* This enum allows us to identify how the clock is defined on the array of the
   * clock in the order
   */
-@@ -908,13 +900,12 @@
+@@ -908,13 +900,12 @@ enum mtk_tx_buf_type {
   */
  struct mtk_tx_buf {
  	enum mtk_tx_buf_type type;

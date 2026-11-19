@@ -28,7 +28,7 @@ Link: https://lore.kernel.org/all/20261004100741.71711-6-pepe.schlehofer@gmail.c
 ---
 --- a/drivers/media/dvb-core/dmxdev.c
 +++ b/drivers/media/dvb-core/dmxdev.c
-@@ -50,7 +50,8 @@
+@@ -50,7 +50,8 @@ static int dvb_dmxdev_buffer_write(struc
  	return dvb_ringbuffer_write(buf, src, len);
  }
  
@@ -38,7 +38,7 @@ Link: https://lore.kernel.org/all/20261004100741.71711-6-pepe.schlehofer@gmail.c
  				      int non_blocking, char __user *buf,
  				      size_t count, loff_t *ppos)
  {
-@@ -75,10 +76,16 @@
+@@ -75,10 +76,16 @@ static ssize_t dvb_dmxdev_buffer_read(st
  
  		ret = wait_event_interruptible(src->queue,
  					       !dvb_ringbuffer_empty(src) ||
@@ -56,7 +56,7 @@ Link: https://lore.kernel.org/all/20261004100741.71711-6-pepe.schlehofer@gmail.c
  		if (src->error) {
  			ret = src->error;
  			dvb_ringbuffer_flush(src);
-@@ -274,7 +281,7 @@
+@@ -274,7 +281,7 @@ static ssize_t dvb_dvr_read(struct file
  	if (dmxdev->exit)
  		return -ENODEV;
  
@@ -65,7 +65,7 @@ Link: https://lore.kernel.org/all/20261004100741.71711-6-pepe.schlehofer@gmail.c
  				      file->f_flags & O_NONBLOCK,
  				      buf, count, ppos);
  }
-@@ -998,7 +1005,7 @@
+@@ -998,7 +1005,7 @@ static ssize_t dvb_dmxdev_read_sec(struc
  		hcount = 3 + dfil->todo;
  		if (hcount > count)
  			hcount = count;
@@ -74,7 +74,7 @@ Link: https://lore.kernel.org/all/20261004100741.71711-6-pepe.schlehofer@gmail.c
  						file->f_flags & O_NONBLOCK,
  						buf, hcount, ppos);
  		if (result < 0) {
-@@ -1019,7 +1026,7 @@
+@@ -1019,7 +1026,7 @@ static ssize_t dvb_dmxdev_read_sec(struc
  	}
  	if (count > dfil->todo)
  		count = dfil->todo;
@@ -83,7 +83,7 @@ Link: https://lore.kernel.org/all/20261004100741.71711-6-pepe.schlehofer@gmail.c
  					file->f_flags & O_NONBLOCK,
  					buf, count, ppos);
  	if (result < 0)
-@@ -1035,13 +1042,17 @@
+@@ -1035,13 +1042,17 @@ dvb_demux_read(struct file *file, char _
  	struct dmxdev_filter *dmxdevfilter = file->private_data;
  	int ret;
  
@@ -102,7 +102,7 @@ Link: https://lore.kernel.org/all/20261004100741.71711-6-pepe.schlehofer@gmail.c
  					     file->f_flags & O_NONBLOCK,
  					     buf, count, ppos);
  
-@@ -1457,8 +1468,21 @@
+@@ -1457,8 +1468,21 @@ EXPORT_SYMBOL(dvb_dmxdev_init);
  
  void dvb_dmxdev_release(struct dmxdev *dmxdev)
  {

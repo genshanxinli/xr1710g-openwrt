@@ -21,7 +21,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  #define RTL8366RB_POWER_SAVE			0x15
  #define RTL8366RB_POWER_SAVE_ON			BIT(12)
  
-@@ -361,6 +365,10 @@
+@@ -361,6 +365,10 @@ struct rtl8261x_priv {
  	bool fw_loaded;
  };
  
@@ -32,7 +32,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  static int rtl821x_read_page(struct phy_device *phydev)
  {
  	return __phy_read(phydev, RTL821x_PAGE_SELECT);
-@@ -1832,6 +1840,18 @@
+@@ -1832,6 +1840,18 @@ static int rtl822x_write_mmd(struct phy_
  
  static int rtl822x_probe(struct phy_device *phydev)
  {
@@ -51,7 +51,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	if (IS_ENABLED(CONFIG_REALTEK_PHY_HWMON) &&
  	    phydev->phy_id != RTL_GENERIC_PHYID)
  		return rtl822x_hwmon_init(phydev);
-@@ -2060,6 +2080,19 @@
+@@ -2060,6 +2080,19 @@ static int rtl8226_probe(struct phy_devi
  	return rtl8226_config_mdi_order(phydev);
  }
  
@@ -71,7 +71,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  static int rtl822x_set_serdes_option_mode(struct phy_device *phydev, bool gen1)
  {
  	bool has_2500, has_sgmii;
-@@ -2117,7 +2150,15 @@
+@@ -2117,7 +2150,15 @@ static int rtl822x_set_serdes_option_mod
  	if (ret < 0)
  		return ret;
  

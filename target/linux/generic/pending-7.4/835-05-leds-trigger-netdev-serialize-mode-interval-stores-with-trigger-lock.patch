@@ -44,7 +44,7 @@ Link: https://lore.kernel.org/linux-leds/20261027113349.383147-6-alexander.sverd
 ---
 --- a/drivers/leds/trigger/ledtrig-netdev.c
 +++ b/drivers/leds/trigger/ledtrig-netdev.c
-@@ -81,6 +81,17 @@
+@@ -81,6 +81,17 @@ struct led_netdev_data {
  
  static const struct attribute_group netdev_trig_link_speed_attrs_group;
  
@@ -62,7 +62,7 @@ Link: https://lore.kernel.org/linux-leds/20261027113349.383147-6-alexander.sverd
  static void set_baseline_state(struct led_netdev_data *trigger_data)
  {
  	int current_brightness;
-@@ -164,10 +175,7 @@
+@@ -164,10 +175,7 @@ static void set_baseline_state(struct le
  		/* If we are looking for RX/TX start periodically
  		 * checking stats
  		 */
@@ -74,7 +74,7 @@ Link: https://lore.kernel.org/linux-leds/20261027113349.383147-6-alexander.sverd
  			schedule_delayed_work(&trigger_data->work, 0);
  	}
  }
-@@ -385,7 +393,7 @@
+@@ -385,7 +393,7 @@ static ssize_t netdev_led_attr_store(str
  {
  	struct led_netdev_data *trigger_data = led_trigger_get_drvdata(dev);
  	struct led_classdev *led_cdev = trigger_data->led_cdev;
@@ -83,7 +83,7 @@ Link: https://lore.kernel.org/linux-leds/20261027113349.383147-6-alexander.sverd
  	int ret;
  	int bit;
  
-@@ -417,6 +425,10 @@
+@@ -417,6 +425,10 @@ static ssize_t netdev_led_attr_store(str
  		return -EINVAL;
  	}
  
@@ -94,7 +94,7 @@ Link: https://lore.kernel.org/linux-leds/20261027113349.383147-6-alexander.sverd
  	assign_bit(bit, &mode, state);
  
  	if (test_bit(TRIGGER_NETDEV_LINK, &mode) &&
-@@ -429,20 +441,26 @@
+@@ -429,20 +441,26 @@ static ssize_t netdev_led_attr_store(str
  	     test_bit(TRIGGER_NETDEV_LINK_25000, &mode) ||
  	     test_bit(TRIGGER_NETDEV_LINK_40000, &mode) ||
  	     test_bit(TRIGGER_NETDEV_LINK_50000, &mode) ||
@@ -124,7 +124,7 @@ Link: https://lore.kernel.org/linux-leds/20261027113349.383147-6-alexander.sverd
  	return size;
  }
  
-@@ -494,9 +512,6 @@
+@@ -494,9 +512,6 @@ static ssize_t interval_store(struct dev
  	unsigned long value;
  	int ret;
  
@@ -134,7 +134,7 @@ Link: https://lore.kernel.org/linux-leds/20261027113349.383147-6-alexander.sverd
  	ret = kstrtoul(buf, 0, &value);
  	if (ret)
  		return ret;
-@@ -505,11 +520,21 @@
+@@ -505,11 +520,21 @@ static ssize_t interval_store(struct dev
  	if (value < 5 || value > 10000)
  		return -EINVAL;
  
@@ -157,7 +157,7 @@ Link: https://lore.kernel.org/linux-leds/20261027113349.383147-6-alexander.sverd
  	return size;
  }
  
-@@ -691,11 +716,8 @@
+@@ -691,11 +716,8 @@ static void netdev_trig_work(struct work
  		return;
  	}
  

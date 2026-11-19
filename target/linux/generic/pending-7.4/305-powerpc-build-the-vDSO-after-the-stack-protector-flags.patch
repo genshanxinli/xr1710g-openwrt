@@ -26,7 +26,7 @@ Signed-off-by: Paul Spooren <mail@aparcar.org>
 ---
 --- a/arch/powerpc/Makefile
 +++ b/arch/powerpc/Makefile
-@@ -405,6 +405,7 @@
+@@ -405,6 +405,7 @@ archheaders:
  
  ifdef CONFIG_STACKPROTECTOR
  prepare: stack_protector_prepare

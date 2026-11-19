@@ -10,7 +10,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 ---
 --- a/drivers/net/usb/rndis_host.c
 +++ b/drivers/net/usb/rndis_host.c
-@@ -661,6 +661,16 @@
+@@ -661,6 +661,16 @@ static const struct driver_info	rndis_in
  	.manage_power =	usbnet_manage_power,
  };
  
@@ -27,7 +27,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  /*-------------------------------------------------------------------------*/
  
  static const struct usb_device_id	products [] = {
-@@ -707,6 +717,36 @@
+@@ -707,6 +717,36 @@ static const struct usb_device_id	produc
  	USB_INTERFACE_INFO(USB_CLASS_WIRELESS_CONTROLLER, 1, 3),
  	.driver_info = (unsigned long) &rndis_info,
  }, {

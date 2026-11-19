@@ -29,7 +29,7 @@ Signed-off-by: John Crispin <john@phrozen.org>
 ---
 --- a/arch/loongarch/vdso/Makefile
 +++ b/arch/loongarch/vdso/Makefile
-@@ -16,6 +16,8 @@
+@@ -16,6 +16,8 @@ ccflags-vdso := \
  	$(filter -m64,$(KBUILD_CFLAGS)) \
  	$(filter -march=%,$(KBUILD_CFLAGS)) \
  	$(filter -m%-float,$(KBUILD_CFLAGS)) \

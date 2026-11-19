@@ -25,7 +25,7 @@ Reviewed-by: Andrew Lunn <andrew@lunn.ch>
 ---
 --- a/drivers/net/dsa/mxl862xx/mxl862xx-host.c
 +++ b/drivers/net/dsa/mxl862xx/mxl862xx-host.c
-@@ -495,6 +495,46 @@
+@@ -495,6 +495,46 @@ out:
  	return ret;
  }
  
@@ -74,7 +74,7 @@ Reviewed-by: Andrew Lunn <andrew@lunn.ch>
  	INIT_WORK(&priv->crc_err_work, mxl862xx_crc_err_work_fn);
 --- a/drivers/net/dsa/mxl862xx/mxl862xx-host.h
 +++ b/drivers/net/dsa/mxl862xx/mxl862xx-host.h
-@@ -18,5 +18,7 @@
+@@ -18,5 +18,7 @@ int mxl862xx_api_wrap(struct mxl862xx_pr
  	mxl862xx_api_wrap(dev, cmd, &(data), sizeof((data)), true, true)
  
  int mxl862xx_reset(struct mxl862xx_priv *priv);

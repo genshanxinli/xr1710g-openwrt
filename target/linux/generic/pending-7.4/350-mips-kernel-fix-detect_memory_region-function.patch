@@ -15,7 +15,7 @@ Signed-off-by: Shiji Yang <yangshiji66@outlook.com>
 ---
 --- a/arch/mips/include/asm/bootinfo.h
 +++ b/arch/mips/include/asm/bootinfo.h
-@@ -93,7 +93,9 @@
+@@ -93,7 +93,9 @@ const char *get_system_type(void);
  
  extern unsigned long mips_machtype;
  
@@ -27,7 +27,7 @@ Signed-off-by: Shiji Yang <yangshiji66@outlook.com>
  extern void prom_free_prom_memory(void);
 --- a/arch/mips/kernel/setup.c
 +++ b/arch/mips/kernel/setup.c
-@@ -88,21 +88,27 @@
+@@ -88,21 +88,27 @@ static struct resource bss_resource = {
  unsigned long __kaslr_offset __ro_after_init;
  EXPORT_SYMBOL(__kaslr_offset);
  
@@ -60,7 +60,7 @@ Signed-off-by: Shiji Yang <yangshiji66@outlook.com>
  	}
  
  	pr_debug("Memory: %lluMB of RAM detected at 0x%llx (min: %lluMB, max: %lluMB)\n",
-@@ -113,6 +119,7 @@
+@@ -113,6 +119,7 @@ void __init detect_memory_region(phys_ad
  
  	memblock_add(start, size);
  }

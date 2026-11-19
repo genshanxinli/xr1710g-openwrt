@@ -10,7 +10,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
 ---
 --- a/drivers/net/ethernet/mediatek/mtk_eth_soc.c
 +++ b/drivers/net/ethernet/mediatek/mtk_eth_soc.c
-@@ -45,6 +45,11 @@
+@@ -45,6 +45,11 @@ MODULE_PARM_DESC(msg_level, "Message lev
  				  offsetof(struct mtk_hw_stats, xdp_stats.x) / \
  				  sizeof(u64) }
  
@@ -22,7 +22,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  static const struct mtk_reg_map mtk_reg_map = {
  	.tx_irq_mask		= 0x1a1c,
  	.tx_irq_status		= 0x1a18,
-@@ -1329,13 +1334,13 @@
+@@ -1329,13 +1334,13 @@ static int mtk_init_fq_dma(struct mtk_et
  	dma_addr_t dma_addr;
  	int i, j, len;
  
@@ -38,7 +38,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  
  	for (j = 0; j < DIV_ROUND_UP(soc->tx.fq_dma_size, MTK_FQ_DMA_LENGTH); j++) {
  		len = min_t(int, cnt - j * MTK_FQ_DMA_LENGTH, MTK_FQ_DMA_LENGTH);
-@@ -1354,11 +1359,11 @@
+@@ -1354,11 +1359,11 @@ static int mtk_init_fq_dma(struct mtk_et
  		for (i = 0; i < len; i++) {
  			struct mtk_tx_dma_v2 *txd;
  
@@ -52,7 +52,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  
  			txd->txd3 = TX_DMA_PLEN0(MTK_QDMA_PAGE_SIZE);
  			if (MTK_HAS_CAPS(soc->caps, MTK_36BIT_DMA))
-@@ -1388,9 +1393,9 @@
+@@ -1388,9 +1393,9 @@ static void *mtk_qdma_phys_to_virt(struc
  }
  
  static struct mtk_tx_buf *mtk_desc_to_tx_buf(struct mtk_tx_ring *ring,
@@ -64,7 +64,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  
  	return &ring->buf[idx];
  }
-@@ -1401,9 +1406,9 @@
+@@ -1401,9 +1406,9 @@ static struct mtk_tx_dma *qdma_to_pdma(s
  	return ring->dma_pdma - (struct mtk_tx_dma *)ring->dma + dma;
  }
  
@@ -76,7 +76,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  }
  
  static void mtk_tx_unmap(struct mtk_eth *eth, struct mtk_tx_buf *tx_buf,
-@@ -1611,7 +1616,7 @@
+@@ -1611,7 +1616,7 @@ static int mtk_tx_map(struct sk_buff *sk
  	if (itxd == ring->last_free)
  		return -ENOMEM;
  
@@ -85,7 +85,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  	memset(itx_buf, 0, sizeof(*itx_buf));
  
  	txd_info.addr = dma_map_single(eth->dma_dev, skb->data, txd_info.size,
-@@ -1665,7 +1670,7 @@
+@@ -1665,7 +1670,7 @@ static int mtk_tx_map(struct sk_buff *sk
  			mtk_tx_set_dma_desc(dev, txd, &txd_info);
  
  			tx_buf = mtk_desc_to_tx_buf(ring, txd,
@@ -94,7 +94,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  			if (new_desc)
  				memset(tx_buf, 0, sizeof(*tx_buf));
  			tx_buf->data = (void *)MTK_DMA_DUMMY_DESC;
-@@ -1708,7 +1713,7 @@
+@@ -1708,7 +1713,7 @@ static int mtk_tx_map(struct sk_buff *sk
  	} else {
  		int next_idx;
  
@@ -103,7 +103,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  					 ring->dma_size);
  		mtk_w32(eth, next_idx, MT7628_TX_CTX_IDX0);
  	}
-@@ -1717,7 +1722,7 @@
+@@ -1717,7 +1722,7 @@ static int mtk_tx_map(struct sk_buff *sk
  
  err_dma:
  	do {
@@ -112,7 +112,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  
  		/* unmap dma */
  		mtk_tx_unmap(eth, tx_buf, NULL, false);
-@@ -1891,7 +1896,7 @@
+@@ -1891,7 +1896,7 @@ static struct mtk_rx_ring *mtk_get_rx_ri
  
  		ring = &eth->rx_ring[i];
  		idx = NEXT_DESP_IDX(ring->calc_idx, ring->dma_size);
@@ -121,7 +121,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  		if (rxd->rxd2 & RX_DMA_DONE) {
  			ring->calc_idx_update = true;
  			return ring;
-@@ -2059,7 +2064,7 @@
+@@ -2059,7 +2064,7 @@ static int mtk_xdp_submit_frame(struct m
  	}
  	htxd = txd;
  
@@ -130,7 +130,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  	memset(tx_buf, 0, sizeof(*tx_buf));
  	htx_buf = tx_buf;
  
-@@ -2078,7 +2083,7 @@
+@@ -2078,7 +2083,7 @@ static int mtk_xdp_submit_frame(struct m
  				goto unmap;
  
  			tx_buf = mtk_desc_to_tx_buf(ring, txd,
@@ -139,7 +139,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  			memset(tx_buf, 0, sizeof(*tx_buf));
  			n_desc++;
  		}
-@@ -2116,7 +2121,7 @@
+@@ -2116,7 +2121,7 @@ static int mtk_xdp_submit_frame(struct m
  	} else {
  		int idx;
  
@@ -148,7 +148,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  		mtk_w32(eth, NEXT_DESP_IDX(idx, ring->dma_size),
  			MT7628_TX_CTX_IDX0);
  	}
-@@ -2127,7 +2132,7 @@
+@@ -2127,7 +2132,7 @@ static int mtk_xdp_submit_frame(struct m
  
  unmap:
  	while (htxd != txd) {
@@ -157,7 +157,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  		mtk_tx_unmap(eth, tx_buf, NULL, false);
  
  		htxd->txd3 = TX_DMA_LS0 | TX_DMA_OWNER_CPU;
-@@ -2259,7 +2264,7 @@
+@@ -2259,7 +2264,7 @@ static int mtk_poll_rx(struct napi_struc
  			goto rx_done;
  
  		idx = NEXT_DESP_IDX(ring->calc_idx, ring->dma_size);
@@ -166,7 +166,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  		data = ring->data[idx];
  
  		if (!mtk_rx_get_desc(eth, &trxd, rxd))
-@@ -2526,7 +2531,7 @@
+@@ -2526,7 +2531,7 @@ static int mtk_poll_tx_qdma(struct mtk_e
  			break;
  
  		tx_buf = mtk_desc_to_tx_buf(ring, desc,
@@ -175,7 +175,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  		if (!tx_buf->data)
  			break;
  
-@@ -2577,7 +2582,7 @@
+@@ -2577,7 +2582,7 @@ static int mtk_poll_tx_pdma(struct mtk_e
  		}
  		mtk_tx_unmap(eth, tx_buf, &bq, true);
  
@@ -184,7 +184,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  		ring->last_free = desc;
  		atomic_inc(&ring->free_count);
  
-@@ -2695,7 +2700,7 @@
+@@ -2695,7 +2700,7 @@ static int mtk_tx_alloc(struct mtk_eth *
  {
  	const struct mtk_soc_data *soc = eth->soc;
  	struct mtk_tx_ring *ring = &eth->tx_ring;
@@ -193,7 +193,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  	struct mtk_tx_dma_v2 *txd;
  	int ring_size;
  	u32 ofs, val;
-@@ -2734,7 +2739,7 @@
+@@ -2734,7 +2739,7 @@ static int mtk_tx_alloc(struct mtk_eth *
  	 * descriptors in ring->dma_pdma.
  	 */
  	if (!MTK_HAS_CAPS(soc->caps, MTK_QDMA)) {
@@ -202,7 +202,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  						    &ring->phys_pdma, GFP_KERNEL);
  		if (!ring->dma_pdma)
  			goto no_tx_mem;
-@@ -2749,7 +2754,7 @@
+@@ -2749,7 +2754,7 @@ static int mtk_tx_alloc(struct mtk_eth *
  	atomic_set(&ring->free_count, ring_size - 2);
  	ring->next_free = ring->dma;
  	ring->last_free = (void *)txd;
@@ -211,7 +211,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  	ring->thresh = MAX_SKB_FRAGS;
  
  	/* make sure that all changes to the dma ring are flushed before we
-@@ -2761,7 +2766,7 @@
+@@ -2761,7 +2766,7 @@ static int mtk_tx_alloc(struct mtk_eth *
  		mtk_w32(eth, ring->phys, soc->reg_map->qdma.ctx_ptr);
  		mtk_w32(eth, ring->phys, soc->reg_map->qdma.dtx_ptr);
  		mtk_w32(eth,
@@ -220,7 +220,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  			soc->reg_map->qdma.crx_ptr);
  		mtk_w32(eth, ring->last_free_ptr, soc->reg_map->qdma.drx_ptr);
  
-@@ -2798,7 +2803,6 @@
+@@ -2798,7 +2803,6 @@ no_tx_mem:
  
  static void mtk_tx_clean(struct mtk_eth *eth)
  {
@@ -228,7 +228,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  	struct mtk_tx_ring *ring = &eth->tx_ring;
  	int i;
  
-@@ -2810,14 +2814,14 @@
+@@ -2810,14 +2814,14 @@ static void mtk_tx_clean(struct mtk_eth
  	}
  
  	if (ring->dma) {
@@ -245,7 +245,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  				  ring->dma_pdma, ring->phys_pdma);
  		ring->dma_pdma = NULL;
  	}
-@@ -2865,7 +2869,7 @@
+@@ -2865,7 +2869,7 @@ static int mtk_rx_alloc(struct mtk_eth *
  	}
  
  	ring->dma = mtk_dma_ring_alloc(eth,
@@ -254,7 +254,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  				       &ring->phys,
  				       rx_flag == MTK_RX_FLAGS_NORMAL);
  	if (!ring->dma)
-@@ -2876,7 +2880,7 @@
+@@ -2876,7 +2880,7 @@ static int mtk_rx_alloc(struct mtk_eth *
  		dma_addr_t dma_addr;
  		void *data;
  
@@ -263,7 +263,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  		if (ring->page_pool) {
  			data = mtk_page_pool_get_buff(ring->page_pool,
  						      &dma_addr, GFP_KERNEL);
-@@ -2967,7 +2971,7 @@
+@@ -2967,7 +2971,7 @@ static void mtk_rx_clean(struct mtk_eth
  			if (!ring->data[i])
  				continue;
  
@@ -272,7 +272,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  			if (!rxd->rxd1)
  				continue;
  
-@@ -2983,7 +2987,7 @@
+@@ -2983,7 +2987,7 @@ static void mtk_rx_clean(struct mtk_eth
  	}
  
  	if (ring->dma) {
@@ -281,7 +281,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  				  ring->dma, ring->phys, in_sram);
  		ring->dma = NULL;
  	}
-@@ -3353,7 +3357,7 @@
+@@ -3353,7 +3357,7 @@ static void mtk_dma_free(struct mtk_eth
  	}
  
  	if (eth->scratch_ring) {
@@ -290,7 +290,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  				  eth->scratch_ring, eth->phy_scratch_ring,
  				  true);
  		eth->scratch_ring = NULL;
-@@ -5463,6 +5467,9 @@
+@@ -5463,6 +5467,9 @@ static void mtk_remove(struct platform_d
  	mtk_mdio_cleanup(eth);
  }
  
@@ -300,7 +300,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  static const struct mtk_soc_data mt2701_data = {
  	.reg_map = &mtk_reg_map,
  	.caps = MT7623_CAPS | MTK_HWLRO,
-@@ -5471,14 +5478,14 @@
+@@ -5471,14 +5478,14 @@ static const struct mtk_soc_data mt2701_
  	.required_pctl = true,
  	.version = 1,
  	.tx = {
@@ -317,7 +317,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  		.irq_done_mask = MTK_RX_DONE_INT,
  		.dma_l4_valid = RX_DMA_L4_VALID,
  		.dma_size = MTK_DMA_SIZE(2K),
-@@ -5499,14 +5506,14 @@
+@@ -5499,14 +5506,14 @@ static const struct mtk_soc_data mt7621_
  	.hash_offset = 2,
  	.foe_entry_size = MTK_FOE_ENTRY_V1_SIZE,
  	.tx = {
@@ -334,7 +334,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  		.irq_done_mask = MTK_RX_DONE_INT,
  		.dma_l4_valid = RX_DMA_L4_VALID,
  		.dma_size = MTK_DMA_SIZE(2K),
-@@ -5529,14 +5536,14 @@
+@@ -5529,14 +5536,14 @@ static const struct mtk_soc_data mt7622_
  	.has_accounting = true,
  	.foe_entry_size = MTK_FOE_ENTRY_V1_SIZE,
  	.tx = {
@@ -351,7 +351,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  		.irq_done_mask = MTK_RX_DONE_INT,
  		.dma_l4_valid = RX_DMA_L4_VALID,
  		.dma_size = MTK_DMA_SIZE(2K),
-@@ -5558,14 +5565,14 @@
+@@ -5558,14 +5565,14 @@ static const struct mtk_soc_data mt7623_
  	.foe_entry_size = MTK_FOE_ENTRY_V1_SIZE,
  	.disable_pll_modes = true,
  	.tx = {
@@ -368,7 +368,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  		.irq_done_mask = MTK_RX_DONE_INT,
  		.dma_l4_valid = RX_DMA_L4_VALID,
  		.dma_size = MTK_DMA_SIZE(2K),
-@@ -5584,14 +5591,14 @@
+@@ -5584,14 +5591,14 @@ static const struct mtk_soc_data mt7629_
  	.has_accounting = true,
  	.version = 1,
  	.tx = {
@@ -385,7 +385,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  		.irq_done_mask = MTK_RX_DONE_INT,
  		.dma_l4_valid = RX_DMA_L4_VALID,
  		.dma_size = MTK_DMA_SIZE(2K),
-@@ -5614,14 +5621,14 @@
+@@ -5614,14 +5621,14 @@ static const struct mtk_soc_data mt7981_
  	.has_accounting = true,
  	.foe_entry_size = MTK_FOE_ENTRY_V2_SIZE,
  	.tx = {
@@ -402,7 +402,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  		.irq_done_mask = MTK_RX_DONE_INT,
  		.dma_l4_valid = RX_DMA_L4_VALID_V2,
  		.dma_max_len = MTK_TX_DMA_BUF_LEN,
-@@ -5644,14 +5651,14 @@
+@@ -5644,14 +5651,14 @@ static const struct mtk_soc_data mt7986_
  	.has_accounting = true,
  	.foe_entry_size = MTK_FOE_ENTRY_V2_SIZE,
  	.tx = {
@@ -419,7 +419,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  		.irq_done_mask = MTK_RX_DONE_INT,
  		.dma_l4_valid = RX_DMA_L4_VALID_V2,
  		.dma_max_len = MTK_TX_DMA_BUF_LEN,
-@@ -5674,14 +5681,14 @@
+@@ -5674,14 +5681,14 @@ static const struct mtk_soc_data mt7988_
  	.has_accounting = true,
  	.foe_entry_size = MTK_FOE_ENTRY_V3_SIZE,
  	.tx = {
@@ -436,7 +436,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  		.irq_done_mask = MTK_RX_DONE_INT_V2,
  		.dma_l4_valid = RX_DMA_L4_VALID_V2,
  		.dma_max_len = MTK_TX_DMA_BUF_LEN_V2,
-@@ -5698,13 +5705,13 @@
+@@ -5698,13 +5705,13 @@ static const struct mtk_soc_data rt5350_
  	.required_pctl = false,
  	.version = 1,
  	.tx = {
@@ -454,7 +454,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  		.dma_max_len = MTK_TX_DMA_BUF_LEN,
 --- a/drivers/net/ethernet/mediatek/mtk_eth_soc.h
 +++ b/drivers/net/ethernet/mediatek/mtk_eth_soc.h
-@@ -1202,7 +1202,7 @@
+@@ -1202,7 +1202,7 @@ struct mtk_reg_map {
   * @foe_entry_size		Foe table entry size.
   * @has_accounting		Bool indicating support for accounting of
   *				offloaded flows.
@@ -463,7 +463,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
   * @irq_done_mask		Rx irq done register mask.
   * @dma_l4_valid		Rx DMA valid register mask.
   * @dma_max_len			Max DMA tx/rx buffer length.
-@@ -1223,14 +1223,14 @@
+@@ -1223,14 +1223,14 @@ struct mtk_soc_data {
  	bool		has_accounting;
  	bool		disable_pll_modes;
  	struct {

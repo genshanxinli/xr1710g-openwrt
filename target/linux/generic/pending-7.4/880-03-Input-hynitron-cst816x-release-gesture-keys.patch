@@ -18,7 +18,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 ---
 --- a/drivers/input/touchscreen/hynitron-cst816x.c
 +++ b/drivers/input/touchscreen/hynitron-cst816x.c
-@@ -39,28 +39,40 @@
+@@ -39,28 +39,40 @@ static int cst816x_parse_keycodes(struct
  {
  	int count;
  	int error;
@@ -78,7 +78,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	return 0;
  }
  
-@@ -94,24 +106,19 @@
+@@ -94,24 +106,19 @@ static int cst816x_i2c_read_register(str
  	return 0;
  }
  
@@ -107,7 +107,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  }
  
  static bool cst816x_process_touch(struct cst816x_priv *priv,
-@@ -168,10 +175,25 @@
+@@ -168,10 +175,25 @@ static void cst816x_reset(struct cst816x
  	msleep(100);
  }
  
@@ -133,7 +133,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  
  	if (!cst816x_process_touch(priv, &tch))
  		return IRQ_HANDLED;
-@@ -179,10 +201,11 @@
+@@ -179,10 +201,11 @@ static irqreturn_t cst816x_irq_cb(int ir
  	touchscreen_report_pos(priv->input, &priv->prop,
  			       tch.abs_x, tch.abs_y, false);
  

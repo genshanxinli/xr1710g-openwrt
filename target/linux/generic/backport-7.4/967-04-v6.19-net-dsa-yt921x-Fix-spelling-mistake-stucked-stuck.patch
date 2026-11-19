@@ -12,7 +12,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
 ---
 --- a/drivers/net/dsa/yt921x.c
 +++ b/drivers/net/dsa/yt921x.c
-@@ -1131,7 +1131,7 @@
+@@ -1131,7 +1131,7 @@ static int yt921x_fdb_wait(struct yt921x
  	res = yt921x_reg_wait(priv, YT921X_FDB_RESULT, YT921X_FDB_RESULT_DONE,
  			      &val);
  	if (res) {

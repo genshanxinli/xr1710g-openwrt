@@ -25,7 +25,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 ---
 --- a/drivers/net/ethernet/mediatek/mtk_ppe.c
 +++ b/drivers/net/ethernet/mediatek/mtk_ppe.c
-@@ -479,6 +479,7 @@
+@@ -479,6 +479,7 @@ int mtk_foe_entry_set_queue(struct mtk_e
  			    unsigned int queue)
  {
  	u32 *ib2 = mtk_foe_entry_ib2(eth, entry);
@@ -33,7 +33,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  
  	if (mtk_is_netsys_v2_or_greater(eth)) {
  		*ib2 &= ~MTK_FOE_IB2_QID_V2;
-@@ -490,6 +491,12 @@
+@@ -490,6 +491,12 @@ int mtk_foe_entry_set_queue(struct mtk_e
  		*ib2 |= MTK_FOE_IB2_PSE_QOS;
  	}
  
@@ -48,7 +48,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  
 --- a/drivers/net/ethernet/mediatek/mtk_ppe.h
 +++ b/drivers/net/ethernet/mediatek/mtk_ppe.h
-@@ -96,6 +96,8 @@
+@@ -96,6 +96,8 @@ enum {
  #define MTK_FOE_WINFO_AMSDU_HF		BIT(23)
  #define MTK_FOE_WINFO_AMSDU_EN		BIT(24)
  
@@ -57,7 +57,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  enum {
  	MTK_FOE_STATE_INVALID,
  	MTK_FOE_STATE_UNBIND,
-@@ -124,6 +126,8 @@
+@@ -124,6 +126,8 @@ struct mtk_foe_mac_info {
  	/* netsys_v3 */
  	u32 w3info;
  	u32 amsdu;

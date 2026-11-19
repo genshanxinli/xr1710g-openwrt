@@ -20,7 +20,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/drivers/net/ethernet/airoha/Kconfig
 +++ b/drivers/net/ethernet/airoha/Kconfig
-@@ -32,4 +32,18 @@
+@@ -32,4 +32,18 @@ config NET_AIROHA_FLOW_STATS
  	help
  	  Enable Airoha flowtable statistic counters.
  
@@ -47,7 +47,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  airoha-eth-$(CONFIG_DEBUG_FS) += airoha_ppe_debugfs.o
 +obj-$(CONFIG_NET_AIROHA_SOE) += airoha_soe_probe.o
  obj-$(CONFIG_NET_AIROHA_NPU) += airoha_npu.o
---- a/drivers/net/ethernet/airoha/airoha_soe_probe.c
+--- /dev/null
 +++ b/drivers/net/ethernet/airoha/airoha_soe_probe.c
 @@ -0,0 +1,106 @@
 +// SPDX-License-Identifier: GPL-2.0-only

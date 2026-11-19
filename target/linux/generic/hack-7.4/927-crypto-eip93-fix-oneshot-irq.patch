@@ -13,7 +13,7 @@ does not need a threaded handler. Use devm_request_irq() instead.
 ---
 --- a/drivers/crypto/inside-secure/eip93/eip93-main.c
 +++ b/drivers/crypto/inside-secure/eip93/eip93-main.c
-@@ -430,9 +430,8 @@
+@@ -430,9 +430,8 @@ static int eip93_crypto_probe(struct pla
  	if (eip93->irq < 0)
  		return eip93->irq;
  

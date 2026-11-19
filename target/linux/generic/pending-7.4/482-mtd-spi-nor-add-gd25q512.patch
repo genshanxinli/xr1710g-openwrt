@@ -6,7 +6,7 @@ Subject: [PATCH] spi-nor/gigadevic: add gd25q512
 ---
 --- a/drivers/mtd/spi-nor/gigadevice.c
 +++ b/drivers/mtd/spi-nor/gigadevice.c
-@@ -71,6 +71,13 @@
+@@ -71,6 +71,13 @@ static const struct flash_info gigadevic
  		.name = "gd25q256",
  		.flags = SPI_NOR_HAS_LOCK | SPI_NOR_HAS_TB | SPI_NOR_TB_SR_BIT6,
  	}, {

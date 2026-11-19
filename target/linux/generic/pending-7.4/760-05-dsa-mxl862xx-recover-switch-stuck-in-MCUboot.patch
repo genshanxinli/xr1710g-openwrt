@@ -171,7 +171,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  
  static int mxl862xx_sb_pdi_reset(struct mxl862xx_priv *priv)
  {
-@@ -193,7 +239,8 @@
+@@ -193,7 +239,8 @@ static int mxl862xx_sb_pdi_flush_last(st
  
  	ret = read_poll_timeout(mxl862xx_smdio_read, val,
  				val < 0 || (u16)val != (u16)data_written,
@@ -181,7 +181,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  				false, priv, MXL862XX_SB_PDI_STAT);
  	if (val < 0)
  		return val;
-@@ -278,6 +325,357 @@
+@@ -278,6 +325,357 @@ static struct mxl862xx_reprobe *mxl862xx
  	return rp;
  }
  
@@ -539,7 +539,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  /* MCUboot firmware image header */
  struct mxl862xx_fw_hdr {
  	__le32 image_type;
-@@ -353,13 +751,15 @@
+@@ -353,13 +751,15 @@ static int mxl862xx_flash_firmware(struc
  	int ret, i;
  
  	/* Step 1: reboot the firmware into MCUboot rescue mode */
@@ -562,7 +562,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	}
  
  	/* Step 2: wait for bootloader ready */
-@@ -541,6 +941,25 @@
+@@ -541,6 +941,25 @@ int mxl862xx_devlink_info_get(struct dsa
  	char buf[16];
  	int ret;
  
@@ -588,7 +588,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	/* A 0 part number means the CHIP ID read failed or the part is
  	 * unfused; omit it rather than publish a bogus "0000" that fwupd
  	 * would match firmware against -- it then falls back to the driver
-@@ -614,6 +1033,21 @@
+@@ -614,6 +1033,21 @@ int mxl862xx_devlink_flash_update(struct
  		return ret;
  	}
  
@@ -610,7 +610,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	/* The references the reprobe work needs to restore normal operation
  	 * must be held before the switch is disturbed; the work itself is
  	 * scheduled only once the flash is done (see below).
-@@ -633,9 +1067,13 @@
+@@ -633,9 +1067,13 @@ int mxl862xx_devlink_flash_update(struct
  		return -ENOMEM;
  	}
  
@@ -627,7 +627,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  
  	/* Close ports while the firmware is still alive so the DSA core's
  	 * MDB/FDB tracking is drained, and detach user ports so userspace
-@@ -679,6 +1117,7 @@
+@@ -679,6 +1117,7 @@ int mxl862xx_devlink_flash_update(struct
  		mutex_lock_nested(&priv->mdiodev->bus->mdio_lock,
  				  MDIO_MUTEX_NESTED);
  		priv->block_host = false;
@@ -658,7 +658,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  #include "mxl862xx-host.h"
  
  #define CTRL_BUSY_MASK			BIT(15)
-@@ -346,6 +347,11 @@
+@@ -346,6 +347,11 @@ int mxl862xx_api_wrap(struct mxl862xx_pr
  		goto out;
  	}
  
@@ -670,7 +670,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	if (priv->block_host && cmd != SYS_MISC_FW_UPDATE) {
  		ret = -EBUSY;
  		goto out;
-@@ -549,9 +555,11 @@
+@@ -549,9 +555,11 @@ int mxl862xx_smdio_write(struct mxl862xx
  void mxl862xx_host_init(struct mxl862xx_priv *priv)
  {
  	INIT_WORK(&priv->crc_err_work, mxl862xx_crc_err_work_fn);
@@ -684,7 +684,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  }
 --- a/drivers/net/dsa/mxl862xx/mxl862xx-phylink.c
 +++ b/drivers/net/dsa/mxl862xx/mxl862xx-phylink.c
-@@ -406,6 +406,8 @@
+@@ -406,6 +406,8 @@ mxl862xx_phylink_mac_select_pcs(struct p
  
  	switch (port) {
  	case 9 ... 16:
@@ -695,7 +695,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  				      "SerDes PCS unsupported on old firmware.\n");
 --- a/drivers/net/dsa/mxl862xx/mxl862xx.c
 +++ b/drivers/net/dsa/mxl862xx/mxl862xx.c
-@@ -692,21 +692,66 @@
+@@ -692,21 +692,66 @@ static int mxl862xx_setup(struct dsa_swi
  	int n_user_ports = 0, max_vlans;
  	int ingress_finals, vid_rules;
  	struct dsa_port *dp;
@@ -771,7 +771,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	/* Calculate Extended VLAN block sizes.
  	 * With VLAN Filter handling VID membership checks:
  	 *   Ingress: only final catchall rules (PVID insertion, 802.1Q
-@@ -797,11 +842,21 @@
+@@ -797,11 +842,21 @@ static int mxl862xx_port_state(struct ds
  static int mxl862xx_port_enable(struct dsa_switch *ds, int port,
  				struct phy_device *phydev)
  {
@@ -793,7 +793,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	if (mxl862xx_port_state(ds, port, false))
  		dev_err(ds->dev, "failed to disable port %d\n", port);
  }
-@@ -1419,6 +1474,17 @@
+@@ -1419,6 +1474,17 @@ static int mxl862xx_port_setup(struct ds
  	bool is_cpu_port = dsa_port_is_cpu(dp);
  	int ret;
  
@@ -811,7 +811,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	ret = mxl862xx_port_state(ds, port, false);
  	if (ret)
  		return ret;
-@@ -1428,11 +1494,6 @@
+@@ -1428,11 +1494,6 @@ static int mxl862xx_port_setup(struct ds
  	if (dsa_port_is_unused(dp))
  		return 0;
  
@@ -823,7 +823,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	ret = mxl862xx_configure_sp_tag_proto(ds, port, is_cpu_port);
  	if (ret)
  		return ret;
-@@ -1654,11 +1715,11 @@
+@@ -1654,11 +1715,11 @@ static int mxl862xx_port_mdb_del(struct
  	ether_addr_copy(qparam.mac, mdb->addr);
  
  	ret = MXL862XX_API_READ(priv, MXL862XX_MAC_TABLEENTRYQUERY, qparam);
@@ -839,7 +839,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  		return 0;
  	if (ret)
  		return ret;
-@@ -1716,6 +1777,9 @@
+@@ -1716,6 +1777,9 @@ static void mxl862xx_port_stp_state_set(
  	struct mxl862xx_priv *priv = ds->priv;
  	int ret;
  
@@ -861,7 +861,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  #include <linux/workqueue.h>
  #include <net/dsa.h>
  
-@@ -14,6 +16,10 @@
+@@ -14,6 +16,10 @@ struct mxl862xx_priv;
  #define MXL862XX_FIRST_SERDES_PORT	9
  #define MXL862XX_SERDES_SLOTS		4
  
@@ -872,7 +872,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  #define MXL862XX_DEFAULT_BRIDGE		0
  #define MXL862XX_MAX_BRIDGES		48
  #define MXL862XX_MAX_BRIDGE_PORTS	128
-@@ -327,6 +333,16 @@
+@@ -327,6 +333,16 @@ struct mxl862xx_fw_version {
   *                      during a firmware flash
   * @skip_teardown:      discard firmware API commands during the teardown
   *                      triggered by the post-flash reprobe
@@ -889,7 +889,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
   * @stats_work:         periodic work item that polls RMON hardware counters
   *                      and accumulates them into 64-bit per-port stats
   */
-@@ -334,6 +350,7 @@
+@@ -334,6 +350,7 @@ struct mxl862xx_priv {
  	struct dsa_switch *ds;
  	struct mdio_device *mdiodev;
  	struct work_struct crc_err_work;
@@ -897,7 +897,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	unsigned long flags;
  	u16 drop_meter;
  	struct mxl862xx_fw_version fw_version;
-@@ -349,6 +366,9 @@
+@@ -349,6 +366,9 @@ struct mxl862xx_priv {
  	u16 vf_block_size;
  	bool block_host;
  	bool skip_teardown;

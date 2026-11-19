@@ -15,7 +15,7 @@ Signed-off-by: Mieczyslaw Nalewaj <namiltd@yahoo.com>
 ---
 --- a/scripts/Makefile.vmlinux
 +++ b/scripts/Makefile.vmlinux
-@@ -103,7 +103,7 @@
+@@ -103,7 +103,7 @@ quiet_cmd_modules_builtin_modinfo = GEN
        cmd_modules_builtin_modinfo = $(OBJCOPY) -O binary -j .modinfo --dump-section .modinfo=$@ $< /dev/null
  
  targets += modules.builtin.modinfo

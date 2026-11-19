@@ -14,7 +14,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 ---
 --- a/drivers/input/touchscreen/hynitron-cst816x.c
 +++ b/drivers/input/touchscreen/hynitron-cst816x.c
-@@ -157,6 +157,7 @@
+@@ -157,6 +157,7 @@ static int cst816x_register_input(struct
  	input_set_abs_params(priv->input, ABS_X, 0, 240, 0, 0);
  	input_set_abs_params(priv->input, ABS_Y, 0, 240, 0, 0);
  	input_set_capability(priv->input, EV_KEY, BTN_TOUCH);

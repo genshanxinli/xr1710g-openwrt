@@ -26,7 +26,7 @@ mid-stream) are not offloaded either.
 
 Signed-off-by: Tao Gong <gongtao0607@gmail.com>
 ---
---- a/include/net/netfilter/nf_conntrack_brxing.h
+--- /dev/null
 +++ b/include/net/netfilter/nf_conntrack_brxing.h
 @@ -0,0 +1,35 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
@@ -66,7 +66,7 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
 +#endif /* _NF_CONNTRACK_BRXING_H */
 --- a/include/net/netfilter/nf_conntrack_extend.h
 +++ b/include/net/netfilter/nf_conntrack_extend.h
-@@ -31,6 +31,9 @@
+@@ -31,6 +31,9 @@ enum nf_ct_ext_id {
  #if IS_ENABLED(CONFIG_NET_ACT_CT)
  	NF_CT_EXT_ACT_CT,
  #endif
@@ -94,7 +94,7 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
  	[NF_CT_EXT_HELPER] = sizeof(struct nf_conn_help),
  #if IS_ENABLED(CONFIG_NF_NAT)
  	[NF_CT_EXT_NAT] = sizeof(struct nf_conn_nat),
-@@ -57,7 +61,7 @@
+@@ -57,7 +61,7 @@ static const u8 nf_ct_ext_type_len[NF_CT
  static __always_inline unsigned int total_extension_size(void)
  {
  	/* remember to add new extensions below */
@@ -103,7 +103,7 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
  
  	return sizeof(struct nf_ct_ext) +
  	       sizeof(struct nf_conn_help)
-@@ -84,6 +88,9 @@
+@@ -84,6 +88,9 @@ static __always_inline unsigned int tota
  #if IS_ENABLED(CONFIG_NET_ACT_CT)
  		+ sizeof(struct nf_conn_act_ct_ext)
  #endif
@@ -123,7 +123,7 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
  
  static unsigned int
  nf_flow_offload_inet_hook(void *priv, struct sk_buff *skb,
-@@ -75,6 +76,17 @@
+@@ -75,6 +76,17 @@ static struct nf_flowtable_type flowtabl
  	.owner		= THIS_MODULE,
  };
  
@@ -141,7 +141,7 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
  static struct nf_flowtable_type flowtable_bridge;
  
  static struct nf_flowtable_type flowtable_ipv4 = {
-@@ -100,6 +112,7 @@
+@@ -100,6 +112,7 @@ static struct nf_flowtable_type flowtabl
  static int __init nf_flow_inet_module_init(void)
  {
  	flowtable_bridge = flowtable_inet; flowtable_bridge.family = NFPROTO_BRIDGE;
@@ -159,7 +159,7 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
  
  struct nft_flow_offload {
  	struct nft_flowtable	*flowtable;
-@@ -47,12 +48,82 @@
+@@ -47,12 +48,82 @@ static void flow_offload_ct_tcp(struct n
  	spin_unlock_bh(&ct->lock);
  }
  
@@ -242,7 +242,7 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
  	struct tcphdr _tcph, *tcph = NULL;
  	struct nf_flow_route route = {};
  	enum ip_conntrack_info ctinfo;
-@@ -68,6 +139,9 @@
+@@ -68,6 +139,9 @@ static void nft_flow_offload_eval(const
  	if (!ct)
  		goto out;
  
@@ -252,7 +252,7 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
  	switch (ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple.dst.protonum) {
  	case IPPROTO_TCP:
  		tcph = skb_header_pointer(pkt->skb, nft_thoff(pkt),
-@@ -102,6 +176,9 @@
+@@ -102,6 +176,9 @@ static void nft_flow_offload_eval(const
  	if (!nf_ct_is_confirmed(ct))
  		goto out;
  

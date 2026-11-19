@@ -17,7 +17,7 @@ Signed-off-by: Daniel Schwierzeck <daniel.schwierzeck@gmail.com>
 ---
 --- a/drivers/pinctrl/airoha/pinctrl-airoha.c
 +++ b/drivers/pinctrl/airoha/pinctrl-airoha.c
-@@ -164,7 +164,7 @@
+@@ -164,7 +164,7 @@ static int airoha_gpio_set_direction(str
  {
  	struct airoha_pinctrl *pinctrl = gpiochip_get_data(chip);
  	u32 mask, index;
@@ -26,7 +26,7 @@ Signed-off-by: Daniel Schwierzeck <daniel.schwierzeck@gmail.com>
  
  	/* set output enable */
  	mask = BIT(gpio % AIROHA_PIN_BANK_SIZE);
-@@ -176,12 +176,13 @@
+@@ -176,12 +176,13 @@ static int airoha_gpio_set_direction(str
  		return err;
  
  	/* set direction */

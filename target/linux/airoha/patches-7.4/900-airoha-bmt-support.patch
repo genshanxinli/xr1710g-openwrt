@@ -1,4 +1,4 @@
---- a/drivers/mtd/nand/airoha_bmt.c
+--- /dev/null
 +++ b/drivers/mtd/nand/airoha_bmt.c
 @@ -0,0 +1,575 @@
 +

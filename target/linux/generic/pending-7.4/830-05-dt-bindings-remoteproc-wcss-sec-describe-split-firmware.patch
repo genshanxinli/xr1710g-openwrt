@@ -10,7 +10,7 @@ Signed-off-by: Satoshi Ikeuchi <satosan.ikm@gmail.com>
 ---
 --- a/Documentation/devicetree/bindings/remoteproc/qcom,wcss-sec-pil.yaml
 +++ b/Documentation/devicetree/bindings/remoteproc/qcom,wcss-sec-pil.yaml
-@@ -25,8 +25,9 @@
+@@ -25,8 +25,9 @@ properties:
      maxItems: 1
  
    firmware-name:

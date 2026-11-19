@@ -21,7 +21,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
  
  #include "yt921x.h"
  
-@@ -1273,6 +1274,17 @@
+@@ -1273,6 +1274,17 @@ yt921x_marker_tfm_police(struct yt921x_m
  }
  
  static int
@@ -39,7 +39,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
  yt921x_police_validate(const struct flow_action_police *police,
  		       const struct flow_action *action,
  		       const struct flow_action_entry *act,
-@@ -1379,6 +1391,73 @@
+@@ -1379,6 +1391,73 @@ end:
  }
  
  static int
@@ -113,7 +113,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
  yt921x_mirror_del(struct yt921x_priv *priv, int port, bool ingress)
  {
  	u32 mask;
-@@ -3523,6 +3602,13 @@
+@@ -3523,6 +3602,13 @@ static int yt921x_chip_setup_tc(struct y
  		return res;
  	priv->meter_slot_ns = ctrl * op_ns;
  
@@ -127,7 +127,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
  	return 0;
  }
  
-@@ -3679,6 +3765,7 @@
+@@ -3679,6 +3765,7 @@ static const struct dsa_switch_ops yt921
  	/* rate */
  	.port_policer_del	= yt921x_dsa_port_policer_del,
  	.port_policer_add	= yt921x_dsa_port_policer_add,
@@ -137,7 +137,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
  	.port_hsr_join		= dsa_port_simple_hsr_join,
 --- a/drivers/net/dsa/yt921x.h
 +++ b/drivers/net/dsa/yt921x.h
-@@ -531,6 +531,19 @@
+@@ -531,6 +531,19 @@ enum yt921x_app_selector {
  #define  YT921X_MIRROR_PORT_M			GENMASK(3, 0)
  #define   YT921X_MIRROR_PORT(x)				FIELD_PREP(YT921X_MIRROR_PORT_M, (x))
  
@@ -157,7 +157,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
  #define YT921X_EDATA_EXTMODE	0xfb
  #define YT921X_EDATA_LEN	0x100
  
-@@ -556,6 +569,10 @@
+@@ -556,6 +569,10 @@ enum yt921x_fdb_entry_status {
  #define YT921X_METER_UNIT_MAX	((1 << 3) - 1)
  #define YT921X_METER_CIR_MAX	((1 << 18) - 1)
  #define YT921X_METER_CBS_MAX	((1 << 16) - 1)
@@ -168,7 +168,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
  
  #define YT921X_LAG_NUM		2
  #define YT921X_LAG_PORT_NUM	4
-@@ -652,6 +669,7 @@
+@@ -652,6 +669,7 @@ struct yt921x_priv {
  
  	const struct yt921x_info *info;
  	unsigned int meter_slot_ns;

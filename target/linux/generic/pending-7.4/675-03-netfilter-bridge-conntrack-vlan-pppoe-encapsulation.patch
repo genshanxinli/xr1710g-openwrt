@@ -1,6 +1,6 @@
 --- a/include/linux/netfilter_bridge.h
 +++ b/include/linux/netfilter_bridge.h
-@@ -10,6 +10,12 @@
+@@ -10,6 +10,12 @@ struct nf_bridge_frag_data {
  	bool    vlan_present;
  	u16     vlan_tci;
  	__be16  vlan_proto;
@@ -26,7 +26,7 @@
  #include <linux/netfilter_ipv4.h>
  
  #include "../br_private.h"
-@@ -240,6 +244,43 @@
+@@ -240,6 +244,43 @@ static int nf_ct_br_ipv6_check(const str
  	return 0;
  }
  
@@ -70,7 +70,7 @@
  static unsigned int nf_ct_bridge_pre(void *priv, struct sk_buff *skb,
  				     const struct nf_hook_state *state)
  {
-@@ -345,37 +386,67 @@
+@@ -345,37 +386,67 @@ nf_ct_bridge_refrag(struct sk_buff *skb,
  				  struct sk_buff *))
  {
  	struct nf_bridge_frag_data data;

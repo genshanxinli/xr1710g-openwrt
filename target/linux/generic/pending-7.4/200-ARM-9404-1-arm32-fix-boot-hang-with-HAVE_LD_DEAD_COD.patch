@@ -57,7 +57,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  	. = __stubs_lma + SIZEOF(.stubs);				\
 --- a/arch/arm/kernel/vmlinux.lds.S
 +++ b/arch/arm/kernel/vmlinux.lds.S
-@@ -104,13 +104,13 @@
+@@ -104,13 +104,13 @@ SECTIONS
  	}
  	.init.tagtable : {
  		__tagtable_begin = .;

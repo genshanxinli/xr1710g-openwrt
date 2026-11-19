@@ -15,7 +15,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 ---
 --- a/drivers/net/dsa/mxl862xx/mxl862xx.c
 +++ b/drivers/net/dsa/mxl862xx/mxl862xx.c
-@@ -837,6 +837,8 @@
+@@ -837,6 +837,8 @@ static int __mxl862xx_set_bridge_port(st
  				continue;
  			if (!mxl862xx_is_lag_master(priv, member_dp->index))
  				continue;
@@ -24,7 +24,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  			mxl862xx_fw_portmap_set_bit(
  				br_port_cfg.bridge_port_map,
  				mxl862xx_lag_bridge_port(priv,
-@@ -4076,7 +4078,7 @@
+@@ -4076,7 +4078,7 @@ static int mxl862xx_port_pre_bridge_flag
  					  struct netlink_ext_ack *extack)
  {
  	if (flags.mask & ~(BR_FLOOD | BR_MCAST_FLOOD | BR_BCAST_FLOOD |
@@ -33,7 +33,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  		return -EINVAL;
  
  	return 0;
-@@ -4089,6 +4091,7 @@
+@@ -4089,6 +4091,7 @@ static int mxl862xx_port_bridge_flags(st
  	struct mxl862xx_priv *priv = ds->priv;
  	unsigned long old_block = priv->ports[port].flood_block;
  	unsigned long block = old_block;
@@ -41,7 +41,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	int ret;
  
  	if (flags.mask & BR_FLOOD) {
-@@ -4129,6 +4132,21 @@
+@@ -4129,6 +4132,21 @@ static int mxl862xx_port_bridge_flags(st
  			return ret;
  	}
  
@@ -65,7 +65,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  
 --- a/drivers/net/dsa/mxl862xx/mxl862xx.h
 +++ b/drivers/net/dsa/mxl862xx/mxl862xx.h
-@@ -222,6 +222,9 @@
+@@ -222,6 +222,9 @@ struct mxl862xx_port_stats {
   * @flood_block:         bitmask of firmware meter indices that are currently
   *                       rate-limiting flood traffic on this port (zero-rate
   *                       meters used to block flooding)
@@ -75,7 +75,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
   * @learning:            true when address learning is enabled on this port
   * @setup_done:          set at end of port_setup, cleared at start of
   *                       port_teardown; guards deferred work against
-@@ -268,6 +271,7 @@
+@@ -268,6 +271,7 @@ struct mxl862xx_port {
  	struct mxl862xx_priv *priv;
  	u16 fid;
  	unsigned long flood_block;

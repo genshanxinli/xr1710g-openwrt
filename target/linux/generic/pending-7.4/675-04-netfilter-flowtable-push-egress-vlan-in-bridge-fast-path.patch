@@ -27,7 +27,7 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
 ---
 --- a/net/netfilter/nf_flow_table_ip.c
 +++ b/net/netfilter/nf_flow_table_ip.c
-@@ -147,6 +147,7 @@
+@@ -147,6 +147,7 @@ static bool ip_has_options(unsigned int
  
  struct nf_flowtable_ctx {
  	const struct net_device	*in;
@@ -35,7 +35,7 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
  	__be16			ether_type;
  	u32			offset;
  	u32			hdrsize;
-@@ -472,6 +473,37 @@
+@@ -472,6 +473,37 @@ nf_flow_offload_lookup(struct nf_flowtab
  	return flow_offload_lookup(flow_table, &tuple);
  }
  
@@ -73,7 +73,7 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
  static int nf_flow_offload_forward(struct nf_flowtable_ctx *ctx,
  				   struct nf_flowtable *flow_table,
  				   struct flow_offload_tuple_rhash *tuplehash,
-@@ -508,6 +540,7 @@
+@@ -508,6 +540,7 @@ static int nf_flow_offload_forward(struc
  	flow_offload_refresh(flow_table, flow, false);
  
  	nf_flow_encap_pop(ctx, skb, tuplehash);
@@ -81,7 +81,7 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
  	thoff -= ctx->offset;
  	skb_set_transport_header(skb, thoff);
  
-@@ -908,6 +941,7 @@
+@@ -908,6 +941,7 @@ nf_flow_offload_ip_hook(void *priv, stru
  	struct nf_flowtable *flow_table = priv;
  	struct nf_flowtable_ctx ctx = {
  		.in	= state->in,
@@ -89,7 +89,7 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
  	};
  	int ret;
  
-@@ -1137,6 +1171,7 @@
+@@ -1137,6 +1171,7 @@ static int nf_flow_offload_ipv6_forward(
  	flow_offload_refresh(flow_table, flow, false);
  
  	nf_flow_encap_pop(ctx, skb, tuplehash);
@@ -97,7 +97,7 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
  	skb_set_transport_header(skb, sizeof(*ip6h));
  
  	ip6h = ipv6_hdr(skb);
-@@ -1237,6 +1272,7 @@
+@@ -1237,6 +1272,7 @@ nf_flow_offload_ipv6_hook(void *priv, st
  	struct nf_flowtable *flow_table = priv;
  	struct nf_flowtable_ctx ctx = {
  		.in	= state->in,

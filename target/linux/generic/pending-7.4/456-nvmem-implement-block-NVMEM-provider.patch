@@ -12,7 +12,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 ---
 --- a/drivers/nvmem/Kconfig
 +++ b/drivers/nvmem/Kconfig
-@@ -164,6 +164,17 @@
+@@ -164,6 +164,17 @@ config NVMEM_APPLE_SPMI
  	  This driver can also be built as a module. If so, the module
  	  will be called apple-nvmem-spmi.
  
@@ -32,7 +32,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	depends on ARCH_BCM_IPROC || COMPILE_TEST
 --- a/drivers/nvmem/Makefile
 +++ b/drivers/nvmem/Makefile
-@@ -25,6 +25,8 @@
+@@ -25,6 +25,8 @@ obj-$(CONFIG_NVMEM_APPLE_SPMI)		+= apple
  apple_nvmem_spmi-y			:= apple-spmi-nvmem.o
  obj-$(CONFIG_NVMEM_BCM_OCOTP)		+= nvmem-bcm-ocotp.o
  nvmem-bcm-ocotp-y			:= bcm-ocotp.o
@@ -41,7 +41,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  obj-$(CONFIG_NVMEM_BRCM_NVRAM)		+= nvmem_brcm_nvram.o
  nvmem_brcm_nvram-y			:= brcm_nvram.o
  obj-$(CONFIG_NVMEM_IMX_IIM)		+= nvmem-imx-iim.o
---- a/drivers/nvmem/block.c
+--- /dev/null
 +++ b/drivers/nvmem/block.c
 @@ -0,0 +1,200 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later

@@ -1,6 +1,6 @@
 --- a/drivers/net/ethernet/mediatek/mtk_eth_soc.h
 +++ b/drivers/net/ethernet/mediatek/mtk_eth_soc.h
-@@ -1576,6 +1576,8 @@
+@@ -1576,6 +1576,8 @@ int mtk_gmac_usxgmii_path_setup(struct m
  int mtk_eth_offload_init(struct mtk_eth *eth, u8 id);
  int mtk_eth_setup_tc(struct net_device *dev, enum tc_setup_type type,
  		     void *type_data);
@@ -25,7 +25,7 @@
  #include "mtk_ppe.h"
  #include "mtk_ppe_regs.h"
  
-@@ -475,6 +477,160 @@
+@@ -475,6 +477,160 @@ int mtk_foe_entry_set_wdma(struct mtk_et
  	return 0;
  }
  
@@ -186,7 +186,7 @@
  int mtk_foe_entry_set_queue(struct mtk_eth *eth, struct mtk_foe_entry *entry,
  			    unsigned int queue)
  {
-@@ -522,6 +678,22 @@
+@@ -522,6 +678,22 @@ mtk_flow_entry_match(struct mtk_eth *eth
  }
  
  static void
@@ -209,7 +209,7 @@
  __mtk_foe_entry_clear(struct mtk_ppe *ppe, struct mtk_flow_entry *entry,
  		      bool set_state)
  {
-@@ -536,14 +708,8 @@
+@@ -536,14 +708,8 @@ __mtk_foe_entry_clear(struct mtk_ppe *pp
  		return;
  	}
  
@@ -226,7 +226,7 @@
  	entry->hash = 0xffff;
  
  	if (entry->type != MTK_FLOW_TYPE_L2_SUBFLOW)
-@@ -554,6 +720,66 @@
+@@ -554,6 +720,66 @@ __mtk_foe_entry_clear(struct mtk_ppe *pp
  	kfree(entry);
  }
  
@@ -293,7 +293,7 @@
  static int __mtk_foe_entry_idle_time(struct mtk_ppe *ppe, u32 ib1)
  {
  	u32 ib1_ts_mask = mtk_get_ib1_ts_mask(ppe->eth);
-@@ -748,7 +974,7 @@
+@@ -748,7 +974,7 @@ int mtk_foe_entry_commit(struct mtk_ppe
  
  static void
  mtk_foe_entry_commit_subflow(struct mtk_ppe *ppe, struct mtk_flow_entry *entry,
@@ -302,7 +302,7 @@
  {
  	const struct mtk_soc_data *soc = ppe->eth->soc;
  	struct mtk_flow_entry *flow_info;
-@@ -763,9 +989,12 @@
+@@ -763,9 +989,12 @@ mtk_foe_entry_commit_subflow(struct mtk_
  
  	flow_info->type = MTK_FLOW_TYPE_L2_SUBFLOW;
  	flow_info->hash = hash;
@@ -318,7 +318,7 @@
  
  	hwe = mtk_foe_get_entry(ppe, hash);
  	memcpy(&flow_info->data, hwe, soc->foe_entry_size);
-@@ -784,10 +1013,20 @@
+@@ -784,10 +1013,20 @@ mtk_foe_entry_commit_subflow(struct mtk_
  
  	*mtk_foe_entry_ib2(ppe->eth, &flow_info->data) = entry->data.bridge.ib2;
  
@@ -340,7 +340,7 @@
  {
  	const struct mtk_soc_data *soc = ppe->eth->soc;
  	struct hlist_head *head = &ppe->foe_flow[hash / soc->hash_offset];
-@@ -799,6 +1038,7 @@
+@@ -799,6 +1038,7 @@ void __mtk_ppe_check_skb(struct mtk_ppe
  	struct ethhdr *eh;
  	bool found = false;
  	int entry_len;
@@ -348,7 +348,7 @@
  	u8 *tag;
  
  	spin_lock_bh(&ppe_lock);
-@@ -809,6 +1049,8 @@
+@@ -809,6 +1049,8 @@ void __mtk_ppe_check_skb(struct mtk_ppe
  	entry_len = mtk_flow_entry_match_len(ppe->eth, hwe);
  	memcpy(&foe, hwe, entry_len);
  
@@ -357,7 +357,7 @@
  	hlist_for_each_entry_safe(entry, n, head, list) {
  		if (found ||
  		    !mtk_flow_entry_match(ppe->eth, entry, &foe, entry_len)) {
-@@ -817,9 +1059,16 @@
+@@ -817,9 +1059,16 @@ void __mtk_ppe_check_skb(struct mtk_ppe
  			continue;
  		}
  
@@ -375,7 +375,7 @@
  	}
  
  	if (found)
-@@ -856,7 +1105,8 @@
+@@ -856,7 +1105,8 @@ void __mtk_ppe_check_skb(struct mtk_ppe
  	if (!entry)
  		goto out;
  
@@ -405,7 +405,7 @@
  #define MTK_PPE_ENTRIES_SHIFT		4
  #define MTK_PPE_ENTRIES			(1024 << MTK_PPE_ENTRIES_SHIFT)
  #define MTK_PPE_HASH_MASK		(MTK_PPE_ENTRIES - 1)
-@@ -303,8 +314,11 @@
+@@ -303,8 +314,11 @@ struct mtk_flow_entry {
  	};
  	u8 type;
  	s8 wed_index;
@@ -417,7 +417,7 @@
  	struct mtk_foe_entry data;
  	struct rhash_head node;
  	unsigned long cookie;
-@@ -357,10 +371,12 @@
+@@ -357,10 +371,12 @@ int mtk_ppe_stop(struct mtk_ppe *ppe);
  int mtk_ppe_prepare_reset(struct mtk_ppe *ppe);
  struct mtk_foe_accounting *mtk_ppe_mib_entry_read(struct mtk_ppe *ppe, u16 index);
  
@@ -432,7 +432,7 @@
  {
  	u16 now, diff;
  
-@@ -376,7 +392,7 @@
+@@ -376,7 +392,7 @@ mtk_ppe_check_skb(struct mtk_ppe *ppe, s
  		return;
  
  	ppe->foe_check_time[hash] = now;
@@ -441,7 +441,7 @@
  }
  
  int mtk_foe_entry_prepare(struct mtk_eth *eth, struct mtk_foe_entry *entry,
-@@ -405,6 +421,8 @@
+@@ -405,6 +421,8 @@ int mtk_foe_entry_set_queue(struct mtk_e
  			    unsigned int queue);
  int mtk_foe_entry_commit(struct mtk_ppe *ppe, struct mtk_flow_entry *entry);
  void mtk_foe_entry_clear(struct mtk_ppe *ppe, struct mtk_flow_entry *entry);
@@ -452,7 +452,7 @@
  			     int *idle);
 --- a/drivers/net/ethernet/mediatek/mtk_ppe_offload.c
 +++ b/drivers/net/ethernet/mediatek/mtk_ppe_offload.c
-@@ -227,7 +227,7 @@
+@@ -227,7 +227,7 @@ mtk_flow_get_dsa_port(struct net_device
  static int
  mtk_flow_set_output_device(struct mtk_eth *eth, struct mtk_foe_entry *foe,
  			   struct net_device *dev, const u8 *dest_mac,
@@ -461,7 +461,7 @@
  {
  	struct mtk_wdma_info info = {};
  	struct mtk_mac *mac;
-@@ -255,6 +255,7 @@
+@@ -255,6 +255,7 @@ mtk_flow_set_output_device(struct mtk_et
  			pse_port = 3;
  		}
  		*wed_index = info.wdma_idx;
@@ -469,7 +469,7 @@
  		goto out;
  	}
  
-@@ -322,6 +323,7 @@
+@@ -322,6 +323,7 @@ mtk_flow_offload_replace(struct mtk_eth
  	int offload_type = 0;
  	int wed_index = -1;
  	u16 addr_type = 0;
@@ -477,7 +477,7 @@
  	u8 l4proto = 0;
  	int err = 0;
  	int i;
-@@ -531,7 +533,7 @@
+@@ -531,7 +533,7 @@ mtk_flow_offload_replace(struct mtk_eth
  	}
  
  	err = mtk_flow_set_output_device(eth, &foe, odev, data.eth.h_dest,
@@ -486,7 +486,7 @@
  	if (err)
  		return err;
  
-@@ -554,7 +556,9 @@
+@@ -554,7 +556,9 @@ mtk_flow_offload_replace(struct mtk_eth
  	entry->cookie = f->cookie;
  	memcpy(&entry->data, &foe, sizeof(entry->data));
  	entry->wed_index = wed_index;
@@ -496,7 +496,7 @@
  
  	err = mtk_foe_entry_commit(eth->ppe[entry->ppe_index], entry);
  	if (err < 0)
-@@ -645,6 +649,66 @@
+@@ -645,6 +649,66 @@ int mtk_flow_offload_cmd(struct mtk_eth
  	return err;
  }
  
@@ -575,7 +575,7 @@
  struct mtk_wed_flow_block_priv {
  	struct mtk_wed_hw *hw;
  	struct net_device *dev;
-@@ -522,6 +525,8 @@
+@@ -522,6 +525,8 @@ mtk_wed_assign(struct mtk_wed_device *de
  
  out:
  	hw->wed_dev = dev;
@@ -584,7 +584,7 @@
  	return hw;
  }
  
-@@ -1136,6 +1141,9 @@
+@@ -1136,6 +1141,9 @@ __mtk_wed_detach(struct mtk_wed_device *
  {
  	struct mtk_wed_hw *hw = dev->hw;
  
@@ -594,7 +594,7 @@
  	mtk_wed_deinit(dev);
  
  	mtk_wdma_rx_reset(dev);
-@@ -1171,6 +1179,24 @@
+@@ -1171,6 +1179,24 @@ __mtk_wed_detach(struct mtk_wed_device *
  	hw->wed_dev = NULL;
  }
  
@@ -619,7 +619,7 @@
  static void
  mtk_wed_detach(struct mtk_wed_device *dev)
  {
-@@ -1970,7 +1996,7 @@
+@@ -1970,7 +1996,7 @@ mtk_wed_wdma_tx_ring_setup(struct mtk_we
  
  static void
  mtk_wed_ppe_check(struct mtk_wed_device *dev, struct sk_buff *skb,
@@ -628,7 +628,7 @@
  {
  	struct mtk_eth *eth = dev->hw->eth;
  	struct ethhdr *eh;
-@@ -1984,7 +2010,22 @@
+@@ -1984,7 +2010,22 @@ mtk_wed_ppe_check(struct mtk_wed_device
  	skb_set_mac_header(skb, 0);
  	eh = eth_hdr(skb);
  	skb->protocol = eh->h_proto;
@@ -652,7 +652,7 @@
  }
  
  static void
-@@ -2824,6 +2865,7 @@
+@@ -2824,6 +2865,7 @@ void mtk_wed_add_hw(struct device_node *
  		.rro_rx_ring_setup = mtk_wed_rro_rx_ring_setup,
  		.msdu_pg_rx_ring_setup = mtk_wed_msdu_pg_rx_ring_setup,
  		.ind_rx_ring_setup = mtk_wed_ind_rx_ring_setup,
@@ -662,7 +662,7 @@
  	struct platform_device *pdev;
 --- a/drivers/net/ethernet/mediatek/mtk_wed.h
 +++ b/drivers/net/ethernet/mediatek/mtk_wed.h
-@@ -185,6 +185,8 @@
+@@ -185,6 +185,8 @@ void mtk_wed_add_hw(struct device_node *
  void mtk_wed_exit(void);
  int mtk_wed_flow_add(int index);
  void mtk_wed_flow_remove(int index);
@@ -671,7 +671,7 @@
  void mtk_wed_fe_reset(void);
  void mtk_wed_fe_reset_complete(void);
  #else
-@@ -206,6 +208,13 @@
+@@ -206,6 +208,13 @@ static inline void mtk_wed_flow_remove(i
  {
  }
  
@@ -695,7 +695,7 @@
  
  enum mtk_wed_wo_cmd {
  	MTK_WED_WO_CMD_WED_CFG,
-@@ -188,6 +189,9 @@
+@@ -188,6 +189,9 @@ struct mtk_wed_device {
  					   struct mtk_wed_wo_rx_stats *stats);
  		int (*reset)(struct mtk_wed_device *wed);
  		void (*reset_complete)(struct mtk_wed_device *wed);
@@ -705,7 +705,7 @@
  	} wlan;
  #endif
  };
-@@ -204,7 +208,7 @@
+@@ -204,7 +208,7 @@ struct mtk_wed_ops {
  			  void *data, int len);
  	void (*detach)(struct mtk_wed_device *dev);
  	void (*ppe_check)(struct mtk_wed_device *dev, struct sk_buff *skb,
@@ -714,7 +714,7 @@
  
  	void (*stop)(struct mtk_wed_device *dev);
  	void (*start)(struct mtk_wed_device *dev, u32 irq_mask);
-@@ -225,6 +229,10 @@
+@@ -225,6 +229,10 @@ struct mtk_wed_ops {
  				      void __iomem *regs);
  	int (*ind_rx_ring_setup)(struct mtk_wed_device *dev,
  				 void __iomem *regs);
@@ -725,7 +725,7 @@
  };
  
  extern const struct mtk_wed_ops __rcu *mtk_soc_wed_ops;
-@@ -288,8 +296,8 @@
+@@ -288,8 +296,8 @@ static inline bool mtk_wed_is_amsdu_supp
  	(_dev)->ops->irq_set_mask(_dev, _mask)
  #define mtk_wed_device_rx_ring_setup(_dev, _ring, _regs, _reset) \
  	(_dev)->ops->rx_ring_setup(_dev, _ring, _regs, _reset)
@@ -736,7 +736,7 @@
  #define mtk_wed_device_update_msg(_dev, _id, _msg, _len) \
  	(_dev)->ops->msg_update(_dev, _id, _msg, _len)
  #define mtk_wed_device_stop(_dev) (_dev)->ops->stop(_dev)
-@@ -304,6 +312,8 @@
+@@ -304,6 +312,8 @@ static inline bool mtk_wed_is_amsdu_supp
  	(_dev)->ops->msdu_pg_rx_ring_setup(_dev, _ring, _regs)
  #define mtk_wed_device_ind_rx_ring_setup(_dev, _regs) \
  	(_dev)->ops->ind_rx_ring_setup(_dev, _regs)
@@ -745,7 +745,7 @@
  
  #else
  static inline bool mtk_wed_device_active(struct mtk_wed_device *dev)
-@@ -319,7 +329,8 @@
+@@ -319,7 +329,8 @@ static inline bool mtk_wed_device_active
  #define mtk_wed_device_irq_get(_dev, _mask) 0
  #define mtk_wed_device_irq_set_mask(_dev, _mask) do {} while (0)
  #define mtk_wed_device_rx_ring_setup(_dev, _ring, _regs, _reset) -ENODEV
@@ -755,7 +755,7 @@
  #define mtk_wed_device_update_msg(_dev, _id, _msg, _len) -ENODEV
  #define mtk_wed_device_stop(_dev) do {} while (0)
  #define mtk_wed_device_dma_reset(_dev) do {} while (0)
-@@ -328,6 +339,8 @@
+@@ -328,6 +339,8 @@ static inline bool mtk_wed_device_active
  #define mtk_wed_device_rro_rx_ring_setup(_dev, _ring, _regs) -ENODEV
  #define mtk_wed_device_msdu_pg_rx_ring_setup(_dev, _ring, _regs) -ENODEV
  #define mtk_wed_device_ind_rx_ring_setup(_dev, _regs) -ENODEV
@@ -766,7 +766,7 @@
  #endif
 --- a/drivers/net/ethernet/mediatek/mtk_eth_soc.c
 +++ b/drivers/net/ethernet/mediatek/mtk_eth_soc.c
-@@ -2604,7 +2604,7 @@
+@@ -2604,7 +2604,7 @@ static int mtk_poll_rx(struct napi_struc
  		}
  
  		if (reason == MTK_PPE_CPU_REASON_HIT_UNBIND_RATE_REACHED)

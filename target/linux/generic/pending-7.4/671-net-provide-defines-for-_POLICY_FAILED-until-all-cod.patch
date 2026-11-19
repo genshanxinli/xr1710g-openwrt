@@ -12,7 +12,7 @@ Signed-off-by: Jonas Gorski <jogo@openwrt.org>
 ---
 --- a/include/uapi/linux/fib_rules.h
 +++ b/include/uapi/linux/fib_rules.h
-@@ -95,6 +95,8 @@
+@@ -95,6 +95,8 @@ enum {
  	__FR_ACT_MAX,
  };
  
@@ -23,7 +23,7 @@ Signed-off-by: Jonas Gorski <jogo@openwrt.org>
  #endif
 --- a/include/uapi/linux/icmpv6.h
 +++ b/include/uapi/linux/icmpv6.h
-@@ -127,6 +127,8 @@
+@@ -127,6 +127,8 @@ struct icmp6hdr {
  #define ICMPV6_POLICY_FAIL		5
  #define ICMPV6_REJECT_ROUTE		6
  
@@ -34,7 +34,7 @@ Signed-off-by: Jonas Gorski <jogo@openwrt.org>
   */
 --- a/include/uapi/linux/rtnetlink.h
 +++ b/include/uapi/linux/rtnetlink.h
-@@ -277,6 +277,8 @@
+@@ -277,6 +277,8 @@ enum {
  	__RTN_MAX
  };
  

@@ -26,7 +26,7 @@ Link: https://lore.kernel.org/all/20261004100741.71711-2-pepe.schlehofer@gmail.c
 ---
 --- a/drivers/media/usb/dvb-usb-v2/az6007.c
 +++ b/drivers/media/usb/dvb-usb-v2/az6007.c
-@@ -526,7 +526,7 @@
+@@ -526,7 +526,7 @@ static int az6007_ci_poll_slot_status(st
  
  	b = kmalloc(12, GFP_KERNEL);
  	if (!b)
@@ -35,7 +35,7 @@ Link: https://lore.kernel.org/all/20261004100741.71711-2-pepe.schlehofer@gmail.c
  	mutex_lock(&state->ca_mutex);
  
  	req = 0xC5;
-@@ -535,16 +535,18 @@
+@@ -535,16 +535,18 @@ static int az6007_ci_poll_slot_status(st
  	blen = 1;
  
  	ret = az6007_read(d, req, value, index, b, blen);

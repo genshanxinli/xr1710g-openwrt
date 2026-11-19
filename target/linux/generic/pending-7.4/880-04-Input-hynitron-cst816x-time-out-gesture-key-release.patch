@@ -29,7 +29,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  
  struct cst816x_touch {
  	u8 gest;
-@@ -32,6 +35,9 @@
+@@ -32,6 +35,9 @@ struct cst816x_priv {
  	struct input_dev *input;
  	unsigned int keycode[CST816X_NUM_KEYS];
  	unsigned int keycodemax;
@@ -39,7 +39,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	struct touchscreen_properties prop;
  };
  
-@@ -175,8 +181,9 @@
+@@ -175,8 +181,9 @@ static void cst816x_reset(struct cst816x
  	msleep(100);
  }
  
@@ -50,7 +50,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	unsigned int key;
  	unsigned int i;
  
-@@ -186,34 +193,67 @@
+@@ -186,34 +193,67 @@ static void cst816x_release_keys(struct
  			continue;
  
  		input_report_key(priv->input, key, 0);
@@ -120,7 +120,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  static int cst816x_probe(struct i2c_client *client)
  {
  	struct device *dev = &client->dev;
-@@ -225,6 +265,8 @@
+@@ -225,6 +265,8 @@ static int cst816x_probe(struct i2c_clie
  		return -ENOMEM;
  
  	priv->client = client;
@@ -129,7 +129,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  
  	priv->reset = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
  	if (IS_ERR(priv->reset))
-@@ -242,6 +284,10 @@
+@@ -242,6 +284,10 @@ static int cst816x_probe(struct i2c_clie
  	if (error)
  		return dev_err_probe(dev, error, "input register failed\n");
  

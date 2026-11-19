@@ -19,7 +19,7 @@ Signed-off-by: David Bauer <mail@david-bauer.net>
  #include <linux/crc32.h>
  #include <linux/if_vlan.h>
  #include <linux/uaccess.h>
-@@ -7190,6 +7191,22 @@
+@@ -7190,6 +7191,22 @@ static void rtl_tally_reset(struct r8152
  	ocp_word_set_bits(tp, MCU_TYPE_PLA, PLA_RSTTALLY, TALLY_RESET);
  }
  
@@ -42,7 +42,7 @@ Signed-off-by: David Bauer <mail@david-bauer.net>
  static void r8152b_init(struct r8152 *tp)
  {
  	u32 ocp_data;
-@@ -7222,6 +7239,8 @@
+@@ -7222,6 +7239,8 @@ static void r8152b_init(struct r8152 *tp
  	/* enable rx aggregation */
  	ocp_word_clr_bits(tp, MCU_TYPE_USB, USB_USB_CTRL,
  			  RX_AGG_DISABLE | RX_ZERO_EN);
@@ -51,7 +51,7 @@ Signed-off-by: David Bauer <mail@david-bauer.net>
  }
  
  static void r8153_init(struct r8152 *tp)
-@@ -7339,6 +7358,8 @@
+@@ -7339,6 +7358,8 @@ static void r8153_init(struct r8152 *tp)
  		tp->coalesce = COALESCE_SLOW;
  		break;
  	}
@@ -60,7 +60,7 @@ Signed-off-by: David Bauer <mail@david-bauer.net>
  }
  
  static void r8153b_init(struct r8152 *tp)
-@@ -7409,6 +7430,8 @@
+@@ -7409,6 +7430,8 @@ static void r8153b_init(struct r8152 *tp
  	rtl_tally_reset(tp);
  
  	tp->coalesce = 15000;	/* 15 us */

@@ -18,7 +18,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
 ---
 --- a/drivers/net/dsa/yt921x.c
 +++ b/drivers/net/dsa/yt921x.c
-@@ -682,21 +682,22 @@
+@@ -682,21 +682,22 @@ static int yt921x_read_mib(struct yt921x
  		const struct yt921x_mib_desc *desc = &yt921x_mib_descs[i];
  		u32 reg = YT921X_MIBn_DATA0(port) + desc->offset;
  		u64 *valp = &((u64 *)mib)[i];

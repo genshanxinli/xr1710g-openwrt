@@ -24,7 +24,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -661,6 +661,18 @@
+@@ -661,6 +661,18 @@ struct airoha_gdm_port {
  #define AIROHA_RXD4_PPE_CPU_REASON	GENMASK(20, 16)
  #define AIROHA_RXD4_FOE_ENTRY		GENMASK(15, 0)
  
@@ -43,7 +43,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  struct airoha_ppe {
  	struct airoha_ppe_dev dev;
  	struct airoha_eth *eth;
-@@ -682,6 +694,12 @@
+@@ -682,6 +694,12 @@ struct airoha_ppe {
  	 */
  	bool foe_stats_enabled;
  
@@ -56,7 +56,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	struct dentry *debugfs_dir;
  };
  
-@@ -810,6 +828,7 @@
+@@ -810,6 +828,7 @@ void airoha_ppe_init_upd_mem(struct airo
  u32 airoha_ppe_get_total_num_entries(struct airoha_ppe *ppe);
  struct airoha_foe_entry *airoha_ppe_foe_get_entry(struct airoha_ppe *ppe,
  						  u32 hash);
@@ -66,7 +66,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -818,6 +818,77 @@
+@@ -818,6 +818,77 @@ static bool airoha_ppe_foe_compare_entry
  	return !memcmp(&e->data.d, &hwe->d, len - sizeof(hwe->ib1));
  }
  
@@ -146,7 +146,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	struct airoha_foe_entry *hwe = ppe->foe + hash * sizeof(*hwe);
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -242,6 +242,29 @@
+@@ -242,6 +242,29 @@ static int airoha_ppe_debugfs_foe_bind_s
  }
  DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_foe_bind);
  
@@ -176,7 +176,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  {
  	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-@@ -251,6 +274,8 @@
+@@ -251,6 +274,8 @@ int airoha_ppe_debugfs_init(struct airoh
  			    &airoha_ppe_debugfs_foe_bind_fops);
  	debugfs_create_file("usage", 0444, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_foe_usage_fops);

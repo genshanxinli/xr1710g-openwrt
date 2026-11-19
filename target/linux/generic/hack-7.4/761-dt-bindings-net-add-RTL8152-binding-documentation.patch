@@ -8,7 +8,7 @@ adapters.
 
 Signed-off-by: David Bauer <mail@david-bauer.net>
 ---
---- a/Documentation/devicetree/bindings/net/realtek,rtl8152.yaml
+--- /dev/null
 +++ b/Documentation/devicetree/bindings/net/realtek,rtl8152.yaml
 @@ -0,0 +1,36 @@
 +# SPDX-License-Identifier: GPL-2.0

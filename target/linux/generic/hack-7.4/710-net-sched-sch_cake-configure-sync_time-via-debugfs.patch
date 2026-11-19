@@ -31,7 +31,7 @@ Signed-off-by: Jonas Köppeler <j.koeppeler@tu-berlin.de>
  
  /* struct cobalt_params - contains codel and blue parameters
   * @interval:	codel initial drop rate
-@@ -2026,7 +2029,7 @@
+@@ -2026,7 +2029,7 @@ static struct sk_buff *cake_dequeue(stru
  	u32 len;
  
  	if (q->config->is_shared && q->rate_ns &&
@@ -40,7 +40,7 @@ Signed-off-by: Jonas Köppeler <j.koeppeler@tu-berlin.de>
  		u64 new_rate = READ_ONCE(q->config->rate_bps);
  		struct net_device *dev = qdisc_dev(sch);
  		struct cake_sched_data *other_priv;
-@@ -3404,8 +3407,13 @@
+@@ -3404,8 +3407,13 @@ static int __init cake_module_init(void)
  		return ret;
  
  	ret = register_qdisc(&cake_mq_qdisc_ops);
@@ -55,7 +55,7 @@ Signed-off-by: Jonas Köppeler <j.koeppeler@tu-berlin.de>
  
  	return ret;
  }
-@@ -3414,6 +3422,7 @@
+@@ -3414,6 +3422,7 @@ static void __exit cake_module_exit(void
  {
  	unregister_qdisc(&cake_qdisc_ops);
  	unregister_qdisc(&cake_mq_qdisc_ops);

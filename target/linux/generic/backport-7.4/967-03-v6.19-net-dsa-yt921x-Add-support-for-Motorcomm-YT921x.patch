@@ -20,7 +20,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
 ---
 --- a/drivers/net/dsa/Kconfig
 +++ b/drivers/net/dsa/Kconfig
-@@ -173,4 +173,11 @@
+@@ -173,4 +173,11 @@ config NET_DSA_VITESSE_VSC73XX_PLATFORM
  	  This enables support for the Vitesse VSC7385, VSC7388, VSC7395
  	  and VSC7398 SparX integrated ethernet switches, connected over
  	  a CPU-attached address bus and work in memory-mapped I/O mode.
@@ -34,7 +34,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
  endmenu
 --- a/drivers/net/dsa/Makefile
 +++ b/drivers/net/dsa/Makefile
-@@ -14,6 +14,7 @@
+@@ -14,6 +14,7 @@ obj-$(CONFIG_NET_DSA_SMSC_LAN9303_MDIO)
  obj-$(CONFIG_NET_DSA_VITESSE_VSC73XX) += vitesse-vsc73xx-core.o
  obj-$(CONFIG_NET_DSA_VITESSE_VSC73XX_PLATFORM) += vitesse-vsc73xx-platform.o
  obj-$(CONFIG_NET_DSA_VITESSE_VSC73XX_SPI) += vitesse-vsc73xx-spi.o
@@ -42,7 +42,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
  obj-y				+= b53/
  obj-y				+= hirschmann/
  obj-y				+= lantiq/
---- a/drivers/net/dsa/yt921x.c
+--- /dev/null
 +++ b/drivers/net/dsa/yt921x.c
 @@ -0,0 +1,2891 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
@@ -2936,7 +2936,7 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
 +MODULE_AUTHOR("David Yang <mmyangfl@gmail.com>");
 +MODULE_DESCRIPTION("Driver for Motorcomm YT921x Switch");
 +MODULE_LICENSE("GPL");
---- a/drivers/net/dsa/yt921x.h
+--- /dev/null
 +++ b/drivers/net/dsa/yt921x.h
 @@ -0,0 +1,504 @@
 +/* SPDX-License-Identifier: GPL-2.0-or-later */

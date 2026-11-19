@@ -40,7 +40,7 @@ Link: https://patch.msgid.link/20261013-rm500q-db-burst-v1-1-bb850d54e2c4@gmail.
 ---
 --- a/drivers/bus/mhi/host/pci_generic.c
 +++ b/drivers/bus/mhi/host/pci_generic.c
-@@ -490,10 +490,57 @@
+@@ -490,10 +490,57 @@ static const struct mhi_pci_dev_info mhi
  	.sideband_wake = true,
  };
  

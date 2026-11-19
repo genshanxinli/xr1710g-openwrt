@@ -13,7 +13,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 ---
 --- a/Documentation/devicetree/bindings/net/pse-pd/skyworks,si3474.yaml
 +++ b/Documentation/devicetree/bindings/net/pse-pd/skyworks,si3474.yaml
-@@ -25,6 +25,11 @@
+@@ -25,6 +25,11 @@ properties:
        - const: main
        - const: secondary
  

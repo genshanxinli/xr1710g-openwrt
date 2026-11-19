@@ -20,7 +20,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
 ---
 --- a/drivers/net/phy/as21xxx.c
 +++ b/drivers/net/phy/as21xxx.c
-@@ -964,6 +964,7 @@
+@@ -964,6 +964,7 @@ static struct phy_driver as21xxx_drivers
  		.led_hw_control_set = as21xxx_led_hw_control_set,
  		.led_hw_control_get = as21xxx_led_hw_control_get,
  		.led_polarity_set = as21xxx_led_polarity_set,
@@ -28,7 +28,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  	},
  	{
  		PHY_ID_MATCH_EXACT(PHY_ID_AS21011PB1),
-@@ -976,6 +977,7 @@
+@@ -976,6 +977,7 @@ static struct phy_driver as21xxx_drivers
  		.led_hw_control_set = as21xxx_led_hw_control_set,
  		.led_hw_control_get = as21xxx_led_hw_control_get,
  		.led_polarity_set = as21xxx_led_polarity_set,
@@ -36,7 +36,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  	},
  	{
  		PHY_ID_MATCH_EXACT(PHY_ID_AS21010PB1),
-@@ -988,6 +990,7 @@
+@@ -988,6 +990,7 @@ static struct phy_driver as21xxx_drivers
  		.led_hw_control_set = as21xxx_led_hw_control_set,
  		.led_hw_control_get = as21xxx_led_hw_control_get,
  		.led_polarity_set = as21xxx_led_polarity_set,
@@ -44,7 +44,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  	},
  	{
  		PHY_ID_MATCH_EXACT(PHY_ID_AS21010JB1),
-@@ -1000,6 +1003,7 @@
+@@ -1000,6 +1003,7 @@ static struct phy_driver as21xxx_drivers
  		.led_hw_control_set = as21xxx_led_hw_control_set,
  		.led_hw_control_get = as21xxx_led_hw_control_get,
  		.led_polarity_set = as21xxx_led_polarity_set,
@@ -52,7 +52,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  	},
  	{
  		PHY_ID_MATCH_EXACT(PHY_ID_AS21210PB1),
-@@ -1012,6 +1016,7 @@
+@@ -1012,6 +1016,7 @@ static struct phy_driver as21xxx_drivers
  		.led_hw_control_set = as21xxx_led_hw_control_set,
  		.led_hw_control_get = as21xxx_led_hw_control_get,
  		.led_polarity_set = as21xxx_led_polarity_set,
@@ -60,7 +60,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  	},
  	{
  		PHY_ID_MATCH_EXACT(PHY_ID_AS21510JB1),
-@@ -1024,6 +1029,7 @@
+@@ -1024,6 +1029,7 @@ static struct phy_driver as21xxx_drivers
  		.led_hw_control_set = as21xxx_led_hw_control_set,
  		.led_hw_control_get = as21xxx_led_hw_control_get,
  		.led_polarity_set = as21xxx_led_polarity_set,
@@ -68,7 +68,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  	},
  	{
  		PHY_ID_MATCH_EXACT(PHY_ID_AS21510PB1),
-@@ -1036,6 +1042,7 @@
+@@ -1036,6 +1042,7 @@ static struct phy_driver as21xxx_drivers
  		.led_hw_control_set = as21xxx_led_hw_control_set,
  		.led_hw_control_get = as21xxx_led_hw_control_get,
  		.led_polarity_set = as21xxx_led_polarity_set,
@@ -76,7 +76,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  	},
  	{
  		PHY_ID_MATCH_EXACT(PHY_ID_AS21511JB1),
-@@ -1048,6 +1055,7 @@
+@@ -1048,6 +1055,7 @@ static struct phy_driver as21xxx_drivers
  		.led_hw_control_set = as21xxx_led_hw_control_set,
  		.led_hw_control_get = as21xxx_led_hw_control_get,
  		.led_polarity_set = as21xxx_led_polarity_set,
@@ -84,7 +84,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  	},
  	{
  		PHY_ID_MATCH_EXACT(PHY_ID_AS21210JB1),
-@@ -1060,6 +1068,7 @@
+@@ -1060,6 +1068,7 @@ static struct phy_driver as21xxx_drivers
  		.led_hw_control_set = as21xxx_led_hw_control_set,
  		.led_hw_control_get = as21xxx_led_hw_control_get,
  		.led_polarity_set = as21xxx_led_polarity_set,
@@ -92,7 +92,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  	},
  	{
  		PHY_ID_MATCH_EXACT(PHY_ID_AS21511PB1),
-@@ -1072,6 +1081,7 @@
+@@ -1072,6 +1081,7 @@ static struct phy_driver as21xxx_drivers
  		.led_hw_control_set = as21xxx_led_hw_control_set,
  		.led_hw_control_get = as21xxx_led_hw_control_get,
  		.led_polarity_set = as21xxx_led_polarity_set,
@@ -102,7 +102,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  module_phy_driver(as21xxx_drivers);
 --- a/drivers/net/phy/phy_device.c
 +++ b/drivers/net/phy/phy_device.c
-@@ -1868,7 +1868,8 @@
+@@ -1868,7 +1868,8 @@ static void phy_detach_internal(struct p
  	}
  
  	/* Assert the reset signal */
@@ -114,7 +114,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  	 * The phydev might go away on the put_device() below, so avoid
 --- a/include/linux/phy.h
 +++ b/include/linux/phy.h
-@@ -64,6 +64,7 @@
+@@ -64,6 +64,7 @@ extern const int phy_basic_ports_array[3
  #define PHY_RST_AFTER_CLK_EN	0x00000002
  #define PHY_POLL_CABLE_TEST	0x00000004
  #define PHY_ALWAYS_CALL_SUSPEND	0x00000008

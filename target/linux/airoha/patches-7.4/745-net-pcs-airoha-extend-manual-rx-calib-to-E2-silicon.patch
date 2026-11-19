@@ -18,7 +18,7 @@ Signed-off-by: Gilly <gilroyscott1970@gmail.com>
 ---
 --- a/drivers/net/pcs/airoha/pcs-airoha-common.c
 +++ b/drivers/net/pcs/airoha/pcs-airoha-common.c
-@@ -1317,8 +1317,8 @@
+@@ -1317,8 +1317,8 @@ static int airoha_pcs_probe(struct platf
  		return dev_err_probe(dev, PTR_ERR(priv->xfi_rst), "failed to get xfi reset lines\n");
  
  	/* For Ethernet PCS, read the AN7581 SoC revision to check if
@@ -29,7 +29,7 @@ Signed-off-by: Gilly <gilroyscott1970@gmail.com>
  	 */
  	if (device_is_compatible(dev, "airoha,an7581-pcs-eth")) {
  		u32 val;
-@@ -1327,7 +1327,7 @@
+@@ -1327,7 +1327,7 @@ static int airoha_pcs_probe(struct platf
  		if (ret)
  			return ret;
  

@@ -29,7 +29,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 ---
 --- a/net/netfilter/nf_flow_table_ip.c
 +++ b/net/netfilter/nf_flow_table_ip.c
-@@ -504,6 +504,36 @@
+@@ -504,6 +504,36 @@ static void nf_flow_bridge_vlan_push(str
  				       other->encap[0].id);
  }
  
@@ -66,7 +66,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static int nf_flow_offload_forward(struct nf_flowtable_ctx *ctx,
  				   struct nf_flowtable *flow_table,
  				   struct flow_offload_tuple_rhash *tuplehash,
-@@ -554,10 +584,11 @@
+@@ -554,10 +584,11 @@ static int nf_flow_offload_forward(struc
  				    FIELD_PREP(INET_DSCP_MASK,
  					       tuplehash->tuple.dscp));
  
@@ -80,7 +80,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	if (flow->priority)
  		skb->priority = flow->priority;
  	else if (READ_ONCE(dev_net(skb->dev)->ipv4.sysctl_ip_fwd_update_priority))
-@@ -1197,10 +1228,11 @@
+@@ -1197,10 +1228,11 @@ static int nf_flow_offload_ipv6_forward(
  				    FIELD_PREP(INET_DSCP_MASK,
  					       tuplehash->tuple.dscp));
  

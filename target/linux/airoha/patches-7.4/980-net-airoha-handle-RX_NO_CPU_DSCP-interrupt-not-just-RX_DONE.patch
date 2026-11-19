@@ -36,7 +36,7 @@ Signed-off-by: Gilly <gilroyscott1970@gmail.com>
  #define RX31_NO_CPU_DSCP_INT_MASK	BIT(31)
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -1164,13 +1164,16 @@
+@@ -1164,13 +1164,16 @@ static int airoha_qdma_rx_napi_poll(stru
  		int i, qid = q - &qdma->q_rx[0];
  		int intr_reg = qid < RX_DONE_HIGH_OFFSET ? QDMA_INT_REG_IDX1
  							 : QDMA_INT_REG_IDX2;
@@ -54,7 +54,7 @@ Signed-off-by: Gilly <gilroyscott1970@gmail.com>
  		}
  	}
  
-@@ -1877,16 +1880,19 @@
+@@ -1877,16 +1880,19 @@ static irqreturn_t airoha_irq_handler(in
  	if (!test_bit(DEV_STATE_INITIALIZED, &qdma->eth->state))
  		return IRQ_NONE;
  

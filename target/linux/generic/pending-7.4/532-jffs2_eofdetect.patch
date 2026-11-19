@@ -5,7 +5,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
 ---
 --- a/fs/jffs2/build.c
 +++ b/fs/jffs2/build.c
-@@ -117,6 +117,16 @@
+@@ -117,6 +117,16 @@ static int jffs2_build_filesystem(struct
  	dbg_fsbuild("scanned flash completely\n");
  	jffs2_dbg_dump_block_lists_nolock(c);
  
@@ -24,7 +24,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  	/* Now scan the directory tree, increasing nlink according to every dirent found. */
 --- a/fs/jffs2/scan.c
 +++ b/fs/jffs2/scan.c
-@@ -148,8 +148,14 @@
+@@ -148,8 +148,14 @@ int jffs2_scan_medium(struct jffs2_sb_in
  		/* reset summary info for next eraseblock scan */
  		jffs2_sum_reset_collected(s);
  
@@ -41,7 +41,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  
  		if (ret < 0)
  			goto out;
-@@ -569,6 +575,17 @@
+@@ -569,6 +575,17 @@ full_scan:
  			return err;
  	}
  
