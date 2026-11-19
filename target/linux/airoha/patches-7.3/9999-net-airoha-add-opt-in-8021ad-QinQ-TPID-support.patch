@@ -45,7 +45,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -80,6 +80,17 @@ bool airoha_ppe_6rd_enabled(void)
+@@ -81,6 +81,17 @@ bool airoha_ppe_6rd_enabled(void)
  	return airoha_ppe_6rd;
  }
  
@@ -63,7 +63,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  /* -1: use the kernel bridge_input signal (default)
   *  0: force "routed" (TTL decrement) for A/B testing
   *  1: force "L2-bridged" (no TTL decrement) for A/B testing
-@@ -2365,6 +2376,18 @@ static void airoha_ppe_foe_entry_set_6rd
+@@ -2366,6 +2377,18 @@ static void airoha_ppe_foe_entry_set_6rd
  		hwe->ib1 |= AIROHA_FOE_IB1_BIND_TUNNEL_DECAP;
  }
  
@@ -82,7 +82,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
  					   struct flow_cls_offload *f)
  {
-@@ -2480,7 +2503,7 @@ static int airoha_ppe_flow_offload_repla
+@@ -2481,7 +2504,7 @@ static int airoha_ppe_flow_offload_repla
  			break;
  		case FLOW_ACTION_VLAN_PUSH:
  			if (data.vlan.num == 2 ||
@@ -91,7 +91,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  				return -EOPNOTSUPP;
  
  			data.vlan.hdr[data.vlan.num].id = act->vlan.vid;
-@@ -3214,6 +3237,12 @@ int airoha_ppe_init(struct airoha_eth *e
+@@ -3215,6 +3238,12 @@ int airoha_ppe_init(struct airoha_eth *e
  	if (err)
  		goto error_l2_flow_table_destroy;
  
@@ -104,7 +104,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	return 0;
  
  error_l2_flow_table_destroy:
-@@ -3243,4 +3272,7 @@ void airoha_ppe_deinit(struct airoha_eth
+@@ -3244,4 +3273,7 @@ void airoha_ppe_deinit(struct airoha_eth
  	rhashtable_destroy(&eth->ppe->l2_flows);
  	rhashtable_destroy(&eth->flow_table);
  	debugfs_remove(eth->ppe->debugfs_dir);
@@ -132,10 +132,10 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  {
  	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-@@ -778,6 +789,8 @@ int airoha_ppe_debugfs_init(struct airoh
- 			    &airoha_ppe_debugfs_6rd_fops);
- 	debugfs_create_file("mcast", 0444, ppe->debugfs_dir, ppe,
- 			    &airoha_ppe_debugfs_mcast_fops);
+@@ -779,6 +790,8 @@ int airoha_ppe_debugfs_init(struct airoh
+ 
+ 	debugfs_create_file("flush", 0200, ppe->debugfs_dir, ppe,
+ 			    &airoha_ppe_debugfs_flush_fops);
 +	debugfs_create_file("tpid", 0444, ppe->debugfs_dir, ppe,
 +			    &airoha_ppe_debugfs_tpid_fops);
  
