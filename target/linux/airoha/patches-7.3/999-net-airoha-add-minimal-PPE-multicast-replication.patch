@@ -35,18 +35,10 @@ are not measured on hardware here.
 
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
- drivers/net/ethernet/airoha/airoha_eth.h         |  14 +++
- drivers/net/ethernet/airoha/airoha_ppe.c         | 121 ++++++++++++++++++++++
- drivers/net/ethernet/airoha/airoha_ppe_debugfs.c | 105 ++++++++++++++++++++
- drivers/net/ethernet/airoha/airoha_regs.h        |   8 +
- 4 files changed, 246 insertions(+), 2 deletions(-)
-
-diff --git a/drivers/net/ethernet/airoha/airoha_eth.h b/drivers/net/ethernet/airoha/airoha_eth.h
-index 5f252ca..d9db0ce 100644
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -507,6 +507,14 @@ struct airoha_foe_stats64 {
- 	u64 packets;
+@@ -560,6 +560,14 @@ struct airoha_ppe_6rd {
+ 	u16 tunnel_mtu;		/* maximum inner packet size */
  };
  
 +/* Minimal multicast replication.  The PPE entry keeps the conduit PSE
@@ -60,10 +52,10 @@ index 5f252ca..d9db0ce 100644
  struct airoha_flow_data {
  	struct ethhdr eth;
  
-@@ -536,6 +544,12 @@ struct airoha_flow_data {
- 		u16 sid;
- 		u8 num;
- 	} pppoe;
+@@ -618,6 +626,12 @@ struct airoha_flow_data {
+ 	} dslite;
+ 
+ 	struct airoha_ppe_6rd sixrd;
 +
 +	/* DSA/switch destination bitmap for a multicast flow, zero for a
 +	 * unicast flow.  A multicast flow is only offloaded when at least
@@ -73,11 +65,9 @@ index 5f252ca..d9db0ce 100644
  };
  
  enum airoha_flow_entry_type {
-diff --git a/drivers/net/ethernet/airoha/airoha_ppe.c b/drivers/net/ethernet/airoha/airoha_ppe.c
-index df614f7..f3d976c 100644
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -482,6 +482,97 @@ static int airoha_get_dsa_port(struct net_device **dev)
+@@ -822,6 +822,97 @@ static int airoha_get_dsa_port(struct net_device **dev)
  #endif
  }
  
@@ -175,7 +165,7 @@ index df614f7..f3d976c 100644
  static void airoha_ppe_foe_set_bridge_addrs(struct airoha_foe_bridge *br,
  					    struct ethhdr *eh)
  {
-@@ -703,6 +794,14 @@ static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
+@@ -1094,6 +1185,14 @@ static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
  		}
  	}
  
@@ -190,7 +180,7 @@ index df614f7..f3d976c 100644
  	if (is_multicast_ether_addr(data->eth.h_dest))
  		val |= AIROHA_FOE_IB2_MULTICAST;
  
-@@ -755,7 +854,8 @@ static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
+@@ -1176,7 +1275,8 @@ static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
  	if (wlan_etype >= 0) {
  		l2->etype = wlan_etype;
  	} else if (dsa_port >= 0) {
@@ -200,7 +190,7 @@ index df614f7..f3d976c 100644
  		l2->etype |= !data->vlan.num ? BIT(15) : 0;
  	} else if (data->pppoe.num) {
  		l2->etype = ETH_P_PPP_SES;
-@@ -1702,9 +1802,26 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
+@@ -2362,9 +2462,26 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
  	}
  
  	if (!is_valid_ether_addr(data.eth.h_source) ||
@@ -225,16 +215,14 @@ index df614f7..f3d976c 100644
 +			return -EOPNOTSUPP;
 +	}
 +
- 	/* A flow whose ingress and egress devices are both ports of the same
- 	 * bridge never leaves L2, so the PPE must forward it without touching
- 	 * the IP TTL.  Routing -- including entering or leaving the bridge --
-diff --git a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-index d1909d2..d7c0861 100644
+ 	/* Allocate the meter only after every action and the L2 header
+ 	 * have been accepted: all the early returns above then stay
+ 	 * allocation-free, and from here on put_smac is the single
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -365,6 +365,109 @@ static int airoha_ppe_debugfs_tb_regs_show(struct seq_file *m, void *private)
+@@ -648,6 +648,109 @@ static int airoha_ppe_debugfs_6rd_show(struct seq_file *m, void *private)
  }
- DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_tb_regs);
+ DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_6rd);
  
 +/* Bound multicast entries and their replication port masks.  The masks
 + * live in the entry itself: the DSA/switch port bitmap is the low part of
@@ -342,17 +330,15 @@ index d1909d2..d7c0861 100644
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  {
  	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-@@ -380,6 +483,8 @@ int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
+@@ -663,6 +766,8 @@ int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  			    &airoha_ppe_debugfs_bind_rate_fops);
  	debugfs_create_file("tb_regs", 0444, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_tb_regs_fops);
 +	debugfs_create_file("mcast", 0444, ppe->debugfs_dir, ppe,
 +			    &airoha_ppe_debugfs_mcast_fops);
- 
- 	return 0;
- }
-diff --git a/drivers/net/ethernet/airoha/airoha_regs.h b/drivers/net/ethernet/airoha/airoha_regs.h
-index 3c6f8d0..1f6215d 100644
+ 	debugfs_create_file("6rd", 0444, ppe->debugfs_dir, ppe,
+ 			    &airoha_ppe_debugfs_6rd_fops);
+ 	debugfs_create_file("dslite", 0444, ppe->debugfs_dir, ppe,
 --- a/drivers/net/ethernet/airoha/airoha_regs.h
 +++ b/drivers/net/ethernet/airoha/airoha_regs.h
 @@ -345,6 +345,14 @@

@@ -35,94 +35,11 @@ application only.
 
 Signed-off-by: OpenWrt <openwrt@example.org>
 ---
- include/net/netfilter/nf_flow_table.h              |  2 ++
- net/netfilter/nf_flow_table_path.c                 | 10 ++++++++++
- net/netfilter/nf_flow_table_core.c                 |  1 +
- include/net/flow_offload.h                         |  1 +
- net/netfilter/nf_flow_table_offload.c              |  1 +
- drivers/net/ethernet/airoha/airoha_ppe.c           | 27 +++++++++++++++-----------
- 6 files changed, 31 insertions(+), 11 deletions(-)
-
---- a/include/net/netfilter/nf_flow_table.h
-+++ b/include/net/netfilter/nf_flow_table.h
-@@ -164,6 +164,7 @@
- 					encap_num:2,
- 					needs_gso_segment:1,
- 					bridge_path:1,
-+					bridge_input:1,
- 					bridge_vlan:1,
- 					port_vlans:2,
- 					tun_num:2,
-@@ -251,6 +252,7 @@
- 			u8			h_dest[ETH_ALEN];
- 			u8			needs_gso_segment:1,
- 						bridge_path:1,
-+						bridge_input:1,
- 						bridge_vlan:1,
- 						port_vlans:2;
- 		} out;
---- a/net/netfilter/nf_flow_table_path.c
-+++ b/net/netfilter/nf_flow_table_path.c
-@@ -403,6 +403,16 @@
- 	nft_default_forward_path(route, this_dst, dir);
- 	nft_default_forward_path(route, other_dst, !dir);
- 
-+	/* is_bridging is true only when the first packet arrived through a
-+	 * bridge port and the route was resolved through the bridge device:
-+	 * the flow is switched at L2 and must not consume an IP TTL.  The
-+	 * existing bridge_path bit cannot be used for this, because it only
-+	 * says that the egress path contains a DEV_PATH_BRIDGE, which is
-+	 * also true for a routed flow whose destination is on the LAN.
-+	 */
-+	route->tuple[dir].out.bridge_input = is_bridging;
-+	route->tuple[!dir].out.bridge_input = is_bridging;
-+
- 	if (route->tuple[dir].xmit_type	== FLOW_OFFLOAD_XMIT_NEIGH &&
- 	    nft_dev_forward_path(pkt, is_bridging, route, ct, dir, dir, ft) &&
- 	    is_bridging)
---- a/net/netfilter/nf_flow_table_core.c
-+++ b/net/netfilter/nf_flow_table_core.c
-@@ -154,6 +154,7 @@
- 		       ETH_ALEN);
- 		flow_tuple->out.ifidx = route->tuple[dir].out.ifindex;
- 		flow_tuple->bridge_path = route->tuple[dir].out.bridge_path;
-+		flow_tuple->bridge_input = route->tuple[dir].out.bridge_input;
- 		flow_tuple->bridge_vlan = route->tuple[dir].out.bridge_vlan;
- 		flow_tuple->port_vlans = route->tuple[dir].out.port_vlans;
- 		break;
---- a/include/net/flow_offload.h
-+++ b/include/net/flow_offload.h
-@@ -696,6 +696,7 @@
- 	enum flow_cls_command command;
- 	bool use_act_stats;
- 	unsigned long cookie;
-+	bool bridge_input;	/* flow is L2-switched, not routed */
- 	struct flow_rule *rule;
- 	struct flow_stats stats;
- 	u32 classid;
---- a/net/netfilter/nf_flow_table_offload.c
-+++ b/net/netfilter/nf_flow_table_offload.c
-@@ -901,6 +901,7 @@
- 	cls_flow->common.extack = extack;
- 	cls_flow->command = cmd;
- 	cls_flow->cookie = (unsigned long)tuple;
-+	cls_flow->bridge_input = tuple->bridge_input;
- }
- 
- static int nf_flow_offload_tuple(struct nf_flowtable *flowtable,
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -6,6 +6,7 @@
- 
- #include <linux/ip.h>
- #include <linux/ipv6.h>
-+#include <linux/module.h>
- #include <linux/of_platform.h>
- #include <linux/platform_device.h>
- #include <linux/rhashtable.h>
-@@ -24,6 +25,13 @@
- DEFINE_MUTEX(flow_offload_mutex);
- static DEFINE_SPINLOCK(ppe_lock);
+@@ -79,6 +79,13 @@ bool airoha_ppe_6rd_enabled(void)
+ 	return airoha_ppe_6rd;
+ }
  
 +/* -1: use the kernel bridge_input signal (default)
 + *  0: force "routed" (TTL decrement) for A/B testing
@@ -134,15 +51,15 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static const struct rhashtable_params airoha_flow_table_params = {
  	.head_offset = offsetof(struct airoha_flow_table_entry, node),
  	.key_offset = offsetof(struct airoha_flow_table_entry, cookie),
-@@ -1599,7 +1607,6 @@
+@@ -2297,7 +2304,6 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
  	struct flow_match_meta meta;
- 	u8 dsfield = 0, l4proto = 0;
+ 	u8 dsfield = 0, l4proto = 0, meter = AIROHA_PPE_METER_NONE;
  	struct airoha_foe_entry hwe;
 -	struct net_device *indev;
- 	bool bridged;
+ 	bool bridged, has_ports, use_3t, nat_rewrite = false;
  	int err, i, offload_type;
  	u16 addr_type = 0;
-@@ -1713,17 +1720,15 @@
+@@ -2510,17 +2516,15 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
  	 * This cannot be told from the dissector keys: bridged packets reach
  	 * the inet flowtable through br_netfilter and are encoded as
  	 * IPV4_HNAPT, exactly like routed ones.
@@ -168,3 +85,70 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
  	err = airoha_ppe_foe_entry_prepare(eth, &hwe, odev, offload_type,
  					   &data, l4proto, dsfield, bridged);
+--- a/include/net/flow_offload.h
++++ b/include/net/flow_offload.h
+@@ -696,6 +696,7 @@ struct flow_cls_offload {
+ 	enum flow_cls_command command;
+ 	bool use_act_stats;
+ 	unsigned long cookie;
++	bool bridge_input;	/* flow is L2-switched, not routed */
+ 	struct flow_rule *rule;
+ 	struct flow_stats stats;
+ 	u32 classid;
+--- a/include/net/netfilter/nf_flow_table.h
++++ b/include/net/netfilter/nf_flow_table.h
+@@ -164,6 +164,7 @@ struct flow_offload_tuple {
+ 					encap_num:2,
+ 					needs_gso_segment:1,
+ 					bridge_path:1,
++					bridge_input:1,
+ 					bridge_vlan:1,
+ 					port_vlans:2,
+ 					tun_num:2,
+@@ -251,6 +252,7 @@ struct nf_flow_route {
+ 			u8			h_dest[ETH_ALEN];
+ 			u8			needs_gso_segment:1,
+ 						bridge_path:1,
++						bridge_input:1,
+ 						bridge_vlan:1,
+ 						port_vlans:2;
+ 		} out;
+--- a/net/netfilter/nf_flow_table_core.c
++++ b/net/netfilter/nf_flow_table_core.c
+@@ -154,6 +154,7 @@ static int flow_offload_fill_route(struct flow_offload *flow,
+ 		       ETH_ALEN);
+ 		flow_tuple->out.ifidx = route->tuple[dir].out.ifindex;
+ 		flow_tuple->bridge_path = route->tuple[dir].out.bridge_path;
++		flow_tuple->bridge_input = route->tuple[dir].out.bridge_input;
+ 		flow_tuple->bridge_vlan = route->tuple[dir].out.bridge_vlan;
+ 		flow_tuple->port_vlans = route->tuple[dir].out.port_vlans;
+ 		break;
+--- a/net/netfilter/nf_flow_table_offload.c
++++ b/net/netfilter/nf_flow_table_offload.c
+@@ -901,6 +901,7 @@ static void nf_flow_offload_init(struct flow_cls_offload *cls_flow,
+ 	cls_flow->common.extack = extack;
+ 	cls_flow->command = cmd;
+ 	cls_flow->cookie = (unsigned long)tuple;
++	cls_flow->bridge_input = tuple->bridge_input;
+ }
+ 
+ static int nf_flow_offload_tuple(struct nf_flowtable *flowtable,
+--- a/net/netfilter/nf_flow_table_path.c
++++ b/net/netfilter/nf_flow_table_path.c
+@@ -418,6 +418,16 @@ int nft_flow_route(const struct nft_pktinfo *pkt, const struct nf_conn *ct,
+ 	nft_default_forward_path(route, this_dst, dir);
+ 	nft_default_forward_path(route, other_dst, !dir);
+ 
++	/* is_bridging is true only when the first packet arrived through a
++	 * bridge port and the route was resolved through the bridge device:
++	 * the flow is switched at L2 and must not consume an IP TTL.  The
++	 * existing bridge_path bit cannot be used for this, because it only
++	 * says that the egress path contains a DEV_PATH_BRIDGE, which is
++	 * also true for a routed flow whose destination is on the LAN.
++	 */
++	route->tuple[dir].out.bridge_input = is_bridging;
++	route->tuple[!dir].out.bridge_input = is_bridging;
++
+ 	if (route->tuple[dir].xmit_type	== FLOW_OFFLOAD_XMIT_NEIGH &&
+ 	    nft_dev_forward_path(pkt, is_bridging, route, ct, dir, dir, ft) < 0)
+ 		goto err_dst_release;
