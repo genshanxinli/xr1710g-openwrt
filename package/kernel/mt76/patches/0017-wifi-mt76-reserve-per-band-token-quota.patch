@@ -488,9 +488,9 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
 --- a/mt7996/debugfs.c
 +++ b/mt7996/debugfs.c
-@@ -1151,6 +1151,78 @@
- 	return 0;
+@@ -1483,6 +1483,78 @@
  }
+ DEFINE_SHOW_ATTRIBUTE(mt7996_msix);
  
 +static ssize_t
 +mt7996_token_quota_read(struct file *file, char __user *user_buf,
@@ -567,10 +567,10 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  int mt7996_init_debugfs(struct mt7996_dev *dev)
  {
  	struct dentry *dir;
-@@ -1186,6 +1258,8 @@
- 				    mt7996_rdd_monitor);
- 	debugfs_create_devm_seqfile(dev->mt76.dev, "token_info", dir,
+@@ -1524,6 +1596,8 @@
  				    mt7996_token_info_read);
+ 	debugfs_create_devm_seqfile(dev->mt76.dev, "npu_rro", dir,
+ 				    mt7996_npu_rro_read);
 +	debugfs_create_file("token_quota", 0600, dir, dev,
 +			    &mt7996_token_quota_ops);
  
