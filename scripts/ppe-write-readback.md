@@ -80,7 +80,7 @@ matches and the write is refused.
   works; that is the expected result, not a bug to work around.
 - A kernel built with `CONFIG_DEVMEM=y` and the busybox `devmem` applet
   enabled. The current tree does not have either:
-  `target/linux/generic/config-7.3` has `# CONFIG_DEVMEM is not set`, the config also sets
+  `target/linux/generic/config-7.4` has `# CONFIG_DEVMEM is not set`, the config also sets
   `CONFIG_IO_STRICT_DEVMEM=y`, and `BUSYBOX_DEFAULT_DEVMEM` is `n`. Every
   real run on today's image therefore refuses at the `/dev/mem` check, and
   only `--dry-run` works. Enabling `/dev/mem` (and allowing it to reach the

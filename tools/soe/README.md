@@ -6,7 +6,7 @@ data path and makes no performance claim.
 
 ## What this change adds
 
-- `target/linux/airoha/patches-7.3/970-net-airoha-soe-readonly-probe.patch`
+- `target/linux/airoha/patches-7.4/970-net-airoha-soe-readonly-probe.patch`
   - `drivers/net/ethernet/airoha/airoha_soe_probe.c`: a platform driver bound
     by `compatible = "airoha,en7581-soe"`.
   - `drivers/net/ethernet/airoha/Kconfig`: `NET_AIROHA_SOE` (tristate,
@@ -64,7 +64,7 @@ The symbol is default `n` and no package or target selects it, so a default
 image does not compile the object. To compile it explicitly:
 
 ```sh
-echo 'CONFIG_NET_AIROHA_SOE=y' >> target/linux/airoha/an7581/config-7.3
+echo 'CONFIG_NET_AIROHA_SOE=y' >> target/linux/airoha/an7581/config-7.4
 make target/linux/compile
 ```
 
@@ -73,10 +73,10 @@ a default image. The expected artifact is
 `build_dir/target-*/linux-*/drivers/net/ethernet/airoha/airoha_soe_probe.o`
 (built-in) or `airoha_soe_probe.ko` when built as a module.
 
-Patch applicability check, in a prepared 7.3 kernel source tree:
+Patch applicability check, in a prepared 7.4 kernel source tree:
 
 ```sh
-git apply --check target/linux/airoha/patches-7.3/970-net-airoha-soe-readonly-probe.patch
+git apply --check target/linux/airoha/patches-7.4/970-net-airoha-soe-readonly-probe.patch
 ```
 
 ## Read-only check
@@ -85,7 +85,7 @@ Static check of the added driver lines:
 
 ```sh
 grep -nE 'writel|writew|writeb|regmap_write|request_irq|xfrm|esp' \
-	target/linux/airoha/patches-7.3/970-net-airoha-soe-readonly-probe.patch
+	target/linux/airoha/patches-7.4/970-net-airoha-soe-readonly-probe.patch
 ```
 
 Matches in comments are expected; there must be no match in executable code.

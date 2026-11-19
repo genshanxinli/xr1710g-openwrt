@@ -32,9 +32,9 @@ claims:
   - id: ppe-table-24576
     claim: "目标配置开了 CONFIG_NET_AIROHA_FLOW_STATS=y，两颗 PPE 的 SRAM 数据表各 4096 项（合计 8192），整机 PPE 表为 8192 SRAM + 16384 DRAM = 24576，不是 32768 或 49152。"
     source:
-      - target/linux/airoha/patches-7.3/209-net-airoha-size-the-SRAM-tables-the-way-the-hardware-sees-them.patch:14
-      - target/linux/airoha/patches-7.3/209-net-airoha-size-the-SRAM-tables-the-way-the-hardware-sees-them.patch:36
-      - target/linux/airoha/an7581/config-7.3:279
+      - target/linux/airoha/patches-7.4/209-net-airoha-size-the-SRAM-tables-the-way-the-hardware-sees-them.patch:14
+      - target/linux/airoha/patches-7.4/209-net-airoha-size-the-SRAM-tables-the-way-the-hardware-sees-them.patch:36
+      - target/linux/airoha/an7581/config-7.4:279
     evidence: 代码
     date: "2026-11-15"
     status: supported
@@ -44,7 +44,7 @@ claims:
     claim: "整机 PPE 表是 32768（SRAM 16384 + DRAM 16384 共享），不是 49152。"
     source:
       - https://github.com/genshanxinli/xr1710g-openwrt/issues/31
-      - target/linux/airoha/patches-7.3/209-net-airoha-size-the-SRAM-tables-the-way-the-hardware-sees-them.patch:36
+      - target/linux/airoha/patches-7.4/209-net-airoha-size-the-SRAM-tables-the-way-the-hardware-sees-them.patch:36
     evidence: 代码
     date: "2026-11-15"
     status: refuted
@@ -62,9 +62,9 @@ claims:
   - id: ppe-counter-index-identity
     claim: "流计数器按流自身的 hash 做恒等映射：只有 hash < 8192 的 SRAM 流能拿到计数器，块外 hash 直接返回无计数器，不会折叠到别的流的槽位。"
     source:
-      - target/linux/airoha/patches-7.3/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:20
-      - target/linux/airoha/patches-7.3/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:47
-      - target/linux/airoha/patches-7.3/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:56
+      - target/linux/airoha/patches-7.4/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:15
+      - target/linux/airoha/patches-7.4/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:20
+      - target/linux/airoha/patches-7.4/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:23
     evidence: 代码
     date: "2026-11-15"
     status: supported
@@ -73,8 +73,8 @@ claims:
   - id: ppe-hash-bijective
     claim: "PPE 的 hash 折叠对 32768 和 24576 两种表几何都覆盖全部槽位（32768→32768，24576→24576），且不引入每包 udiv。"
     source:
-      - target/linux/airoha/patches-7.3/212-net-airoha-address-PPE-entries-from-their-own-table.patch:29
-      - target/linux/airoha/patches-7.3/212-net-airoha-address-PPE-entries-from-their-own-table.patch:30
+      - target/linux/airoha/patches-7.4/212-net-airoha-address-PPE-entries-from-their-own-table.patch:29
+      - target/linux/airoha/patches-7.4/212-net-airoha-address-PPE-entries-from-their-own-table.patch:30
     evidence: 代码
     date: "2026-11-15"
     status: supported
@@ -83,10 +83,10 @@ claims:
   - id: bridge-ttl-hardware-path
     claim: "同一个 bridge 两个端口之间转发的流保持 IP TTL；PPE 只在这类流上清 IB1.BIND_TTL，routed 流仍递减。该修复只覆盖已绑定 PPE 的硬件路径，未绑定流仍由软件 ip_decrease_ttl() 递减。"
     source:
-      - target/linux/airoha/patches-7.3/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:15
-      - target/linux/airoha/patches-7.3/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:20
-      - target/linux/airoha/patches-7.3/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:23
-      - target/linux/airoha/patches-7.3/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:75
+      - target/linux/airoha/patches-7.4/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:14
+      - target/linux/airoha/patches-7.4/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:15
+      - target/linux/airoha/patches-7.4/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:20
+      - target/linux/airoha/patches-7.4/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:72
     evidence: 代码
     date: "2026-11-15"
     status: supported

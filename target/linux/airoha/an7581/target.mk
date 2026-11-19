@@ -3,7 +3,7 @@ SUBTARGET:=an7581
 BOARDNAME:=AN7581 / AN7566 / AN7551
 CPU_TYPE:=cortex-a53
 KERNELNAME:=Image dtbs
-KERNEL_PATCHVER:=7.3
+KERNEL_PATCHVER:=7.4
 FEATURES+=pwm
 
 DEFAULT_PACKAGES += \
@@ -35,7 +35,7 @@ DEFAULT_PACKAGES += \
 # entry, exactly like routed traffic.  Measured: it binds, and a 3.5M-packet
 # run spent 0.46 CPU-seconds against 34.3 for the same traffic unbound.
 #
-# generic/pending-7.3/675-01..675-05 are what a *bridge-family* flowtable
+# generic/pending-7.4/675-01..675-05 are what a *bridge-family* flowtable
 # needed.  Nothing here creates one any more (firewall4 has no
 # flow_offloading_bridge option), so those patches are retained rather than
 # used; removing them is a separate change that needs its own build test.

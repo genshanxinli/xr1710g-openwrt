@@ -3,7 +3,7 @@
 """Check that the 974 (BQL) and 968 (napi_complete_done) changes are really in
 the XR1710G release image.
 
-A patch file living in ``target/linux/airoha/patches-7.3`` proves nothing about
+A patch file living in ``target/linux/airoha/patches-7.4`` proves nothing about
 the image that is published: the release builder may use another branch, the
 kernel may not have been rebuilt after the patch was added, or the image may
 have been assembled from an older ``Image`` than the one in ``build_dir``.
@@ -14,7 +14,7 @@ anything or writes to the tree.
 Checks, in order:
 
   source   the kernel build source carries both changes; if no build tree is
-           given, the patch files in ``patches-7.3`` are checked instead.
+           given, the patch files in ``patches-7.4`` are checked instead.
   build    the kernel was compiled after the source changed (mtime chain),
            ``CONFIG_BQL=y`` is set, and the 974 accumulator functions are in
            ``airoha_eth.o``/``vmlinux``.
@@ -68,9 +68,9 @@ SIG_974_ADD = "airoha_qdma_tx_bql_add"
 SIG_974_FLUSH = "airoha_qdma_tx_bql_flush"
 SIG_974_CALL = "netdev_tx_completed_queue"
 
-PATCHES_REL = Path("target/linux/airoha/patches-7.3")
-KERNEL_DIR = "linux-7.3"
-KERNEL_KDIR_GLOB = "build_dir/target-*/linux-airoha_an7581/linux-7.3"
+PATCHES_REL = Path("target/linux/airoha/patches-7.4")
+KERNEL_DIR = "linux-7.4"
+KERNEL_KDIR_GLOB = "build_dir/target-*/linux-airoha_an7581/linux-7.4"
 IMAGE_DIR_REL = Path("bin/targets/airoha/an7581")
 MIN_INFLIGHT_DEFAULT = 64 * 1024
 MTIME_TOLERANCE = 2.0
@@ -409,8 +409,8 @@ def resolve_kernel_dir(build: Path) -> tuple[Path, Path] | None:
     if (build / "drivers/net/ethernet/airoha/airoha_eth.c").is_file():
         candidates.append(build)
     candidates.append(build / KERNEL_DIR)
-    candidates.extend(sorted(build.glob("target-*/linux-airoha_an7581/linux-7.3")))
-    candidates.extend(sorted(build.glob("linux-7.3")))
+    candidates.extend(sorted(build.glob("target-*/linux-airoha_an7581/linux-7.4")))
+    candidates.extend(sorted(build.glob("linux-7.4")))
     for cand in candidates:
         if (cand / "drivers/net/ethernet/airoha/airoha_eth.c").is_file():
             return cand, cand.parent
@@ -422,7 +422,7 @@ def find_kernel_image(kdir: Path) -> Path | None:
         candidate = kdir / name
         if candidate.is_file():
             return candidate
-    candidate = kdir / "linux-7.3/arch/arm64/boot/Image"
+    candidate = kdir / "linux-7.4/arch/arm64/boot/Image"
     return candidate if candidate.is_file() else None
 
 
@@ -738,7 +738,7 @@ def print_guidance() -> None:
     print("The gate is read-only: it did not flash, reboot or change anything.")
     print("To get an image that passes:")
     print("  1. Build from a tree that carries both changes (968 first, then 974).")
-    print("     If the branch has no 968/974 in patches-7.3, it will never be in the image.")
+    print("     If the branch has no 968/974 in patches-7.4, it will never be in the image.")
     print("  2. Rebuild the kernel and the image in one run, for example:")
     print("       make target/linux/clean")
     print("       make target/linux/compile")
@@ -765,7 +765,7 @@ def resolve_build_dir(args, repo: Path, report: Report) -> Path | None:
         path = Path(args.build_dir).resolve()
         resolved = resolve_kernel_dir(path)
         if resolved is None:
-            raise GateError(f"{path} is not a linux-7.3 kernel build tree", 2)
+            raise GateError(f"{path} is not a linux-7.4 kernel build tree", 2)
         return path
     auto = autodetect_build_dir(repo)
     if auto is not None:
@@ -798,7 +798,7 @@ def parse_args(argv):
         "Exit codes: 0 pass, 1 gate failure, 2 usage/input error, 3 cannot verify.",
     )
     parser.add_argument("--repo", default=None, help="repository root (default: parent of this script)")
-    parser.add_argument("--build-dir", default=None, help="OpenWrt build_dir or the linux-7.3 tree")
+    parser.add_argument("--build-dir", default=None, help="OpenWrt build_dir or the linux-7.4 tree")
     parser.add_argument("--image-dir", default=None, help="directory with the built images")
     parser.add_argument("--capture", default=None, help="offline capture file or directory")
     parser.add_argument(
@@ -831,7 +831,7 @@ def main(argv=None) -> int:
         if build_dir is not None:
             resolved = resolve_kernel_dir(build_dir)
             if resolved is None:
-                raise GateError(f"{build_dir} has no linux-7.3 kernel source", 3)
+                raise GateError(f"{build_dir} has no linux-7.4 kernel source", 3)
             kernel_dir, kdir = resolved
             print(f"kernel build: {kernel_dir}")
         image_dir = resolve_image_dir(args, repo, report)

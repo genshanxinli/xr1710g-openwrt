@@ -1,0 +1,282 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: npu: add a read-only tunnel mailbox probe
+
+debugfs npu/tunnel_probe exposes the mailbox state that carries tunnel
+mails without writing a single register.  Function slot 1 is the tunnel
+handler and it is dispatched on core 0's mailbox queue, so the probe
+reads MBQ0 CTRL0..3 and prints them with the CTRL3 status bits, the
+version string embedded in the rv32 firmware image and the tunnel packet
+counter when the running image publishes one.
+
+The doorbell (CTRL2) is never touched and no register is programmed, so
+the probe cannot queue a mail, change tunnel state or disturb the live
+mailbox.  It is the read-only first step for the tunnel offload work:
+on a stock v08 unit it shows whether slot 1 exists before any VXLAN,
+SRv6, MAP-T or L4S handling is considered.  The tunnel counter lives in
+the NDBG block of the Clanker firmware; stock v08 does not publish that
+block, so the count is reported as unavailable rather than as zero.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+--- a/drivers/net/ethernet/airoha/airoha_npu.c
++++ b/drivers/net/ethernet/airoha/airoha_npu.c
+@@ -3,11 +3,22 @@
+  * Copyright (c) 2025 AIROHA Inc
+  * Author: Lorenzo Bianconi <lorenzo@kernel.org>
+  */
++#define AIROHA_NPU_MBOX_SIZE			256
+ 
+-#include <linux/devcoredump.h>
+-#include <linux/devm-helpers.h>
+-#include <linux/firmware.h>
+-#include <linux/platform_device.h>
++/*
++ * ClankerNPU keeps a fixed field-debug block at the top of the NPU SRAM
++ * (host 0x1E906800).  Stock v08 does not publish it, so the tunnel counter
++ * is only read when the magic says the block is there.
++ */
++#define AIROHA_NPU_NDBG_BASE			0x6800
++#define AIROHA_NPU_NDBG_MAGIC			0x4e444247 /* "NDBG" */
++#define AIROHA_NPU_NDBG_LAYOUT			0x004
++#define AIROHA_NPU_NDBG_LAYOUT_VER		1
++#define AIROHA_NPU_NDBG_COUNTERS		0x280
++
++#define REG_NPU_LOCAL_SRAM		0x0
++
++#define NPU_PC_BASE_ADDR		0x305000
+ #include <linux/of_net.h>
+ #include <linux/of_platform.h>
+ #include <linux/of_reserved_mem.h>
+@@ -225,8 +236,37 @@
+ 	return __airoha_npu_send_msg(npu, func_id, data, len, data, len);
+ }
+ 
++static void airoha_npu_fw_version_scan(const struct firmware *fw,
++				       char *version, size_t len)
++{
++	const u8 *data = fw->data;
++	size_t i;
++
++	/* The image is raw RV32 code, so the version string has no fixed
++	 * offset.  It is the printable run that starts with "TLB<digit>"
++	 * (for example "TLB7.7.0.0_v08").
++	 */
++	for (i = 0; i + 4 < fw->size; i++) {
++		size_t n = 0;
++
++		if (memcmp(data + i, "TLB", 3) ||
++		    data[i + 3] < '0' || data[i + 3] > '9')
++			continue;
++
++		while (i + n < fw->size && n < len - 1 &&
++		       data[i + n] >= 0x20 && data[i + n] <= 0x7e) {
++			version[n] = data[i + n];
++			n++;
++		}
++
++		version[n] = '\0';
++		return;
++	}
++}
++
+ static int airoha_npu_load_firmware(struct device *dev, void __iomem *addr,
+-				    const char *fw_name, int fw_max_size)
++				    const char *fw_name, int fw_max_size,
++				    char *version, size_t version_len)
+ {
+ 	const struct firmware *fw;
+ 	int ret;
+@@ -244,6 +284,9 @@
+ 	}
+ 
+ 	memcpy_toio(addr, fw->data, fw->size);
++
++	if (version && version_len)
++		airoha_npu_fw_version_scan(fw, version, version_len);
+ out:
+ 	release_firmware(fw);
+ 
+@@ -251,7 +294,8 @@
+ }
+ 
+ static int
+-airoha_npu_load_firmware_from_dts(struct device *dev, void __iomem *addr,
++airoha_npu_load_firmware_from_dts(struct airoha_npu *npu,
++				  struct device *dev, void __iomem *addr,
+ 				  void __iomem *base)
+ {
+ 	const char *fw_names[2];
+@@ -264,17 +308,20 @@
+ 				     "invalid firmware-name property\n");
+ 
+ 	ret = airoha_npu_load_firmware(dev, addr, fw_names[0],
+-				       NPU_EN7581_FIRMWARE_RV32_MAX_SIZE);
++				       NPU_EN7581_FIRMWARE_RV32_MAX_SIZE,
++				       npu->fw_version,
++				       sizeof(npu->fw_version));
+ 	if (ret)
+ 		return ret;
+ 
+ 	return airoha_npu_load_firmware(dev, base + REG_NPU_LOCAL_SRAM,
+ 					fw_names[1],
+-					NPU_EN7581_FIRMWARE_DATA_MAX_SIZE);
++					NPU_EN7581_FIRMWARE_DATA_MAX_SIZE,
++					NULL, 0);
+ }
+ 
+-static int airoha_npu_run_firmware(struct device *dev, void __iomem *base,
+-				   struct resource *res)
++static int airoha_npu_run_firmware(struct airoha_npu *npu, struct device *dev,
++				   void __iomem *base, struct resource *res)
+ {
+ 	const struct airoha_npu_soc_data *soc;
+ 	void __iomem *addr;
+@@ -292,20 +339,92 @@
+ 	 * dts if available.
+ 	 */
+ 	if (of_find_property(dev->of_node, "firmware-name", NULL))
+-		return airoha_npu_load_firmware_from_dts(dev, addr, base);
++		return airoha_npu_load_firmware_from_dts(npu, dev, addr, base);
+ 
+ 	/* Load rv32 npu firmware */
+ 	ret = airoha_npu_load_firmware(dev, addr, soc->fw_rv32.name,
+-				       soc->fw_rv32.max_size);
++				       soc->fw_rv32.max_size,
++				       npu->fw_version,
++				       sizeof(npu->fw_version));
+ 	if (ret)
+ 		return ret;
+ 
+ 	/* Load data npu firmware */
+ 	return airoha_npu_load_firmware(dev, base + REG_NPU_LOCAL_SRAM,
+ 					soc->fw_data.name,
+-					soc->fw_data.max_size);
++					soc->fw_data.max_size, NULL, 0);
+ }
+ 
++#if IS_ENABLED(CONFIG_DEBUG_FS)
++static bool airoha_npu_tunnel_count(struct airoha_npu *npu, u32 *count)
++{
++	u32 magic, layout;
++
++	/* The NDBG counter block is in NPU SRAM behind the regmap; a stock
++	 * v08 image leaves it blank, which makes the count unavailable
++	 * rather than zero.
++	 */
++	if (regmap_read(npu->regmap, AIROHA_NPU_NDBG_BASE, &magic) ||
++	    magic != AIROHA_NPU_NDBG_MAGIC)
++		return false;
++
++	if (regmap_read(npu->regmap,
++			AIROHA_NPU_NDBG_BASE + AIROHA_NPU_NDBG_LAYOUT,
++			&layout) || layout != AIROHA_NPU_NDBG_LAYOUT_VER)
++		return false;
++
++	return !regmap_read(npu->regmap,
++			    AIROHA_NPU_NDBG_BASE + AIROHA_NPU_NDBG_COUNTERS,
++			    count);
++}
++
++/* Tunnel mails use function slot 1 and are dispatched on core 0's queue,
++ * so the four CTRL words of that queue are the slot-1 mailbox state.
++ * Reading them is enough: the probe never touches the doorbell (CTRL2) or
++ * any other register, and it stays useful while the mailbox is live.
++ * CTRL3 is the arg/status word: bits 14:11 are the function slot, bit 1
++ * is done, and bits 4:2 are the handler return value.
++ */
++static int airoha_npu_tunnel_probe_show(struct seq_file *m, void *private)
++{
++	struct airoha_npu *npu = m->private;
++	u32 word[4], status, count;
++	bool readable = true;
++	int i;
++
++	for (i = 0; i < ARRAY_SIZE(word); i++) {
++		if (regmap_read(npu->regmap, REG_CR_MBQ0_CTRL(i), &word[i])) {
++			readable = false;
++			break;
++		}
++	}
++
++	if (readable) {
++		/* CTRL3 is the arg/status word.  Report the done bit and the
++		 * handler return value as status, leaving the raw word in the
++		 * register dump above.
++		 */
++		status = word[3] & (MBOX_MSG_DONE | MBOX_MSG_STATUS);
++		seq_printf(m,
++			   "slot1 word0..3=0x%08x 0x%08x 0x%08x 0x%08x status=0x%08x fw=%s\n",
++			   word[0], word[1], word[2], word[3], status,
++			   npu->fw_version[0] ? npu->fw_version :
++			   "unavailable");
++	} else {
++		seq_puts(m,
++			 "slot1 word0..3=unavailable status=unavailable fw=unavailable\n");
++	}
++
++	if (airoha_npu_tunnel_count(npu, &count))
++		seq_printf(m, "tunnel=%u\n", count);
++	else
++		seq_puts(m, "tunnel=unavailable\n");
++
++	return 0;
++}
++DEFINE_SHOW_ATTRIBUTE(airoha_npu_tunnel_probe);
++#endif
++
+ static irqreturn_t airoha_npu_mbox_handler(int irq, void *npu_instance)
+ {
+ 	struct airoha_npu *npu = npu_instance;
+@@ -1021,7 +1140,7 @@
+ 			return -ENOMEM;
+ 	}
+ 
+-	err = airoha_npu_run_firmware(dev, base, &res);
++	err = airoha_npu_run_firmware(npu, dev, base, &res);
+ 	if (err)
+ 		return err;
+ 
+@@ -1050,8 +1169,19 @@
+ 	platform_set_drvdata(pdev, npu);
+ 
+ #if IS_ENABLED(CONFIG_DEBUG_FS)
+-	/* Read-only observation: npu/support_map and npu/counters.  Failure to
+-	 * create them is not fatal for the network data path.
++	{
++		struct dentry *dir;
++
++		dir = debugfs_create_dir("npu", NULL);
++		if (!IS_ERR_OR_NULL(dir))
++			debugfs_create_file("tunnel_probe", 0444, dir, npu,
++					    &airoha_npu_tunnel_probe_fops);
++	}
++#endif
++
++	return 0;
++}
++
+ 	 */
+ 	airoha_npu_debugfs_register(npu);
+ #endif
+--- a/include/linux/soc/airoha/airoha_offload.h
++++ b/include/linux/soc/airoha/airoha_offload.h
+@@ -69,6 +69,7 @@
+ #define NPU_NUM_IRQ		6
+ #define NPU_RX0_DESC_NUM	512
+ #define NPU_RX1_DESC_NUM	512
++#define NPU_FW_VERSION_LEN	48
+ 
+ /* CTRL */
+ #define NPU_RX_DMA_DESC_LAST_MASK	BIT(29)
+@@ -182,6 +183,11 @@
+ 
+ 	struct airoha_foe_stats __iomem *stats;
+ 
++	/* Version string embedded in the rv32 firmware image, cached at
++	 * probe so the debugfs probe does not have to read firmware again.
++	 */
++	char fw_version[NPU_FW_VERSION_LEN];
++
+ 	struct {
+ 		int (*ppe_init)(struct airoha_npu *npu);
+ 		int (*ppe_deinit)(struct airoha_npu *npu);

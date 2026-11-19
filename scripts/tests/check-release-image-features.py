@@ -84,14 +84,14 @@ HEADER_BQL = """struct airoha_gdm_dev {
 """
 
 STUB_C = r"""
-const char kernel_version[] = "Linux version 7.3 test-build";
+const char kernel_version[] = "Linux version 7.4 test-build";
 void airoha_qdma_tx_bql_add(void) {}
 void airoha_qdma_tx_bql_flush(void) {}
 int main(void) { return 0; }
 """
 
 STUB_NO_BQL = r"""
-const char kernel_version[] = "Linux version 7.3 test-build";
+const char kernel_version[] = "Linux version 7.4 test-build";
 int main(void) { return 0; }
 """
 
@@ -123,7 +123,7 @@ def write(path: Path, text: str | bytes) -> None:
 
 def make_repo(root: Path, patches: bool = True, bad_patches: bool = False) -> Path:
     repo = root / "repo"
-    patch_dir = repo / "target/linux/airoha/patches-7.3"
+    patch_dir = repo / "target/linux/airoha/patches-7.4"
     if patches:
         patch_dir.mkdir(parents=True, exist_ok=True)
         write(patch_dir / "968-net-airoha-pass-the-real-work-done.patch",
@@ -138,7 +138,7 @@ def make_build(root: Path, source: str = SOURCE_968_974, header: str = HEADER_BQ
     if CC is None:
         raise RuntimeError("a C compiler is needed for the build fixture")
     build = root / "build"
-    kernel = build / "linux-7.3"
+    kernel = build / "linux-7.4"
     driver = kernel / "drivers/net/ethernet/airoha"
     write(driver / "airoha_eth.c", source)
     write(driver / "airoha_eth.h", header)
@@ -149,7 +149,7 @@ def make_build(root: Path, source: str = SOURCE_968_974, header: str = HEADER_BQ
                    check=True, capture_output=True)
     subprocess.run([CC, str(root / "stub.c"), "-o", str(kernel / "vmlinux")],
                    check=True, capture_output=True)
-    write(build / "Image", b"Linux version 7.3 test-build\n" + b"K" * 64)
+    write(build / "Image", b"Linux version 7.4 test-build\n" + b"K" * 64)
     # A healthy build: source oldest, then object, vmlinux, Image.
     base = 1_700_000_000
     os.utime(driver / "airoha_eth.c", (base, base))

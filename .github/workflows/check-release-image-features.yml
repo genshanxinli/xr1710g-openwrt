@@ -1,7 +1,7 @@
 name: Check release image features
 
 # 974 (BQL) and 968 (napi_complete_done) have to be in the XR1710G image,
-# not merely in target/linux/airoha/patches-7.3.  The self-test job proves the
+# not merely in target/linux/airoha/patches-7.4.  The self-test job proves the
 # gate itself works on every change; the release-branch audit fails when the
 # branch that publishes images does not carry the changes (the release build
 # must also run the full build+image check, see docs/release-image-features-gate.md).
@@ -20,7 +20,7 @@ on:
       - 'scripts/check-release-image-features.py'
       - 'scripts/tests/check-release-image-features.py'
       - 'docs/release-image-features-gate.md'
-      - 'target/linux/airoha/patches-7.3/**'
+      - 'target/linux/airoha/patches-7.4/**'
       - '.github/workflows/check-release-image-features.yml'
   workflow_dispatch:
 

@@ -8,7 +8,7 @@ all device work lives on branch **`xr1710g`**.
 ### Where `xr1710g` comes from
 
 `xr1710g` is **based on the `kernel73` branch** of the upstream repository,
-which is where the AN7581 target, the kernel 7.3 port and the MediaTek MT7996
+which is where the AN7581 target, the kernel 7.4 port and the MediaTek MT7996
 work come from:
 
 ```

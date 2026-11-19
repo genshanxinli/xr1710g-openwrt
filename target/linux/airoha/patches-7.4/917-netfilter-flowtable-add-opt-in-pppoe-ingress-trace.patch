@@ -1,0 +1,243 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Sun, 15 Nov 2026 07:00:00 +0800
+Subject: [PATCH] netfilter: nf_flow_table: add an opt-in PPPoE ingress trace
+
+The software flowtable is the last netfilter layer that sees a PPPoE
+packet before the hardware entry takes over.  Its 8-byte session header
+makes the skb offsets and the TCP checksum accounting hard to reason
+about from the outside, so add a tracepoint that records the skb shape
+at the three points where a PPPoE flow is still visible:
+
+  ingress - nf_flow_tuple_encap(), before the flow lookup
+  pop     - nf_flow_encap_pop(), before the PPPoE header is pulled
+  popped  - nf_flow_encap_pop(), after the PPPoE header is pulled
+
+The event carries skb->len, the network/transport/mac header offsets,
+the data offset and linear length, the number of encapsulations, the
+PPPoE session id, the L4 protocol, skb->csum, the TCP/UDP checksum
+field, skb->ip_summed, csum_start and csum_offset.
+
+The tracepoint uses the standard static key and is off by default.  All
+three call sites sit in branches that already test for ETH_P_PPP_SES,
+so a kernel without CONFIG_TRACEPOINTS compiles the calls away, and a
+kernel with tracepoints enabled but this event disabled executes a
+patched NOP at each site when jump labels are available.  No return
+value, packet path or default changes.
+
+Collect with:
+
+  trace-cmd record -e nf_flow_table:nf_flow_pppoe
+  trace-cmd report
+
+This needs a kernel built with CONFIG_FTRACE (CONFIG_KERNEL_FTRACE=y in
+OpenWrt); the default airoha kernel has tracing off and compiles the
+tracepoint out.
+
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/net/netfilter/nf_flow_table_ip.c
++++ b/net/netfilter/nf_flow_table_ip.c
+@@ -22,6 +22,9 @@
+ #include <linux/tcp.h>
+ #include <linux/udp.h>
+ 
++#define CREATE_TRACE_POINTS
++#include <trace/events/nf_flow_table.h>
++
+ static int nf_flow_state_check(struct flow_offload *flow, int proto,
+ 			       struct sk_buff *skb, unsigned int thoff)
+ {
+@@ -186,6 +189,7 @@
+ 		phdr = (struct pppoe_hdr *)skb_network_header(skb);
+ 		tuple->encap[i].id = ntohs(phdr->sid);
+ 		tuple->encap[i].proto = skb->protocol;
++		trace_nf_flow_pppoe(skb, tuple, NF_FLOW_PPPOE_HOOK_INGRESS);
+ 		offset += PPPOE_SES_HLEN;
+ 		break;
+ 	}
+@@ -449,9 +453,13 @@
+ 			skb_reset_network_header(skb);
+ 			break;
+ 		case htons(ETH_P_PPP_SES):
++			trace_nf_flow_pppoe(skb, &tuplehash->tuple,
++					    NF_FLOW_PPPOE_HOOK_POP);
+ 			skb->protocol = __nf_flow_pppoe_proto(skb);
+ 			skb_pull_rcsum(skb, PPPOE_SES_HLEN);
+ 			skb_reset_network_header(skb);
++			trace_nf_flow_pppoe(skb, &tuplehash->tuple,
++					    NF_FLOW_PPPOE_HOOK_POPPED);
+ 			break;
+ 		}
+ 	}
+--- a/include/trace/events/nf_flow_table.h
++++ b/include/trace/events/nf_flow_table.h
+@@ -0,0 +1,169 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#undef TRACE_SYSTEM
++#define TRACE_SYSTEM nf_flow_table
++
++#if !defined(_TRACE_NF_FLOW_TABLE_H) || defined(TRACE_HEADER_MULTI_READ)
++#define _TRACE_NF_FLOW_TABLE_H
++
++#include <linux/if_ether.h>
++#include <linux/if_pppox.h>
++#include <linux/ip.h>
++#include <linux/ipv6.h>
++#include <linux/skbuff.h>
++#include <linux/tcp.h>
++#include <linux/tracepoint.h>
++#include <linux/udp.h>
++#include <net/ip.h>
++#include <net/netfilter/nf_flow_table.h>
++
++#define NF_FLOW_PPPOE_HOOK_INGRESS	0
++#define NF_FLOW_PPPOE_HOOK_POP		1
++#define NF_FLOW_PPPOE_HOOK_POPPED	2
++
++/*
++ * Shape of a PPPoE-encapsulated skb as the software flowtable sees it at
++ * lookup time and around nf_flow_encap_pop().  Disabled by default; when
++ * disabled, the tracepoint call sites are patched out by the static key.
++ */
++TRACE_EVENT(nf_flow_pppoe,
++
++	TP_PROTO(const struct sk_buff *skb,
++		 const struct flow_offload_tuple *tuple,
++		 u8 hook),
++
++	TP_ARGS(skb, tuple, hook),
++
++	TP_STRUCT__entry(
++		__field(unsigned int,	skb_len)
++		__field(unsigned int,	network_header)
++		__field(unsigned int,	transport_header)
++		__field(unsigned int,	mac_header)
++		__field(unsigned int,	data_offset)
++		__field(unsigned int,	headlen)
++		__field(unsigned int,	hook)
++		__field(unsigned int,	encap_count)
++		__field(unsigned int,	l4proto)
++		__field(unsigned int,	pppoe_session)
++		__field(unsigned int,	csum)
++		__field(unsigned int,	l4_csum)
++		__field(unsigned int,	ip_summed)
++		__field(unsigned int,	csum_start)
++		__field(unsigned int,	csum_offset)
++	),
++
++	TP_fast_assign(
++		const struct pppoe_hdr *phdr;
++		const struct iphdr *iph;
++		const struct ipv6hdr *ip6h;
++		const void *l4hdr;
++		u8 buf[sizeof(struct ipv6hdr)];
++		int off, l4off = -1;
++		__be16 *l4csum;
++		u8 version, i;
++
++		__entry->skb_len		= skb->len;
++		__entry->network_header		= skb->network_header;
++		__entry->transport_header	= skb->transport_header;
++		__entry->mac_header		= skb->mac_header;
++		__entry->data_offset		= skb->data - skb->head;
++		__entry->headlen		= skb_headlen(skb);
++		__entry->hook			= hook;
++		__entry->encap_count		= tuple ? tuple->encap_num : 0;
++		__entry->l4proto		= tuple ? tuple->l4proto : 0;
++		__entry->pppoe_session		= 0;
++		__entry->csum			= skb->csum;
++		__entry->l4_csum		= 0;
++		__entry->ip_summed		= skb->ip_summed;
++		__entry->csum_start		= skb->csum_start;
++		__entry->csum_offset		= skb->csum_offset;
++
++		for (i = 0; tuple && i < tuple->encap_num; i++) {
++			if (tuple->encap[i].proto == htons(ETH_P_PPP_SES))
++				__entry->pppoe_session = tuple->encap[i].id;
++		}
++
++		off = skb_network_offset(skb);
++		if (skb->protocol == htons(ETH_P_PPP_SES) &&
++		    !__entry->encap_count)
++			__entry->encap_count = 1;
++
++		if (off >= 0) {
++			if (skb->protocol == htons(ETH_P_PPP_SES)) {
++				/* The network header points at the PPPoE hdr. */
++				if (!__entry->pppoe_session) {
++					phdr = skb_header_pointer(skb, off,
++								  sizeof(*phdr),
++								  buf);
++					if (phdr)
++						__entry->pppoe_session =
++							ntohs(phdr->sid);
++				}
++				off += PPPOE_SES_HLEN;
++			}
++
++			version = 0;
++			l4hdr = skb_header_pointer(skb, off, 1, buf);
++			if (l4hdr)
++				version = *(const u8 *)l4hdr >> 4;
++
++			if (version == 4) {
++				iph = skb_header_pointer(skb, off,
++							 sizeof(*iph), buf);
++				if (iph && iph->ihl >= 5) {
++					if (!__entry->l4proto)
++						__entry->l4proto =
++							iph->protocol;
++					if (!ip_is_fragment(iph))
++						l4off = off + iph->ihl * 4;
++				}
++			} else if (version == 6) {
++				ip6h = skb_header_pointer(skb, off,
++							  sizeof(*ip6h), buf);
++				if (ip6h) {
++					if (!__entry->l4proto)
++						__entry->l4proto =
++							ip6h->nexthdr;
++					l4off = off + sizeof(*ip6h);
++				}
++			}
++
++			switch (__entry->l4proto) {
++			case IPPROTO_TCP:
++				if (l4off < 0)
++					break;
++				l4csum = skb_header_pointer(skb,
++					l4off + offsetof(struct tcphdr, check),
++					sizeof(*l4csum), buf);
++				if (l4csum)
++					__entry->l4_csum = ntohs(*l4csum);
++				break;
++			case IPPROTO_UDP:
++				if (l4off < 0)
++					break;
++				l4csum = skb_header_pointer(skb,
++					l4off + offsetof(struct udphdr, check),
++					sizeof(*l4csum), buf);
++				if (l4csum)
++					__entry->l4_csum = ntohs(*l4csum);
++				break;
++			}
++		}
++	),
++
++	TP_printk("hook=%s len=%u net=%u trans=%u mac=%u data=%u headlen=%u encap=%u pppoe=%u l4proto=%u csum=%#x l4csum=%#x ip_summed=%u csum_start=%u csum_off=%u",
++		  __print_symbolic(__entry->hook,
++				   { NF_FLOW_PPPOE_HOOK_INGRESS, "ingress" },
++				   { NF_FLOW_PPPOE_HOOK_POP, "pop" },
++				   { NF_FLOW_PPPOE_HOOK_POPPED, "popped" }),
++		  __entry->skb_len, __entry->network_header,
++		  __entry->transport_header, __entry->mac_header,
++		  __entry->data_offset, __entry->headlen,
++		  __entry->encap_count, __entry->pppoe_session,
++		  __entry->l4proto, __entry->csum, __entry->l4_csum,
++		  __entry->ip_summed, __entry->csum_start,
++		  __entry->csum_offset)
++);
++#endif /* _TRACE_NF_FLOW_TABLE_H */
++
++/* This part must be outside protection */
++#include <trace/define_trace.h>
