@@ -19,9 +19,11 @@ Renew: ZiMing Mo <msylgj@immortalwrt.org>
  3 files changed, 59 insertions(+), 4 deletions(-)
  create mode 100644 root/usr/share/firewall4/templates/zone-fullcone.uc
 
---- a/root/usr/share/firewall4/templates/ruleset.uc
-+++ b/root/usr/share/firewall4/templates/ruleset.uc
-@@ -327,6 +327,12 @@
+---
+diff -urN fw4orig/root/usr/share/firewall4/templates/ruleset.uc fw4test2/root/usr/share/firewall4/templates/ruleset.uc
+--- a/root/usr/share/firewall4/templates/ruleset.uc	2026-11-19 12:42:13.064511717 +0800
++++ b/root/usr/share/firewall4/templates/ruleset.uc	2026-11-19 12:41:55.915226378 +0800
+@@ -333,6 +333,12 @@
  {%   for (let redirect in fw4.redirects(`dstnat_${zone.name}`)): %}
  		{%+ include("redirect.uc", { fw4, zone, redirect }) %}
  {%   endfor %}
@@ -34,7 +36,7 @@ Renew: ZiMing Mo <msylgj@immortalwrt.org>
  {%   fw4.includes('chain-append', `dstnat_${zone.name}`) %}
  	}
  
-@@ -337,20 +343,26 @@
+@@ -343,20 +349,26 @@
  {%   for (let redirect in fw4.redirects(`srcnat_${zone.name}`)): %}
  		{%+ include("redirect.uc", { fw4, zone, redirect }) %}
  {%   endfor %}
@@ -63,16 +65,18 @@ Renew: ZiMing Mo <msylgj@immortalwrt.org>
  {%   fw4.includes('chain-append', `srcnat_${zone.name}`) %}
  	}
  
---- a/root/usr/share/firewall4/templates/zone-fullcone.uc
-+++ b/root/usr/share/firewall4/templates/zone-fullcone.uc
+diff -urN fw4orig/root/usr/share/firewall4/templates/zone-fullcone.uc fw4test2/root/usr/share/firewall4/templates/zone-fullcone.uc
+--- a/root/usr/share/firewall4/templates/zone-fullcone.uc	1970-01-01 08:00:00.000000000 +0800
++++ b/root/usr/share/firewall4/templates/zone-fullcone.uc	2026-11-19 12:41:55.915461177 +0800
 @@ -0,0 +1,4 @@
 +{# /usr/share/firewall4/templates/zone-fullcone.uc #}
 +		meta nfproto {{ fw4.nfproto(family) }} fullcone comment "!fw4: Handle {{
 +		zone.name
 +}} {{ fw4.nfproto(family, true) }} fullcone NAT {{ direction }} traffic"
---- a/root/usr/share/ucode/fw4.uc
-+++ b/root/usr/share/ucode/fw4.uc
-@@ -474,6 +474,21 @@
+diff -urN fw4orig/root/usr/share/ucode/fw4.uc fw4test2/root/usr/share/ucode/fw4.uc
+--- a/root/usr/share/ucode/fw4.uc	2026-11-19 12:42:13.065445815 +0800
++++ b/root/usr/share/ucode/fw4.uc	2026-11-19 12:42:05.990993353 +0800
+@@ -527,6 +527,21 @@
  	return info || [];
  }
  
@@ -94,15 +98,15 @@ Renew: ZiMing Mo <msylgj@immortalwrt.org>
  function nft_try_hw_offload(devices) {
  	let nft_test = `
  		add table inet fw4-hw-offload-test;
-@@ -1495,6 +1510,7 @@
+@@ -1632,6 +1647,7 @@
  			"dnat",
  			"snat",
  			"masquerade",
 +			"fullcone",
+ 			"npt",
  			"accept",
  			"reject",
- 			"drop"
-@@ -1966,6 +1982,8 @@
+@@ -2122,6 +2138,8 @@
  		}
  
  		let defs = this.parse_options(data, {
@@ -111,7 +115,7 @@ Renew: ZiMing Mo <msylgj@immortalwrt.org>
  			input: [ "policy", "drop" ],
  			output: [ "policy", "drop" ],
  			forward: [ "policy", "drop" ],
-@@ -2001,6 +2019,14 @@
+@@ -2156,6 +2174,14 @@
  
  		delete defs.syn_flood;
  
@@ -126,9 +130,9 @@ Renew: ZiMing Mo <msylgj@immortalwrt.org>
  		this.state.defaults = defs;
  	},
  
-@@ -2226,10 +2252,23 @@
- 		zone.related_subnets = related_subnets;
+@@ -2406,10 +2432,23 @@
  		zone.related_physdevs = related_physdevs;
+ 		zone.related_l3devs = related_l3devs;
  
 -		if (zone.masq || zone.masq6)
 +		if (zone.masq) {
@@ -149,6 +153,6 @@ Renew: ZiMing Mo <msylgj@immortalwrt.org>
  
 -		if ((zone.auto_helper && !(zone.masq || zone.masq6)) || length(zone.helper)) {
 +		if ((zone.auto_helper && !(zone.masq || zone.masq6 || this.state.defaults.fullcone || this.state.defaults.fullcone6)) || length(zone.helper)) {
- 			zone.dflags.helper = true;
+ 			zone.dflags.helper = false;
  
  			for (let helper in (length(zone.helper) ? zone.helper : this.state.helpers)) {
