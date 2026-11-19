@@ -32,7 +32,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -507,6 +507,20 @@
+@@ -546,6 +546,20 @@ struct airoha_foe_stats64 {
  	u64 packets;
  };
  
@@ -53,40 +53,36 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  struct airoha_flow_data {
  	struct ethhdr eth;
  
-@@ -536,6 +550,7 @@
- 		u16 sid;
- 		u8 num;
- 	} pppoe;
+@@ -602,6 +616,8 @@ struct airoha_flow_data {
+ 		u8 tunnel_id;
+ 		u16 tunnel_mtu;
+ 	} dslite;
++
 +	struct airoha_ppe_6rd sixrd;
  };
  
  enum airoha_flow_entry_type {
-@@ -864,6 +879,7 @@
+@@ -953,6 +969,7 @@ struct airoha_foe_entry *airoha_ppe_foe_get_entry(struct airoha_ppe *ppe,
  int airoha_ppe_probe_entry_alias(struct airoha_ppe *ppe);
  void airoha_ppe_foe_entry_get_stats(struct airoha_ppe *ppe, u32 hash,
  				    struct airoha_foe_stats64 *stats);
 +bool airoha_ppe_6rd_enabled(void);
  
- #ifdef CONFIG_DEBUG_FS
- int airoha_ppe_debugfs_init(struct airoha_ppe *ppe);
+ /* DS-Lite decapsulation offload, default off.  Declared unconditionally
+  * because the flow path reads it whether or not debugfs is compiled in.
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -6,10 +6,12 @@
- 
- #include <linux/ip.h>
- #include <linux/ipv6.h>
-+#include <linux/module.h>
- #include <linux/of_platform.h>
+@@ -13,6 +13,7 @@
  #include <linux/platform_device.h>
  #include <linux/rhashtable.h>
  #include <net/dst_metadata.h>
 +#include <net/ip_tunnels.h>
  #include <net/ipv6.h>
- #include <linux/if_vlan.h>
  #include <net/pkt_cls.h>
-@@ -24,6 +26,21 @@
- DEFINE_MUTEX(flow_offload_mutex);
- static DEFINE_SPINLOCK(ppe_lock);
+ #include <net/route.h>
+@@ -63,6 +64,21 @@ module_param(airoha_ppe_dslite, bool, 0444);
+ MODULE_PARM_DESC(airoha_ppe_dslite,
+ 		 "Offload IPv4-in-IPv6 DS-Lite decapsulation flows to the PPE");
  
 +/* A 6rd entry still needs the outer IPv4 header from a PPE tunnel table
 + * entry, which this driver does not manage.  Mapping the host-side tunnel
@@ -106,7 +102,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static const struct rhashtable_params airoha_flow_table_params = {
  	.head_offset = offsetof(struct airoha_flow_table_entry, node),
  	.key_offset = offsetof(struct airoha_flow_table_entry, cookie),
-@@ -977,7 +994,9 @@
+@@ -1406,7 +1422,9 @@ static void airoha_ppe_foe_flow_stats_update(struct airoha_ppe *ppe,
  
  	val = *ib2 & (AIROHA_FOE_IB2_NBQ | AIROHA_FOE_IB2_PSE_PORT |
  		      AIROHA_FOE_IB2_PSE_QOS | AIROHA_FOE_IB2_FAST_PATH);
@@ -117,8 +113,8 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
  	nbq = pse_port == 1 ? 6 : 5;
  	*ib2 &= ~(AIROHA_FOE_IB2_NBQ | AIROHA_FOE_IB2_PSE_PORT |
-@@ -1588,6 +1607,120 @@
- 	return airoha_ppe_get_entry_idle_time(ppe, e->data.ib1);
+@@ -2051,6 +2069,120 @@ static bool airoha_ppe_dslite_flow(struct airoha_eth *eth, u32 ifindex,
+ 	return ret;
  }
  
 +/* A 6rd flow is an IPv6 flow whose outer header is IPv4.  The flow offload
@@ -238,9 +234,9 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
  					   struct flow_cls_offload *f)
  {
-@@ -1664,6 +1797,10 @@
- 		return -EOPNOTSUPP;
- 	}
+@@ -2147,6 +2279,10 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
+ 	    airoha_ppe_dslite_flow(eth, meta.key->ingress_ifindex, &data))
+ 		offload_type = PPE_PKT_TYPE_IPV4_DSLITE;
  
 +	err = airoha_ppe_flow_6rd_parse(rule, addr_type, &data);
 +	if (err)
@@ -249,9 +245,9 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	flow_action_for_each(i, act, &rule->action) {
  		switch (act->id) {
  		case FLOW_ACTION_MANGLE:
-@@ -1696,11 +1833,40 @@
- 			data.pppoe.sid = act->pppoe.sid;
- 			data.pppoe.num++;
+@@ -2191,11 +2327,40 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
+ 
+ 			police = act;
  			break;
 +		case FLOW_ACTION_TUNNEL_ENCAP:
 +		case FLOW_ACTION_TUNNEL_DECAP:
@@ -290,7 +286,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	if (!is_valid_ether_addr(data.eth.h_source) ||
  	    !is_valid_ether_addr(data.eth.h_dest))
  		return -EINVAL;
-@@ -1800,6 +1966,8 @@
+@@ -2334,6 +2499,8 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
  			goto put_smac;
  	}
  
@@ -301,9 +297,9 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  		err = -ENOMEM;
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -365,6 +365,73 @@
+@@ -581,6 +581,73 @@ static int airoha_ppe_debugfs_dslite_show(struct seq_file *m, void *private)
  }
- DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_tb_regs);
+ DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_dslite);
  
 +/* The 6rd view is the set of IPv6 route entries whose data word carries the
 + * tunnel mark, plus the parameters those entries were built with.  A flow
@@ -375,12 +371,12 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  {
  	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-@@ -380,6 +447,8 @@
+@@ -596,6 +663,8 @@ int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  			    &airoha_ppe_debugfs_bind_rate_fops);
  	debugfs_create_file("tb_regs", 0444, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_tb_regs_fops);
 +	debugfs_create_file("6rd", 0444, ppe->debugfs_dir, ppe,
 +			    &airoha_ppe_debugfs_6rd_fops);
- 
- 	return 0;
- }
+ 	debugfs_create_file("dslite", 0444, ppe->debugfs_dir, ppe,
+ 			    &airoha_ppe_debugfs_dslite_fops);
+ 	debugfs_create_file("meter", 0444, ppe->debugfs_dir, ppe,
