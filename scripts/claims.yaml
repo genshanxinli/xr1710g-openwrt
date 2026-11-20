@@ -42,6 +42,10 @@ claims:
     status: supported
     notes: "只在 FLOW_STATS=y 且 NPU 接受流计数器时成立；patch 214 把它改成运行时条件（num_stats > 0 && !ppe->foe_stats_enabled 时不切 SRAM），所以同一份 config 在两台机器上可以是 24576 或 32768。ppe/usage 的 ipv4_capacity 打印当下生效的那一个，但硬件上的 dump 仍未采集。"
 
+    verify:
+      - "text: target/linux/airoha/patches-7.3/209-net-airoha-size-the-SRAM-tables-the-way-the-hardware-sees-them.patch:14 each PPE's table holds 4096 entries"
+      - "text: target/linux/airoha/patches-7.3/214-net-airoha-stop-paying-for-unused-flow-counters.patch:83 if (num_stats > 0 && !ppe->foe_stats_enabled)"
+      - "kconfig: target/linux/airoha/an7581/config-7.3 CONFIG_NET_AIROHA_FLOW_STATS=y"
   - id: ppe-table-32768
     claim: "整机 PPE 表是 32768（SRAM 16384 + DRAM 16384 共享），不是 49152。"
     source:
@@ -73,6 +77,9 @@ claims:
     status: supported
     notes: "修复前的 hash - PPE_STATS_NUM_ENTRIES 会让 hash 4096 与 8192、4097 与 8193 等 4096 对槽位别名（patch 210:20）。静态代码结论，未用 NPU 计数器做硬件验证。"
 
+    verify:
+      - "text: target/linux/airoha/patches-7.3/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:20 so hash 4096 and hash 8192 share slot 4096"
+      - "text: target/linux/airoha/patches-7.3/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:53 if (hash >= ppe_num_stats_entries)"
   - id: ppe-hash-bijective
     claim: "PPE 的 hash 折叠对 32768 和 24576 两种表几何都覆盖全部槽位（32768→32768，24576→24576），且不引入每包 udiv。"
     source:
@@ -83,6 +90,9 @@ claims:
     status: supported
     notes: "取自 patch 212 的 split-fold 说明；只有静态一致性检查，没有运行时碰撞或覆盖率统计。"
 
+    verify:
+      - "text: target/linux/airoha/patches-7.3/212-net-airoha-address-PPE-entries-from-their-own-table.patch:62 if (num_entries == 3 * PPE_SRAM_NUM_ENTRIES)"
+      - "text: target/linux/airoha/patches-7.3/212-net-airoha-address-PPE-entries-from-their-own-table.patch:63 return ((hash >> 13) % 3) * PPE_SRAM_NUM_ENTRIES +"
   - id: bridge-ttl-hardware-path
     claim: "同一个 bridge 两个端口之间转发的流保持 IP TTL；PPE 只在这类流上清 IB1.BIND_TTL，routed 流仍递减。该修复只覆盖已绑定 PPE 的硬件路径，未绑定流仍由软件 ip_decrease_ttl() 递减。"
     source:
@@ -95,6 +105,9 @@ claims:
     status: supported
     notes: "patch 963 记录修复前实测：TTL 5 的帧从 lan2 进、phy0.0-ap0 出变成 TTL 4。修复本身是代码结论，未做修复后的 TTL A/B。"
 
+    verify:
+      - "text: target/linux/airoha/patches-7.3/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:20 and BIND_TTL is cleared.  Routed flows keep decrementing"
+      - "text: target/linux/airoha/patches-7.3/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:56 val |= AIROHA_FOE_IB1_BIND_TTL;"
   - id: eip93-no-gcm
     claim: "EIP93 的 AEAD 只注册 authenc(hmac(md5/sha1/sha224/sha256), cbc(aes|des|des3_ede) 或 rfc3686(ctr(aes)))，没有 gcm(aes) 或 ChaCha；IPsec 只能按 classic ESP 规划。"
     source:
@@ -104,8 +117,10 @@ claims:
     evidence: 代码
     date: "2026-11-15"
     status: supported
-    notes: "驱动源码在上游内核树，不在本仓库；issue #72 记录的 REV 0x0301a25d、OPTION1 0x000fe007 与无 GCM/ChaCha 一致。不要宣传 GCM/ChaCha 或 ≥5 Gbit/s。"
+    notes: "驱动源码在上游内核树，不在本仓库；issue #72 记录的 REV 0x0301a25d、OPTION1 0x000fe007 与无 GCM/ChaCha 一致。不要宣传 GCM/ChaCha 或 ≥5 Gbit/s。 追加(claimsv)：manual: 驱动源码在上游内核树，本仓无路径可复核，verified_at 记那次实测的 sha。"
 
+    manual: true
+    verified_at: fbfc590687
   - id: fullcone-udp-only
     claim: "内置 nft-fullcone 只对 UDP 实现真正的 full-cone；其他协议等价于 MASQUERADE，模块加载失败时 fw4 回退普通 NAT。"
     source:
@@ -116,6 +131,8 @@ claims:
     status: supported
     notes: "README 记录的行为；模块源码不在本仓库，未逐行核对。"
 
+    verify:
+      - "text: README.md:133 Note that the shipped `nft-fullcone` module only"
   - id: cpu-top-opp-1200
     claim: "当前树的 CPU OPP 表最高 1.2 GHz（an7581.dtsi 的 opp-1200000000），不是 issue #1 验收里写的 1.35 GHz。"
     source:
@@ -126,6 +143,8 @@ claims:
     status: supported
     notes: "issue #1（D15）按 1.35 GHz 验收，但本树 DTS 只到 1.2 GHz；在 DTS 改到 1.35 GHz 前不能把 D15 当既有事实。"
 
+    verify:
+      - "text: target/linux/airoha/dts/an7581.dtsi:243 opp-hz = /bits/ 64 <1200000000>;"
   - id: 5g-half-offload
     claim: "5G（band1）是半卸载：band1 没有独立 NPU TX buffer window，WAN→5G 只能走 host 注入（约 1 核/G），2.4G/6G 有自有窗口。"
     source:
@@ -164,6 +183,9 @@ claims:
     status: supported
     notes: "单机单次 1G 链路：对端是 NAT 后面的宿主（MTU 1280），TX 有 87 次重传。同参数重复三次为 TX 0.69–0.76、RX 0.85–0.92。不代表 10G 能力，也不构成 stock 对比。"
 
+    verify:
+      - "text: scripts/perf-baselines/lan4-1g-2026-11-20/result.json:22 \"gbps\":0.704"
+      - "text: scripts/perf-baselines/lan4-1g-2026-11-20/result.json:24 \"gbps\":0.887"
   - id: pppoe-decap-bit23
     claim: "PPPoE 入向硬件 decap 依赖 IB1 bit23（BIND_TUNNEL_DECAP）：decap=0 时没有 bit23、没有硬件 decap，decap=1 才有；入向最小集是 5T/route 键 + STATE=2 + TTL + IB1 bit23，etype=8864/bit22/pppoe_id 不是必需。"
     source:
@@ -184,6 +206,9 @@ claims:
     status: supported
     notes: "来自 /sys/kernel/debug/regmap/dummy-syscon@0x000000001fbe3400/registers 的整份 dump（63 行，r38047-a86ce12e27，kernel 7.3）。只证明读数；0x7 的字段语义仍是推断，an7581.dtsi 的三个 mediatek,pbus-csr 窗口（0x0-0x4 / 0x8-0xc / 0x10-0x14）都不覆盖 0x18，即没有 in-tree 消费者。写 0x0 能否关掉 pcie_single_cut、能否改善延迟：未验证（本机无 CONFIG_DEVMEM/devmem）。"
 
+    verify:
+      - "text: scripts/tests/fixtures/pbus_csr-1fbe3400.registers:12 18: 00000007"
+      - "text: target/linux/airoha/dts/an7581.dtsi:589 pbus_csr: syscon@1fbe3400"
   - id: pcie-topology-xr1710g
     claim: "XR1710G 上 pcie0（1fc00000，domain 0000）以 x2 / 8.0 GT/s 训练并枚举 14c3:7990（mt7996e），pcie2（1fc40000，domain 0002）以 x1 / 5.0 GT/s 枚举 14c3:7991，pcie1（1fc20000）未枚举。"
     source:
@@ -193,6 +218,12 @@ claims:
     status: supported
     notes: "宽度/速率取自 /sys/bus/pci/devices/*/current_link_* 当前值；该机 dmesg 只剩 22 行、开机枚举段已滚掉，所以“开机时如何训练起来的”没有留证。与板级 DT 一致：num-lanes=<2>，&pcie1 disabled，&pcie2 okay。"
 
+    verify:
+      - "device: /sys/bus/pci/devices/0000:00:00.0/current_link_width 2"
+      - "device: /sys/bus/pci/devices/0000:00:00.0/current_link_speed 8.0 GT/s PCIe"
+      - "device: /sys/bus/pci/devices/0000:01:00.0/device 0x7990"
+      - "device: /sys/bus/pci/devices/0002:00:00.0/current_link_width 1"
+      - "text: target/linux/airoha/dts/an7581-xr1710g-ubi.dts:235 num-lanes = <2>;"
   - id: reg-arbitrate-us-agree
     claim: "美规 XR1710G 出厂 radio1.country=radio2.country=US，运行 60_xr1710g-reg-arbitrate 只记一行 reg=US 日志、rc=0、不改 /etc/config/wireless。"
     source:
@@ -201,6 +232,8 @@ claims:
     date: "2026-11-20"
     status: supported
     notes: "只覆盖真值表第 4b 行（两 radio 同域）。同一台机还实测了 REG_PREFER=cn 归一化成 CN、无效值先告警。第 6a/6b 行（冲突 + REG_PREFER 命中其一，会 uci set + commit）需要设备处于冲突态，本机未做；CN 分支在美规机上仍然未验证。"
+    verify:
+      - "text: target/linux/airoha/an7581/base-files/etc/uci-defaults/60_xr1710g-reg-arbitrate:178 ignored: radios already agree"
   - id: npu-fw-tlb7700v08-in-cve-range
     claim: "树内 NPU 固件 en7581_MT7996_npu_rv32.bin 的版本串是 TLB7.7.0.0_v08（md5 550a8b3b…），落在 CVE-2026-89142 的受影响区间（≤ TLB7.8.0.0_v006）；数据块因无版本串判 UNKNOWN，不是安全。"
     source:
@@ -211,6 +244,9 @@ claims:
     status: supported
     notes: "判定由本树只读脚本给出（scripts/check-npu-firmware.sh 跑出 VULNERABLE-RANGE），设备侧 blob 与本树文件 sha256 一致；处置（换固件/缓解/接受风险）尚未决定，台账不替它下结论。"
 
+    verify:
+      - "text: scripts/check-npu-firmware.sh:28 CVE_MAX_VERSION=TLB7.8.0.0_v006"
+      - "symbol: package/firmware/linux-firmware/files/airoha/en7581_MT7996_npu_rv32.bin TLB7.7.0.0_v08"
   - id: flowtable-ft-missing-wlan-vifs
     claim: "运行时已加载的 inet fw4 flowtable ft 的设备集合是 {lan2,lan3,lan4,wan}，不含 br-lan 里的 wlan vif；同一时刻 fw4 print 按当前状态会给出含 phy0.0-ap0/phy0.1-ap0 的集合，即已加载的 ft 是重载旧快照，缺口是重载竞争而不是 fw4 过滤。"
     source:
@@ -219,8 +255,10 @@ claims:
     evidence: 实测
     date: "2026-11-20"
     status: supported
-    notes: "2026-11-20 04:38 UTC 在 r38047-a86ce12e27 上一条 SSH 内顺序执行 nft list flowtables / ls brif / fw4 print 得到；设备是共享机，别人 wifi reload 会改变 vif 集合，所以复测要在同一时刻取三份输出。日志侧有同批 reload already in progress, giving up，说明放弃的重载没有补跑。"
+    notes: "2026-11-20 04:38 UTC 在 r38047-a86ce12e27 上一条 SSH 内顺序执行 nft list flowtables / ls brif / fw4 print 得到；设备是共享机，别人 wifi reload 会改变 vif 集合，所以复测要在同一时刻取三份输出。日志侧有同批 reload already in progress, giving up，说明放弃的重载没有补跑。 追加(claimsv)：manual: 需同一时刻取 nft flowtables/brif/fw4 print 三份输出，verified_at 记那次实测的 sha。"
 
+    manual: true
+    verified_at: 78486b870b
   - id: nf-flow-pppoe-trace-compiled
     claim: "airoha/an7581 的默认 7.3 内核现在会编入 nf_flow_pppoe tracepoint：config/Config-kernel.in 给 KERNEL_FTRACE 和 KERNEL_ENABLE_DEFAULT_TRACERS 加了 default y if TARGET_airoha_an7581，生成的 linux-7.3/.config 有 CONFIG_TRACEPOINTS=y，net/netfilter/nf_flow_table_ip.o 里有 __tracepoint_nf_flow_pppoe；同一份源码在改之前的 tracing-off 配置下该符号为 0。"
     source:
@@ -233,6 +271,11 @@ claims:
     status: supported
     notes: "实测只到编译产物：干净 defconfig 得到 CONFIG_KERNEL_FTRACE=y 与 CONFIG_KERNEL_ENABLE_DEFAULT_TRACERS=y，内核 .config 有 CONFIG_TRACEPOINTS=y，nm 目标文件有 15 个 nf_flow_pppoe 符号；未验证：现网 r38047 镜像仍是 tracing-off，本机没有 PPPoE 会话（wan proto=dhcp，/proc/net/pppoe 0 条），从未采到真实 PPPoE 入向事件，available_events 要等新镜像启动后才会有该事件。"
 
+    verify:
+      - "text: config/Config-kernel.in:377 default y if TARGET_airoha_an7581"
+      - "text: target/linux/airoha/patches-7.3/917-netfilter-flowtable-add-opt-in-pppoe-ingress-trace.patch:56 trace_nf_flow_pppoe(skb, tuple, NF_FLOW_PPPOE_HOOK_INGRESS);"
+      - "kconfig: build_dir/**/linux-7.4-rc3/.config CONFIG_TRACEPOINTS=y"
+      - "symbol: build_dir/**/linux-7.4-rc3/net/netfilter/nf_flow_table_ip.o nf_flow_pppoe"
   - id: wifi-self-loopback-not-possible
     claim: "XR1710G（mt7996e，单 wiphy phy0）上无法建立单机 AP+STA 环回：同一 phy 的发射不上自己的接收路径，任何 VIF 都关联不到自己承载的 BSS。"
     source:
@@ -240,8 +283,10 @@ claims:
     evidence: 实测
     date: "2026-11-20"
     status: supported
-    notes: "自收判据取自 6 GHz ch37（ch_time_busy 占比 0.4%，介质几乎无他源）20 s 窗口 rx_mpdu_cnt 恒 0；对照取自同一条 managed VIF 打邻居 AP 成功（sta_state=2、tx_packets=1、rx_packets=14）、打自己 AP 返回 -2（ENOENT）且计数器全零。原始输出未提交进库（/tmp 在重刷后清空），文件内嵌了关键行。该结论针对 mt7996e + r38047，不是对 mt76 全系的断言。"
+    notes: "自收判据取自 6 GHz ch37（ch_time_busy 占比 0.4%，介质几乎无他源）20 s 窗口 rx_mpdu_cnt 恒 0；对照取自同一条 managed VIF 打邻居 AP 成功（sta_state=2、tx_packets=1、rx_packets=14）、打自己 AP 返回 -2（ENOENT）且计数器全零。原始输出未提交进库（/tmp 在重刷后清空），文件内嵌了关键行。该结论针对 mt7996e + r38047，不是对 mt76 全系的断言。 追加(claimsv)：manual: 自收判据是 20 s rx_mpdu_cnt 窗口，verified_at 记那次实测的 sha。"
 
+    manual: true
+    verified_at: af31c794de
   - id: wifi-single-radio-one-channel
     claim: "phy0 的 per-radio valid interface combinations 是 #{ AP, mesh point } <= 16, #{ managed } <= 19, total <= 19, #channels <= 1, STA/AP BI must match，因此同一 radio 上的 AP 与 STA 只能共用一个信道，跨 band 环回被这条约束排除。"
     source:
@@ -249,8 +294,10 @@ claims:
     evidence: 实测
     date: "2026-11-20"
     status: supported
-    notes: "读自 `iw phy phy0 info`（r38047）；三个 radio 的组合条款各自完全相同，全局条款是 #{ IBSS, managed, AP, mesh point } <= 57, total <= 57, #channels <= 3，那是跨 radio 的总量，不放宽单 radio 的 1 信道限制。同一 radio 内的 STA 侧 chanctx 请求在已有 AP chanctx 时返回 EBUSY（iw dev <sta> set freq 5745 80 5775 → Resource busy -16），即便三个 AP 全禁用仍复现。"
+    notes: "读自 `iw phy phy0 info`（r38047）；三个 radio 的组合条款各自完全相同，全局条款是 #{ IBSS, managed, AP, mesh point } <= 57, total <= 57, #channels <= 3，那是跨 radio 的总量，不放宽单 radio 的 1 信道限制。同一 radio 内的 STA 侧 chanctx 请求在已有 AP chanctx 时返回 EBUSY（iw dev <sta> set freq 5745 80 5775 → Resource busy -16），即便三个 AP 全禁用仍复现。 追加(claimsv)：manual: iw phy info 的运行时组合条款，verified_at 记那次实测的 sha。"
 
+    manual: true
+    verified_at: af31c794de
   - id: wifi-managed-set-channel-rejected
     claim: "mac80211 上 managed VIF 不允许显式设置信道，iw set freq / set channel 一律返回 Resource busy (-16)；先锁信道再 connect 的规避手段在 mt7996e 上没有可行性。"
     source:
@@ -260,6 +307,8 @@ claims:
     status: supported
     notes: "实测部分：r37994/r38034/r38047 三版固件上都复现 -16，且在三个 AP VIF 全部 disabled、一个 VIF 不剩时仍然 -16。代码部分只指向本仓用的 backports 版本（PKG_SOURCE_VERSION:=7.2），对应的 cfg80211/mac80211 源码不在 repo 内（dl/backports-7.2.tar.zst），所以 -16 的具体来源未在库内留下 file:line。"
 
+    verify:
+      - "text: package/kernel/mac80211/Makefile:13 PKG_SOURCE_VERSION:=7.2"
   - id: soe-probe-off-by-default
     claim: "990/970 的 SOE 只读探针在 an7581/config-7.3 里显式关掉（config-7.3:281 写 `# CONFIG_NET_AIROHA_SOE is not set`，Kconfig 里 `default n`），所以默认镜像里不编 `airoha_soe_probe.o`；在 7.3 树上 `yes \"\" | make ARCH=arm64 syncconfig` 只剩 0 个 `(NEW)` 符号。"
     source:
@@ -269,3 +318,7 @@ claims:
     date: "2026-11-20"
     status: supported
     notes: "2026-11-20 在 build_dir 的 linux-7.3 上实测：0 个 (NEW)；去掉 281 行后同一棵树恰好出现 1 个 (NEW)=NET_AIROHA_SOE，这行就是它缺席时 syncconfig 卡住的原因。未验证的是这套配置在新 untar 的树上重复一遍时要重新 apply 队列（本次 fresh tree 队列 338 个补丁全过）；618 对等性清单见 issue #9。"
+    verify:
+      - "text: target/linux/airoha/an7581/config-7.3:281 # CONFIG_NET_AIROHA_SOE is not set"
+      - "kconfig: target/linux/airoha/an7581/config-7.3 CONFIG_NET_AIROHA_SOE=n"
+      - "text: target/linux/airoha/patches-7.3/970-net-airoha-soe-readonly-probe.patch:56 obj-$(CONFIG_NET_AIROHA_SOE) += airoha_soe_probe.o"

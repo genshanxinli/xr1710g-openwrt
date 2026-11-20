@@ -27,5 +27,19 @@ jobs:
       - name: Check fields, sources and statuses
         run: python3 scripts/check-claims.py
 
+      # One extra step: re-check the CONTENT of the rows that carry a verify:
+      # assertion.  A cited line must still say what the row claims and a
+      # Kconfig key must still hold its value; the self-test guards the verifier
+      # itself.  --skip device is deliberate: this runner is an ephemeral
+      # ubuntu-latest with no XR1710G attached, so a device: assertion could
+      # only fail on ssh or pass on a stale host.  Those rows carry
+      # manual: true + verified_at and are re-read by hand.  Without a build_dir
+      # the symbol: assertions SKIP; SKIP is reported in the summary line and
+      # never fails the job, --strict only gates on FAIL.
+      - name: Re-check claim content (static layer, no device)
+        run: |
+          python3 scripts/claims-verify.py --strict --skip device
+          python3 -m unittest scripts/tests/test_claims_verify.py
+
       # scripts/check-claims.py --strict --max-unverified N is available for
       # release checks; the PR job only enforces the ledger's own invariants.
