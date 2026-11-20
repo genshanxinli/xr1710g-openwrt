@@ -12,8 +12,7 @@ selected by any target or package. When enabled, the probe maps the
 0x1fbfa000 window, reads GLB_CFG, SA_CTRL, SA_DONE, INT_EN and INT_STS,
 logs them and returns. It does not write any register, program an SA,
 submit ESP, request the SOE interrupt or register an XFRM/netdev offload
-provider. The full SOE data path remains out of scope; see
-tools/soe/README.md for the register sources and known gaps.
+provider. The full SOE data path remains out of scope; register sources and known gaps are recorded in issue #23.
 
 Assisted-by: DeepSeek Harness
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
@@ -61,7 +60,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 + *
 + * The probe does not write any register, program an SA, submit ESP, request
 + * the SOE interrupt or register an XFRM/netdev offload provider. The full
-+ * data path is a separate change; see tools/soe/README.md.
++ * data path is a separate change; see issue #23.
 + */
 +
 +#include <linux/bitfield.h>

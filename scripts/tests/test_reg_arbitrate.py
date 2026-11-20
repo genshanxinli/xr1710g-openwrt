@@ -249,7 +249,7 @@ class RegArbitrateTest(unittest.TestCase):
     def test_four_state_matrix_changes_nothing(self):
         """The four non-conflict uci states: log only, never write.
 
-        This is the truth table in docs/wifi-reg-arbitration.md, rows 1-4.
+        This is the truth table enforced by the script, rows 1-4.
         Every row must leave the uci store byte-identical and log exactly one
         line: the switch must not "helpfully" fill in a country.
         """

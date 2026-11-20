@@ -59,11 +59,11 @@ if [ -z "$device" ]; then
 	device=$(find_device) || {
 		if [ "$dry_run" -eq 1 ]; then
 			echo "tool=none device=none (no /dev/ttyUSB* found; would exit 3)"
-			echo "hint: attach the CH340 (usbipd list -> usbipd attach --wsl); see docs/serial/console-setup.md"
+			echo "hint: attach the CH340 (usbipd list -> usbipd attach --wsl), 115200 8N1"
 			exit 0
 		fi
 		echo "$prog: no /dev/ttyUSB* or /dev/ttyACM* present." >&2
-		echo "$prog: check the CH340 is attached (usbipd list / usbipd attach --wsl); see docs/serial/console-setup.md" >&2
+		echo "$prog: check the CH340 is attached (usbipd list / usbipd attach --wsl), 115200 8N1" >&2
 		exit 3
 	}
 fi

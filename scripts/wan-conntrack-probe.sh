@@ -11,10 +11,10 @@
 #   quantity: a line either carries the marker or it does not at the instant
 #   it is read, so neither ct_lines nor with_offload says anything about an
 #   offload *rate*.  Do not turn this output into an offload-rate claim
-#   (docs/wan-limit-2026-11-14/01-claim-audit.md C12).
+#   (issue #23 comment C12).
 #
 # Why the clear is fail-loud:
-#   docs/wan-limit-2026-11-14/06-reproducibility.md F4/D4: this image is
+#   issue #23 comment F4/D4: this image is
 #   built without the conntrack applet (CONFIG_PACKAGE_conntrack is not
 #   set), so the old clear discarded conntrack -F's output and error text
 #   and was a silent no-op: "clear before every round" never actually
