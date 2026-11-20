@@ -19,6 +19,11 @@ set -eu
 
 ROOT=$(cd -- "$(dirname -- "$0")/../.." && pwd)
 SCRIPT=${WAN_PATH_SCRIPT:-$ROOT/target/linux/airoha/an7581/base-files/usr/sbin/wan-path}
+# Real output captured read-only from an XR1710G running r38047-a86ce12e27
+# (nft 1.1.7).  The last two scenarios replay those bytes instead of
+# hand-written ones, so the parsers are checked against what the device
+# actually prints: tab-indented flowtable blocks and a "dev" key.
+FIX=$ROOT/scripts/tests/fixtures/wan-path-xr1710g
 VERBOSE=0
 [ "${1:-}" = --verbose ] && VERBOSE=1
 
@@ -178,6 +183,7 @@ expect_grep '"duplex":"full"' "$outfile" dhcp
 expect_grep '"bound":11' "$outfile" dhcp
 expect_grep '"interface_entries":1' "$outfile" dhcp
 expect_grep '"member":true' "$outfile" dhcp
+expect_grep '"state":"up"' "$outfile" dhcp
 expect_grep '"complete":true' "$outfile" dhcp
 after=$(tree_sum)
 [ "$before" = "$after" ] && pass "dhcp: fake tree unchanged" || fail "dhcp: fake tree changed"
@@ -212,6 +218,7 @@ expect_grep '"logical_device":"pppoe-wan"' "$outfile" pppoe
 expect_grep '"physical_device":"wan"' "$outfile" pppoe
 expect_grep '"session":true' "$outfile" pppoe
 expect_grep '"qdam_id":"2"' "$outfile" pppoe
+expect_grep '"state":"up"' "$outfile" pppoe
 expect_grep '"complete":true' "$outfile" pppoe
 after=$(tree_sum)
 [ "$before" = "$after" ] && pass "pppoe: fake tree unchanged" || fail "pppoe: fake tree changed"
@@ -239,6 +246,7 @@ expect_grep '"speed":null' "$outfile" down
 expect_grep '"qdam_id":null' "$outfile" down
 expect_grep '"member":false' "$outfile" down
 expect_grep '"bound":null' "$outfile" down
+expect_grep '"state":"no-carrier"' "$outfile" down
 expect_grep '"complete":false' "$outfile" down
 after=$(tree_sum)
 [ "$before" = "$after" ] && pass "down: fake tree unchanged" || fail "down: fake tree changed"
@@ -246,8 +254,7 @@ expect_no_mutation down
 
 # --- scenario 4: nft 1.1.7 pretty-printed JSON with the "dev" key ------------
 #
-# Captured verbatim from a live XR1710G running nft 1.1.7 "Commodore Bullmoose
-# #8".  The document is pretty-printed and calls the device list "dev", not
+# The document is pretty-printed and calls the device list "dev", not
 # "devices", so a compact-only pattern finds nothing and every flowtable
 # question answers "no" instead of "we could not read it".
 
@@ -259,12 +266,82 @@ FAKE_ETHTOOL='Settings for wan:
 	Speed: 10000Mb/s
 	Duplex: Full
 	Link detected: yes'
-FAKE_NFT_JSON='{"nftables": [{"metainfo": {"version": "1.1.7", "release_name": "Commodore Bullmoose #8", "json_schema_version": 1}}, {"flowtable": {"family": "inet", "name": "ft", "table": "fw4", "handle": 71, "hook": "ingress", "prio": 0, "dev": ["lan2", "lan3", "lan4", "wan"]}}, {"flowtable": {"family": "bridge", "name": "fb", "table": "fw4", "handle": 2, "hook": "ingress", "prio": 0, "dev": ["lan2", "lan3", "lan4"]}}]}'
+FAKE_NFT_JSON=$(cat "$FIX/nft-j-list-flowtables.json")
 add_dt_node wan
 if out=$(run_script --json); then rc=0; else rc=$?; fi
 outfile=$TMP/out.4
 printf '%s\n' "$out" > "$outfile"
 expect_grep '"member":true' "$outfile" nft117
+expect_grep '"name":"ft"' "$outfile" nft117
+
+# --- scenario 5: the real box, replayed from captured output ----------------
+#
+# Everything below is the device byte for byte: proto=dhcp, wan present but
+# carrier 0, no PPPoE session (/proc/net/pppoe has only the header), the
+# tab-indented flowtable listing, the pretty-printed `nft -j` document, and the
+# live PPE usage dump with an empty bind table.  The path stops at the PHY, so
+# the run must say so and must not exit 0 just because most counters resolved.
+
+tree_reset
+add_netdev wan -1 unknown 0
+cp "$FIX/proc-net-pppoe.txt" "$TREE/proc/net/pppoe"
+FAKE_PROTO=$(sed -n "s/^network\.wan\.proto='\(.*\)'$/\1/p" "$FIX/uci-network-wan.txt")
+FAKE_DEVICE=$(sed -n "s/^network\.wan\.device='\(.*\)'$/\1/p" "$FIX/uci-network-wan.txt")
+FAKE_ETHTOOL=$(cat "$FIX/ethtool-wan.txt")
+FAKE_NFT_JSON=$(cat "$FIX/nft-j-list-flowtables.json")
+FAKE_NFT_TEXT=$(cat "$FIX/nft-list-flowtables.txt")
+add_dt_node wan
+mkdir -p "$TREE/debugfs/ppe"
+cp "$FIX/ppe-usage.txt" "$TREE/debugfs/ppe/usage"
+: > "$TREE/debugfs/ppe/bind"
+before=$(tree_sum)
+if out=$(run_script --json); then rc=0; else rc=$?; fi
+outfile=$TMP/out.5
+printf '%s\n' "$out" > "$outfile"
+expect_rc "$rc" 1 device
+expect_grep '"state":"no-carrier"' "$outfile" device
+expect_grep '"physical_device":"wan"' "$outfile" device
+expect_grep '"member":true' "$outfile" device
+expect_grep '"name":"ft"' "$outfile" device
+expect_grep '"family":"inet"' "$outfile" device
+expect_grep '"session":false' "$outfile" device
+expect_grep '"carrier":false' "$outfile" device
+expect_grep '"entries":32768' "$outfile" device
+expect_grep '"qdam_id":null' "$outfile" device
+expect_grep '"interface_entries":null' "$outfile" device
+if out=$(run_script); then rc=0; else rc=$?; fi
+textfile=$TMP/out.5.text
+printf '%s\n' "$out" > "$textfile"
+expect_rc "$rc" 1 device-text
+expect_grep 'state: no-carrier' "$textfile" device-text
+expect_grep 'flowtable: member=yes name=ft family=inet' "$textfile" device-text
+after=$(tree_sum)
+[ "$before" = "$after" ] && pass "device: fake tree unchanged" || fail "device: fake tree changed"
+expect_no_mutation device
+
+# --- scenario 6: device resolved through the netifd status fallback ---------
+#
+# The same capture, but with network.wan.device unset, so the physical dev has
+# to come from `ubus call network.interface.wan status` - the real status
+# document, not a hand-written stub.
+
+tree_reset
+add_netdev wan -1 unknown 0
+cp "$FIX/proc-net-pppoe.txt" "$TREE/proc/net/pppoe"
+FAKE_PROTO=dhcp FAKE_DEVICE=
+FAKE_UBUS=$(cat "$FIX/ubus-wan-status.json")
+FAKE_ETHTOOL=$(cat "$FIX/ethtool-wan.txt")
+FAKE_NFT_JSON=
+FAKE_NFT_TEXT=$(cat "$FIX/nft-list-flowtables.txt")
+add_dt_node wan
+if out=$(run_script --json); then rc=0; else rc=$?; fi
+outfile=$TMP/out.6
+printf '%s\n' "$out" > "$outfile"
+expect_rc "$rc" 1 ubus-fallback
+expect_grep '"physical_device":"wan"' "$outfile" ubus-fallback
+expect_grep '"member":true' "$outfile" ubus-fallback
+expect_grep '"name":"ft"' "$outfile" ubus-fallback
+expect_no_mutation ubus-fallback
 
 if [ "$FAILED" -ne 0 ]; then
 	printf '\nwan-path-test: FAILED\n' >&2
