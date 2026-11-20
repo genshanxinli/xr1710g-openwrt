@@ -1,0 +1,4 @@
+port speed_mbps duplex carrier operstate tso gro gso hw-tc-offload
+br-lan 1000 unknown 1 up on on on off
+cpu 10000 full 1 up on on on on
+lan4 1000 full 1 up on on on on

@@ -1,0 +1,63 @@
+2026-11-20T05:17:05Z snapshot env: /tmp/bench-baseline3/snapshots/env
+2026-11-20T05:17:05Z + ethtool br-lan > /tmp/bench-baseline3/snapshots/env/ethtool-iface.txt
+2026-11-20T05:17:05Z + ethtool -i br-lan > /tmp/bench-baseline3/snapshots/env/ethtool-driver.txt
+2026-11-20T05:17:05Z + ethtool -k br-lan > /tmp/bench-baseline3/snapshots/env/ethtool-features.txt
+2026-11-20T05:17:05Z + read /sys/class/net/br-lan/{speed,duplex,carrier,operstate,mtu} > /tmp/bench-baseline3/snapshots/env/sysfs-link.txt
+2026-11-20T05:17:05Z + nft list ruleset > /tmp/bench-baseline3/snapshots/env/nft-ruleset-full.txt
+2026-11-20T05:17:05Z + speed/duplex/flags of every link with a positive speed > /tmp/bench-baseline3/snapshots/env/link-ports.txt
+2026-11-20T05:17:05Z + uname -a, /proc/version, /proc/cmdline > /tmp/bench-baseline3/snapshots/env/kernel.txt
+2026-11-20T05:17:05Z + processor count and model from /proc/cpuinfo > /tmp/bench-baseline3/snapshots/env/cpuinfo.txt
+2026-11-20T05:17:05Z + ip addr, ip route and link map > /tmp/bench-baseline3/snapshots/env/topology.txt
+2026-11-20T05:17:05Z start bench-10g.sh
+2026-11-20T05:17:05Z role=server (passive; the peer dials this box) box_ip=192.168.1.1 port=5301 peer_wait=90s
+2026-11-20T05:17:05Z iface=br-lan duration=5 parallel=4 dump_foe=0 baseline=1 label=lan4-1g-2026-11-20
+2026-11-20T05:17:05Z git_describe=unknown kernel_release=7.3 mtu=1500
+2026-11-20T05:17:05Z user=root
+2026-11-20T05:17:05Z snapshot before tx: /tmp/bench-baseline3/snapshots/tx-before
+2026-11-20T05:17:05Z + ethtool -S br-lan > /tmp/bench-baseline3/snapshots/tx-before/ethtool-stats.txt
+2026-11-20T05:17:05Z command failed (exit 94): ethtool -S br-lan
+2026-11-20T05:17:05Z + nft list ruleset > /tmp/bench-baseline3/snapshots/tx-before/nft-ruleset.txt
+2026-11-20T05:17:05Z tc not installed
+2026-11-20T05:17:05Z tc not installed
+2026-11-20T05:17:05Z + cat /sys/kernel/debug/ppe/usage > /tmp/bench-baseline3/snapshots/tx-before/ppe-usage.txt
+2026-11-20T05:17:05Z + read /sys/class/net/br-lan/statistics/{rx_packets,tx_packets,rx_bytes,tx_bytes,rx_errors,tx_errors,rx_dropped,tx_dropped} > /tmp/bench-baseline3/snapshots/tx-before/iface-counters.txt
+2026-11-20T05:17:05Z + cat /proc/uptime > /tmp/bench-baseline3/snapshots/tx-before/uptime.txt
+2026-11-20T05:17:05Z + cat /proc/stat > /tmp/bench-baseline3/snapshots/tx-before/proc-stat.txt
+2026-11-20T05:17:05Z + cat /proc/interrupts > /tmp/bench-baseline3/snapshots/tx-before/proc-interrupts.txt
+2026-11-20T05:17:05Z + iperf3 -s -1 -J -p 5301 > /tmp/bench-baseline3/iperf3-tx.json
+2026-11-20T05:17:12Z iperf3 tx exit=0
+2026-11-20T05:17:12Z snapshot after tx: /tmp/bench-baseline3/snapshots/tx-after
+2026-11-20T05:17:12Z + cat /proc/stat > /tmp/bench-baseline3/snapshots/tx-after/proc-stat.txt
+2026-11-20T05:17:12Z + cat /proc/interrupts > /tmp/bench-baseline3/snapshots/tx-after/proc-interrupts.txt
+2026-11-20T05:17:12Z + cat /proc/uptime > /tmp/bench-baseline3/snapshots/tx-after/uptime.txt
+2026-11-20T05:17:12Z + ethtool -S br-lan > /tmp/bench-baseline3/snapshots/tx-after/ethtool-stats.txt
+2026-11-20T05:17:12Z command failed (exit 94): ethtool -S br-lan
+2026-11-20T05:17:12Z + nft list ruleset > /tmp/bench-baseline3/snapshots/tx-after/nft-ruleset.txt
+2026-11-20T05:17:12Z tc not installed
+2026-11-20T05:17:12Z tc not installed
+2026-11-20T05:17:12Z + cat /sys/kernel/debug/ppe/usage > /tmp/bench-baseline3/snapshots/tx-after/ppe-usage.txt
+2026-11-20T05:17:12Z + read /sys/class/net/br-lan/statistics/{rx_packets,tx_packets,rx_bytes,tx_bytes,rx_errors,tx_errors,rx_dropped,tx_dropped} > /tmp/bench-baseline3/snapshots/tx-after/iface-counters.txt
+2026-11-20T05:17:12Z snapshot before rx: /tmp/bench-baseline3/snapshots/rx-before
+2026-11-20T05:17:12Z + ethtool -S br-lan > /tmp/bench-baseline3/snapshots/rx-before/ethtool-stats.txt
+2026-11-20T05:17:12Z command failed (exit 94): ethtool -S br-lan
+2026-11-20T05:17:12Z + nft list ruleset > /tmp/bench-baseline3/snapshots/rx-before/nft-ruleset.txt
+2026-11-20T05:17:12Z tc not installed
+2026-11-20T05:17:12Z tc not installed
+2026-11-20T05:17:12Z + cat /sys/kernel/debug/ppe/usage > /tmp/bench-baseline3/snapshots/rx-before/ppe-usage.txt
+2026-11-20T05:17:12Z + read /sys/class/net/br-lan/statistics/{rx_packets,tx_packets,rx_bytes,tx_bytes,rx_errors,tx_errors,rx_dropped,tx_dropped} > /tmp/bench-baseline3/snapshots/rx-before/iface-counters.txt
+2026-11-20T05:17:12Z + cat /proc/uptime > /tmp/bench-baseline3/snapshots/rx-before/uptime.txt
+2026-11-20T05:17:12Z + cat /proc/stat > /tmp/bench-baseline3/snapshots/rx-before/proc-stat.txt
+2026-11-20T05:17:12Z + cat /proc/interrupts > /tmp/bench-baseline3/snapshots/rx-before/proc-interrupts.txt
+2026-11-20T05:17:12Z + iperf3 -s -1 -J -p 5301 > /tmp/bench-baseline3/iperf3-rx.json
+2026-11-20T05:17:20Z iperf3 rx exit=0
+2026-11-20T05:17:20Z snapshot after rx: /tmp/bench-baseline3/snapshots/rx-after
+2026-11-20T05:17:20Z + cat /proc/stat > /tmp/bench-baseline3/snapshots/rx-after/proc-stat.txt
+2026-11-20T05:17:20Z + cat /proc/interrupts > /tmp/bench-baseline3/snapshots/rx-after/proc-interrupts.txt
+2026-11-20T05:17:20Z + cat /proc/uptime > /tmp/bench-baseline3/snapshots/rx-after/uptime.txt
+2026-11-20T05:17:20Z + ethtool -S br-lan > /tmp/bench-baseline3/snapshots/rx-after/ethtool-stats.txt
+2026-11-20T05:17:20Z command failed (exit 94): ethtool -S br-lan
+2026-11-20T05:17:20Z + nft list ruleset > /tmp/bench-baseline3/snapshots/rx-after/nft-ruleset.txt
+2026-11-20T05:17:20Z tc not installed
+2026-11-20T05:17:20Z tc not installed
+2026-11-20T05:17:20Z + cat /sys/kernel/debug/ppe/usage > /tmp/bench-baseline3/snapshots/rx-after/ppe-usage.txt
+2026-11-20T05:17:20Z + read /sys/class/net/br-lan/statistics/{rx_packets,tx_packets,rx_bytes,tx_bytes,rx_errors,tx_errors,rx_dropped,tx_dropped} > /tmp/bench-baseline3/snapshots/rx-after/iface-counters.txt

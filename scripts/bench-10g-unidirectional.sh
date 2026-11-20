@@ -24,6 +24,19 @@
 # run time.  The output directory also keeps raw.log, a chronological log
 # of every command the harness ran.
 #
+# --baseline adds the part a number needs to be citable: a label, a
+# free-form environment note, one static snapshot of the link (speed,
+# duplex, driver), the offload features, the flowtable stanza and the
+# kernel, plus CPU busy seconds per direction.  It writes baseline.md
+# next to result.json with a paste-ready claims.yaml entry, and the entry
+# states the measured link speed, so a 1G run can never be quoted as a
+# 10G baseline.
+#
+# --peer-connects makes the box under test the passive end: it runs
+# "iperf3 -s -1 -J" and the peer drives the traffic.  The box under test
+# always has the snapshots in every mode, because the numbers that
+# matter (CPU, PPE, interface counters) live on this box.
+#
 # POSIX sh only, so it runs on the OpenWrt device with busybox ash.
 #
 # Exit status: 0 both directions ran, 1 an iperf3 run failed or setup was
@@ -49,6 +62,12 @@ DURATION=${DURATION:-60}
 PARALLEL=${PARALLEL:-4}
 RESULT_DIR=${RESULT_DIR:-}
 DUMP_FOE=${DUMP_FOE:-0}
+PORT=${PORT:-5201}
+BASELINE=${BASELINE:-0}
+LABEL=${LABEL:-unlabelled}
+ENV_NOTE=${ENV_NOTE:-}
+PEER=${PEER:-client}
+PEER_WAIT=${PEER_WAIT:-120}
 DRY_RUN=0
 
 # Snapshot file names are part of the on-disk format; keep them stable so
@@ -63,6 +82,17 @@ S_PPE_USAGE=ppe-usage.txt
 S_PPE_ENTRIES=ppe-entries.txt
 S_IFACE_COUNTERS=iface-counters.txt
 S_UPTIME=uptime.txt
+# --baseline only, written once per run into snapshots/env/.
+S_LINK=ethtool-iface.txt
+S_DRIVER=ethtool-driver.txt
+S_FEATURES=ethtool-features.txt
+S_SYSFS_LINK=sysfs-link.txt
+S_FLOWTABLE=nft-flowtable.txt
+S_NFT_FULL=nft-ruleset-full.txt
+S_PORTS=link-ports.txt
+S_KERNEL=kernel.txt
+S_CPU=cpuinfo.txt
+S_TOPOLOGY=topology.txt
 
 usage() {
 	cat <<'EOF'
@@ -73,7 +103,8 @@ separate iperf3 runs, never concurrent; each direction gets a full set
 of before/after snapshots and its own entry in result.json.
 
 Required inputs for a real run (environment variable or flag):
-  TARGET / --target IP        peer running "iperf3 -s"
+  TARGET / --target IP        peer running "iperf3 -s" (client role only;
+                              --peer-connects does not need it)
   IFACE  / --iface NAME       local network interface under test
                               --dry-run accepts unset values and prints
                               them as <required> placeholders; a real run
@@ -82,13 +113,40 @@ Required inputs for a real run (environment variable or flag):
 Optional inputs:
   DURATION / --duration SEC   seconds per direction (default 60)
   PARALLEL / --parallel N     iperf3 streams per direction (default 4)
+  PORT / --port N             iperf3 port (default 5201, iperf3's own
+                              default; both ends use the same port)
   RESULT_DIR / --result-dir DIR
                               output directory (default ./bench-10g-<epoch>)
   DUMP_FOE / --dump-foe       set to 1 to also snapshot the full FOE table,
                               /sys/kernel/debug/ppe/entries (about 32768
                               lines per snapshot; off by default)
+  PEER_WAIT / --peer-wait SEC --peer-connects only: how long to wait for
+                              the peer's test to arrive per direction
+                              (default 120; must exceed DURATION + 10)
+  LABEL / --label TEXT        --baseline only: the name this run is
+                              quoted under (default: unlabelled)
+  ENV_NOTE / --env-note TEXT   --baseline only: free-form description of
+                              the peer, the path and anything between the
+                              two ends (NAT, switch, cable, virtual link)
 
 Options:
+  --baseline                  also record the environment (link speed,
+                              duplex, driver, offload features, flowtable
+                              stanza, kernel, CPU count) in snapshots/env/,
+                              and write baseline.md with a paste-ready
+                              claims.yaml entry naming the measured link
+                              speed.  Needed before a number may be
+                              quoted as a result.
+  --peer-connects             the box under test is the passive end: it
+                              runs "iperf3 -s -1 -J -p PORT" twice (once
+                              per direction) and the peer runs
+                              "iperf3 -c <box> -p PORT -t D -P P [-R]".
+                              Use it when the box cannot open a
+                              connection towards the peer (no default
+                              route, or the peer only accepts inbound).
+                              The harness prints the exact peer command
+                              and waits up to PEER_WAIT seconds for it.
+                              All snapshots still come from this box.
   --dry-run                   print the commands and every snapshot path,
                               then exit 0.  No directory is created, no
                               command is run, no peer is contacted and the
@@ -99,14 +157,21 @@ Options:
 Real runs also refuse to start when TARGET or IFACE is empty, when the
 interface does not exist or has no IPv4/IPv6 address, when iperf3 or the
 ip command is not installed, or when RESULT_DIR/result.json already
-exists (a previous run is never overwritten).  The peer must have
-"iperf3 -s" listening; it is not started by this harness.
+exists (a previous run is never overwritten).  In client role the peer
+must have "iperf3 -s" listening; it is not started by this harness.
 
 Protocol, in this order:
   1. TX snapshots before  -> iperf3 -c TARGET -t DURATION -P PARALLEL -J
                           -> TX snapshots after
   2. RX snapshots before  -> iperf3 -c TARGET -t DURATION -P PARALLEL -R -J
                           -> RX snapshots after
+
+With --peer-connects the same two windows use the passive form instead:
+  1. TX: iperf3 -s -1 -J -p PORT (peer sends and passes -R), snapshots
+  2. RX: iperf3 -s -1 -J -p PORT (peer sends, no -R), snapshots
+So "TX" is always traffic from this box to the peer and "RX" always
+traffic from the peer to this box, whichever end opens the connection.
+TX and RX are still separate runs, never concurrent.
 
 Each snapshot directory contains:
   proc-stat.txt          /proc/stat (all CPU lines)
@@ -120,13 +185,31 @@ Each snapshot directory contains:
   iface-counters.txt     sysfs rx/tx packet and byte counters, key value
   uptime.txt             /proc/uptime, bounds the pps measurement window
 
+With --baseline, snapshots/env/ is written once, before the first
+direction, because none of it changes during the run:
+  ethtool-iface.txt      ethtool IFACE (speed, duplex, autoneg)
+  ethtool-driver.txt     ethtool -i IFACE (driver and version)
+  ethtool-features.txt   ethtool -k IFACE (offload on/off)
+  sysfs-link.txt         /sys/class/net/IFACE/{speed,duplex,carrier,...}
+  nft-flowtable.txt      the flowtable stanzas extracted from the ruleset
+  link-ports.txt         speed/duplex and the key offload flags of every
+                         link that reports a positive speed; a bridge
+                         hides its members, so the members are listed
+  kernel.txt             uname -a, /proc/version, /proc/cmdline
+  cpuinfo.txt            CPU count and model from /proc/cpuinfo
+  topology.txt           ip addr, ip route, per-port link map
+
 Output directory:
   raw.log                chronological command log
   result.json            machine-readable result (schema
                          bench-10g-unidirectional/v1)
+  baseline.md            --baseline only: the citable record, with a
+                         paste-ready claims.yaml entry that names the
+                         measured link speed
   iperf3-tx.json         raw iperf3 JSON for the TX run
   iperf3-rx.json         raw iperf3 JSON for the RX run
   snapshots/{tx,rx}-{before,after}/
+  snapshots/env/         --baseline only, as above
 
 result.json records the timestamp, git describe, kernel release, MTU,
 iperf3 reported bits/s and derived Gbit/s per direction, interface-counter
@@ -140,6 +223,11 @@ Examples:
   IFACE=wan TARGET=192.168.1.2 ./scripts/bench-10g-unidirectional.sh
   ./scripts/bench-10g-unidirectional.sh --target 192.168.1.2 --iface wan \
       --duration 30 --parallel 4 --result-dir /tmp/bench-run
+  # citable baseline, box under test as the passive end:
+  ./scripts/bench-10g-unidirectional.sh --baseline --peer-connects \
+      --iface br-lan --label lan4-1g-2026-11-20 \
+      --env-note "peer=host behind NAT, lan4 1000Mb/s" \
+      --duration 5 --parallel 4 --result-dir /tmp/bench-baseline
   ./scripts/bench-10g-unidirectional.sh --help
 EOF
 }
@@ -302,26 +390,228 @@ snapshot_after() {
 	snapshot_extra "$_dir"
 }
 
-iperf_cmd_string() {
-	if [ "$1" = rx ]; then
-		printf 'iperf3 -c %s -t %s -P %s -R -J' "$TARGET" "$DURATION" "$PARALLEL"
-	else
-		printf 'iperf3 -c %s -t %s -P %s -J' "$TARGET" "$DURATION" "$PARALLEL"
+# The offload flags of one link, as "tso gro gso hw-tc-offload"; "?" when
+# ethtool is missing or the kernel does not report the feature.
+port_flags() {
+	if ! command -v ethtool >/dev/null 2>&1; then
+		printf '? ? ? ?'
+		return
 	fi
+	ethtool -k "$1" 2>/dev/null | awk '
+		$1 ~ /:$/ {
+			k = $1
+			sub(/:/, "", k)
+			if (k == "tcp-segmentation-offload") tso = $2
+			else if (k == "generic-receive-offload") gro = $2
+			else if (k == "generic-segmentation-offload") gso = $2
+			else if (k == "hw-tc-offload") hw = $2
+		}
+		END {
+			printf "%s %s %s %s", \
+				(tso == "" ? "?" : tso), (gro == "" ? "?" : gro), \
+				(gso == "" ? "?" : gso), (hw == "" ? "?" : hw)
+		}'
+}
+
+# --baseline: the environment a number is only valid inside.  Taken once,
+# before the first direction, because none of it changes while the bench
+# runs.  Every file is a raw capture, not a summary.
+snapshot_env() {
+	_dir=$(snapshot_dir env)
+	log_note "snapshot env: $_dir"
+	mkdir -p "$_dir" || die "cannot create $_dir"
+
+	if command -v ethtool >/dev/null 2>&1; then
+		capture "$_dir/$S_LINK" ethtool "$IFACE"
+		capture "$_dir/$S_DRIVER" ethtool -i "$IFACE"
+		capture "$_dir/$S_FEATURES" ethtool -k "$IFACE"
+	else
+		note_file "$_dir/$S_LINK" "ethtool not installed"
+		note_file "$_dir/$S_DRIVER" "ethtool not installed"
+		note_file "$_dir/$S_FEATURES" "ethtool not installed"
+	fi
+
+	{
+		for _k in speed duplex carrier operstate mtu; do
+			_v=$(cat "/sys/class/net/$IFACE/$_k" 2>/dev/null) || _v=
+			if [ -n "$_v" ]; then
+				printf '%s %s\n' "$_k" "$_v"
+			fi
+		done
+	} >"$_dir/$S_SYSFS_LINK" 2>&1
+	log_cmd "read /sys/class/net/$IFACE/{speed,duplex,carrier,operstate,mtu} > $_dir/$S_SYSFS_LINK"
+
+	# The flowtable stanza is what decides whether the PPE sees flows at
+	# all; the full ruleset stays next to it so the stanza can be checked
+	# in context.
+	if command -v nft >/dev/null 2>&1; then
+		capture "$_dir/$S_NFT_FULL" nft list ruleset
+		{
+			printf 'extracted from %s; blank means no flowtable stanza\n' \
+				"$S_NFT_FULL"
+			awk '/^[ \t]*flowtable /{ f = 1 }
+			     f { print }
+			     f && /^[ \t]*}/{ f = 0 }' "$_dir/$S_NFT_FULL"
+		} >"$_dir/$S_FLOWTABLE" 2>&1
+	else
+		note_file "$_dir/$S_NFT_FULL" "nft not installed"
+		note_file "$_dir/$S_FLOWTABLE" "nft not installed"
+	fi
+
+	# A bridge hides its members, so the members are listed one by one:
+	# only links with a positive speed are real candidates for traffic.
+	{
+		printf 'port speed_mbps duplex carrier operstate tso gro gso hw-tc-offload\n'
+		# shellcheck disable=SC2045  # /sys/class/net names hold no blanks
+		for _p in $(ls /sys/class/net 2>/dev/null); do
+			_s=$(cat "/sys/class/net/$_p/speed" 2>/dev/null) || _s=
+			case $_s in
+			''|*[!0-9]*) continue ;;
+			esac
+			[ "$_s" -gt 0 ] 2>/dev/null || continue
+			# shellcheck disable=SC2046  # four flags, split on purpose
+			printf '%s %s %s %s %s %s\n' "$_p" "$_s" \
+				"$(cat "/sys/class/net/$_p/duplex" 2>/dev/null)" \
+				"$(cat "/sys/class/net/$_p/carrier" 2>/dev/null)" \
+				"$(cat "/sys/class/net/$_p/operstate" 2>/dev/null)" \
+				"$(port_flags "$_p")"
+		done
+	} >"$_dir/$S_PORTS" 2>&1
+	log_cmd "speed/duplex/flags of every link with a positive speed > $_dir/$S_PORTS"
+
+	{
+		uname -a
+		printf '\n/proc/version:\n'
+		cat /proc/version
+		printf '\n/proc/cmdline:\n'
+		cat /proc/cmdline
+	} >"$_dir/$S_KERNEL" 2>&1
+	log_cmd "uname -a, /proc/version, /proc/cmdline > $_dir/$S_KERNEL"
+
+	{
+		awk -F: '
+			/^processor/ { n++ }
+			/^model name|^CPU part|^Processor|^cpu model/ { m = $0; sub(/^[^:]*:[ \t]*/, "", m) }
+			END {
+				printf "processors: %d\n", n
+				printf "model: %s\n", (m == "" ? "unknown" : m)
+			}' /proc/cpuinfo
+		printf '\n--- /proc/cpuinfo ---\n'
+		cat /proc/cpuinfo
+	} >"$_dir/$S_CPU" 2>&1
+	log_cmd "processor count and model from /proc/cpuinfo > $_dir/$S_CPU"
+
+	{
+		printf -- '--- ip addr ---\n'
+		ip addr 2>&1
+		printf -- '--- ip route ---\n'
+		ip route 2>&1
+		printf -- '--- links ---\n'
+		cat "$_dir/$S_PORTS" 2>/dev/null
+	} >"$_dir/$S_TOPOLOGY" 2>&1
+	log_cmd "ip addr, ip route and link map > $_dir/$S_TOPOLOGY"
+}
+
+iperf_cmd_string() {
+	if [ "$PEER" = server ]; then
+		printf 'iperf3 -s -1 -J -p %s' "$PORT"
+	elif [ "$1" = rx ]; then
+		printf 'iperf3 -c %s -t %s -P %s -R -J -p %s' \
+			"$TARGET" "$DURATION" "$PARALLEL" "$PORT"
+	else
+		printf 'iperf3 -c %s -t %s -P %s -J -p %s' \
+			"$TARGET" "$DURATION" "$PARALLEL" "$PORT"
+	fi
+}
+
+# The address the peer has to connect to, taken from IFACE (the passive
+# role cannot rely on a default route, and the peer is not given an
+# address out of thin air).
+box_ip() {
+	if [ "${_box_ip:-}" != "" ]; then
+		printf '%s' "$_box_ip"
+		return
+	fi
+	_w=$(ip -o addr show dev "$IFACE" 2>/dev/null |
+		awk '$3 == "inet" { print $4; exit }')
+	printf '%s' "${_w%%/*}"
+}
+
+# The command the peer has to run, printed by --peer-connects so the two
+# ends cannot disagree about direction or port.
+peer_cmd_string() {
+	_ip=$(box_ip)
+	[ -n "$_ip" ] || _ip='<box-ip>'
+	if [ "$1" = tx ]; then
+		printf 'iperf3 -c %s -t %s -P %s -R -p %s' \
+			"$_ip" "$DURATION" "$PARALLEL" "$PORT"
+	else
+		printf 'iperf3 -c %s -t %s -P %s -p %s' \
+			"$_ip" "$DURATION" "$PARALLEL" "$PORT"
+	fi
+}
+
+# Passive role: this box listens and the peer drives the traffic.  iperf3
+# -1 serves exactly one test and then exits, so a complete JSON summary in
+# the output file is the "test finished" signal.  The wait is bounded by
+# PEER_WAIT so an absent peer fails the direction instead of hanging.
+serve_iperf() {
+	_dir=$1
+	_out=$2
+	_err=$3
+	log_cmd "$(iperf_cmd_string "$_dir") > $_out"
+	: >"$_out"
+	# Backgrounded with its pid kept, so a timeout stops this listener and
+	# never another iperf3 that happens to run on the same box.
+	iperf3 -s -1 -J -p "$PORT" >"$_out" 2>"$_err" </dev/null &
+	_lpid=$!
+	printf 'peer now, for %s: %s\n' "$_dir" "$(peer_cmd_string "$_dir")"
+	_w=0
+	_st=1
+	while [ "$_w" -lt "$PEER_WAIT" ]; do
+		if grep -q '"sum_received"' "$_out" 2>/dev/null; then
+			# the summary is written after the test ends; one more
+			# second lets the trailing fields land.
+			sleep 1
+			_st=0
+			break
+		fi
+		sleep 1
+		_w=$((_w + 1))
+	done
+	if [ "$_st" -ne 0 ]; then
+		log_note "no peer test arrived within ${PEER_WAIT}s for $_dir"
+		# -1 keeps the listener alive until one test arrives; stop it,
+		# and only it.
+		kill "$_lpid" 2>/dev/null
+	fi
+	wait "$_lpid" 2>/dev/null
+	if [ -s "$_err" ]; then
+		log_note "iperf3 $_dir stderr:"
+		cat "$_err" >>"$RAW_LOG"
+	else
+		rm -f "$_err"
+	fi
+	log_note "iperf3 $_dir exit=$_st"
+	return "$_st"
 }
 
 # Runs one direction only.  The caller decides when the next direction
 # starts; there is deliberately no background job here.
 run_iperf() {
+	if [ "$PEER" = server ]; then
+		serve_iperf "$@"
+		return $?
+	fi
 	_dir=$1
 	_out=$2
 	_err=$3
 	log_cmd "$(iperf_cmd_string "$_dir") > $_out"
 	if [ "$_dir" = rx ]; then
-		iperf3 -c "$TARGET" -t "$DURATION" -P "$PARALLEL" -R -J \
+		iperf3 -c "$TARGET" -t "$DURATION" -P "$PARALLEL" -R -J -p "$PORT" \
 			>"$_out" 2>"$_err"
 	else
-		iperf3 -c "$TARGET" -t "$DURATION" -P "$PARALLEL" -J \
+		iperf3 -c "$TARGET" -t "$DURATION" -P "$PARALLEL" -J -p "$PORT" \
 			>"$_out" 2>"$_err"
 	fi
 	_st=$?
@@ -467,6 +757,37 @@ cpu_json() {
 			printf "{\"cpu\":\"%s\",\"idle_ticks_delta\":%d,\"iowait_ticks_delta\":%d,\"total_ticks_delta\":%d,\"idle_pct\":%.2f}", k, ci, cw, ct, cpct
 		}
 		printf "]}\n"
+	}
+	' "$1" "$2"
+}
+
+# CPU time spent inside one direction, in seconds.  Same /proc/stat
+# fields as cpu_json, but reported as wall-clock seconds so a baseline can
+# state cost per direction instead of only a percentage.  USER_HZ is 100
+# on every kernel this repo targets; idle_pct counts iowait as idle.
+cpu_seconds() {
+	if [ ! -r "$1" ] || [ ! -r "$2" ]; then
+		printf 'null null null\n'
+		return
+	fi
+	awk '
+	FNR == NR {
+		if ($1 == "cpu") {
+			bt = $2 + $3 + $4 + $5 + $6 + $7 + $8 + $9
+			bi = $5 + $6
+		}
+		next
+	}
+	$1 == "cpu" {
+		at = $2 + $3 + $4 + $5 + $6 + $7 + $8 + $9
+		ai = $5 + $6
+	}
+	END {
+		if (bt == "" || at == "") { print "null null null"; exit }
+		dt = at - bt
+		di = ai - bi
+		if (dt <= 0) { print "null null null"; exit }
+		printf "%.2f %.2f %.2f\n", (dt - di) / 100, dt / 100, di * 100 / dt
 	}
 	' "$1" "$2"
 }
@@ -686,28 +1007,323 @@ emit_direction() {
 	printf '"error":%s}\n' "$_err"
 }
 
+# --baseline: the citable record.  Every number here is read back out of
+# the capture files of this run (never from the terminal), and every line
+# that qualifies a number is printed next to it, so a reader can tell a 1G
+# measurement from a 10G one without asking.
+emit_baseline_md() {
+	_tx_st=$1
+	_rx_st=$2
+	_edir=$(snapshot_dir env)
+	_ts=$(now_ts)
+
+	_speed=$(cat "/sys/class/net/$IFACE/speed" 2>/dev/null) || _speed=
+	case $_speed in
+	''|*[!0-9]*) _speed= ;;
+	esac
+	if [ -z "$_speed" ] || [ "$_speed" -le 0 ]; then
+		_speed=$(awk '
+			/^[ \t]*Speed:/ {
+				v = $2
+				gsub(/[^0-9]/, "", v)
+				if (v != "") { print v; exit }
+			}' "$_edir/$S_LINK" 2>/dev/null)
+	fi
+	[ -n "$_speed" ] || _speed=unknown
+
+	_duplex=$(cat "/sys/class/net/$IFACE/duplex" 2>/dev/null) || _duplex=
+	if [ -z "$_duplex" ]; then
+		# a bridge has no duplex of its own; the members carry it
+		_duplex=$(awk '
+			/^[ \t]*Duplex:/ {
+				v = $2
+				if (v != "") { print tolower(v); exit }
+			}' "$_edir/$S_LINK" 2>/dev/null)
+	fi
+	[ -n "$_duplex" ] || _duplex=unknown
+
+	# the bridge itself reports no duplex, so the members are named: a
+	# reader has to know which physical link the number ran over.
+	_links=$(awk '
+		NR == 1 { next }
+		{ printf "%s%s %s/%s %s", (n++ ? "; " : ""), $1, $2, $3, $5 }
+		END { if (n == 0) print "none captured" }
+		' "$_edir/$S_PORTS" 2>/dev/null)
+	[ -n "$_links" ] || _links="none captured"
+	_mtu=$(cat "/sys/class/net/$IFACE/mtu" 2>/dev/null) || _mtu=
+	_driver=$(awk '/^driver:/ { print $2; exit }' "$_edir/$S_DRIVER" 2>/dev/null)
+	_drvver=$(awk '/^version:/ { print $2; exit }' "$_edir/$S_DRIVER" 2>/dev/null)
+	[ -n "$_driver" ] || _driver=unknown
+	[ -n "$_drvver" ] || _drvver=unknown
+	_ncpu=$(awk -F: '/^processors:/ { gsub(/ /, "", $2); print $2 }' "$_edir/$S_CPU" 2>/dev/null)
+	[ -n "$_ncpu" ] || _ncpu=unknown
+	_cpu_model=$(awk -F: '/^model:/ { sub(/^ /, "", $2); print $2 }' "$_edir/$S_CPU" 2>/dev/null)
+	[ -n "$_cpu_model" ] || _cpu_model=unknown
+
+	# the capture starts with one note line; the stanza itself keeps its
+	# own line breaks so the record shows what nft actually printed
+	_ft_def=$(awk 'NR > 1' "$_edir/$S_FLOWTABLE" 2>/dev/null)
+	[ -n "$_ft_def" ] || _ft_def="no flowtable stanza captured"
+	_ft_dev=$(awk '
+		/devices = / {
+			i = index($0, "devices = ")
+			s = substr($0, i + 11)
+			gsub(/[{}"]/, "", s)
+			gsub(/^[ \t]+|[ \t]+$/, "", s)
+			print s
+			exit
+		}' "$_edir/$S_FLOWTABLE" 2>/dev/null)
+	[ -n "$_ft_dev" ] || _ft_dev=none
+	if printf '%s' "$_ft_def" | grep -q 'flags offload'; then
+		_ft_hw=on
+	else
+		_ft_hw=off
+	fi
+	_feat=$(awk '
+		$1 ~ /:$/ {
+			k = $1
+			sub(/:/, "", k)
+			if (k == "tcp-segmentation-offload") tso = $2
+			else if (k == "generic-receive-offload") gro = $2
+			else if (k == "generic-segmentation-offload") gso = $2
+			else if (k == "rx-checksumming") rxc = $2
+			else if (k == "tx-checksumming") txc = $2
+		}
+		END {
+			printf "tso=%s gro=%s gso=%s rx-csum=%s tx-csum=%s", \
+				(tso == "" ? "?" : tso), (gro == "" ? "?" : gro), \
+				(gso == "" ? "?" : gso), (rxc == "" ? "?" : rxc), \
+				(txc == "" ? "?" : txc)
+		}' "$_edir/$S_FEATURES" 2>/dev/null)
+	[ -n "$_feat" ] || _feat=unknown
+
+	_label_esc=$(json_escape "$LABEL")
+	_id=$(printf '%s' "$LABEL" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9._-]/-/g')
+	printf '# baseline %s\n\n' "$_label_esc"
+	printf 'Recorded by scripts/bench-10g-unidirectional.sh --baseline on %s.\n' "$_ts"
+	printf 'This file is the citable record: every number below was read back\n'
+	printf 'out of the capture files of this run, and every qualifier next to it\n'
+	printf 'comes from the same capture.\n\n'
+	printf '| field | value |\n| --- | --- |\n'
+	printf '| label | %s |\n' "$_label_esc"
+	printf '| recorded at (UTC) | %s |\n' "$_ts"
+	printf '| role | %s |\n' "$PEER"
+	printf '| interface under test | %s (MTU %s) |\n' "$IFACE" "${_mtu:-unknown}"
+	printf '| link speed | %s Mb/s |\n' "$_speed"
+	printf '| duplex (as %s reports it) | %s |\n' "$IFACE" "$_duplex"
+	printf '| links with a positive speed | %s |\n' "$_links"
+	printf '| driver | %s %s |\n' "$_driver" "$_drvver"
+	printf '| kernel | %s |\n' "$_krel"
+	printf '| kernel build | %s |\n' "$(awk '/^Linux version/ { print; exit }' "$_edir/$S_KERNEL" 2>/dev/null)"
+	printf '| CPUs | %s (%s) |\n' "$_ncpu" "$_cpu_model"
+	printf '| iperf3 | %s |\n' "$_iperf_ver"
+	printf '| duration / streams | %s s / %s |\n' "$DURATION" "$PARALLEL"
+	printf '| flowtable devices | %s |\n' "$_ft_dev"
+	printf '| flowtable hw offload flag | %s |\n' "$_ft_hw"
+	printf '| iface offload state | %s |\n' "$_feat"
+	printf '| git | %s |\n' "$_git_desc"
+	if [ -n "$ENV_NOTE" ]; then
+		printf '| environment | %s |\n' "$(json_escape "$ENV_NOTE")"
+	fi
+	printf '\n'
+	printf 'Flowtable stanza as captured:\n\n```\n%s\n```\n\n' "$_ft_def"
+
+	printf '## throughput and cost per direction\n\n'
+	printf 'TX = traffic from this box to the peer, RX = traffic from the peer\n'
+	printf 'to this box; the two are separate runs, never concurrent.\n\n'
+	if [ "$PEER" = server ]; then
+		printf 'In passive role the peer-side counters are not in this\n'
+		printf 'record: this box holds only its own iperf3 JSON, so the peer\n'
+		printf 'column is "-" rather than a number the harness did not see.\n\n'
+	fi
+	printf '| direction | Gbit/s | peer Gbit/s (passive: -) | pps | retransmits | CPU busy s | CPU busy %% of wall | idle %% |\n'
+	printf '| --- | --- | --- | --- | --- | --- | --- | --- |\n'
+
+	_gbps_tx=-
+	_gbps_rx=-
+
+	for _dn in tx rx; do
+		case $_dn in
+		tx) _st=$_tx_st ;;
+		rx) _st=$_rx_st ;;
+		esac
+		_ijson=$RESULT_DIR/iperf3-$_dn.json
+		_bdir=$(snapshot_dir "$_dn-before")
+		_adir=$(snapshot_dir "$_dn-after")
+
+		_sbps=null; _rbps=null; _retr=null
+		if [ -r "$_ijson" ]; then
+			_iline=$(iperf_summary "$_ijson")
+			if [ -n "$_iline" ]; then
+				# shellcheck disable=SC2086
+				set -- $_iline
+				if [ "$#" -ge 8 ]; then
+					_sbps=$1
+					_rbps=$5
+					_retr=$4
+				fi
+			fi
+		fi
+		if [ "$_dn" = rx ]; then
+			_bps=$_rbps
+			_peer=$_sbps
+		else
+			_bps=$_sbps
+			_peer=$_rbps
+		fi
+
+		_gbps=-
+		_pgbps=-
+		if [ "$_bps" != null ]; then
+			_gbps=$(gbit "$_bps")
+		fi
+		if [ "$_peer" != null ]; then
+			_pgbps=$(gbit "$_peer")
+			# in passive role our own JSON carries the box's counters,
+			# and a zero here means "not measured from this end", not
+			# "the peer saw nothing".
+			case $_pgbps in
+			0.000) _pgbps=- ;;
+			esac
+		fi
+		case $_dn in
+		tx) _gbps_tx=$_gbps ;;
+		rx) _gbps_rx=$_gbps ;;
+		esac
+
+		_el=$(uptime_delta "$_bdir/$S_UPTIME" "$_adir/$S_UPTIME")
+		_elv=1
+		case $_el in
+		*[!0-9.]*) _elv=1 ;;
+		*) _elv=$_el ;;
+		esac
+		if [ "$_dn" = rx ]; then
+			_pk=$(counter_delta "$_bdir/$S_IFACE_COUNTERS" \
+				"$_adir/$S_IFACE_COUNTERS" rx_packets)
+		else
+			_pk=$(counter_delta "$_bdir/$S_IFACE_COUNTERS" \
+				"$_adir/$S_IFACE_COUNTERS" tx_packets)
+		fi
+		_pps=-
+		if [ "$_pk" != null ] && [ -n "$_pk" ]; then
+			_pps=$(awk -v d="$_pk" -v t="$_elv" \
+				'BEGIN { if (t > 0) printf "%.0f", d / t; else print "-" }')
+		fi
+		_retrs=-
+		if [ "$_retr" != null ] && [ -n "$_retr" ]; then
+			_retrs=$_retr
+		fi
+
+		# shellcheck disable=SC2046
+		set -- $(cpu_seconds "$_bdir/$S_PROC_STAT" "$_adir/$S_PROC_STAT")
+		_busy=$1
+		_wall=$2
+		_idle=$3
+		_busypct=-
+		if [ "$_busy" != null ] && [ "$_wall" != null ]; then
+			_busypct=$(awk -v b="$_busy" -v w="$_wall" -v s="$_st" \
+				'BEGIN {
+					if (w <= 0) { print "-"; exit }
+					printf "%.1f", b * 100 / w
+				}')
+		fi
+		if [ "$_st" -ne 0 ]; then
+			printf '| %s | **failed (exit %s)** | - | - | - | - | - | - |\n' \
+				"$_dn" "$_st"
+		else
+			printf '| %s | %s | %s | %s | %s | %s | %s | %s |\n' \
+				"$_dn" "$_gbps" "$_pgbps" "$_pps" "$_retrs" \
+				"${_busy:--}" "${_busypct}" "${_idle:--}"
+		fi
+	done
+
+	printf '\n## what this record does and does not establish\n\n'
+	printf 'The link under test reports **%s Mb/s**, so %s Mb/s is this run''s\n' \
+		"$_speed" "$_speed"
+	printf 'hard ceiling and no number here can describe a 10G path.\n'
+	case $_speed in
+	10000|25000|40000|50000|100000)
+		printf 'The link is fast enough to be quoted as a 10G-class baseline.\n' ;;
+	*)
+		printf '\nA stock-firmware side is **not** part of this record: this script\n'
+		printf 'measures the firmware it is run on, and no stock unit was attached.\n'
+		printf 'A stock-vs-OpenWrt comparison needs the same harness run on the\n'
+		printf 'stock firmware over the same link, and stays unmeasured until that\n'
+		printf 'exists.\n' ;;
+	esac
+
+	printf '\n## captures behind this record\n\n'
+	for _f in "$S_LINK" "$S_DRIVER" "$S_FEATURES" "$S_SYSFS_LINK" "$S_FLOWTABLE" \
+		"$S_NFT_FULL" "$S_PORTS" "$S_KERNEL" "$S_CPU" "$S_TOPOLOGY"; do
+		printf -- '- `snapshots/env/%s`\n' "$_f"
+	done
+	printf -- '- `iperf3-tx.json`, `iperf3-rx.json` (raw iperf3 JSON)\n'
+	printf -- '- `result.json` (parsed result, schema bench-10g-unidirectional/v1)\n'
+	printf -- '- `raw.log` (every command, in order)\n'
+
+	printf '\n## paste-ready claims.yaml entry\n\n'
+	printf 'Commit this file as `scripts/perf-baselines/%s.md` before citing it;\n' \
+		"$_label_esc"
+	printf '`source` must point at a committed line.\n\n'
+	printf '```yaml\n'
+	printf '  - id: baseline-%s\n' "$_id"
+	printf '    claim: "在本仓库 iperf3 基线上（%s Mb/s 链路，%s 驱动，flowtable\n' \
+		"$_speed" "$_driver"
+	printf '      硬件 offload %s），本移植单向吞吐为 TX %s Gbit/s、RX %s Gbit/s，\n' \
+		"$_ft_hw" "$_gbps_tx" "$_gbps_rx"
+	printf '      对应 CPU busy 见记录。"\n'
+	printf '    source:\n'
+	printf '      - "scripts/perf-baselines/%s.md:1"\n' "$_label_esc"
+	printf '    evidence: 实测\n'
+	printf '    date: "%s"\n' "$(date -u +%Y-%m-%d)"
+	printf '    status: supported\n'
+	printf '    notes: "单机、单次、%s 链路，不代表 10G 能力，也不能与 stock 固件\n' \
+		"$_speed"
+	printf '      的数字并列当作对比；stock 侧仍无测量。"\n'
+	printf '```\n'
+}
+
 # Print the planned protocol without touching the system.  Every path and
 # command below is exactly what a real run uses.
 dry_run_plan() {
 	_target=${TARGET:-<required>}
 	_iface=${IFACE:-<required>}
 	printf '%s: dry run; nothing will be created or executed\n' "$PROG"
-	if [ -z "$TARGET" ] || [ -z "$IFACE" ]; then
-		printf '  note: an unset TARGET or IFACE is shown as <required>;\n'
+	if { [ "$PEER" = client ] && [ -z "$TARGET" ]; } || [ -z "$IFACE" ]; then
+		printf '  note: an unset TARGET (client role) or IFACE is shown as <required>;\n'
 		printf '        a real run refuses to start without both.\n'
 	fi
 	printf '  TARGET=%s\n' "$_target"
 	printf '  IFACE=%s\n' "$_iface"
 	printf '  DURATION=%s PARALLEL=%s DUMP_FOE=%s\n' "$DURATION" "$PARALLEL" "$DUMP_FOE"
+	printf '  PORT=%s ROLE=%s PEER_WAIT=%s\n' "$PORT" "$PEER" "$PEER_WAIT"
+	printf '  BASELINE=%s LABEL=%s\n' "$BASELINE" "$LABEL"
+	if [ -n "$ENV_NOTE" ]; then
+		printf '  ENV_NOTE=%s\n' "$ENV_NOTE"
+	fi
 	printf '  RESULT_DIR=%s\n' "$RESULT_DIR"
 	printf '\nprotocol commands, in order:\n'
 	printf '  1. TX snapshots before: %s/snapshots/tx-before\n' "$RESULT_DIR"
-	printf '     iperf3 -c %s -t %s -P %s -J > %s/iperf3-tx.json\n' \
-		"$_target" "$DURATION" "$PARALLEL" "$RESULT_DIR"
+	if [ "$PEER" = server ]; then
+		printf '     iperf3 -s -1 -J -p %s > %s/iperf3-tx.json\n' \
+			"$PORT" "$RESULT_DIR"
+		printf '     peer runs: iperf3 -c <box-ip> -t %s -P %s -R -p %s\n' \
+			"$DURATION" "$PARALLEL" "$PORT"
+	else
+		printf '     iperf3 -c %s -t %s -P %s -J -p %s > %s/iperf3-tx.json\n' \
+			"$_target" "$DURATION" "$PARALLEL" "$PORT" "$RESULT_DIR"
+	fi
 	printf '  2. TX snapshots after:  %s/snapshots/tx-after\n' "$RESULT_DIR"
 	printf '  3. RX snapshots before: %s/snapshots/rx-before\n' "$RESULT_DIR"
-	printf '     iperf3 -c %s -t %s -P %s -R -J > %s/iperf3-rx.json\n' \
-		"$_target" "$DURATION" "$PARALLEL" "$RESULT_DIR"
+	if [ "$PEER" = server ]; then
+		printf '     iperf3 -s -1 -J -p %s > %s/iperf3-rx.json\n' \
+			"$PORT" "$RESULT_DIR"
+		printf '     peer runs: iperf3 -c <box-ip> -t %s -P %s -p %s\n' \
+			"$DURATION" "$PARALLEL" "$PORT"
+	else
+		printf '     iperf3 -c %s -t %s -P %s -R -J -p %s > %s/iperf3-rx.json\n' \
+			"$_target" "$DURATION" "$PARALLEL" "$PORT" "$RESULT_DIR"
+	fi
 	printf '  4. RX snapshots after:  %s/snapshots/rx-after\n' "$RESULT_DIR"
 	printf '\nreal-run preconditions (not checked by --dry-run):\n'
 	printf '  ip -o addr show dev %s   # must contain inet or inet6\n' "$_iface"
@@ -746,9 +1362,31 @@ dry_run_plan() {
 		printf '  read /sys/class/net/%s/statistics/{rx_packets,tx_packets,rx_bytes,tx_bytes,rx_errors,tx_errors,rx_dropped,tx_dropped} > %s/%s\n' \
 			"$_iface" "$_dir" "$S_IFACE_COUNTERS"
 	done
+	if [ "$BASELINE" = 1 ]; then
+		_dir=$RESULT_DIR/snapshots/env
+		printf '\n[%s], exact environment snapshot commands and paths:\n' "$_dir"
+		printf '  ethtool %s > %s/%s\n' "$_iface" "$_dir" "$S_LINK"
+		printf '  ethtool -i %s > %s/%s\n' "$_iface" "$_dir" "$S_DRIVER"
+		printf '  ethtool -k %s > %s/%s\n' "$_iface" "$_dir" "$S_FEATURES"
+		printf '  read /sys/class/net/%s/{speed,duplex,carrier,operstate,mtu} > %s/%s\n' \
+			"$_iface" "$_dir" "$S_SYSFS_LINK"
+		printf '  nft list ruleset > %s/%s\n' "$_dir" "$S_NFT_FULL"
+		printf '  flowtable stanzas extracted from %s > %s/%s\n' \
+			"$S_NFT_FULL" "$_dir" "$S_FLOWTABLE"
+		printf '  positive-speed links with tso/gro/gso/hw-tc-offload > %s/%s\n' \
+			"$_dir" "$S_PORTS"
+		printf '  uname -a, /proc/version, /proc/cmdline > %s/%s\n' \
+			"$_dir" "$S_KERNEL"
+		printf '  /proc/cpuinfo (count and model) > %s/%s\n' "$_dir" "$S_CPU"
+		printf '  ip addr, ip route, link map > %s/%s\n' "$_dir" "$S_TOPOLOGY"
+	fi
 	printf '\nresults:\n'
 	printf '  %s/result.json\n' "$RESULT_DIR"
 	printf '  %s/raw.log\n' "$RESULT_DIR"
+	if [ "$BASELINE" = 1 ]; then
+		printf '  %s/baseline.md   # citable record, paste-ready claims.yaml entry\n' \
+			"$RESULT_DIR"
+	fi
 }
 
 # ---------------------------------------------------------------------
@@ -817,6 +1455,53 @@ while [ "$#" -gt 0 ]; do
 		RESULT_DIR=${1#--result-dir=}
 		shift
 		;;
+	--baseline)
+		BASELINE=1
+		shift
+		;;
+	--peer-connects)
+		case $PEER in
+		server) ;;
+		client) PEER=server ;;
+		esac
+		shift
+		;;
+	--label)
+		[ "$#" -ge 2 ] || usage_error "--label requires a value"
+		LABEL=$2
+		shift 2
+		;;
+	--label=*)
+		LABEL=${1#--label=}
+		shift
+		;;
+	--env-note)
+		[ "$#" -ge 2 ] || usage_error "--env-note requires a value"
+		ENV_NOTE=$2
+		shift 2
+		;;
+	--env-note=*)
+		ENV_NOTE=${1#--env-note=}
+		shift
+		;;
+	--port)
+		[ "$#" -ge 2 ] || usage_error "--port requires a value"
+		PORT=$2
+		shift 2
+		;;
+	--port=*)
+		PORT=${1#--port=}
+		shift
+		;;
+	--peer-wait)
+		[ "$#" -ge 2 ] || usage_error "--peer-wait requires a value"
+		PEER_WAIT=$2
+		shift 2
+		;;
+	--peer-wait=*)
+		PEER_WAIT=${1#--peer-wait=}
+		shift
+		;;
 	-*)
 		usage_error "unknown option: $1"
 		;;
@@ -828,6 +1513,22 @@ done
 
 require_positive_int DURATION "$DURATION"
 require_positive_int PARALLEL "$PARALLEL"
+require_positive_int PORT "$PORT"
+require_positive_int PEER_WAIT "$PEER_WAIT"
+
+case $PEER in
+client | server) ;;
+*) usage_error "PEER must be client or server, got '$PEER'" ;;
+esac
+
+case $BASELINE in
+0 | 1) ;;
+*) usage_error "BASELINE must be 1 or 0, got '$BASELINE'" ;;
+esac
+
+if [ "$PEER" = server ] && [ "$PEER_WAIT" -lt $((DURATION + 10)) ]; then
+	usage_error "PEER_WAIT=${PEER_WAIT}s is shorter than DURATION+10s=$((DURATION + 10))s; the peer test would be cut off"
+fi
 
 case $DUMP_FOE in
 0) ;;
@@ -847,7 +1548,9 @@ fi
 # ---------------------------------------------------------------------
 # real run
 
-[ -n "$TARGET" ] || usage_error "TARGET is required (peer running iperf3 -s)"
+if [ "$PEER" = client ]; then
+	[ -n "$TARGET" ] || usage_error "TARGET is required in client role (peer running iperf3 -s)"
+fi
 [ -n "$IFACE" ] || usage_error "IFACE is required (local network interface)"
 
 command -v iperf3 >/dev/null 2>&1 ||
@@ -883,6 +1586,12 @@ TMPDIR_RUN=$(mktemp -d "$RESULT_DIR/.tmp.XXXXXX") ||
 RAW_LOG=$RESULT_DIR/raw.log
 : >"$RAW_LOG" || die "cannot write $RAW_LOG"
 
+if [ "$BASELINE" = 1 ]; then
+	# taken before the first direction, so the link state, the flowtable
+	# and the kernel are captured exactly as the traffic will see them.
+	snapshot_env
+fi
+
 _git_desc=unknown
 if [ -n "$REPO_DIR" ] && command -v git >/dev/null 2>&1; then
 	_git_desc=$(git -C "$REPO_DIR" describe --tags --always --dirty 2>/dev/null) ||
@@ -895,7 +1604,12 @@ _iperf_ver=$(iperf3 --version 2>/dev/null | awk 'NR == 1 { print; exit }') ||
 [ -n "$_iperf_ver" ] || _iperf_ver=unknown
 
 log_note "start $PROG"
-log_note "target=$TARGET iface=$IFACE duration=$DURATION parallel=$PARALLEL dump_foe=$DUMP_FOE"
+if [ "$PEER" = server ]; then
+	log_note "role=server (passive; the peer dials this box) box_ip=$(box_ip) port=$PORT peer_wait=${PEER_WAIT}s"
+else
+	log_note "target=$TARGET iface=$IFACE role=client port=$PORT"
+fi
+log_note "iface=$IFACE duration=$DURATION parallel=$PARALLEL dump_foe=$DUMP_FOE baseline=$BASELINE label=$LABEL"
 log_note "git_describe=$_git_desc kernel_release=$_krel mtu=$_mtu"
 if [ -n "${USER:-}" ]; then
 	log_note "user=$USER"
@@ -930,6 +1644,24 @@ emit_direction rx "$rx_status" "$RESULT_DIR/iperf3-rx.json" \
 	>"$TMPDIR_RUN/rx.json"
 
 _json_ts=$(now_ts)
+
+_base_json=false
+_env_json=null
+if [ "$BASELINE" = 1 ]; then
+	_base_json=true
+	_b_speed=$(cat "/sys/class/net/$IFACE/speed" 2>/dev/null) || _b_speed=
+	case $_b_speed in
+	''|*[!0-9]*) _b_speed=null ;;
+	esac
+	_b_duplex=$(cat "/sys/class/net/$IFACE/duplex" 2>/dev/null) || _b_duplex=
+	_b_driver=$(awk '/^driver:/ { print $2; exit }' \
+		"$RESULT_DIR/snapshots/env/$S_DRIVER" 2>/dev/null)
+	_b_ft=$(grep -c 'flags offload' \
+		"$RESULT_DIR/snapshots/env/$S_FLOWTABLE" 2>/dev/null) || _b_ft=0
+	_b_ft_off=false
+	[ "${_b_ft:-0}" -gt 0 ] && _b_ft_off=true
+	_env_json="{\"link_speed_mbps\":$_b_speed,\"duplex\":\"$(json_escape "${_b_duplex:-unknown}")\",\"driver\":\"$(json_escape "${_b_driver:-unknown}")\",\"flowtable_hw_offload\":$_b_ft_off,\"captures\":\"snapshots/env\"}"
+fi
 {
 	printf '{\n'
 	printf '  "schema": "bench-10g-unidirectional/v1",\n'
@@ -940,6 +1672,11 @@ _json_ts=$(now_ts)
 	printf '  "iperf3_version": "%s",\n' "$(json_escape "$_iperf_ver")"
 	printf '  "iface": "%s",\n' "$(json_escape "$IFACE")"
 	printf '  "target": "%s",\n' "$(json_escape "$TARGET")"
+	printf '  "role": "%s",\n' "$PEER"
+	printf '  "port": %s,\n' "$PORT"
+	printf '  "baseline": %s,\n' "$_base_json"
+	printf '  "label": "%s",\n' "$(json_escape "$LABEL")"
+	printf '  "env_note": "%s",\n' "$(json_escape "$ENV_NOTE")"
 	printf '  "mtu": %s,\n' "$_mtu"
 	printf '  "duration_s": %s,\n' "$DURATION"
 	printf '  "parallel": %s,\n' "$PARALLEL"
@@ -948,6 +1685,7 @@ _json_ts=$(now_ts)
 	else
 		printf '  "dump_foe": false,\n'
 	fi
+	printf '  "environment": %s,\n' "$_env_json"
 	printf '  "raw_log": "raw.log",\n'
 	printf '  "directions": {\n    "tx": '
 	cat "$TMPDIR_RUN/tx.json"
@@ -965,8 +1703,21 @@ mv "$RESULT_DIR/result.json.tmp" "$RESULT_DIR/result.json" ||
 	die "cannot move result.json into place"
 rm -rf "$TMPDIR_RUN"
 
+if [ "$BASELINE" = 1 ]; then
+	# the citable record is written last, so it can only ever describe a
+	# run whose result.json already exists.
+	emit_baseline_md "$tx_status" "$rx_status" \
+		>"$RESULT_DIR/baseline.md.tmp" ||
+		die "cannot write $RESULT_DIR/baseline.md.tmp"
+	mv "$RESULT_DIR/baseline.md.tmp" "$RESULT_DIR/baseline.md" ||
+		die "cannot move baseline.md into place"
+fi
+
 printf '\nTX: exit %s, result: %s\n' "$tx_status" "$RESULT_DIR/result.json"
 printf 'RX: exit %s, raw log: %s\n' "$rx_status" "$RAW_LOG"
+if [ "$BASELINE" = 1 ]; then
+	printf 'baseline record: %s/baseline.md\n' "$RESULT_DIR"
+fi
 
 _rc=0
 [ "$tx_status" -eq 0 ] || _rc=1

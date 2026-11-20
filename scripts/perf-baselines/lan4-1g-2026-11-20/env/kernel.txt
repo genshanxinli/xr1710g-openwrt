@@ -1,0 +1,7 @@
+Linux OpenWrt 7.3 #0 SMP PREEMPT Fri Nov 20 04:04:01 2026 aarch64 GNU/Linux
+
+/proc/version:
+Linux version 7.3 (l1n@localhost) (aarch64-openwrt-linux-musl-gcc (OpenWrt GCC 14.4.0 toolchain-582d2181ab) 14.4.0, GNU ld (GNU Binutils) 2.46.1) #0 SMP PREEMPT Fri Nov 20 04:04:01 2026
+
+/proc/cmdline:
+console=ttyS0,115200 earlycon ubi.block=0,fit root=/dev/fit0 rootwait rdinit=/sbin/init

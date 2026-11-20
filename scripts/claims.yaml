@@ -143,17 +143,26 @@ claims:
     evidence: 推断
     date: "2026-11-15"
     status: unverified
-    notes: "issue #26 明确要求 TX/RX 分开，issue #13 的 baseline 表尚未提交。单向数字不能写成双向吞吐。"
+    notes: "issue #26 明确要求 TX/RX 分开；1G 的单向记录已提交（baseline-lan4-1g-2026-11-20），10G 链路与双向/全双工基线仍无。单向数字不能写成双向吞吐。"
 
   - id: stock-bridge-gap
-    claim: "纯 L2 桥接下 stock 固件约 9.4 Gbit/s，本移植约 3.2 Gbit/s。"
+    claim: "待测目标，不是测量结果：纯 L2 桥接下 stock 固件与本移植的相对差距，本仓库没有任何一次可重放的测量。issue #3/#13 转引的 stock 约 9.4 Gbit/s、本移植约 3.2 Gbit/s 都是现场口述/转引的目标值。"
     source:
       - https://github.com/genshanxinli/xr1710g-openwrt/issues/3
       - https://github.com/genshanxinli/xr1710g-openwrt/issues/13
     evidence: 推断
     date: "2026-11-15"
     status: unverified
-    notes: "数字来自 issue #3 的社区/现场报告和 issue #13 的引用，没有本仓库可重放结果；引用时必须带 unverified，不能当基线。"
+    notes: "两个数字都不许放在结果位置。原因：本机只有 1000 Mb/s 的 lan4（lan2/wan carrier 0），没有 2.5G/10G 对端，也没有 stock 固件在这台机器上运行；1G 链路上的实测见 baseline-lan4-1g-2026-11-20（0.x Gbit/s），与 9.4/3.2 不可比，也不能据此推算 10G 比值。"
+
+  - id: baseline-lan4-1g-2026-11-20
+    claim: "1000 Mb/s lan4 链路上，本移植单向 iperf3 吞吐为 TX 0.704 Gbit/s、RX 0.887 Gbit/s；该次流量没有被 PPE 绑定（bound_delta 0），按软件路径处理，CPU busy 约 9.5%（TX）/37.9%（RX）占墙钟。"
+    source:
+      - "scripts/perf-baselines/lan4-1g-2026-11-20/record.md:1"
+    evidence: 实测
+    date: "2026-11-20"
+    status: supported
+    notes: "单机单次 1G 链路：对端是 NAT 后面的宿主（MTU 1280），TX 有 87 次重传。同参数重复三次为 TX 0.69–0.76、RX 0.85–0.92。不代表 10G 能力，也不构成 stock 对比。"
 
   - id: pppoe-decap-bit23
     claim: "PPPoE 入向硬件 decap 依赖 IB1 bit23（BIND_TUNNEL_DECAP）：decap=0 时没有 bit23、没有硬件 decap，decap=1 才有；入向最小集是 5T/route 键 + STATE=2 + TTL + IB1 bit23，etype=8864/bit22/pppoe_id 不是必需。"
