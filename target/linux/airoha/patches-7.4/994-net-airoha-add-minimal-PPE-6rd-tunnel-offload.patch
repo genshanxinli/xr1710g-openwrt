@@ -1,38 +1,6 @@
-From: OpenWrt <openwrt@example.org>
-Subject: [PATCH] net: airoha: add minimal PPE 6rd tunnel offload
-
-The PPE entry layouts already describe the fields a 6rd tunnel needs: the
-tunnel bit and tunnel id in a route entry's data word, the tunnel MTU in
-the meter word, and the tunnel-decap bit in information block 1.  Nothing
-in the Linux driver ever writes them: every flow is built as an ordinary
-IPv4 or IPv6 route.
-
-Map the host-side tunnel parameters the flow offload API reports onto
-those fields.  A flow is marked as 6rd when it is an IPv6 flow carried by
-a plain IPv4-in-IP tunnel, that is the rule carries a TUNNEL_ENCAP action
-whose ip_tunnel_info has an IPv4 outer address family and no UDP
-encapsulation, or a TUNNEL_DECAP action with an IPv4 ENC_CONTROL.  The
-tunnel id comes from the action key (ENC_KEYID on the decap side), the MTU
-from the underlay device, and rmt is set only for the decapsulation
-direction.  Ordinary flows never set a tunnel field.
-
-The mapping is gated by the airoha_ppe_6rd module parameter (default 0).
-The driver does not program the PPE tunnel table that supplies the outer
-IPv4 header, so a 6rd entry is not usable end to end until that table is
-managed.  With the parameter off, tunnel actions are rejected exactly as
-before and every 6rd field keeps the zero the entry builder writes.
-
-Add /sys/kernel/debug/ppe/6rd (0444), a read-only dump of the marked
-entries and their tunnel parameters.  It reads FOE entries and the module
-parameter only.
-
-Table sizing, bind/aging, PPPoE, L2B, QoS and multicast are untouched.
-
-Signed-off-by: OpenWrt <openwrt@example.org>
----
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -546,6 +546,20 @@
+@@ -549,6 +549,20 @@
  	u64 packets;
  };
  
@@ -53,15 +21,16 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  struct airoha_flow_data {
  	struct ethhdr eth;
  
-@@ -596,6 +610,7 @@
+@@ -605,6 +619,8 @@
  		u8 tunnel_id;
  		u16 tunnel_mtu;
  	} dslite;
++
 +	struct airoha_ppe_6rd sixrd;
+ };
  
- 	/* Meter group requested by a tc police action, or
- 	 * AIROHA_PPE_METER_NONE.  Carried from the action parser to
-@@ -953,6 +968,7 @@
+ enum airoha_flow_entry_type {
+@@ -972,6 +988,7 @@
  int airoha_ppe_probe_entry_alias(struct airoha_ppe *ppe);
  void airoha_ppe_foe_entry_get_stats(struct airoha_ppe *ppe, u32 hash,
  				    struct airoha_foe_stats64 *stats);
@@ -71,24 +40,19 @@ Signed-off-by: OpenWrt <openwrt@example.org>
   * because the flow path reads it whether or not debugfs is compiled in.
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -8,11 +8,13 @@
- #include <linux/ipv6.h>
- #include <linux/if_arp.h>
- #include <linux/moduleparam.h>
-+#include <linux/module.h>
- #include <linux/of_platform.h>
+@@ -14,6 +14,7 @@
  #include <linux/platform_device.h>
- #include <linux/rhashtable.h>
  #include <linux/rhashtable.h>
  #include <net/dst_metadata.h>
 +#include <net/ip_tunnels.h>
  #include <net/ipv6.h>
+ #include <linux/if_vlan.h>
  #include <net/pkt_cls.h>
- #include <net/route.h>
-@@ -64,6 +66,21 @@
+@@ -84,6 +85,21 @@
+ module_param(airoha_ppe_dslite, bool, 0444);
  MODULE_PARM_DESC(airoha_ppe_dslite,
  		 "Offload IPv4-in-IPv6 DS-Lite decapsulation flows to the PPE");
- 
++
 +/* A 6rd entry still needs the outer IPv4 header from a PPE tunnel table
 + * entry, which this driver does not manage.  Mapping the host-side tunnel
 + * parameters onto the FOE entry is therefore opt-in: at 0 no flow is marked
@@ -103,11 +67,10 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +{
 +	return airoha_ppe_6rd;
 +}
-+
+ 
  static const struct rhashtable_params airoha_flow_table_params = {
  	.head_offset = offsetof(struct airoha_flow_table_entry, node),
- 	.key_offset = offsetof(struct airoha_flow_table_entry, cookie),
-@@ -1412,7 +1429,9 @@
+@@ -1456,7 +1472,9 @@
  
  	val = *ib2 & (AIROHA_FOE_IB2_NBQ | AIROHA_FOE_IB2_PSE_PORT |
  		      AIROHA_FOE_IB2_PSE_QOS | AIROHA_FOE_IB2_FAST_PATH);
@@ -118,7 +81,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
  	nbq = pse_port == 1 ? 6 : 5;
  	*ib2 &= ~(AIROHA_FOE_IB2_NBQ | AIROHA_FOE_IB2_PSE_PORT |
-@@ -2057,6 +2076,120 @@
+@@ -2147,6 +2165,120 @@
  	return ret;
  }
  
@@ -239,7 +202,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
  					   struct flow_cls_offload *f)
  {
-@@ -2153,6 +2286,10 @@
+@@ -2243,6 +2375,10 @@
  	    airoha_ppe_dslite_flow(eth, meta.key->ingress_ifindex, &data))
  		offload_type = PPE_PKT_TYPE_IPV4_DSLITE;
  
@@ -250,7 +213,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	flow_action_for_each(i, act, &rule->action) {
  		switch (act->id) {
  		case FLOW_ACTION_MANGLE:
-@@ -2198,11 +2335,40 @@
+@@ -2287,9 +2423,38 @@
  
  			police = act;
  			break;
@@ -265,8 +228,8 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  		default:
  			return -EOPNOTSUPP;
  		}
- 	}
- 
++	}
++
 +	/* The underlay is the redirect target when the inner packet is
 +	 * encapsulated, and the device the tunnel packet arrived on when it
 +	 * is decapsulated.  Its MTU bounds the inner packet.
@@ -286,23 +249,21 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +			mtu = odev->mtu;
 +		}
 +		data.sixrd.tunnel_mtu = airoha_ppe_6rd_mtu(mtu);
-+	}
-+
- 	if (!is_valid_ether_addr(data.eth.h_source) ||
- 	    !is_valid_ether_addr(data.eth.h_dest))
- 		return -EINVAL;
-@@ -2341,6 +2507,8 @@
- 			goto put_smac;
  	}
  
-+	airoha_ppe_foe_entry_set_6rd(&hwe, &data);
+ 	if (!is_valid_ether_addr(data.eth.h_source) ||
+@@ -2429,6 +2594,8 @@
+ 		if (err)
+ 			goto put_smac;
+ 	}
 +
++	airoha_ppe_foe_entry_set_6rd(&hwe, &data);
+ 
  	e = kzalloc_obj(*e);
  	if (!e) {
- 		err = -ENOMEM;
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -481,6 +481,73 @@
+@@ -581,6 +581,73 @@
  }
  DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_dslite);
  
@@ -376,18 +337,12 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  {
  	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-@@ -488,6 +555,14 @@
-  * an experiment.  A read would report nothing useful, so the file has no
-  * read side at all.
-  *
-+			    &airoha_ppe_debugfs_bind_rate_fops);
-+	debugfs_create_file("tb_regs", 0444, ppe->debugfs_dir, ppe,
-+			    &airoha_ppe_debugfs_tb_regs_fops);
+@@ -596,6 +663,8 @@
+ 			    &airoha_ppe_debugfs_bind_rate_fops);
+ 	debugfs_create_file("tb_regs", 0444, ppe->debugfs_dir, ppe,
+ 			    &airoha_ppe_debugfs_tb_regs_fops);
 +	debugfs_create_file("6rd", 0444, ppe->debugfs_dir, ppe,
 +			    &airoha_ppe_debugfs_6rd_fops);
-+
-+	return 0;
-+}
-  * The tables are cleared, not the flows: pair it with
-  * "nft flush flowtable inet fw4 ft" or the conntrack entries that keep their
-  * IPS_OFFLOAD bit will keep sending packets to a table that no longer holds
+ 	debugfs_create_file("dslite", 0444, ppe->debugfs_dir, ppe,
+ 			    &airoha_ppe_debugfs_dslite_fops);
+ 	debugfs_create_file("meter", 0444, ppe->debugfs_dir, ppe,

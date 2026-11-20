@@ -1,16 +1,3 @@
-From 6408cdca652b1f85e5b8582c283203d11f4dedcb Mon Sep 17 00:00:00 2001
-Message-ID: <6408cdca652b1f85e5b8582c283203d11f4dedcb.1779086987.git.lorenzo@kernel.org>
-From: Lorenzo Bianconi <lorenzo@kernel.org>
-Date: Sun, 17 May 2026 21:11:27 +0200
-Subject: [PATCH net-next 1/2] net: netfilter: flowtable: Add the capability to
- offload dscp field
-
-Introduce the capability to hw offload via netfilter flowtable APIs the
-IP TOS info. Implement the sw offloading for DSCP field via the
-netfilter flowtable APIs.
-
-Signed-off-by: Lorenzo Bianconi <lorenzo@kernel.org>
----
 --- a/include/net/netfilter/nf_flow_table.h
 +++ b/include/net/netfilter/nf_flow_table.h
 @@ -29,6 +29,7 @@ struct nf_flow_key {
@@ -73,27 +60,6 @@ Signed-off-by: Lorenzo Bianconi <lorenzo@kernel.org>
  	ip6h->hop_limit--;
  	skb_clear_tstamp(skb);
  
---- a/net/netfilter/nf_flow_table_offload.c
-+++ b/net/netfilter/nf_flow_table_offload.c
-@@ -105,6 +105,7 @@ static int nf_flow_rule_match(struct nf_
- 	NF_FLOW_DISSECTOR(match, FLOW_DISSECTOR_KEY_BASIC, basic);
- 	NF_FLOW_DISSECTOR(match, FLOW_DISSECTOR_KEY_IPV4_ADDRS, ipv4);
- 	NF_FLOW_DISSECTOR(match, FLOW_DISSECTOR_KEY_IPV6_ADDRS, ipv6);
-+	NF_FLOW_DISSECTOR(match, FLOW_DISSECTOR_KEY_IP, ip);
- 	NF_FLOW_DISSECTOR(match, FLOW_DISSECTOR_KEY_TCP, tcp);
- 	NF_FLOW_DISSECTOR(match, FLOW_DISSECTOR_KEY_PORTS, tp);
- 
-@@ -175,6 +176,10 @@ static int nf_flow_rule_match(struct nf_
- 	match->dissector.used_keys |= BIT_ULL(key->control.addr_type);
- 	mask->basic.n_proto = 0xffff;
- 
-+	key->ip.tos = FIELD_PREP(INET_DSCP_MASK, tuple->dscp);
-+	mask->ip.tos = 0xff;
-+	match->dissector.used_keys |= BIT_ULL(FLOW_DISSECTOR_KEY_IP);
-+
- 	switch (tuple->l4proto) {
- 	case IPPROTO_TCP:
- 		key->tcp.flags = 0;
 --- a/net/netfilter/nft_flow_offload.c
 +++ b/net/netfilter/nft_flow_offload.c
 @@ -9,6 +9,7 @@
@@ -142,3 +108,24 @@ Signed-off-by: Lorenzo Bianconi <lorenzo@kernel.org>
  	flow_offload_route_init(flow, &route);
  	if (tcph)
  		flow_offload_ct_tcp(ct);
+--- a/net/netfilter/nf_flow_table_offload.c
++++ b/net/netfilter/nf_flow_table_offload.c
+@@ -105,6 +105,7 @@
+ 	NF_FLOW_DISSECTOR(match, FLOW_DISSECTOR_KEY_BASIC, basic);
+ 	NF_FLOW_DISSECTOR(match, FLOW_DISSECTOR_KEY_IPV4_ADDRS, ipv4);
+ 	NF_FLOW_DISSECTOR(match, FLOW_DISSECTOR_KEY_IPV6_ADDRS, ipv6);
++	NF_FLOW_DISSECTOR(match, FLOW_DISSECTOR_KEY_IP, ip);
+ 	NF_FLOW_DISSECTOR(match, FLOW_DISSECTOR_KEY_TCP, tcp);
+ 	NF_FLOW_DISSECTOR(match, FLOW_DISSECTOR_KEY_PORTS, tp);
+ 
+@@ -169,6 +170,10 @@
+ 	mask->control.addr_type = 0xffff;
+ 	match->dissector.used_keys |= BIT_ULL(key->control.addr_type);
+ 	mask->basic.n_proto = 0xffff;
++
++	key->ip.tos = FIELD_PREP(INET_DSCP_MASK, tuple->dscp);
++	mask->ip.tos = 0xff;
++	match->dissector.used_keys |= BIT_ULL(FLOW_DISSECTOR_KEY_IP);
+ 
+ 	switch (tuple->l4proto) {
+ 	case IPPROTO_TCP:

@@ -1,23 +1,6 @@
-From: OpenWrt <openwrt@example.org>
-Subject: [PATCH] net: airoha: do not report absent flow counters as zero
-
-The NPU firmware rejects the per-flow statistics block with -22 and the
-driver carries on without counters, which is the right call: counting is
-optional and must not cost us the offload.  What is left over is the
-reporting.  /sys/kernel/debug/ppe/entries still prints packets=0 bytes=0
-for every bound entry, because the readout returns early and leaves the
-caller's zero-initialised struct alone.
-
-A bound entry carrying traffic and printing zero is worse than printing
-nothing: it invites the conclusion that the flow is not being offloaded,
-when the opposite is true.  Print the counters only when the driver owns
-a working statistics path, and say so explicitly otherwise.
-
-Signed-off-by: OpenWrt <openwrt@example.org>
----
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -162,11 +162,21 @@ static int airoha_ppe_debugfs_foe_show(s
+@@ -162,11 +162,21 @@
  		*((__be32 *)h_source) = cpu_to_be32(l2->src_mac_hi);
  
  		seq_printf(m, " eth=%pM->%pM etype=%04x data=%08x"

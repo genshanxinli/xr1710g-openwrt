@@ -1,43 +1,3 @@
-From: OpenWrt <openwrt@example.org>
-Subject: [PATCH] net: airoha: add opt-in 3-tuple PPE entries
-
-The flow offload API reports FLOW_DISSECTOR_KEY_PORTS only for flows whose
-L4 protocol has ports.  An ICMP, ESP or GRE flow therefore reaches
-airoha_ppe_flow_offload_replace() without that key while the driver has
-already picked a 5-tuple packet type, and the missing-port check rejects
-it: these flows never reach the PPE at all.
-
-The hardware has 3-tuple types for exactly this case.  Add the
-airoha_ppe_3t module parameter (default 0).  When it is enabled and the
-rule carries no ports, pick PPE_PKT_TYPE_IPV4_ROUTE (type 1, IPv4 NAT) for
-IPv4 and PPE_PKT_TYPE_IPV6_ROUTE_3T (type 4) for IPv6 instead of the
-5-tuple types.  The entry builder already fills the 0xa5a5a5xx port word
-for both types, so the protocol stays part of the key.  A rule that
-carries ports keeps the existing 5-tuple type even with the parameter on.
-
-The parser has to accept the packet types before it can match them.  Turn
-on the existing PPE_FLOW_CFG enable bits IP4_NAT (bit 12) and IP6_3T_ROUTE
-(bit 8) when the parameter is on; the NPU firmware normally sets both, but
-the driver should not depend on that.  With the parameter off the register
-is left alone.
-
-An IPv4 3-tuple HNAT entry keeps the pre-NAT addresses in the first tuple
-and the rewrite in the second one.  airoha_ppe_foe_entry_set_ipv4_tuple()
-put the egress addresses into the same tuple as the ingress ones for type
-1, which would have lost the original address of a NAT flow; write the
-egress half to new_tuple instead.  Type 1 is only reachable with the
-parameter on, so the default path is unchanged.
-
-Packet type names are already present in the debugfs table, so ppe/foe and
-ppe/usage report the new entries as "IPv4 3T" and "IPv6 3T" without
-further changes.
-
-Hardware forwarding correctness is not validated here; this only lands the
-selection behind a default-off knob.  NAT behaviour, PPE table capacity,
-QoS, PPPoE and multicast are untouched.
-
-Signed-off-by: OpenWrt <openwrt@example.org>
----
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
 @@ -6,6 +6,7 @@
@@ -46,12 +6,13 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  #include <linux/ipv6.h>
 +#include <linux/module.h>
  #include <linux/of_platform.h>
+ #include <linux/moduleparam.h>
  #include <linux/platform_device.h>
- #include <linux/rhashtable.h>
 @@ -24,6 +25,22 @@
+  */
  DEFINE_MUTEX(flow_offload_mutex);
  static DEFINE_SPINLOCK(ppe_lock);
- 
++
 +/* A flow whose rule carries no L4 ports has no port pair to fill in, so the
 + * driver refuses it after it has already picked a 5-tuple packet type: those
 + * flows never reach the PPE.  The PPE has dedicated 3-tuple packet types for
@@ -67,11 +28,10 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +module_param(airoha_ppe_3t, bool, 0444);
 +MODULE_PARM_DESC(airoha_ppe_3t,
 +		 "Offload flows without L4 ports as 3-tuple PPE entries");
-+
+ 
  static const struct rhashtable_params airoha_flow_table_params = {
  	.head_offset = offsetof(struct airoha_flow_table_entry, node),
- 	.key_offset = offsetof(struct airoha_flow_table_entry, cookie),
-@@ -319,6 +336,17 @@ static void airoha_ppe_hw_init(struct ai
+@@ -346,6 +363,17 @@
  		airoha_fe_wr(eth, REG_PPE_HASH_SEED(i), PPE_HASH_SEED);
  		airoha_fe_clear(eth, REG_PPE_PPE_FLOW_CFG(i),
  				PPE_FLOW_CFG_IP6_6RD_MASK);
@@ -89,25 +49,24 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	}
  
  	for (i = 0; i < ARRAY_SIZE(eth->ports); i++) {
-@@ -752,9 +780,16 @@ static int airoha_ppe_foe_entry_set_ipv4
+@@ -780,8 +808,15 @@
  		}
  		fallthrough;
  	case PPE_PKT_TYPE_IPV4_DSLITE:
--	case PPE_PKT_TYPE_IPV4_ROUTE:
- 		t = &hwe->ipv4.orig_tuple;
- 		break;
-+	case PPE_PKT_TYPE_IPV4_ROUTE:
++		t = &hwe->ipv4.orig_tuple;
++		break;
+ 	case PPE_PKT_TYPE_IPV4_ROUTE:
+-		t = &hwe->ipv4.orig_tuple;
 +		/* A 3-tuple entry keeps the pre-NAT addresses in the first
 +		 * tuple and the rewrite in the second one, the same way the
 +		 * vendor SDK fills an IPv4 HNAT entry.
 +		 */
 +		t = egress ? &hwe->ipv4.new_tuple :
 +			     &hwe->ipv4.orig_tuple;
-+		break;
+ 		break;
  	default:
  		WARN_ON_ONCE(1);
- 		return -EINVAL;
-@@ -1573,7 +1608,7 @@ static int airoha_ppe_flow_offload_repla
+@@ -1647,7 +1682,7 @@
  	u8 dsfield = 0, l4proto = 0;
  	struct airoha_foe_entry hwe;
  	struct net_device *indev;
@@ -116,17 +75,17 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	int err, i, offload_type;
  	u16 addr_type = 0;
  
-@@ -1614,6 +1649,9 @@ static int airoha_ppe_flow_offload_repla
+@@ -1687,6 +1722,9 @@
+ 		flow_rule_match_ip(rule, &match);
  		dsfield = match.key->tos;
  	}
- 
++
 +	has_ports = flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_PORTS);
 +	use_3t = !has_ports && airoha_ppe_3t;
-+
+ 
  	switch (addr_type) {
  	case 0:
- 		offload_type = PPE_PKT_TYPE_BRIDGE;
-@@ -1628,10 +1666,12 @@ static int airoha_ppe_flow_offload_repla
+@@ -1702,10 +1740,12 @@
  		}
  		break;
  	case FLOW_DISSECTOR_KEY_IPV4_ADDRS:
@@ -141,7 +100,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  		break;
  	default:
  		return -EOPNOTSUPP;
-@@ -1704,7 +1744,7 @@ static int airoha_ppe_flow_offload_repla
+@@ -1777,7 +1817,7 @@
  	if (err)
  		return err;
  
@@ -150,7 +109,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  		struct flow_match_ports ports;
  
  		if (offload_type == PPE_PKT_TYPE_BRIDGE) {
-@@ -1715,7 +1755,12 @@ static int airoha_ppe_flow_offload_repla
+@@ -1788,7 +1828,12 @@
  		flow_rule_match_ports(rule, &ports);
  		data.src_port = ports.key->src;
  		data.dst_port = ports.key->dst;

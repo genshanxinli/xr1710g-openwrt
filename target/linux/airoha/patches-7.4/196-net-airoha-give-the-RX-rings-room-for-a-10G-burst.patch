@@ -1,22 +1,3 @@
-From: OpenWrt <openwrt@example.org>
-Subject: [PATCH] net: airoha: give the RX rings room for a 10G burst
-
-Most RX rings hold only 32 descriptors.  At 10G a 1 KiB
-packet consumes a slot roughly every 800 ns, so 32 slots buy about 25 us
-of slack - less than one NAPI poll takes when the ring is drained with a
-full budget.  The QDMA then runs dry and starts dropping.
-
-Ring 0 is the CPU port and already had 1024 descriptors.  The four rings
-that carry the multi-gigabit ports (2, 4, 11, 15) are raised to 256 and
-the rest to 128.  At 32 bytes per descriptor and 1 KiB buffers that is
-~172 KiB of descriptors and ~5 MiB of buffers, which a 2 GiB board takes
-without noticing.
-
-This does not change the memory window reserved for hardware forwarding
-(qdma0/qdma1-buf): those are separate regions sized by the DTS.
-
-Signed-off-by: OpenWrt <openwrt@example.org>
----
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
 @@ -39,12 +39,29 @@

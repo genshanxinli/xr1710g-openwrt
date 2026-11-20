@@ -1,31 +1,6 @@
-From: OpenWrt <openwrt@example.org>
-Subject: [PATCH] net: airoha: dump the live L2B window
-
-The live L2B window at 0x1fb50e00..0x1fb50f00 is written by the NPU, but
-the driver has no view of it.  The FOE dump walks the 32768-entry PPE
-table, and the only L2B state the driver touches is the multicast bit in
-its own entry, so the bridge/NPU experiments have nothing to read.
-
-Add ppe/l2b, a read-only 64-row dump of the 256-byte window through
-airoha_fe_rr().  It stays in the FE mapping: the NPU's own
-0x1e900000..0x1ebfffff window must not be read from the A53 because a
-read there hangs the SoC.
-
-Decode the two fields the vendor register map names in this window: the
-ethertype enable mask (inner slots in the low half, outer slots in the
-high half) and the 8-entry ethertype table, two 16-bit slots per word.
-Everything else in the window is printed raw, since the rest of the
-layout is not public.
-
-The NPU owns those L2B fields and can rewrite them between two reads, so
-the dump is a snapshot, not a coherent view of the table.  The file is
-0444 and has no write callback; the read path never writes a register.
-
-Signed-off-by: OpenWrt <openwrt@example.org>
----
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -365,6 +365,59 @@ static int airoha_ppe_debugfs_tb_regs_sh
+@@ -365,6 +365,59 @@
  }
  DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_tb_regs);
  
@@ -85,12 +60,15 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  {
  	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-@@ -380,6 +433,8 @@ int airoha_ppe_debugfs_init(struct airoh
+@@ -380,6 +433,8 @@
  			    &airoha_ppe_debugfs_bind_rate_fops);
  	debugfs_create_file("tb_regs", 0444, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_tb_regs_fops);
+-
+-	return 0;
+-}
 +	debugfs_create_file("l2b", 0444, ppe->debugfs_dir, ppe,
 +			    &airoha_ppe_debugfs_l2b_fops);
- 
- 	return 0;
- }
++
++	return 0;
++}

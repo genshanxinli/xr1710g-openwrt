@@ -1,53 +1,6 @@
-From: Gilly <gilroyscott1970@gmail.com>
-Subject: [PATCH] net: airoha: allocate UPDMEM slots per IPv6 egress source MAC
-
-Routed IPv6 Foe entries do not carry a source MAC.  They carry a 4-bit
-smac_id, and the hardware resolves it through the UPDMEM table, so the
-entry is bound to whatever address happens to be in that slot when the
-frame leaves.  The driver only ever programmed one slot per GDM port, in
-airoha_set_macaddr(), which is the right thing for a flow whose egress
-netdev is that same port -- but not for the others the same port can
-carry.  A VLAN upper, a bridged client or a service VLAN on a PON link
-can each route with their own address on one GDM port, and they all
-shared the single slot.  IPv4 keeps working throughout because it writes
-the address inline, which is what makes this look like an IPv6-only
-fault: flows egress with whichever MAC was programmed last, and a
-MAC-bound ISP black-holes them.
-
-Slots 0xf is "keep the frame's own source address" and slots below
-AIROHA_MAX_NUM_GDM_PORTS belong to the GDM ports themselves, so the
-addresses have to be packed into the remaining ones (5..14 on a board
-that registers ports 1..4, the lower ones being poolable only when the
-matching port is not registered at all).  Allocate a slot per distinct
-egress MAC, refcount it by the number of flows using it, and keep the
-address in the slot -- a slot is only reprogrammed once its last flow is
-gone, so a live flow can never be repointed at a different MAC.  When
-the slots run out, decline the offload with -EOPNOTSUPP so the flow
-stays in the software path and keeps working, which is the correct
-failure direction: the alternative is offloading it onto a wrong MAC.
-
-The slot index is stored inside the Foe entry, so it has to be released
-with the entry rather than with the flow descriptor, and every failure
-path between taking a slot and handing the entry to the rhashtable has
-to release it too -- the entry is not tracked yet at that point, so
-nothing else will.  airoha_ppe_flow_offload_replace() grows a put_smac
-label for that.
-
-UPDMEM is a single register pair, so the write itself is now under a
-spinlock; that also closes the race between flow setup and
-ndo_set_mac_address, which previously could interleave two writes to the
-same DATA/CTRL pair.
-
-Not exercised on-device: this needs a PON or VLAN setup where two
-addresses on one GDM port are routed at the same time.
-
-Link: https://github.com/Gilly1970/Gemtek-W1700K-6.18
-Signed-off-by: Gilly <gilroyscott1970@gmail.com>
-Signed-off-by: airola <airola@example.org>
----
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -655,6 +655,9 @@ struct airoha_gdm_port {
+@@ -655,6 +655,9 @@
  	int id;
  	int users;
  
@@ -57,7 +10,7 @@ Signed-off-by: airola <airola@example.org>
  	/* protect concurrent hw_stats and frag register accesses */
  	spinlock_t lock;
  
-@@ -740,9 +743,24 @@ struct airoha_eth {
+@@ -740,8 +743,23 @@
  	struct airoha_qdma qdma[AIROHA_MAX_NUM_QDMA];
  	struct airoha_gdm_port *ports[AIROHA_MAX_NUM_GDM_PORTS];
  
@@ -75,16 +28,15 @@ Signed-off-by: airola <airola@example.org>
 +
  	struct dentry *debugfs_dir;
  };
- 
++
 +/* Slot 0xf tells the hardware to keep the frame's own source address. */
 +#define AIROHA_UPDMEM_SMAC_ID_KEEP	0xf
-+
+ 
  u32 airoha_rr(void __iomem *base, u32 offset);
  void airoha_wr(void __iomem *base, u32 offset, u32 val);
- u32 airoha_rmw(void __iomem *base, u32 offset, u32 mask, u32 val);
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -437,6 +437,123 @@ static void airoha_ppe_foe_set_bridge_ad
+@@ -464,6 +464,123 @@
  	br->src_mac_lo = get_unaligned_be32(eh->h_source + 2);
  }
  
@@ -208,7 +160,7 @@ Signed-off-by: airola <airola@example.org>
  static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
  					struct airoha_foe_entry *hwe,
  					struct net_device *netdev, int type,
-@@ -514,6 +631,15 @@ static int airoha_ppe_foe_entry_prepare(
+@@ -541,6 +658,15 @@
  						  dsa_port);
  
  			smac_id = port->id;
@@ -224,7 +176,7 @@ Signed-off-by: airola <airola@example.org>
  		}
  	}
  
-@@ -1059,6 +1185,13 @@ static void airoha_ppe_foe_remove_l2_flo
+@@ -1086,6 +1212,13 @@
  static void airoha_ppe_foe_flow_remove_entry(struct airoha_ppe *ppe,
  					     struct airoha_flow_table_entry *e)
  {
@@ -238,7 +190,7 @@ Signed-off-by: airola <airola@example.org>
  	spin_lock_bh(&ppe_lock);
  
  	if (e->type == FLOW_TYPE_L2)
-@@ -1067,6 +1200,9 @@ static void airoha_ppe_foe_flow_remove_e
+@@ -1094,6 +1227,9 @@
  		airoha_ppe_foe_remove_flow(ppe, e);
  
  	spin_unlock_bh(&ppe_lock);
@@ -248,7 +200,7 @@ Signed-off-by: airola <airola@example.org>
  }
  
  static int
-@@ -1425,14 +1561,17 @@ static int airoha_ppe_flow_offload_repla
+@@ -1451,14 +1587,17 @@
  	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_PORTS)) {
  		struct flow_match_ports ports;
  
@@ -269,7 +221,7 @@ Signed-off-by: airola <airola@example.org>
  	}
  
  	if (addr_type == FLOW_DISSECTOR_KEY_IPV4_ADDRS) {
-@@ -1458,8 +1597,10 @@ static int airoha_ppe_flow_offload_repla
+@@ -1484,8 +1623,10 @@
  		if (act->id != FLOW_ACTION_MANGLE)
  			continue;
  
@@ -282,7 +234,7 @@ Signed-off-by: airola <airola@example.org>
  
  		switch (act->mangle.htype) {
  		case FLOW_ACT_MANGLE_HDR_TYPE_TCP:
-@@ -1473,25 +1614,28 @@ static int airoha_ppe_flow_offload_repla
+@@ -1499,22 +1640,25 @@
  			/* handled earlier */
  			break;
  		default:
@@ -312,12 +264,8 @@ Signed-off-by: airola <airola@example.org>
 +	}
  
  	e->cookie = f->cookie;
--	memcpy(&e->data, &hwe, sizeof(e->data));
-+	e->ingress_dev_idx = meta.key->ingress_ifindex;
- 
- 	err = airoha_ppe_foe_flow_commit_entry(eth->ppe, e);
- 	if (err)
-@@ -1499,15 +1643,19 @@ static int airoha_ppe_flow_offload_repla
+ 	memcpy(&e->data, &hwe, sizeof(e->data));
+@@ -1525,15 +1669,19 @@
  
  	err = rhashtable_insert_fast(&eth->flow_table, &e->node,
  				     airoha_flow_table_params);
@@ -341,20 +289,21 @@ Signed-off-by: airola <airola@example.org>
  
  	return err;
  }
-@@ -1766,24 +1914,39 @@ void airoha_ppe_check_skb(struct airoha_
+@@ -1792,24 +1940,39 @@
  	airoha_ppe_foe_insert_entry(ppe, skb, hash, rx_wlan);
  }
  
 -void airoha_ppe_init_upd_mem(struct airoha_gdm_dev *dev, const u8 *addr)
-+static void airoha_ppe_write_upd_mem(struct airoha_eth *eth, u8 slot,
-+				     const u8 *addr)
- {
+-{
 -	struct airoha_gdm_port *port = dev->port;
 -	struct airoha_eth *eth = dev->eth;
++static void airoha_ppe_write_upd_mem(struct airoha_eth *eth, u8 slot,
++				     const u8 *addr)
++{
  	u32 val;
- 
-+	lockdep_assert_held(&eth->updmem_lock);
 +
++	lockdep_assert_held(&eth->updmem_lock);
+ 
  	val = (addr[2] << 24) | (addr[3] << 16) | (addr[4] << 8) | addr[5];
  	airoha_fe_wr(eth, REG_UPDMEM_DATA(0), val);
  	airoha_fe_wr(eth, REG_UPDMEM_CTRL(0),
@@ -386,7 +335,7 @@ Signed-off-by: airola <airola@example.org>
  }
  
  struct airoha_ppe_dev *airoha_ppe_get_dev(struct device *dev)
-@@ -1897,6 +2060,8 @@ int airoha_ppe_init(struct airoha_eth *e
+@@ -1923,6 +2086,8 @@
  	if (err)
  		return err;
  

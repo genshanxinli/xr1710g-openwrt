@@ -1,63 +1,6 @@
-From: OpenWrt <openwrt@example.org>
-Subject: [PATCH] net: airoha: size the SRAM tables the way the hardware sees them
-
-airoha_ppe_hw_init() carves PPE_STATS_NUM_ENTRIES out of each PPE's SRAM
-when flow counters are in use, and programs the leftover through
-PPE_SRAM_TB_NUM_ENTRY_MASK:
-
-	sram_ppe_num_data_entries = PPE_SRAM_NUM_ENTRIES;   /* 8192 */
-	if (sram_num_stats_entries > 0)
-		sram_ppe_num_data_entries -= sram_num_stats_entries;  /* 4096 */
-	sram_ppe_num_data_entries = PPE_RAM_NUM_ENTRIES_SHIFT(...);
-
-so with CONFIG_NET_AIROHA_FLOW_STATS=y, which is how this target is
-built, each PPE's table holds 4096 entries and the two PPEs hold 8192
-between them.  Nothing else in the driver knows that.  Every other user
-of the table geometry still works from
-
-	PPE_SRAM_NUM_ENTRIES * num_ppe  ==  16384
-
-which is twice the real size, and from "bool ppe2 = hash >=
-PPE_SRAM_NUM_ENTRIES", which puts the PPE1/PPE2 boundary at 8192 instead
-of 4096.  Three consequences, in order of severity:
-
- - Two live flows collide on one hardware entry.  Hash 0 and hash 4096
-   are both handled as PPE1 and both land on entry 0, and the same holds
-   for every pair 4096 apart across the whole range: 8192 colliding
-   slots out of 16384 hashes.  Two flows sharing an entry means one
-   overwrites the other's forwarding decision.
-
- - Hashes in [4096, 8192) are presented to PPE1's control register as
-   entry numbers up to 8191, but PPE1 only has 4096 entries, so the entry
-   they name belongs to another flow.  This patch does not fix that
-   addressing - the follow-up "address PPE entries from their own table"
-   does, by sending the index relative to the PPE that owns it.
-
- - airoha_ppe_get_total_num_entries() reports 32768 where the hardware
-   has 4096 * 2 + 16384 == 24576, so the hash space and the DRAM region
-   boundary are both wrong by 8192 entries.
-
-Give the geometry one definition, airoha_ppe_get_sram_num_entries(),
-which accounts for the carve-out, and use it for the SRAM total and for
-both PPE1/PPE2 boundary decisions.  airoha_ppe_hw_init() then no longer
-subtracts the counter size a second time.
-
-That leaves the table at 24576 entries, which is not a power of two, and
-the hash is folded with "& (total - 1)".  With 24576 entries that mask
-can only produce the 16384 values sharing the low 14 bits, so 8192
-entries become unreachable.  Fold with a modulo instead; for the 32768
-entry configuration it is the same result, and for 24576 it reaches
-every entry.
-
-The counter slot index keeps naming the same entry: an SRAM hash is now
-in [0, 8192) which is exactly the [0, 8192) counter block, so the
-identity mapping there is unchanged.
-
-Signed-off-by: OpenWrt <openwrt@example.org>
----
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -59,11 +59,27 @@ static int airoha_ppe_get_total_num_stat
+@@ -59,11 +59,27 @@
  	return num_stats;
  }
  
@@ -86,7 +29,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  }
  
  u32 airoha_ppe_get_total_num_entries(struct airoha_ppe *ppe)
-@@ -129,7 +145,8 @@ void airoha_ppe_set_xmit_frame_size(stru
+@@ -129,7 +145,8 @@
  
  static void airoha_ppe_hw_init(struct airoha_ppe *ppe)
  {
@@ -96,7 +39,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	u32 sram_tb_size, dram_num_entries;
  	struct airoha_eth *eth = ppe->eth;
  	int i, sram_num_stats_entries;
-@@ -139,8 +156,6 @@ static void airoha_ppe_hw_init(struct ai
+@@ -139,8 +156,6 @@
  	dram_num_entries = PPE_RAM_NUM_ENTRIES_SHIFT(PPE_DRAM_NUM_ENTRIES);
  
  	sram_num_stats_entries = airoha_ppe_get_num_stats_entries(ppe);
@@ -105,7 +48,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	sram_ppe_num_data_entries =
  		PPE_RAM_NUM_ENTRIES_SHIFT(sram_ppe_num_data_entries);
  
-@@ -552,7 +567,7 @@ static u32 airoha_ppe_foe_get_entry_hash
+@@ -552,7 +567,7 @@
  					 struct airoha_foe_entry *hwe)
  {
  	int type = FIELD_GET(AIROHA_FOE_IB1_BIND_PACKET_TYPE, hwe->ib1);
@@ -114,7 +57,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	u32 hash, hv1, hv2, hv3;
  
  	switch (type) {
-@@ -590,16 +605,21 @@ static u32 airoha_ppe_foe_get_entry_hash
+@@ -590,16 +605,21 @@
  	case PPE_PKT_TYPE_IPV6_6RD:
  	default:
  		WARN_ON_ONCE(1);
@@ -127,8 +70,9 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	hash ^= hv1 ^ hv2 ^ hv3;
  	hash ^= hash >> 16;
 -	hash &= ppe_hash_mask;
- 
+-
 -	return hash;
++
 +	/* The table is not a power of two once flow counters carve their
 +	 * slots out of the SRAM, so "& (entries - 1)" would leave a hole:
 +	 * with 24576 entries it can only ever produce the 16384 values that
@@ -139,7 +83,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  }
  
  static int airoha_ppe_foe_get_flow_stats_index(struct airoha_ppe *ppe,
-@@ -708,7 +728,7 @@ airoha_ppe_foe_get_entry_locked(struct a
+@@ -708,7 +728,7 @@
  
  	if (hash < sram_num_entries) {
  		u32 *hwe = ppe->foe + hash * sizeof(struct airoha_foe_entry);
@@ -148,7 +92,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  		struct airoha_eth *eth = ppe->eth;
  		u32 val;
  		int i;
-@@ -763,7 +783,7 @@ static bool airoha_ppe_foe_compare_entry
+@@ -763,7 +783,7 @@
  static int airoha_ppe_foe_commit_sram_entry(struct airoha_ppe *ppe, u32 hash)
  {
  	struct airoha_foe_entry *hwe = ppe->foe + hash * sizeof(*hwe);
@@ -157,7 +101,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	u32 *ptr = (u32 *)hwe, val;
  	int i;
  
-@@ -1539,11 +1559,11 @@ void airoha_ppe_check_skb(struct airoha_
+@@ -1538,11 +1558,11 @@
  			  u16 hash, bool rx_wlan)
  {
  	struct airoha_ppe *ppe = dev->priv;

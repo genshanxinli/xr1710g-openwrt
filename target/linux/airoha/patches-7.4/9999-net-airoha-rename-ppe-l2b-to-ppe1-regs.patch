@@ -1,0 +1,133 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: rename ppe/l2b to what it is, a PPE1 register window
+
+ppe/l2b was added as a dump of a "live L2B table at 0x1fb50e00..0x1fb50f00".
+That address is PPE1_BASE + 0x200: the 64 words it covers are the first 256
+bytes of PPE1's register block, the same window ppe/tb_regs reads one named
+register at a time (glo_cfg at +0x00, ppe_flow_cfg at +0x04, tb_cfg at +0x1c,
+bind_rate at +0x28, the bind limits at +0x2c/+0x30, unbind_age at +0x38,
+hash_seed at +0x44, tb_hash_cfg at +0x50 and so on).  There is no separate
+L2B table behind those addresses; the L2B state the NPU owns lives elsewhere,
+which is why reading this window never produced the ethertype data the old
+comment described.
+
+Rename the node to ppe/ppe1_regs and its helpers with it, correct the
+comment, and drop the "EN"/"N<n>" labels the old dump attached to +0x08c and
++0x0d0.  Those offsets are inside the block, but the field names are in
+nothing this driver can check, and printing a guess as a decoded field is
+worse than printing the raw word.  All 64 rows stay, in the same
+"idx offset value" form, still 0444 and still read-only.
+
+ppe1_regs rather than l2b_regs because the window is PPE1's register block,
+not an L2B table, and the name should say which block a reader is looking at.
+tb_regs already covers the named bind/aging registers of both PPEs, so this
+node stays the raw slice it always was.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+--- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
+@@ -383,58 +383,48 @@
+ }
+ DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_tb_regs);
+ 
+-/* The L2B fields in the PPE window: 64 words starting at FE 0xe00.  The
+- * ethertype enable mask sits at 0xe8c and the 8-entry ethertype table at
+- * 0xed0..0xedc, eight slots in four words.
+- */
+-#define AIROHA_PPE_L2B_BASE		0x0e00
+-#define AIROHA_PPE_L2B_WORDS		64
+-#define AIROHA_PPE_L2B_ETYPE_EN		(AIROHA_PPE_L2B_BASE + 0x08c)
+-#define AIROHA_PPE_L2B_ETYPE_N(_n) \
+-	(AIROHA_PPE_L2B_BASE + 0x0d0 + (((_n) >> 1) << 2))
+-
+-/*
+- * The L2B ethertype table and its enable mask are owned by the NPU firmware:
+- * the host driver never writes them, it only sets the multicast bit in its
+- * own FOE entries.  The dump is a live snapshot, not a lock-protected view,
+- * so the NPU can rewrite a word between two reads.  Do not confuse this with
+- * the NPU's own 0x1e900000..0x1ebfffff window, which must not be read from
+- * the A53: a read there hangs the SoC.
++/* The first 64 words of PPE1's register block.  FE 0x0e00 is
++ * PPE1_BASE + 0x200, so this window is the same one tb_regs reads a register
++ * at a time: glo_cfg at +0x00, ppe_flow_cfg at +0x04, ip_proto_chk at +0x08,
++ * tb_cfg at +0x1c, tb_base at +0x20, bind_rate at +0x28, bind_limit0/1 at
++ * +0x2c/+0x30, unbind_age at +0x38, bnd_age0/1 at +0x3c/+0x40, hash_seed at
++ * +0x44, the two default cports at +0x48/+0x4c and tb_hash_cfg at +0x50.  The
++ * words between them belong to the same block but have no name in the
++ * driver's register map, so they are printed as they read.
+  *
+- * The rest of the window is printed raw because nothing else in it is
+- * documented.
+- */
+-static int airoha_ppe_debugfs_l2b_show(struct seq_file *m, void *private)
++ * This used to be called an L2B table and decoded as an ethertype mask plus
++ * an ethertype table.  There is no separate L2B table at these addresses: the
++ * window is a slice of the PPE1 register block, and the field names the old
++ * dump invented for +0x08c and +0x0d0 are not documented anywhere this driver
++ * can check.  The register values are the data; the labels were a guess and
++ * are gone.
++ *
++ * The NPU can write these registers, so a dump is a snapshot and not a
++ * coherent view of anything.  Do not confuse the window with the NPU's own
++ * 0x1e900000..0x1ebfffff register file, which must not be read from the
++ * A53: a read there hangs the SoC.
++ */
++#define AIROHA_PPE1_REGS_BASE		(PPE1_BASE + 0x200)
++#define AIROHA_PPE1_REGS_WORDS		64
++
++static int airoha_ppe_debugfs_ppe1_regs_show(struct seq_file *m,
++					     void *private)
+ {
+ 	struct airoha_ppe *ppe = m->private;
+ 	struct airoha_eth *eth = ppe->eth;
+ 	int i;
+ 
+-	for (i = 0; i < AIROHA_PPE_L2B_WORDS; i++) {
+-		u32 off = AIROHA_PPE_L2B_BASE + i * 4;
+-		u32 val = airoha_fe_rr(eth, off);
++	for (i = 0; i < AIROHA_PPE1_REGS_WORDS; i++) {
++		u32 off = AIROHA_PPE1_REGS_BASE + i * 4;
+ 
+ 		/* idx, register offset, raw value. */
+-		seq_printf(m, "%02d 0x%04x %08x", i, off, val);
+-
+-		if (off == AIROHA_PPE_L2B_ETYPE_EN)
+-			seq_printf(m, " EN=0x%08x inner=0x%04x outer=0x%04x",
+-				   val, val & 0xffff, val >> 16);
+-		else if (off >= AIROHA_PPE_L2B_ETYPE_N(0) &&
+-			 off <= AIROHA_PPE_L2B_ETYPE_N(7)) {
+-			u32 base = (off - AIROHA_PPE_L2B_ETYPE_N(0)) / 4 * 2;
+-
+-			/* Even slots are in the low half of the word. */
+-			seq_printf(m, " N%u=0x%04x N%u=0x%04x", base,
+-				   val & 0xffff, base + 1, val >> 16);
+-		}
+-
+-		seq_putc(m, '\n');
+-	}
+-
+-	return 0;
+-}
+-DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_l2b);
++		seq_printf(m, "%02d 0x%04x %08x\n", i, off,
++			   airoha_fe_rr(eth, off));
++	}
++
++	return 0;
++}
++DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_ppe1_regs);
+ 
+ /* Write-only (0200) node that returns both PPE tables to the state they have
+  * after probe, so a repeated fill experiment can start from bound 0 again.
+@@ -785,8 +775,8 @@
+ 			    &airoha_ppe_debugfs_dslite_fops);
+ 	debugfs_create_file("meter", 0444, ppe->debugfs_dir, ppe,
+ 			    &airoha_ppe_debugfs_meter_fops);
+-	debugfs_create_file("l2b", 0444, ppe->debugfs_dir, ppe,
+-			    &airoha_ppe_debugfs_l2b_fops);
++	debugfs_create_file("ppe1_regs", 0444, ppe->debugfs_dir, ppe,
++			    &airoha_ppe_debugfs_ppe1_regs_fops);
+ 
+ 	debugfs_create_file("flush", 0200, ppe->debugfs_dir, ppe,
+ 			    &airoha_ppe_debugfs_flush_fops);

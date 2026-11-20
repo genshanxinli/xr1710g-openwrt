@@ -1,0 +1,79 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: report the derived IPv4 capacity in ppe/usage
+
+ppe/usage prints "entries 32768 (sram 16384, dram 16384)" and takes that
+number as the denominator of the occupancy percentage.  Both are the hash
+space and the size of the array the driver allocates, not what an IPv4 flow
+can occupy: when the NPU takes half of each PPE's SRAM for flow counters the
+usable table is 24576 (4096 entries per PPE plus the DRAM half), and a board
+whose firmware refuses the counters keeps all 32768.  Both cases print the
+same "entries" line, so the percentage understates occupancy on whichever
+geometry the reader did not assume.
+
+Add the derived figures as new lines rather than redefine one that existing
+parsers already read:
+
+  ipv4_capacity <usable> (sram <sram>, dram <dram>)
+  ipv4_bound <n> ipv4_bound_pct <pct>
+
+The two numbers come from airoha_ppe_get_total_num_entries() split at
+PPE_DRAM_NUM_ENTRIES, so the line follows the SRAM carve-out with no second
+definition of the table size.  A SoC that reports no PPE prints
+"ipv4_capacity n/a" and skips the division.
+
+ipv4_bound counts bound entries of the IPv4 5-tuple, 3-tuple and DS-Lite
+packet types only, so an L2B or IPv6 flow does not inflate it.  The entries,
+bound and l2b_bound lines keep their wording and their denominators.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+--- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
+@@ -207,7 +207,9 @@
+ 	struct airoha_ppe *ppe = m->private;
+ 	u32 total = airoha_ppe_get_total_num_entries(ppe);
+ 	u32 sram = total - PPE_DRAM_NUM_ENTRIES;
+-	u32 bound = 0, unbound = 0, l2b = 0;
++	u32 bound = 0, unbound = 0, l2b = 0, ipv4 = 0;
++	u32 capacity = sram + PPE_DRAM_NUM_ENTRIES;
++	struct airoha_eth *eth = ppe->eth;
+ 	int i;
+ 
+ 	/* The hardware age-out never clears a slot back to zero: an entry that
+@@ -231,8 +233,13 @@
+ 			bound++;
+ 			type = FIELD_GET(AIROHA_FOE_IB1_BIND_PACKET_TYPE,
+ 					 hwe->ib1);
+-			if (type == PPE_PKT_TYPE_BRIDGE)
++			if (type == PPE_PKT_TYPE_BRIDGE) {
+ 				l2b++;
++			} else if (type == PPE_PKT_TYPE_IPV4_HNAPT ||
++				   type == PPE_PKT_TYPE_IPV4_ROUTE ||
++				   type == PPE_PKT_TYPE_IPV4_DSLITE) {
++				ipv4++;
++			}
+ 		} else {
+ 			unbound++;
+ 		}
+@@ -244,6 +251,21 @@
+ 		   total ? bound * 100 / total : 0, unbound);
+ 	seq_printf(m, "l2b_bound %u l2_flows_sw %u\n", l2b,
+ 		   atomic_read(&ppe->l2_flows.nelems));
++
++	/* entries above is the hash space and the size of the array the driver
++	 * allocates, which is not what an IPv4 flow can occupy: the SRAM tables
++	 * lose half of their slots when the NPU takes them for flow counters,
++	 * so the usable figure depends on the build and on whether the NPU
++	 * agreed to count.  Report it separately rather than redefining a
++	 * number existing parsers already read.
++	 */
++	if (eth->soc->num_ppe)
++		seq_printf(m, "ipv4_capacity %u (sram %u, dram %u)\n",
++			   capacity, sram, (u32)PPE_DRAM_NUM_ENTRIES);
++	else
++		seq_puts(m, "ipv4_capacity n/a\n");
++	seq_printf(m, "ipv4_bound %u ipv4_bound_pct %u\n", ipv4,
++		   capacity ? ipv4 * 100 / capacity : 0);
+ 
+ 	return 0;
+ }

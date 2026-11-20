@@ -1,0 +1,74 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: hash offloaded flows across the 32 TX rings
+
+airoha_dev_select_queue() picks the QDMA channel from port->id and the
+queue inside that channel from skb->priority, so the ring a packet lands
+on is a function of its egress port and its priority alone.  Every flow
+leaving one port therefore shares eight of the 32 TX rings no matter how
+many 5-tuples the box carries: one busy TCP stream and forty small ones
+are enqueued on the same eight rings, and the other 24 stay idle.
+
+Deriving the channel from the flow hash instead spreads unrelated flows
+over the four HW QoS channels.  The queue inside the channel still
+follows skb->priority, so DSCP/QoS classification keeps choosing among
+the eight queues of whichever channel the flow landed on.  The ring
+count, the queue mapping and the IRQ affinity are untouched: only which
+of the 32 rings a packet joins changes.
+
+ndo_select_queue() only ever sees packets the CPU transmits, so this
+cannot be gated on "the flow is offloaded": a PPE-bound flow's packets
+never reach the stack at all.  What the knob spreads is the traffic that
+does cross the CPU - flows before they are offloaded, and flows the PPE
+declined.
+
+The knob is off by default and stays inert while any QoS channel of the
+QDMA is claimed by an HTB leaf: the channels are a shared per-QDMA
+resource, and a hashed packet on a shaped channel would be scheduled by
+another port's shaper.  In that state the port-derived channel is used
+as before, so the knob can never silently bypass or misapply a
+configured rate.
+
+A packet with no 5-tuple keeps the port-derived channel too, and is
+counted: landing it on ring 0 would move every ARP frame of every port
+onto port 0's channel.
+
+It is a 0444 parameter - set on the kernel command line or at insmod -
+since the channel binding is a property of the device's lifetime, not
+something to flip under flows that are already enqueued.
+
+Getting the distribution from userspace needs a counter, and ethtool -S
+is the wrong shape for it: the rings belong to a QDMA block that several
+net_devices share, so per-netdev statistics would report the same 32
+rings five times.  qdma/tx_ring_hist reports them once, where they are
+accounted, and is only filled while the knob is on.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+ drivers/net/ethernet/airoha/airoha_eth.c | 124 ++++++++++++++++++++++-
+ drivers/net/ethernet/airoha/airoha_eth.h |   6 ++
+ 2 files changed, 127 insertions(+), 3 deletions(-)
+
+--- a/drivers/net/ethernet/airoha/airoha_eth.h
++++ b/drivers/net/ethernet/airoha/airoha_eth.h
+@@ -660,6 +660,21 @@
+ 	struct airoha_queue q_rx[AIROHA_NUM_RX_RING];
+ 
+ 	DECLARE_BITMAP(qos_channel_map, AIROHA_NUM_QOS_CHANNELS);
++
++	/* Packets enqueued on each TX ring, filled only while tx_ring_hash is
++	 * on.  Every enqueue takes the ring's own q->lock, so a plain u64
++	 * increment from airoha_dev_xmit() has a single writer per entry and
++	 * needs no seqcount.
++	 */
++	struct {
++		u64 pkts;
++		u64 bytes;
++	} tx_ring_stat[AIROHA_NUM_TX_RING];
++
++	/* Packets tx_ring_hash could not classify and that kept the
++	 * port-derived channel.
++	 */
++	u64 tx_ring_hash_fallback;
+ };
+ 
+ enum airoha_dev_flags {
