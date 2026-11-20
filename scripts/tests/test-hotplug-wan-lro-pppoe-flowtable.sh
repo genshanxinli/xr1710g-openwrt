@@ -19,8 +19,11 @@ set -u
 
 REPO_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 HOTPLUG_DIR="$REPO_ROOT/target/linux/airoha/an7581/base-files/etc/hotplug.d/iface"
-LRO="$HOTPLUG_DIR/52-wan-lro"
-PPPFT="$HOTPLUG_DIR/54-pppoe-flowtable"
+# Overridable so the suite can be pointed at a pre-fix copy of the scripts and
+# has to fail on it; that is the only way a stubbed test can claim it would have
+# caught the defect it was written for.
+LRO="${WAN_LRO_SCRIPT:-$HOTPLUG_DIR/52-wan-lro}"
+PPPFT="${PPPFT_SCRIPT:-$HOTPLUG_DIR/54-pppoe-flowtable}"
 
 fail() {
 	printf 'FAIL: %s\n' "$*" >&2
@@ -37,6 +40,10 @@ STUBS="$WORK/stubs"
 SYSNET="$WORK/sys"
 LOCKS="$WORK/lock"
 mkdir -p "$STUBS" "$SYSNET/mac80211" "$LOCKS"
+
+# The real flock, resolved before the stubs shadow it: the stub below has to
+# behave like busybox's, which means forwarding the calls it does understand.
+REAL_FLOCK=$(command -v flock) || fail "no flock on this host; the lock cases need one"
 
 # --- stubs ------------------------------------------------------------------
 #
@@ -93,7 +100,12 @@ case "$1" in
 	[ "${2:-}" = "${FAKE_ETHTOOL_DEV:-}" ] && [ -n "${FAKE_ETHTOOL_K:-}" ] && cat "$FAKE_ETHTOOL_K"
 	;;
 -K)
+	# enter/leave around the toggle, with an optional delay in between: two
+	# runs that interleave show up as "enter,enter" in $FAKE_SEQ.
+	printf 'enter\n' >>"$FAKE_SEQ"
+	[ -n "${FAKE_ETHTOOL_SET_DELAY:-}" ] && sleep "$FAKE_ETHTOOL_SET_DELAY"
 	printf '%s\n' "${2:-} ${3:-} ${4:-}" >>"$FAKE_ETHTOOL_SET"
+	printf 'leave\n' >>"$FAKE_SEQ"
 	;;
 esac
 exit 0
@@ -120,7 +132,35 @@ cat >"$STUBS/logger" <<'STUB'
 printf '%s\n' "$*" >>"$FAKE_LOG"
 STUB
 
+# busybox's flock, because that is the only flock a stock image has:
+# /usr/bin/flock -> ../../bin/busybox, usage "flock [-sxun] FD".  There is no
+# -w, and a -w is not a wait that times out - it is an unknown option, so the
+# call exits 1 and any "|| give up" guard fires.  Serving that shape here is
+# the point of the whole suite: with the host's util-linux flock a script that
+# says "flock -w 10 9" looks healthy while doing nothing at all on the board.
+cat >"$STUBS/flock" <<STUB
+#!/bin/sh
+case "\$1" in
+-w) printf 'flock: unrecognized option: w\n' >&2; exit 1 ;;
+*) exec "$REAL_FLOCK" "\$@" ;;
+esac
+STUB
+
 chmod +x "$STUBS"/*
+
+# A lock that is never free, and a sleep that does not sleep: together they let
+# a case run the whole ten-second give-up path instantly, and count the waits.
+FAILSTUBS="$WORK/failstubs"
+mkdir -p "$FAILSTUBS"
+cat >"$FAILSTUBS/flock" <<'STUB'
+#!/bin/sh
+exit 1
+STUB
+cat >"$FAILSTUBS/sleep" <<STUB
+#!/bin/sh
+printf 'sleep %s\n' "\$*" >>"\$FAKE_LOG"
+STUB
+chmod +x "$FAILSTUBS"/*
 
 # --- helpers ----------------------------------------------------------------
 
@@ -128,10 +168,13 @@ reset_case() {
 	export FAKE_LOG="$WORK/log"
 	export FAKE_ETHTOOL_SET="$WORK/ethtool-set"
 	export FAKE_NFT_ADD="$WORK/nft-add"
+	export FAKE_SEQ="$WORK/seq"
 	: >"$FAKE_LOG"
 	: >"$FAKE_ETHTOOL_SET"
 	: >"$FAKE_NFT_ADD"
+	: >"$FAKE_SEQ"
 	unset FAKE_STATUS FAKE_ETHTOOL_DEV FAKE_ETHTOOL_K FAKE_FLOWTABLE FAKE_NFT_ADD_RC
+	unset FAKE_ETHTOOL_SET_DELAY
 	export PATH="$STUBS:$PATH"
 	export WAN_LRO_LOCK_DIR="$LOCKS"
 	export PF_LOCK_DIR="$LOCKS"
@@ -256,6 +299,8 @@ export FAKE_STATUS="$WORK/dhcp.json" FAKE_ETHTOOL_DEV=wan FAKE_ETHTOOL_K="$WORK/
 run_lro ifup wan DEVICE=wan
 expect_ethtool_set "wan rx-lro on"
 grep -q 'LRO enabled on wan' "$FAKE_LOG" || fail "lro-ifup-enables: no success log line"
+grep -q 'giving up' "$FAKE_LOG" &&
+	fail "lro-ifup-enables: the lock guard fired; flock is unusable on this image"
 
 CASE=lro-ifupdate-idempotent
 reset_case
@@ -313,6 +358,8 @@ grep -q 'devices = { "pppoe-wan" }' "$FAKE_NFT_ADD" ||
 grep -q 'flags offload;' "$FAKE_NFT_ADD" ||
 	fail "pppft-ifup-adds: hw offload flag not repeated, the update would be rejected"
 grep -q 'added pppoe-wan to flowtable ft' "$FAKE_LOG" || fail "pppft-ifup-adds: no success log line"
+grep -q 'giving up' "$FAKE_LOG" &&
+	fail "pppft-ifup-adds: the lock guard fired; flock is unusable on this image"
 
 CASE=pppft-ifupdate-idempotent
 reset_case
@@ -378,5 +425,63 @@ reset_case
 export FAKE_STATUS="$WORK/pppoe.json" FAKE_FLOWTABLE="$WORK/ft-nowan" FAKE_NFT_ADD_RC=1
 run_pppft ifup wan
 grep -q 'could not add pppoe-wan' "$FAKE_LOG" || fail "pppft-add-failure-is-logged: failure was silent"
+
+# --- the lock ---------------------------------------------------------------
+#
+# The defect these cases exist for: both scripts used "flock -w 10 9".  busybox
+# flock, the only flock on the image, has no -w, so that call exited 1, the
+# guard logged "giving up", and neither script ever reached ethtool or nft.
+# The whole suite already runs under a busybox-shaped flock stub ($STUBS/flock)
+# for that reason - a regression back to -w fails every case above too - and
+# these cases pin the two things the guard must still do: queue, then give up.
+
+CASE=lock-no-flock-w
+# grep -n prints "path:line:text", so a match whose text starts with "# " is the
+# note explaining the defect, not the defect.
+grep -n 'flock -w' "$LRO" "$PPPFT" | grep -v ':# ' &&
+	fail "lock-no-flock-w: a script still calls flock -w, which busybox rejects"
+
+CASE=lro-lock-serialises
+reset_case
+# ifup and ifdown of one interface released together, with a delay inside the
+# toggle so an overlap would be visible: $FAKE_SEQ must read enter,leave twice,
+# never enter,enter.  A dropped second caller would leave one toggle, an
+# interleaved one would nest them.
+export FAKE_STATUS="$WORK/dhcp.json" FAKE_ETHTOOL_DEV=wan FAKE_ETHTOOL_K="$WORK/lro-flat-off"
+export FAKE_ETHTOOL_SET_DELAY=1
+run_lro ifup wan DEVICE=wan &
+lro_p1=$!
+run_lro ifdown wan DEVICE=wan &
+lro_p2=$!
+wait "$lro_p1"
+wait "$lro_p2"
+expect_ethtool_set_count 2
+[ "$(tr '\n' ',' <"$FAKE_SEQ")" = "enter,leave,enter,leave," ] ||
+	fail "lro-lock-serialises: toggles interleaved or dropped: $(tr '\n' ',' <"$FAKE_SEQ")"
+
+CASE=lro-lock-giveup-after-ten-tries
+reset_case
+# A lock that is never free, with no-op sleeps so the bound can be counted
+# instead of waited out: ten one-second attempts, then the give-up line, and
+# no toggle.
+export FAKE_STATUS="$WORK/dhcp.json" FAKE_ETHTOOL_DEV=wan FAKE_ETHTOOL_K="$WORK/lro-flat-off"
+export PATH="$FAILSTUBS:$PATH"
+run_lro ifup wan DEVICE=wan
+expect_ethtool_set_count 0
+[ "$(grep -c 'sleep 1' "$FAKE_LOG")" = 10 ] ||
+	fail "lro-lock-giveup-after-ten-tries: expected 10 waits, got $(grep -c 'sleep 1' "$FAKE_LOG")"
+grep -q 'another LRO change is in progress, giving up' "$FAKE_LOG" ||
+	fail "lro-lock-giveup-after-ten-tries: no give-up log line"
+
+CASE=pppft-lock-giveup-after-ten-tries
+reset_case
+export FAKE_STATUS="$WORK/pppoe.json" FAKE_FLOWTABLE="$WORK/ft-nowan"
+export PATH="$FAILSTUBS:$PATH"
+run_pppft ifup wan
+expect_nft_add 0
+[ "$(grep -c 'sleep 1' "$FAKE_LOG")" = 10 ] ||
+	fail "pppft-lock-giveup-after-ten-tries: expected 10 waits, got $(grep -c 'sleep 1' "$FAKE_LOG")"
+grep -q 'another flowtable change is in progress, giving up' "$FAKE_LOG" ||
+	fail "pppft-lock-giveup-after-ten-tries: no give-up log line"
 
 printf 'all hotplug cases passed\n'
