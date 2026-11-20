@@ -44,10 +44,189 @@ accounted, and is only filled while the knob is on.
 
 Signed-off-by: OpenWrt <openwrt@example.org>
 ---
- drivers/net/ethernet/airoha/airoha_eth.c | 124 ++++++++++++++++++++++-
- drivers/net/ethernet/airoha/airoha_eth.h |   6 ++
- 2 files changed, 127 insertions(+), 3 deletions(-)
 
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -98,6 +98,28 @@
+ 		0644);
+ MODULE_PARM_DESC(napi_weight, "QDMA RX/TX NAPI weight (16-512, default 64)");
+ 
++/* airoha_dev_select_queue() derives the QDMA channel from port->id, so every
++ * packet of one port - and therefore every flow of one 5-tuple - is enqueued
++ * on the same channel, i.e. on the same eight of the 32 TX rings.  With this
++ * knob on the channel instead comes from the flow hash, which spreads
++ * unrelated flows over the four HW QoS channels.
++ *
++ * The parameter is 0444: the choice has to hold for the lifetime of the
++ * device, and a writable knob would let an operator change it under flows
++ * that are already enqueued.  Set it on the kernel command line
++ * (airoha_eth.tx_ring_hash=1) or at insmod.
++ */
++static bool airoha_tx_ring_hash;
++module_param_named(tx_ring_hash, airoha_tx_ring_hash, bool, 0444);
++MODULE_PARM_DESC(tx_ring_hash,
++		 "derive the TX ring from the flow hash (default 0)");
++
++/* Off by default, and the off case must not cost the TX path a branch: the
++ * key is enabled once, from airoha_hw_init(), and the two call sites are
++ * patched to a nop while it stays disabled.
++ */
++static DEFINE_STATIC_KEY_FALSE(airoha_tx_ring_hash_key);
++
+ u32 airoha_rr(void __iomem *base, u32 offset)
+ {
+ 	return readl(base + offset);
+@@ -809,11 +831,44 @@
+ }
+ DEFINE_SHOW_ATTRIBUTE(airoha_qdma_debugfs_napi_weight);
+ 
++/* The rings belong to a QDMA and are shared by every net_device queued on it,
++ * so this cannot be a per-netdev ethtool counter: five netdevices would each
++ * report the same 32 rings.  One file per QDMA block keeps the numbers where
++ * they are accounted.
++ */
++static int airoha_qdma_debugfs_tx_ring_hist_show(struct seq_file *m,
++						 void *private)
++{
++	struct airoha_eth *eth = m->private;
++	int i, j;
++
++	seq_printf(m, "tx_ring_hash %u\n", airoha_tx_ring_hash);
++	seq_puts(m, "qdma ring channel queue pkts bytes\n");
++	for (i = 0; i < ARRAY_SIZE(eth->qdma); i++) {
++		struct airoha_qdma *qdma = &eth->qdma[i];
++
++		for (j = 0; j < ARRAY_SIZE(qdma->tx_ring_stat); j++)
++			seq_printf(m, "%4d %4d %7d %5d %12llu %12llu\n",
++				   i, j, j / AIROHA_NUM_QOS_QUEUES,
++				   j % AIROHA_NUM_QOS_QUEUES,
++				   qdma->tx_ring_stat[j].pkts,
++				   qdma->tx_ring_stat[j].bytes);
++
++		seq_printf(m, "qdma %d unhashed_fallback %llu\n", i,
++			   qdma->tx_ring_hash_fallback);
++	}
++
++	return 0;
++}
++DEFINE_SHOW_ATTRIBUTE(airoha_qdma_debugfs_tx_ring_hist);
++
+ static void airoha_qdma_debugfs_init(struct airoha_eth *eth)
+ {
+ 	eth->qdma_debugfs_dir = debugfs_create_dir("qdma", NULL);
+ 	debugfs_create_file("napi_weight", 0444, eth->qdma_debugfs_dir, NULL,
+ 			    &airoha_qdma_debugfs_napi_weight_fops);
++	debugfs_create_file("tx_ring_hist", 0444, eth->qdma_debugfs_dir, eth,
++			    &airoha_qdma_debugfs_tx_ring_hist_fops);
+ }
+ #else
+ static void airoha_pse_debugfs_init(struct airoha_eth *eth) {}
+@@ -2181,6 +2236,12 @@
+ 	airoha_pse_debugfs_init(eth);
+ 	airoha_qdma_debugfs_init(eth);
+ 
++	if (airoha_tx_ring_hash) {
++		static_branch_enable(&airoha_tx_ring_hash_key);
++		dev_info(eth->dev,
++			 "TX rings follow the flow hash, not the port\n");
++	}
++
+ 	set_bit(DEV_STATE_INITIALIZED, &eth->state);
+ 
+ 	return 0;
+@@ -2817,6 +2878,60 @@
+ 	return 0;
+ }
+ 
++/* Channel to enqueue a non-DSA device's packet on, or -1 to keep the one the
++ * caller derived from port->id.
++ *
++ * skb_get_hash() runs the flow dissector over the 5-tuple and caches the
++ * result in skb->hash, which the stack has usually done already, so the hash
++ * is not recomputed per packet.
++ *
++ * -1 is also returned while any QoS channel of this QDMA is claimed by an HTB
++ * leaf: the channels are a per-QDMA resource and a hashed packet on a shaped
++ * channel would be scheduled by another port's shaper.  Staying inert there
++ * is the only way this knob cannot silently bypass a configured rate.
++ *
++ * A packet with no 5-tuple to hash keeps the port-derived channel as well,
++ * and is counted in tx_ring_hash_fallback.  Landing it on ring 0 instead, as
++ * the request suggested, would move every ARP frame and every unparsed frame
++ * of every port onto port 0's channel - a change to exactly the traffic the
++ * hash cannot classify, which is the case worth leaving alone.
++ */
++static int airoha_tx_hash_channel(struct net_device *netdev,
++				  struct sk_buff *skb)
++{
++	struct airoha_gdm_dev *dev = netdev_priv(netdev);
++	struct airoha_qdma *qdma;
++	u32 hash;
++
++	if (!static_branch_unlikely(&airoha_tx_ring_hash_key))
++		return -1;
++
++	hash = skb_get_hash(skb);
++
++	rcu_read_lock();
++	qdma = rcu_dereference(dev->qdma);
++	if (!qdma || !bitmap_empty(qdma->qos_channel_map,
++				   AIROHA_NUM_QOS_CHANNELS)) {
++		rcu_read_unlock();
++		return -1;
++	}
++
++	if (!hash) {
++		/* No 5-tuple to hash - a non-IP frame, or one the dissector
++		 * could not read.  Counted, so that a shaper-less setup with
++		 * the knob on does not look like a box whose flows all happen
++		 * to hash to one channel.  The count is racy: this is a debug
++		 * counter on the TX fast path, an undercount costs nothing.
++		 */
++		qdma->tx_ring_hash_fallback++;
++		rcu_read_unlock();
++		return -1;
++	}
++	rcu_read_unlock();
++
++	return hash % AIROHA_NUM_QOS_CHANNELS;
++}
++
+ static u16 airoha_dev_select_queue(struct net_device *netdev,
+ 				   struct sk_buff *skb,
+ 				   struct net_device *sb_dev)
+@@ -2826,10 +2941,16 @@
+ 	int queue, channel;
+ 
+ 	/* For dsa device select QoS channel according to the dsa user port
+-	 * index, rely on port id otherwise. Select QoS queue based on the
+-	 * skb priority.
++	 * index, rely on the flow hash - or on the port id when it is off -
++	 * otherwise. Select QoS queue based on the skb priority.
+ 	 */
+-	channel = netdev_uses_dsa(netdev) ? skb_get_queue_mapping(skb) : port->id;
++	if (netdev_uses_dsa(netdev)) {
++		channel = skb_get_queue_mapping(skb);
++	} else {
++		channel = airoha_tx_hash_channel(netdev, skb);
++		if (channel < 0)
++			channel = port->id;
++	}
+ 	channel = channel % AIROHA_NUM_QOS_CHANNELS;
+ 	queue = skb->priority % AIROHA_NUM_QOS_QUEUES;
+ 	queue = channel * AIROHA_NUM_QOS_QUEUES + queue;
+@@ -3028,6 +3149,11 @@
+ 	}
+ 	q->queued += i;
+ 
++	if (static_branch_unlikely(&airoha_tx_ring_hash_key)) {
++		qdma->tx_ring_stat[qid].pkts++;
++		qdma->tx_ring_stat[qid].bytes += skb->len;
++	}
++
+ 	skb_tx_timestamp(skb);
+ 	netdev_tx_sent_queue(txq, skb->len);
+ 	if (q->ndesc - q->queued < q->free_thr) {
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
 @@ -660,6 +660,21 @@

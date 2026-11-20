@@ -1,0 +1,53 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: assert the RX interrupt bank mask union
+
+The QDMA RX rings reach an interrupt line only through the four
+RX_IRQ_BANK_PIN_MASK() values.  airoha_qdma_hw_init() enables a ring's
+RX_DONE interrupt in the banks whose mask names it, and
+airoha_qdma_rx_napi_poll() re-arms a ring in every bank whose mask
+contains it.  A ring that no mask names never raises an interrupt, even
+though airoha_qdma_init_rx() initialises every ring because
+RX_DONE_INT_MASK covers all 32 of them, so a mask change that drops a
+ring is only noticed as a queue that stops receiving.
+
+The masks name 25 of the 32 rings today: bank 0 (0xbb9f) rings 0-4,
+7-9, 11-13 and 15, bank 1 (0xffe00000) rings 21-31, bank 2 (0x20)
+ring 5 and bank 3 (0x40) ring 6.  Rings 10, 14 and 16-20 are named by
+no bank.  Nothing states that, so the masks and the ring set can drift
+apart silently.
+
+Assert the union at build time against RX_DONE_INT_MASK without the
+rings that no bank names, so adding or dropping a ring from interrupt
+coverage fails to compile.  No functional change.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -1913,6 +1913,25 @@
+ 	struct airoha_eth *eth = qdma->eth;
+ 	int i, id = qdma - &eth->qdma[0];
+ 
++	/* An RX ring is reachable only through the interrupt bank that
++	 * names it: airoha_qdma_hw_init() enables RX_DONE in a bank only
++	 * for the rings in its RX_IRQ_BANK_PIN_MASK(), and
++	 * airoha_qdma_rx_napi_poll() re-arms a ring in every bank whose
++	 * mask contains it.  Bank 0 (0xbb9f) names rings 0-4, 7-9, 11-13
++	 * and 15; bank 1 (0xffe00000) rings 21-31; bank 2 (0x20) ring 5;
++	 * bank 3 (0x40) ring 6.  Rings 10, 14 and 16-20 are named by no
++	 * bank.  All 32 rings are initialised because RX_DONE_INT_MASK
++	 * covers them, so changing a mask without touching this list
++	 * would silently add or drop rings from interrupt coverage.  Assert
++	 * the union against RX_DONE_INT_MASK minus the rings that no bank
++	 * names.
++	 */
++	BUILD_BUG_ON((RX_IRQ0_BANK_PIN_MASK | RX_IRQ1_BANK_PIN_MASK |
++		      RX_IRQ2_BANK_PIN_MASK | RX_IRQ3_BANK_PIN_MASK) !=
++		     (RX_DONE_INT_MASK &
++		      ~(BIT(10) | BIT(14) | BIT(16) | BIT(17) | BIT(18) |
++			BIT(19) | BIT(20))));
++
+ 	for (i = 0; i < ARRAY_SIZE(qdma->irq_banks); i++) {
+ 		struct airoha_irq_bank *irq_bank = &qdma->irq_banks[i];
+ 		int err, irq_index = 4 * id + i;
