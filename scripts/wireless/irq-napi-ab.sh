@@ -82,12 +82,15 @@ export LC_ALL
 PROG=${0##*/}
 
 # Defaults.  Every value can also be set from the environment; the command
-# line wins.  WINDOW is seconds, not the bash SECONDS variable.
+# line wins.  The window is kept in integer milliseconds (WINDOW_MS) because
+# every rate below divides by it; WINDOW is only the whole-second form handed
+# to the traffic source and to mpstat.
 IFACE=${IFACE:-}
 CLIENT=${CLIENT:-}
 CLIENT_IP_OPT=${CLIENT_IP:-}
 CLIENT_MAC_OPT=${CLIENT_MAC:-}
 WINDOW=${WINDOW:-20}
+WINDOW_MS=${WINDOW_MS:-}
 WARMUP=${WARMUP:-3}
 PROCS=${PROCS:-6}
 RATE=${RATE:-1340}
@@ -97,8 +100,18 @@ IRQ_NAMES=${IRQ_NAMES:-mt76-npu mt7996e-hif mt7996e}
 IRQ_ARG=${IRQ:-}
 IRQ_MAP_OPT=${IRQ_MAP:-}
 CPUS_OPT=${CPUS:-}
-THREADED_VALUE=${THREADED_VALUE:-1}
+# Empty means "the opposite of the value the board runs now", resolved after
+# the napi_threaded file is found.  A literal 1 on a board that already runs
+# threaded measures nothing and reads as "threaded has no effect".
+THREADED_VALUE=${THREADED_VALUE:-}
+THREADED_VALUE_OPT=
 NAPI_PATH_OPT=${NAPI_PATH:-}
+NAPI_PARAM=${NAPI_PARAM:-/sys/module/mt76/parameters/napi_threaded}
+# CPU sampling for the automatic split target: one short /proc/stat and
+# /proc/interrupts delta, and the per-second IRQ rate above which a CPU
+# counts as already busy (the boot CPU carries arch_timer at ~2.5 M/s).
+IRQ_SAMPLE_S=${IRQ_SAMPLE_S:-1}
+IRQ_BUSY_PER_S=${IRQ_BUSY_PER_S:-50000}
 ARMS=${ARMS:-baseline,split,threaded,combined}
 OUT_DIR_OPT=${OUT_DIR:-}
 PROC_ROOT=${PROC_ROOT:-/proc}
@@ -149,11 +162,19 @@ MPSTAT_PID=
 SOURCE_EXIT=
 SOURCE_SECS=
 PER_PROC_MBPS=
-WINDOW_S=0
+WINDOW_MS_MEASURED=
+WARMUP_MS=0
 ARM_WRITES=0
 NAPI_CHANGED=0
 SPLIT_CHANGED=0
 BASELINE_UNCHANGED=n/a
+THREADED_BASELINE=unavailable
+THREADED_SOURCE=
+SPLIT_TARGETS=
+SPLIT_BASIS=
+SPLIT_CHOSEN_CPU=
+IRQ_MAP_REQUEST=
+IRQ_MAP_READONLY=0
 
 note() {
 	printf '%s: %s\n' "$PROG" "$*" >&2
@@ -359,6 +380,7 @@ parse_args() {
 		--client-ip)		[ $# -ge 2 ] || die "$1 needs a value"; CLIENT_IP_OPT=$2; shift 2 ;;
 		--client-mac)		[ $# -ge 2 ] || die "$1 needs a value"; CLIENT_MAC_OPT=$2; shift 2 ;;
 		--seconds|--window)	[ $# -ge 2 ] || die "$1 needs a value"; WINDOW=$2; shift 2 ;;
+		--window-ms)		[ $# -ge 2 ] || die "$1 needs a value"; WINDOW_MS=$2; shift 2 ;;
 		--warmup)		[ $# -ge 2 ] || die "$1 needs a value"; WARMUP=$2; shift 2 ;;
 		--procs)		[ $# -ge 2 ] || die "$1 needs a value"; PROCS=$2; shift 2 ;;
 		--rate)			[ $# -ge 2 ] || die "$1 needs a value"; RATE=$2; shift 2 ;;
@@ -370,6 +392,7 @@ parse_args() {
 		--irq-map)		[ $# -ge 2 ] || die "$1 needs a value"; IRQ_MAP_OPT=$2; shift 2 ;;
 		--threaded-value)	[ $# -ge 2 ] || die "$1 needs a value"; THREADED_VALUE=$2; shift 2 ;;
 		--napi-path)		[ $# -ge 2 ] || die "$1 needs a value"; NAPI_PATH_OPT=$2; shift 2 ;;
+		--napi-param)		[ $# -ge 2 ] || die "$1 needs a value"; NAPI_PARAM=$2; shift 2 ;;
 		--arms)			[ $# -ge 2 ] || die "$1 needs a value"; ARMS=$2; shift 2 ;;
 		--out-dir)		[ $# -ge 2 ] || die "$1 needs a value"; OUT_DIR_OPT=$2; shift 2 ;;
 		--proc-root)		[ $# -ge 2 ] || die "$1 needs a value"; PROC_ROOT=$2; shift 2 ;;
@@ -381,16 +404,40 @@ parse_args() {
 		esac
 	done
 
-	is_uint "$WINDOW" && [ "$WINDOW" -ge 1 ] && [ "$WINDOW" -le 3600 ] ||
-		die "--seconds must be 1..3600"
+	# The measured window is held in integer milliseconds.  "--seconds 0.00"
+	# used to be accepted as a string, printed as "0.00", and then divided
+	# by, so a zero window is rejected here, before anything runs.
+	if [ -n "$WINDOW_MS" ]; then
+		is_uint "$WINDOW_MS" && [ "$WINDOW_MS" -ge 100 ] &&
+			[ "$WINDOW_MS" -le 3600000 ] ||
+			die "--window-ms must be 100..3600000 (got '$WINDOW_MS')"
+	else
+		WINDOW_MS=$(awk -v s="$WINDOW" 'BEGIN {
+			if (s !~ /^[0-9]+(\.[0-9]+)?$/)
+				exit 1
+			printf "%d", s * 1000
+		}') || die "--seconds must be a number of seconds (got '$WINDOW')"
+		is_uint "$WINDOW_MS" && [ "$WINDOW_MS" -ge 100 ] &&
+			[ "$WINDOW_MS" -le 3600000 ] ||
+			die "--seconds must be 0.1..3600 (got '$WINDOW')"
+	fi
+	# Whole seconds, rounded up, for the traffic source and mpstat only.
+	WINDOW=$(awk -v ms="$WINDOW_MS" 'BEGIN { printf "%d", (ms + 999) / 1000 }')
 	is_uint "$WARMUP" && [ "$WARMUP" -ge 1 ] && [ "$WARMUP" -le 3600 ] ||
 		die "--warmup must be 1..3600"
+	WARMUP_MS=$((WARMUP * 1000))
 	is_uint "$PROCS" && [ "$PROCS" -ge 1 ] && [ "$PROCS" -le 64 ] ||
 		die "--procs must be 1..64"
 	is_uint "$RATE" && [ "$RATE" -ge 1 ] ||
 		die "--rate must be a positive integer (Mbit/s)"
-	case $THREADED_VALUE in
-	0|1) ;;
+	is_uint "$IRQ_SAMPLE_S" && [ "$IRQ_SAMPLE_S" -ge 1 ] &&
+		[ "$IRQ_SAMPLE_S" -le 60 ] ||
+		die "IRQ_SAMPLE_S must be 1..60"
+	is_uint "$IRQ_BUSY_PER_S" && [ "$IRQ_BUSY_PER_S" -ge 1 ] ||
+		die "IRQ_BUSY_PER_S must be a positive integer"
+	case ${THREADED_VALUE:-} in
+	'')	;;
+	0|1)	THREADED_VALUE_OPT=$THREADED_VALUE ;;
 	*) die "--threaded-value must be 0 or 1" ;;
 	esac
 	[ -n "$PROC_ROOT" ] || die "--proc-root must not be empty"
@@ -449,6 +496,9 @@ parse_args() {
 			map="$map $irq:$cpu"
 		done
 		SPLIT_MAP=${map# }
+		# The requested map, kept even when a record has to be dropped:
+		# a read-only report still lists every requested IRQ.
+		IRQ_MAP_REQUEST=$SPLIT_MAP
 	fi
 
 	SOURCE_SECS=$((WARMUP + WINDOW + 2))
@@ -547,6 +597,152 @@ interrupt_cpus() {
 			exit
 		}
 	' "$PROC_ROOT/interrupts"
+}
+
+# ------------------------------------------------------- CPU load sampling
+#
+# The automatic split used to pin every candidate IRQ to cpu0 and later to
+# whatever non-cpu0 CPUs existed, in /proc/interrupts order.  On the board
+# cpu0 already carries arch_timer (~2.5 M interrupts/s) and IRQ55
+# (~1.69 M/s), so moving a Wi-Fi line there cannot show a difference and an
+# idle A53 is the target that says something.  The target is now chosen from
+# a short sample: idle share from /proc/stat and interrupt rate per CPU from
+# /proc/interrupts.  A CPU above IRQ_BUSY_PER_S interrupts/s is excluded as
+# already hot.  The chosen CPUs and the reason are printed and written to
+# result.json.
+
+# Tagged idle/total jiffies per CPU, from one /proc/stat snapshot.
+stat_cpu_jiffies() {
+	[ -r "$1" ] || return 1
+	awk -v tag="${2:-stat}" '
+		$1 ~ /^cpu[0-9]+$/ {
+			cpu = substr($1, 4)
+			total = 0
+			for (i = 2; i <= NF; i++)
+				total += $i
+			# idle = idle + iowait: iowait is time with nothing to run.
+			printf "stat %s %s %s %s\n", tag, cpu, $5 + $6, total
+		}
+	' "$1"
+}
+
+# Tagged per-CPU interrupt totals from one /proc/interrupts snapshot.
+irq_cpu_totals() {
+	[ -r "$1" ] || return 1
+	awk -v tag="${2:-irq}" '
+		NR == 1 {
+			for (i = 2; i <= NF; i++) {
+				c = $i
+				sub(/^CPU/, "", c)
+				if (c ~ /^[0-9]+$/) {
+					col[++ncpu] = i - 1
+					colname[i - 1] = c
+				}
+			}
+			next
+		}
+		{
+			for (k = 1; k <= ncpu; k++) {
+				i = col[k] + 1
+				if (i > NF)
+					continue
+				v = $i
+				if (v ~ /^[0-9]+$/)
+					sum[k] += v
+			}
+		}
+		END {
+			for (k = 1; k <= ncpu; k++)
+				printf "irq %s %s %d\n", tag, colname[k], sum[k] + 0
+		}
+	' "$1"
+}
+
+# Combine two tagged samples into "cpu N idle_pct P irq_per_s R" lines, in
+# CPU order.  stdin carries the four snapshots' tagged lines.
+cpu_metrics() {
+	awk '
+		$1 == "stat" { k = $2 ":" $3; sidle[k] = $4; stot[k] = $5; cpus[$3] = 1 }
+		$1 == "irq"  { irq[$2 ":" $3] = $4 }
+		END {
+			max = -1
+			for (c in cpus)
+				if (c + 0 > max)
+					max = c + 0
+			for (i = 0; i <= max; i++) {
+				if (!(i in cpus))
+					continue
+				dt = stot["b:" i] - stot["a:" i]
+				di = sidle["b:" i] - sidle["a:" i]
+				pct = dt > 0 ? 100 * di / dt : 0
+				r = irq["b:" i] - irq["a:" i]
+				if (r < 0 || r == "")
+					r = 0
+				printf "cpu %d idle_pct %.1f irq_per_s %d\n", i, pct, r
+			}
+		}'
+}
+
+sample_sleep() {
+	sleep "${1:-1}"
+}
+
+cpu_sample() {
+	local tag="$1" out
+
+	out=$(stat_cpu_jiffies "$PROC_ROOT/stat" "$tag") || return 1
+	printf '%s\n' "$out"
+	irq_cpu_totals "$PROC_ROOT/interrupts" "$tag" || return 1
+}
+
+# Selection over "cpu N idle_pct P irq_per_s R" metrics on stdin: prints
+# "basis ..." and "targets CPU...", most idle first, never a CPU that already
+# carries IRQ_BUSY_PER_S interrupts/s.
+split_targets_from_metrics() {
+	awk -v busy="${1:-50000}" -v sample="${2:-1}" '
+		NF >= 6 { n++; id[n] = $2; idle[n] = $4 + 0; rate[n] = $6 + 0 }
+		END {
+			if (n == 0)
+				exit 1
+			for (i = 1; i <= n; i++)
+				if (rate[i] >= busy) {
+					excluded[i] = 1
+					ex = ex sprintf("cpu%s(%d/s) ", id[i], rate[i])
+				}
+			for (k = 1; k <= n; k++) {
+				bi = 0
+				bidle = -1
+				for (i = 1; i <= n; i++)
+					if (!excluded[i] && (bi == 0 || idle[i] > bidle)) {
+						bi = i
+						bidle = idle[i]
+					}
+				if (bi == 0)
+					break
+				excluded[bi] = 1
+				targets = targets (targets == "" ? "" : " ") id[bi]
+				if (k == 1)
+					reason = sprintf("idlest=cpu%s(%.1f%% idle, %d irq/s)", \
+						id[bi], bidle, rate[bi])
+			}
+			if (ex != "")
+				reason = reason "; excluded=" substr(ex, 1, length(ex) - 1)
+			printf "basis %s sample=%ss\n", reason, sample
+			printf "targets %s\n", targets
+		}'
+}
+
+# Sample once, then pick: see split_targets_from_metrics for the rule.
+pick_split_targets() {
+	local first second metrics
+
+	first=$(cpu_sample a) || return 1
+	sample_sleep "${IRQ_SAMPLE_S:-1}"
+	second=$(cpu_sample b) || return 1
+	metrics=$(printf '%s\n%s\n' "$first" "$second" | cpu_metrics) || return 1
+	[ -n "$metrics" ] || return 1
+	printf '%s\n' "$metrics" |
+		split_targets_from_metrics "${IRQ_BUSY_PER_S:-50000}" "${IRQ_SAMPLE_S:-1}"
 }
 
 # Candidate IRQ lines: "irq|matched-name|action" for every /proc/interrupts
@@ -1048,6 +1244,62 @@ read_napi_value() {
 	read_file "$NAPI_PATH" 2>/dev/null
 }
 
+# The value the board runs now: the mt76 module parameter first (it survives
+# even when debugfs is not mounted), the debugfs file as the fallback.
+threaded_baseline() {
+	local v
+
+	if [ -n "$NAPI_PARAM" ] && [ -r "$NAPI_PARAM" ]; then
+		v=$(read_file "$NAPI_PARAM" 2>/dev/null || :)
+		case $v in
+		0|1) printf '%s' "$v"; return 0 ;;
+		esac
+	fi
+	v=$(read_napi_value 2>/dev/null || :)
+	case $v in
+	0|1) printf '%s' "$v"; return 0 ;;
+	esac
+	return 1
+}
+
+# Resolve the value the threaded arm writes.  Without --threaded-value it is
+# the opposite of the current value: on a board that already runs
+# napi_threaded=1 (the XR1710G image does), testing 1 again measures nothing
+# and reads as "threaded has no effect".
+resolve_threaded_value() {
+	local base
+
+	base=$(threaded_baseline 2>/dev/null || :) || base=
+	THREADED_BASELINE=${base:-unavailable}
+	if [ -n "$THREADED_VALUE_OPT" ]; then
+		THREADED_VALUE=$THREADED_VALUE_OPT
+		THREADED_SOURCE=option
+		return 0
+	fi
+	case $THREADED_BASELINE in
+	1) THREADED_VALUE=0; THREADED_SOURCE=inverse-of-1 ;;
+	0) THREADED_VALUE=1; THREADED_SOURCE=inverse-of-0 ;;
+	*) THREADED_VALUE=1; THREADED_SOURCE=baseline-unavailable ;;
+	esac
+}
+
+# Milliseconds as a sleep, without assuming that the shell's sleep takes a
+# fractional argument.
+sleep_ms() {
+	local ms="$1" whole rem
+
+	[ "$ms" -ge 1 ] || return 0
+	whole=$((ms / 1000))
+	rem=$((ms % 1000))
+	if [ "$whole" -gt 0 ]; then
+		sleep "$whole"
+	fi
+	if [ "$rem" -gt 0 ]; then
+		sleep "$(awk -v r="$rem" 'BEGIN { printf "%.3f", r / 1000 }')" ||
+			note "sleep cannot sleep a fractional second; the window runs long"
+	fi
+}
+
 preflight() {
 	local tmp irq name action aff f
 
@@ -1196,16 +1448,19 @@ EOF
 
 	resolve_source_bind
 
-	# Build or validate the split map.  An explicit map is used as-is
-	# (only those IRQs move); the automatic map round-robins the writable
-	# candidates over CPUS in /proc/interrupts order.
+	# Build or validate the split map.  An explicit map is used as-is (only
+	# those IRQs move).  When it names an IRQ this kernel exposes as
+	# read-only (-r--r--r--, typical for the mt7996e-managed lines 49..57 on
+	# the XR1710G image), the run does not fail: the whole invocation
+	# degrades to a read-only report of every requested IRQ and exits 0.
 	if [ -n "$SPLIT_MAP" ]; then
 		local map_ok='' rec m_irq m_cpu
 		for rec in $SPLIT_MAP; do
 			m_irq=${rec%%:*}
 			m_cpu=${rec#*:}
 			if ! contains_word "$m_irq" "$IRQ_WRITABLE"; then
-				add_missing "irq-map-$m_irq-not-writable"
+				IRQ_MAP_READONLY=1
+				note "irq $m_irq: smp_affinity is not writable on this kernel; --irq-map degrades to a read-only report"
 				continue
 			fi
 			if ! contains_word "$m_cpu" "$CPUS"; then
@@ -1216,26 +1471,41 @@ EOF
 		done
 		SPLIT_MAP=${map_ok# }
 	else
-		local i=0 ncpu=0 cpu c k targets=
-		# cpu0 is the boot CPU: arch_timer (~2.5M IRQs/s) and the
-		# housekeeping IRQs already saturate it, so moving a candidate
-		# IRQ there changes nothing and the split arm reads as a no-op.
-		# Round-robin over the remaining online CPUs, and fall back to
-		# the full list on a single-CPU system.
-		for cpu in $CPUS; do
-			[ "$cpu" -eq 0 ] || targets="$targets $cpu"
-		done
-		[ -n "$targets" ] || targets=$CPUS
-		for cpu in $targets; do
+		# The automatic map goes to the most idle CPUs, never to a CPU
+		# that already carries a hot line.  cpu0 on the board runs
+		# arch_timer (~2.5M IRQs/s) and IRQ55 (~1.69M/s), so a candidate
+		# pinned there cannot show a difference: the split arm reads as a
+		# no-op and the A/B measures nothing.
+		local pick targets='' ncpu=0 cpu c k i=0
+		pick=$(pick_split_targets 2>/dev/null || :)
+		SPLIT_TARGETS=$(printf '%s\n' "$pick" |
+			awk '$1 == "targets" { sub(/^targets /, ""); print; exit }')
+		SPLIT_BASIS=$(printf '%s\n' "$pick" |
+			awk '$1 == "basis" { sub(/^basis /, ""); print; exit }')
+		[ -n "$SPLIT_TARGETS" ] || {
+			# No /proc/stat sample (a fixture run): keep the old rule
+			# of "any online CPU but the boot CPU".
+			for cpu in $CPUS; do
+				[ "$cpu" -eq 0 ] || targets="$targets $cpu"
+			done
+			SPLIT_TARGETS=${targets# }
+			[ -n "$SPLIT_TARGETS" ] || SPLIT_TARGETS=$CPUS
+			SPLIT_BASIS="no /proc/stat sample; online CPUs except cpu0"
+			note "no CPU idle sample; split targets: $SPLIT_TARGETS"
+		}
+		SPLIT_CHOSEN_CPU=${SPLIT_TARGETS%% *}
+		for cpu in $SPLIT_TARGETS; do
 			ncpu=$((ncpu + 1))
 		done
 		SPLIT_MAP=
 		if [ -n "$IRQ_WRITABLE" ] && [ "$ncpu" -gt 0 ]; then
+			# Round-robin over the idle-first list, so the first
+			# candidate lands on the most idle CPU.
 			for irq in $IRQ_WRITABLE; do
 				i=$((i + 1))
 				k=$(( (i - 1) % ncpu + 1 ))
 				cpu=
-				for c in $targets; do
+				for c in $SPLIT_TARGETS; do
 					k=$((k - 1))
 					if [ "$k" -eq 0 ]; then
 						cpu=$c
@@ -1249,12 +1519,42 @@ EOF
 		fi
 	fi
 
-	if [ "$NEED_SPLIT" -eq 1 ] && [ -z "$SPLIT_MAP" ]; then
+	if [ "$IRQ_MAP_READONLY" -eq 1 ]; then
+		# Report only: no write, no traffic, no refusal.  main() exits 0
+		# right after printing this.
+		note "irq map is read-only on this kernel; reporting instead of running"
+	elif [ "$NEED_SPLIT" -eq 1 ] && [ -z "$SPLIT_MAP" ]; then
 		add_missing split-map
 	fi
 	if [ "$NEED_NAPI" -eq 1 ] && [ "$NAPI_WRITABLE" -ne 1 ]; then
 		note "no writable napi_threaded; threaded/combined arms will be skipped"
 	fi
+}
+
+# Read-only fallback for --irq-map: every requested IRQ with its affinity,
+# mode and writability, so the operator can see that the policy exists and
+# why the harness cannot apply it on this kernel.
+report_irq_map_readonly() {
+	local rec irq cpu aff counts perm
+
+	say "$PROG: --irq-map is read-only on this kernel; nothing is written and no traffic is sent"
+	say "$PROG: iface=${IFACE:-none} client=${CLIENT:-none} mac=${CLIENT_MAC:-unavailable} cpus=$(printf '%s' "$CPUS" | tr ' ' ',')"
+	say "$PROG: requested map: ${IRQ_MAP_REQUEST:-none}"
+	for rec in $IRQ_MAP_REQUEST; do
+		irq=${rec%%:*}
+		cpu=${rec#*:}
+		aff=$(read_affinity "$irq")
+		counts=$(irq_counts "$PROC_ROOT/interrupts" "$irq" 2>/dev/null || :)
+		perm=$(affinity_perm "$irq")
+		if contains_word "$irq" "$IRQ_WRITABLE"; then
+			writable=yes
+		else
+			writable=no
+		fi
+		say "  irq $irq requested_cpu=$cpu affinity=${aff:-unavailable} mode=${perm:-unavailable} writable=$writable counts=${counts:-unavailable}"
+	done
+	write_result_json
+	say "$PROG: read-only report complete (rc=0)"
 }
 
 report_plan() {
@@ -1263,7 +1563,7 @@ report_plan() {
 	say "$PROG: dry-run: no state is written and no traffic is sent"
 	say "$PROG: iface=${IFACE:-none} wiphy=${WIPHY:-none} iw=$([ "$IW_OK" -eq 1 ] && echo yes || echo no) mpstat=$([ "$MPSTAT_OK" -eq 1 ] && echo yes || echo no)"
 	say "$PROG: client=${CLIENT:-none} ip=${CLIENT_IP:-unavailable} mac=${CLIENT_MAC:-unavailable} station=$([ "$STATION_OK" -eq 1 ] && echo associated || echo missing)"
-	say "$PROG: source=$SOURCE_KIND bind_iface=${BIND_IFACE:-none} procs=$PROCS rate=$RATE window=$WINDOW warmup=$WARMUP source_secs=$SOURCE_SECS"
+	say "$PROG: source=$SOURCE_KIND bind_iface=${BIND_IFACE:-none} procs=$PROCS rate=$RATE window_ms=$WINDOW_MS window=$WINDOW warmup=$WARMUP source_secs=$SOURCE_SECS"
 	say "$PROG: cpus=$(printf '%s' "$CPUS" | tr ' ' ',')"
 	if [ "$IRQ_COUNT" -gt 0 ]; then
 		say "$PROG: candidate IRQs from $PROC_ROOT/interrupts:"
@@ -1272,7 +1572,7 @@ report_plan() {
 			aff=$(read_affinity "$irq")
 			counts=$(irq_counts "$PROC_ROOT/interrupts" "$irq")
 			if contains_word "$irq" "$IRQ_WRITABLE"; then
-				writable=mode-writable
+				writable='mode-writable'
 			else
 				writable=no
 			fi
@@ -1293,13 +1593,20 @@ EOF
 	else
 		say "$PROG: planned split: none (no writable candidate IRQ)"
 	fi
+	if [ -n "$SPLIT_TARGETS" ]; then
+		say "$PROG: split targets: $(printf '%s' "$SPLIT_TARGETS" | tr ' ' ',')"
+		say "$PROG: split basis: ${SPLIT_BASIS:-unavailable}"
+	fi
+	if [ "$IRQ_MAP_READONLY" -eq 1 ]; then
+		say "$PROG: requested --irq-map is read-only here: the run degrades to a read-only report"
+	fi
 	if [ -n "$IRQ_EXCLUDED" ]; then
 		say "$PROG: excluded IRQs: ${IRQ_EXCLUDED# }"
 	fi
 	if [ -n "$NAPI_PATH" ]; then
-		say "$PROG: napi_threaded=$NAPI_PATH value=${NAPI_SAVED:-unavailable} writable=$([ "$NAPI_WRITABLE" -eq 1 ] && echo yes || echo no) arm_value=$THREADED_VALUE"
+		say "$PROG: napi_threaded=$NAPI_PATH value=${NAPI_SAVED:-unavailable} writable=$([ "$NAPI_WRITABLE" -eq 1 ] && echo yes || echo no) baseline_threaded=$THREADED_BASELINE arm_value=$THREADED_VALUE arm_value_source=${THREADED_SOURCE:-unavailable}"
 	else
-		say "$PROG: napi_threaded: not found (threaded/combined arms will be skipped)"
+		say "$PROG: napi_threaded: not found (threaded/combined arms will be skipped) baseline_threaded=$THREADED_BASELINE arm_value=$THREADED_VALUE"
 	fi
 	say "$PROG: arms=$ARMS"
 	if [ "$MISSING_N" -gt 0 ]; then
@@ -1607,7 +1914,7 @@ measure_arm() {
 	if ! restore_state; then
 		note "$arm: could not restore the baseline state before the arm"
 		ARM_STATUS=fail
-		ARM_REASON=restore-before-arm
+		ARM_REASON='restore-before-arm'
 		return 1
 	fi
 	writes_start=$WRITE_COUNT
@@ -1627,7 +1934,7 @@ measure_arm() {
 				note "$arm: failed to pin irq $irq to cpu$cpu"
 				restore_state >/dev/null 2>&1 || :
 				ARM_STATUS=fail
-				ARM_REASON=affinity-write
+				ARM_REASON='affinity-write'
 				return 1
 			fi
 			APPLIED_SPLIT="$APPLIED_SPLIT $irq:$cpu"
@@ -1642,7 +1949,7 @@ measure_arm() {
 		if [ "$NAPI_WRITABLE" -ne 1 ] || [ -z "$NAPI_PATH" ]; then
 			[ "$arm" = combined ] && restore_state >/dev/null 2>&1 || :
 			ARM_STATUS=skipped
-			ARM_REASON=napi-not-writable
+			ARM_REASON='napi-not-writable'
 			return 2
 		fi
 		cur=$(read_napi_value 2>/dev/null || :)
@@ -1650,7 +1957,7 @@ measure_arm() {
 			note "$arm: failed to write napi_threaded=$THREADED_VALUE"
 			restore_state >/dev/null 2>&1 || :
 			ARM_STATUS=skipped
-			ARM_REASON=napi-write-failed
+			ARM_REASON='napi-write-failed'
 			return 2
 		fi
 		APPLIED_NAPI=$THREADED_VALUE
@@ -1669,7 +1976,7 @@ measure_arm() {
 	applied_state
 
 	start_source
-	sleep "$WARMUP"
+	sleep_ms "$WARMUP_MS"
 	if ! sources_alive; then
 		note "$arm: source process exited during warm-up"
 		stop_sources_quiet
@@ -1683,7 +1990,7 @@ measure_arm() {
 	local up_before
 	up_before=$(awk '{ print $1 }' "$PROC_ROOT/uptime" 2>/dev/null || :)
 	start_mpstat
-	sleep "$WINDOW"
+	sleep_ms "$WINDOW_MS"
 	stop_mpstat
 	local up_after
 	up_after=$(awk '{ print $1 }' "$PROC_ROOT/uptime" 2>/dev/null || :)
@@ -1702,12 +2009,17 @@ measure_arm() {
 	if [ "$SOURCE_EXIT" = lingering ]; then
 		note "$arm: a source ignored SOURCE_SECS and had to be killed"
 	fi
-	WINDOW_S=$(awk -v a="$up_before" -v b="$up_after" \
-		'BEGIN { if (a != "" && b != "" && b >= a) printf "%.2f", b - a; else print "0" }')
-	# The value above is "%.2f", so a string compare against 0 never matched
-	# and WINDOW_S stayed "0.00"; every later rate divided by it.  Compare
-	# numerically and fall back to the requested window when it is zero.
-	awk -v s="$WINDOW_S" 'BEGIN { exit !(s + 0 > 0) }' || WINDOW_S=$WINDOW
+	# The measured window is the /proc/uptime delta in whole milliseconds.
+	# It is an integer, so no rate below can divide by a "0.00" string, and a
+	# zero delta (an arm that died early) falls back to the requested window.
+	WINDOW_MS_MEASURED=$(awk -v a="$up_before" -v b="$up_after" -v w="$WINDOW_MS" '
+		BEGIN {
+			if (a == "" || b == "" || b + 0 <= a + 0) { printf "%d", w; exit }
+			ms = int((b - a) * 1000)
+			printf "%d", ms < 1 ? w : ms
+		}')
+	is_uint "$WINDOW_MS_MEASURED" && [ "$WINDOW_MS_MEASURED" -ge 1 ] ||
+		WINDOW_MS_MEASURED=$WINDOW_MS
 
 	collect_arm
 	if [ "$AP_TX_DELTA_BYTES" = unavailable ]; then
@@ -1790,8 +2102,8 @@ collect_arm() {
 				'BEGIN { printf "%.2f", r * 100 / p }')
 		fi
 		if is_uint "$AP_TX_DELTA_BYTES" && [ "$AP_TX_DELTA_BYTES" -gt 0 ]; then
-			GBPS=$(awk -v b="$AP_TX_DELTA_BYTES" -v s="$WINDOW_S" \
-				'BEGIN { printf "%.3f", b * 8 / s / 1000000000 }')
+			GBPS=$(awk -v b="$AP_TX_DELTA_BYTES" -v ms="$WINDOW_MS_MEASURED" \
+				'BEGIN { printf "%.3f", b * 8000 / ms / 1000000000 }')
 		fi
 		CLIENT_SIGNAL=$(field_or_unavail \
 			"$(sta_field "$as" "$CLIENT_MAC" "signal:")")
@@ -1808,8 +2120,8 @@ collect_arm() {
 		"$(read_uint_file "$ARM_DIR/iface_tx_packets.before")" \
 		"$(read_uint_file "$ARM_DIR/iface_tx_packets.after")")
 	if [ "$IFACE_TX_DELTA_BYTES" -gt 0 ]; then
-		IFACE_GBPS=$(awk -v b="$IFACE_TX_DELTA_BYTES" -v s="$WINDOW_S" \
-			'BEGIN { printf "%.3f", b * 8 / s / 1000000000 }')
+		IFACE_GBPS=$(awk -v b="$IFACE_TX_DELTA_BYTES" -v ms="$WINDOW_MS_MEASURED" \
+			'BEGIN { printf "%.3f", b * 8000 / ms / 1000000000 }')
 	fi
 
 	SOFTIRQ_NET_TX_DELTA=$(delta_uint \
@@ -1852,7 +2164,7 @@ print_arm_summary() {
 
 	s="arm=$CURRENT_ARM status=$ARM_STATUS"
 	[ -n "$ARM_REASON" ] && s="$s reason=$ARM_REASON"
-	s="$s window=$WINDOW_S warmup=$WARMUP procs=$PROCS rate=$RATE"
+	s="$s window_ms=$WINDOW_MS_MEASURED requested_window_ms=$WINDOW_MS warmup=$WARMUP procs=$PROCS rate=$RATE"
 	s="$s iface=${IFACE:-none} client_ip=${CLIENT_IP:-unavailable}"
 	s="$s client_mac=${CLIENT_MAC:-unavailable} source=$SOURCE_KIND"
 	s="$s bind_iface=${BIND_IFACE:-none}"
@@ -1902,9 +2214,132 @@ $IRQ_RECORDS
 EOF
 	say ""
 
-	RESULT_RECORDS="$RESULT_RECORDS$CURRENT_ARM|$GBPS|$AP_TX_RETRIES_DELTA|${SOFTIRQ_PCT_PERCPU:-none}|$SOFTIRQ_NET_TX_DELTA|$SOFTIRQ_NET_RX_DELTA
+	RESULT_RECORDS="$RESULT_RECORDS$CURRENT_ARM|$GBPS|$AP_TX_RETRIES_DELTA|${SOFTIRQ_PCT_PERCPU:-none}|$SOFTIRQ_NET_TX_DELTA|$SOFTIRQ_NET_RX_DELTA|$ARM_STATUS|${ARM_REASON:-none}|$WINDOW_MS_MEASURED|${APPLIED_NAPI:-none}|${APPLIED_SPLIT:-none}|$AP_TX_DELTA_BYTES|$AP_TX_DELTA_PACKETS
 "
 }
+
+# ------------------------------------------------------------ result.json
+
+json_str() {
+	awk -v s="${1-}" 'BEGIN {
+		gsub(/\\/, "\\\\", s)
+		gsub(/"/, "\\\"", s)
+		gsub(/[\t\r\n]/, " ", s)
+		printf "%s", s
+	}'
+}
+
+irq_json_records() {
+	local irq name action aff perm counts writable sep=''
+
+	while IFS='|' read -r irq name action; do
+		[ -n "$irq" ] || continue
+		aff=$(read_affinity "$irq")
+		perm=$(affinity_perm "$irq")
+		counts=$(irq_counts "$PROC_ROOT/interrupts" "$irq" 2>/dev/null || :)
+		if contains_word "$irq" "$IRQ_WRITABLE"; then
+			writable=true
+		else
+			writable=false
+		fi
+		printf '%s    {"irq": "%s", "name": "%s", "action": "%s", "affinity": "%s", "mode": "%s", "writable": %s, "counts": "%s"}' \
+			"$sep" "$irq" "$(json_str "$name")" "$(json_str "$action")" \
+			"${aff:-unavailable}" "${perm:-unavailable}" "$writable" \
+			"${counts:-unavailable}"
+		echo
+		sep=','
+	done <<EOF2
+$IRQ_RECORDS
+EOF2
+}
+
+arm_json_records() {
+	local arm gbps retries soft nettx netrx status reason wms napi split tdx tdp sep=''
+
+	while IFS='|' read -r arm gbps retries soft nettx netrx status reason wms napi split tdx tdp; do
+		[ -n "$arm" ] || continue
+		printf '%s    {"arm": "%s", "status": "%s", "reason": "%s", "window_ms": %s, "gbps": "%s", "retries": "%s", "soft_pct_percpu": "%s", "net_tx": "%s", "net_rx": "%s", "tx_delta_bytes": "%s", "tx_delta_packets": "%s", "napi_threaded": "%s", "split_map": "%s"}' \
+			"$sep" "$arm" "$status" "$reason" "${wms:-0}" "$gbps" "$retries" \
+			"$soft" "$nettx" "$netrx" "${tdx:-unavailable}" "${tdp:-unavailable}" \
+			"$napi" "$split"
+		echo
+		sep=','
+	done <<EOF3
+$RESULT_RECORDS
+EOF3
+}
+
+# One machine-readable file per invocation, so a reader does not have to parse
+# the arm= summary lines to see which CPU was chosen, whether the threaded
+# contrast was real, and what each arm measured.
+write_result_json() {
+	local mode arms_file irqs_file
+
+	[ -n "$OUT_DIR" ] || return 0
+	mkdir -p "$OUT_DIR" 2>/dev/null || {
+		note "cannot create $OUT_DIR for result.json"
+		return 1
+	}
+	if [ "$IRQ_MAP_READONLY" -eq 1 ]; then
+		mode=read-only
+	elif [ "$RUN" -eq 1 ]; then
+		mode=run
+	else
+		mode=dry-run
+	fi
+	arms_file=$OUT_DIR/result.arms.json
+	irqs_file=$OUT_DIR/result.irqs.json
+	arm_json_records >"$arms_file" 2>/dev/null || :
+	irq_json_records >"$irqs_file" 2>/dev/null || :
+	{
+		printf '{\n'
+		printf '  "mode": "%s",\n' "$mode"
+		printf '  "iface": "%s",\n' "$(json_str "${IFACE:-}")"
+		printf '  "client": "%s",\n' "$(json_str "${CLIENT:-}")"
+		printf '  "client_ip": "%s",\n' "${CLIENT_IP:-unavailable}"
+		printf '  "client_mac": "%s",\n' "${CLIENT_MAC:-unavailable}"
+		printf '  "window_ms": %s,\n' "${WINDOW_MS:-0}"
+		printf '  "window_s_source": %s,\n' "${WINDOW:-0}"
+		printf '  "warmup_s": %s,\n' "${WARMUP:-0}"
+		printf '  "procs": %s,\n' "${PROCS:-0}"
+		printf '  "rate_mbps": %s,\n' "${RATE:-0}"
+		printf '  "source_kind": "%s",\n' "${SOURCE_KIND:-unknown}"
+		printf '  "cpus": "%s",\n' "$(printf '%s' "${CPUS:-}" | tr ' ' ',')"
+		printf '  "split_targets": "%s",\n' "$(printf '%s' "${SPLIT_TARGETS:-}" | tr ' ' ',')"
+		printf '  "split_chosen_cpu": "%s",\n' "${SPLIT_CHOSEN_CPU:-none}"
+		printf '  "split_basis": "%s",\n' "$(json_str "${SPLIT_BASIS:-unavailable}")"
+		printf '  "split_map": "%s",\n' "${SPLIT_MAP:-none}"
+		printf '  "irq_map_request": "%s",\n' "${IRQ_MAP_REQUEST:-none}"
+		printf '  "irq_map_readonly": %s,\n' "$IRQ_MAP_READONLY"
+		printf '  "irq_excluded": "%s",\n' "$(json_str "${IRQ_EXCLUDED# }")"
+		printf '  "napi_path": "%s",\n' "$(json_str "${NAPI_PATH:-}")"
+		printf '  "napi_param": "%s",\n' "$(json_str "${NAPI_PARAM:-}")"
+		printf '  "baseline_threaded": "%s",\n' "$THREADED_BASELINE"
+		printf '  "threaded_value": "%s",\n' "${THREADED_VALUE:-}"
+		printf '  "threaded_source": "%s",\n' "${THREADED_SOURCE:-unavailable}"
+		printf '  "napi_writable": %s,\n' "$NAPI_WRITABLE"
+		printf '  "arms_requested": "%s",\n' "$(printf '%s' "$ARMS" | tr ' ' ',')"
+		printf '  "restore": "%s",\n' "$([ "$RESTORE_FAILED" -eq 0 ] && echo ok || echo failed)"
+		if [ -s "$irqs_file" ]; then
+			printf '  "irqs": [\n'
+			cat "$irqs_file"
+			printf '  ],\n'
+		else
+			printf '  "irqs": [],\n'
+		fi
+		if [ -s "$arms_file" ]; then
+			printf '  "arms": [\n'
+			cat "$arms_file"
+			printf '  ]\n'
+		else
+			printf '  "arms": []\n'
+		fi
+		printf '}\n'
+	} >"$OUT_DIR/result.json"
+	rm -f "$arms_file" "$irqs_file"
+	say "result: $OUT_DIR/result.json"
+}
+
 
 affinity_of() {
 	local rec
@@ -1919,19 +2354,26 @@ affinity_of() {
 }
 
 print_results() {
-	local rec arm gbps retries soft nettx netrx
+	local arm gbps retries soft nettx netrx status reason wms napi split
+	local tdx tdp
 
-	[ -n "$RESULT_RECORDS" ] || return 0
-	say "$PROG: results (station tx bytes over the measured window)"
-	printf '%-10s %8s %9s %-28s %12s %12s\n' \
-		arm gbps retries "soft% per cpu" net_tx net_rx
-	while IFS='|' read -r arm gbps retries soft nettx netrx; do
-		[ -n "$arm" ] || continue
-		printf '%-10s %8s %9s %-28s %12s %12s\n' \
-			"$arm" "$gbps" "$retries" "$soft" "$nettx" "$netrx"
-	done <<EOF
+	if [ -n "$RESULT_RECORDS" ]; then
+		say "$PROG: results (station tx bytes over the measured window)"
+		printf '%-10s %8s %9s %-28s %12s %12s %-8s\n' \
+			arm gbps retries "soft% per cpu" net_tx net_rx status
+		while IFS='|' read -r arm gbps retries soft nettx netrx status \
+			reason wms napi split tdx tdp; do
+			[ -n "$arm" ] || continue
+			printf '%-10s %8s %9s %-28s %12s %12s %-8s\n' \
+				"$arm" "$gbps" "$retries" "$soft" "$nettx" "$netrx" \
+				"$status"
+		done <<EOF
 $RESULT_RECORDS
 EOF
+	else
+		say "$PROG: results: no arm produced a measurement"
+	fi
+	write_result_json || note "could not write result.json"
 }
 
 # -------------------------------------------------------------------- run
@@ -1952,10 +2394,18 @@ run_all() {
 		printf 'cpus=%s\n' "$CPUS"
 		printf 'irq_names=%s\n' "$IRQ_NAMES"
 		printf 'napi_path=%s napi_before=%s\n' "${NAPI_PATH:-}" "${NAPI_SAVED:-}"
-		printf 'arms=%s window=%s warmup=%s procs=%s rate=%s\n' \
-			"$ARMS" "$WINDOW" "$WARMUP" "$PROCS" "$RATE"
+		printf 'arms=%s window_ms=%s window_s=%s warmup=%s procs=%s rate=%s\n' \
+			"$ARMS" "$WINDOW_MS" "$WINDOW" "$WARMUP" "$PROCS" "$RATE"
+		printf 'split_targets=%s split_chosen_cpu=%s\n' \
+			"$(printf '%s' "$SPLIT_TARGETS" | tr ' ' ',')" \
+			"${SPLIT_CHOSEN_CPU:-none}"
+		printf 'split_basis=%s\n' "${SPLIT_BASIS:-unavailable}"
+		printf 'baseline_threaded=%s threaded_value=%s threaded_source=%s\n' \
+			"$THREADED_BASELINE" "${THREADED_VALUE:-}" \
+			"${THREADED_SOURCE:-unavailable}"
 		printf 'source_kind=%s source=%s\n' "$SOURCE_KIND" "$SOURCE"
-		printf 'proc_root=%s debugfs_root=%s\n' "$PROC_ROOT" "$DEBUGFS_ROOT"
+		printf 'proc_root=%s debugfs_root=%s irq_map_readonly=%s\n' \
+			"$PROC_ROOT" "$DEBUGFS_ROOT" "$IRQ_MAP_READONLY"
 	} > "$OUT_DIR/run.info" 2>/dev/null || :
 
 	trap 'on_exit' EXIT
@@ -2024,6 +2474,16 @@ cleanup_temps() {
 main() {
 	parse_args "$@"
 	preflight
+	resolve_threaded_value
+
+	# --irq-map named an IRQ this kernel keeps read-only (the mt7996e
+	# managed lines): report every requested IRQ and stop with rc=0
+	# instead of refusing the whole invocation.
+	if [ "$IRQ_MAP_READONLY" -eq 1 ]; then
+		report_irq_map_readonly
+		note "nothing was written; read-only map report done"
+		exit 0
+	fi
 
 	if [ "$RUN" -ne 1 ]; then
 		trap cleanup_temps EXIT

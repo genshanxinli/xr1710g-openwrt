@@ -216,6 +216,14 @@ CYCLES_HEADER='time,epoch,elapsed_s,leg,iface,client,cycle,ok,assoc,throughput_m
 THROTTLE_RE='throttl|thermal.*(trip|critical|hot)|over.?temp|temperature.*(high|critical)|cpufreq.*(cool|limit)|cooling.*(state|device)'
 SER_RE='SER recovery|system error recovery|chip full reset|HW recovery|fw recovery|firmware recovery|firmware.*(assert|failed|timeout)|Timeout for (initializing )?firmware'
 
+# iperf3 failure classes.  A cycle that fails while the station is still
+# associated is an outage only when iperf3's stderr names an unreachable
+# target; iperf3's own transient errors (an interrupted run, a control-socket
+# reset, a server that quit) are failures.  Counting every non-zero iperf3
+# exit as an outage is what reported outages=18 with an empty events.log.
+IPERF_OUTAGE_RE='unable to connect|No route to host|Network is unreachable|Connection timed out|Connection refused|host is down|connection reset by peer'
+IPERF_TRANSIENT_RE='interrupted|control socket|segmentation|did not finish|server has terminated'
+
 # ---------------------------------------------------------------------------
 # Small helpers.
 # ---------------------------------------------------------------------------
@@ -392,6 +400,13 @@ Output (all modes):
   events.log            holds, reconnects, SER lines, throttle lines, errors.
   ser.log               new firmware recovery dmesg lines.
   summary.txt           final curve/soak summary and restore proof.
+  result.json           machine-readable summary: per leg cycles, ok,
+                        failures and outages as separate counters, SER and
+                        throttle counts, reboots and the hold before/after.
+                        An outage is association loss or a cycle whose
+                        target iperf3 could not reach; an iperf3 transient
+                        error (interrupted run, closed control socket) is a
+                        failure and does not count as an outage.
 
 Examples:
   sh thermal-soak.sh --thermal --duration 60 --dry-run
@@ -1731,6 +1746,7 @@ leg_loop() {
 
 		ok=0
 		err=
+		outage_col=
 		if [ "$rc" -eq 0 ] && [ "$src" = iperf ]; then
 			ok=1
 		else
@@ -1740,12 +1756,25 @@ leg_loop() {
 			[ -n "$err" ] || err="iperf3 rc=$rc"
 			err=$(csv_clean "$err")
 			echo "[$(iso_utc)] leg $leg cycle $cycle failed: $err" >>"$RUN/events.log"
+			# An associated station that iperf3 could not reach is an
+			# outage for the measured cycle; a transient iperf3 error is
+			# a failure only.  Both stay in cycles-$leg.csv: the outage
+			# column carries the seconds, ok=0 carries the failure.
+			if [ "$assoc" -eq 1 ] && [ "$rc" -ne 0 ] && [ -s "$ef" ] &&
+				grep -Eqi "$IPERF_OUTAGE_RE" "$ef"; then
+				outage_col=$secs
+				echo "[$(iso_utc)] leg $leg cycle $cycle outage: target unreachable (${secs}s)" \
+					>>"$RUN/events.log"
+			elif [ -s "$ef" ] && grep -Eqi "$IPERF_TRANSIENT_RE" "$ef"; then
+				echo "[$(iso_utc)] leg $leg cycle $cycle iperf3 transient; failure only, not an outage" \
+					>>"$RUN/events.log"
+			fi
 		fi
 
 		append_cycle "$(iso_utc)" "$post_time" "$((post_time - START_EPOCH))" \
 			"$leg" "$iface" "$mac" "$cycle" "$ok" "$assoc" \
 			"$throughput" "$src" "$secs" "$retries" "$pkts" "$failed" \
-			"$per" "$retry_pct" "" "$err" "$RUN_ID"
+			"$per" "$retry_pct" "$outage_col" "$err" "$RUN_ID"
 
 		if [ "$ok" -eq 1 ]; then
 			rm -f "$jf" "$ef"
@@ -1936,18 +1965,17 @@ cycles_summary() {
 				r = num($13); if (r != "") retries += r
 				p = num($14); if (p != "") pkts += p
 				f = num($15); if (f != "") failed += f
-			} else {
-				# Only a row that recorded association-loss seconds is
-				# an outage.  A cycle that failed while the station
-				# stayed associated is an iperf3/source failure and used
-				# to be counted here too, which reported outages with an
-				# empty events.log.
-				o = num($18); if (o != "" && o > 0) { outages++; outage += o }
 			}
+			# Only a row that recorded outage seconds is an outage: a
+			# station-loss row always does, and a failed cycle only when
+			# iperf3 said the target was unreachable.  A cycle that
+			# failed while the station stayed associated used to count
+			# here too, which reported outages with an empty events.log.
+			o = num($18); if (o != "" && o > 0) { outages++; outage += o }
 			if ($11 == "sta") stas++
 		}
 		END {
-			printf "leg %s: cycles=%d ok=%d fail=%d", leg, c, ok, bad
+			printf "leg %s: cycles=%d ok=%d failures=%d", leg, c, ok, bad
 			if (qn) printf " avg=%.1f Mbps max=%.1f", qsum / qn, qmax
 			else printf " avg=na max=na"
 			printf " seconds=%d retries=%d tx_packets=%d tx_failed=%d", secs, retries, pkts, failed
@@ -1959,6 +1987,110 @@ cycles_summary() {
 			printf "\n"
 		}
 	' "$file"
+}
+
+# ---------------------------------------------------------------------------
+# result.json.  The summary above is for reading; this file is for a script
+# that has to tell "the soak lost the station" from "iperf3 timed out".  The
+# two counters are separate on purpose: 18 iperf3 transient failures are not
+# 18 outages.
+# ---------------------------------------------------------------------------
+json_str() {
+	awk -v s="${1-}" 'BEGIN {
+		gsub(/\\/, "\\\\", s)
+		gsub(/"/, "\\\"", s)
+		gsub(/[\t\r\n]/, " ", s)
+		printf "%s", s
+	}'
+}
+
+leg_json() {
+	# $1 leg; prints one "a": {...} JSON member, or nothing without rows.
+	[ -f "$RUN/cycles-$1.csv" ] || return 1
+	awk -F, -v leg="$1" -v run="$RUN_ID" '
+		function num(v) { return v ~ /^-?[0-9]+(\.[0-9]+)?$/ ? v + 0 : "" }
+		NR == 1 { next }
+		$20 != run { next }
+		NF >= 19 {
+			c++
+			if ($8 == 1) {
+				ok++
+				v = num($10)
+				if (v != "") { qsum += v; qn++; if (qn == 1 || v > qmax) qmax = v }
+				s = num($12); if (s != "") secs += s
+			} else {
+				failures++
+			}
+			o = num($18); if (o != "" && o > 0) { outages++; outage += o }
+			if ($9 == 1) {
+				r = num($13); if (r != "") rsum += r
+				p = num($14); if (p != "") psum += p
+				f = num($15); if (f != "") fsum += f
+			}
+			if ($11 == "sta") stas++
+		}
+		END {
+			if (c == 0) exit 1
+			avg = qn ? sprintf("%.3f", qsum / qn) : "null"
+			pmax = qn ? sprintf("%.3f", qmax) : "null"
+			per = psum > 0 ? sprintf("%.3f", 100 * fsum / psum) : "null"
+			pret = psum > 0 ? sprintf("%.3f", 100 * rsum / psum) : "null"
+			printf "\"%s\": {\"cycles\": %d, \"ok\": %d, \"failures\": %d, \"outages\": %d, \"outage_s\": %d, \"seconds\": %d, \"retries\": %d, \"tx_packets\": %d, \"tx_failed\": %d, \"per_pct\": %s, \"retry_pct\": %s, \"avg_mbps\": %s, \"max_mbps\": %s, \"sta_fallback\": %d}", \
+				leg, c, ok, failures, outages, outage, secs, rsum, psum, fsum, \
+				per, pret, avg, pmax, stas
+		}
+	' "$RUN/cycles-$1.csv"
+}
+
+write_result_json() {
+	[ -n "$RUN" ] && [ -d "$RUN" ] || return 0
+	_legfile=$RUN/result.legs.json
+	: >"$_legfile"
+	_first=1
+	for _leg in a b; do
+		_obj=$(leg_json "$_leg" 2>/dev/null || true)
+		[ -n "$_obj" ] || continue
+		if [ "$_first" -eq 1 ]; then
+			_first=0
+		else
+			printf ',\n' >>"$_legfile"
+		fi
+		printf '    %s' "$_obj" >>"$_legfile"
+	done
+	{
+		printf '{\n'
+		printf '  "mode": "%s",\n' "$MODE"
+		printf '  "run": "%s",\n' "$RUN_ID"
+		printf '  "duration_s": %s,\n' "$DURATION"
+		printf '  "window_s": %s,\n' "$(summary_window "$RUN/sensors.csv" "$RUN_ID")"
+		printf '  "samples": %s,\n' "${SAMPLES:-0}"
+		printf '  "interval_s": %s,\n' "$INTERVAL"
+		printf '  "iperf_time_s": %s,\n' "$IPERF_TIME"
+		printf '  "iperf_gap_s": %s,\n' "$IPERF_GAP"
+		printf '  "streams": %s,\n' "$STREAMS"
+		printf '  "direction": "%s",\n' "$DIRECTION"
+		printf '  "cpu_load_pct": %s,\n' "$CPU_LOAD"
+		printf '  "iface_a": "%s",\n' "$(json_str "${IFACE_A-}")"
+		printf '  "iface_b": "%s",\n' "$(json_str "${IFACE_B-}")"
+		printf '  "client_ip_a": "%s",\n' "$(json_str "${IP_A-}")"
+		printf '  "client_ip_b": "%s",\n' "$(json_str "${IP_B-}")"
+		printf '  "ser_total": %s,\n' "$SER_TOTAL"
+		printf '  "throttle_dmesg": %s,\n' "$THR_DMESG_TOTAL"
+		printf '  "reboots": %s,\n' "${REBOOTS:-0}"
+		printf '  "hold": {"before": "%s", "after": "%s"},\n' \
+			"$(json_str "${HOLD_PRIOR:-unknown}")" "$(nw_hold_state)"
+		printf '  "reason": "%s",\n' "${INTERRUPTED:+signal:}${INTERRUPTED:-duration}"
+		printf '  "legs": {'
+		if [ -s "$_legfile" ]; then
+			printf '\n'
+			cat "$_legfile"
+			printf '\n  }'
+		else
+			printf '}'
+		fi
+		printf '\n}\n'
+	} >"$RUN/result.json"
+	rm -f "$_legfile"
 }
 
 soak_summary() {
@@ -2038,6 +2170,7 @@ write_summary() {
 		printf 'data: %s\n' "$RUN"
 	} >"$RUN/summary.txt"
 	cat "$RUN/summary.txt"
+	write_result_json
 
 	printf 'run=%s end=%s reason=%s samples=%s new_ser=%s\n' \
 		"$RUN_ID" "$(iso_utc)" "$reason" "$SAMPLES" "$SER_TOTAL" >>"$RUN/runs.log"
