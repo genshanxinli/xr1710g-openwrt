@@ -1,0 +1,154 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Subject: [PATCH] wifi: mt76: skip the redundant NPU TX linearize (opt-in)
+
+The NPU TX descriptor (struct airoha_npu_tx_dma_desc, airoha_offload.h)
+carries one u32 address and one length field (NPU_TX_DMA_DESC_LEN_MASK,
+GENMASK(30, 18), 13 bits).  It has no fragment list, no "last buffer" bit
+and no chain pointer, unlike the RX descriptor, which has both
+NPU_RX_DMA_DESC_LAST_MASK and NPU_RX_DMA_PKT_COUNT_MASK to describe a
+frame spread over several descriptors.  The descriptor cannot gather.
+
+So dma.c has to keep the frame contiguous before it reaches the NPU and
+a nonlinear skb still needs skb_linearize().  What is left is the call
+itself: skb_linearize() is a no-op for an already linear skb, and it is
+the only thing this patch removes from that path, behind an opt-in
+npu_tx_sg module parameter (default 0, which keeps the current call).
+
+Add per-device NPU TX accounting, readable through a new read-only
+"npu-tx" debugfs file, so the actual linearize rate of a live system can
+be measured before any descriptor or firmware change is attempted:
+passthrough (already linear, no copy), linearized (frags copied),
+linearize_failed (ENOMEM, frame dropped) and oversize (skb->len above
+the descriptor length field, which FIELD_PREP() truncates today).
+
+npu_tx_sg=0 runs the same skb_linearize() call as before; the only added
+work in that mode is the counting.
+
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/dma.c
++++ b/dma.c
+@@ -8,6 +8,37 @@
+ #include "dma.h"
+ #include "mt76_connac.h"
+ 
++/* FIELD_MAX(NPU_TX_DMA_DESC_LEN_MASK) from airoha_offload.h: the NPU TX
++ * descriptor length field is 13 bits wide.
++ */
++#define NPU_TX_MAX_FRAME_LEN	0x1fff
++
++bool npu_tx_sg;
++module_param(npu_tx_sg, bool, 0644);
++MODULE_PARM_DESC(npu_tx_sg,
++		 "Skip the redundant skb_linearize() call on already linear NPU TX frames (default: off)");
++
++/* The NPU TX descriptor (struct airoha_npu_tx_dma_desc) carries one address
++ * plus one length field, so the NPU cannot gather fragments: a nonlinear skb
++ * still has to be copied into a single contiguous buffer. npu_tx_sg only
++ * avoids the linearize call when there is nothing to copy.
++ */
++static int mt76_npu_tx_prepare(struct mt76_dev *dev, struct sk_buff *skb)
++{
++	if (npu_tx_sg && !skb_is_nonlinear(skb))
++		atomic64_inc(&dev->npu_tx.passthrough);
++	else if (skb_linearize(skb)) {
++		atomic64_inc(&dev->npu_tx.linearize_failed);
++		return -ENOMEM;
++	} else
++		atomic64_inc(&dev->npu_tx.linearized);
++
++	if (skb->len > NPU_TX_MAX_FRAME_LEN)
++		atomic64_inc(&dev->npu_tx.oversize);
++
++	return 0;
++}
++
+ static struct mt76_txwi_cache *
+ mt76_alloc_txwi(struct mt76_dev *dev)
+ {
+@@ -685,8 +716,10 @@
+ 	if (test_bit(MT76_RESET, &phy->state))
+ 		goto free_skb;
+ 
+-	/* TODO: Take into account unlinear skbs */
+-	if (mt76_npu_device_active(dev) && skb_linearize(skb))
++	/* The NPU TX descriptor has a single address and a single length, so
++	 * the frame must be contiguous before it is handed to the NPU.
++	 */
++	if (mt76_npu_device_active(dev) && mt76_npu_tx_prepare(dev, skb))
+ 		goto free_skb;
+ 
+ 	t = mt76_get_txwi(dev);
+--- a/debugfs.c
++++ b/debugfs.c
+@@ -160,6 +160,23 @@
+ DEFINE_DEBUGFS_ATTRIBUTE(fops_non_aql_limit, mt76_non_aql_limit_get,
+ 			 mt76_non_aql_limit_set, "%llu\n");
+ 
++static int mt76_npu_tx_read(struct seq_file *s, void *data)
++{
++	struct mt76_dev *dev = dev_get_drvdata(s->private);
++
++	seq_printf(s, "npu_tx_sg: %d\n", npu_tx_sg);
++	seq_printf(s, "passthrough: %llu\n",
++		   (unsigned long long)atomic64_read(&dev->npu_tx.passthrough));
++	seq_printf(s, "linearized: %llu\n",
++		   (unsigned long long)atomic64_read(&dev->npu_tx.linearized));
++	seq_printf(s, "linearize_failed: %llu\n",
++		   (unsigned long long)atomic64_read(&dev->npu_tx.linearize_failed));
++	seq_printf(s, "oversize: %llu\n",
++		   (unsigned long long)atomic64_read(&dev->npu_tx.oversize));
++
++	return 0;
++}
++
+ struct dentry *
+ mt76_register_debugfs_fops(struct mt76_phy *phy,
+ 			   const struct file_operations *ops)
+@@ -182,6 +199,8 @@
+ 				    mt76_rx_queues_read);
+ 	debugfs_create_devm_seqfile(dev->dev, "tx_burst", dir,
+ 				    mt76_tx_burst_read);
++	debugfs_create_devm_seqfile(dev->dev, "npu-tx", dir,
++				    mt76_npu_tx_read);
+ 	debugfs_create_file_unsafe("non_aql_limit", 0600, dir, dev,
+ 				   &fops_non_aql_limit);
+ 
+--- a/mt76.h
++++ b/mt76.h
+@@ -755,6 +755,17 @@
+ 	int npu_type;
+ };
+ 
++/* NPU TX accounting, read by the mt76 "npu-tx" debugfs file. The NPU TX
++ * descriptor holds one address and one length, so it cannot gather
++ * fragments: a nonlinear skb always has to be linearized.
++ */
++struct mt76_npu_tx_stats {
++	atomic64_t passthrough;
++	atomic64_t linearized;
++	atomic64_t linearize_failed;
++	atomic64_t oversize;
++};
++
+ struct mt76_rx_status {
+ 	union {
+ 		struct mt76_wcid *wcid;
+@@ -1095,6 +1106,8 @@
+ 	};
+ 
+ 	atomic_t bus_hung;
++
++	struct mt76_npu_tx_stats npu_tx;
+ };
+ 
+ static inline unsigned int
+@@ -1728,6 +1741,8 @@
+ int mt76_testmode_set_state(struct mt76_phy *phy, enum mt76_testmode_state state);
+ int mt76_testmode_alloc_skb(struct mt76_phy *phy, u32 len);
+ 
++extern bool npu_tx_sg;
++
+ #ifdef CONFIG_MT76_NPU
+ void mt76_npu_check_ppe(struct mt76_dev *dev, struct sk_buff *skb,
+ 			u32 info);
