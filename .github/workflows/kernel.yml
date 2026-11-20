@@ -1,4 +1,5 @@
 name: Build Kernel
+# push covers protected branches only; PR branches are covered by pull_request.
 
 on:
   pull_request:
@@ -17,8 +18,10 @@ on:
       - 'include/kernel*'
       - 'package/kernel/**'
       - 'target/linux/**'
-    branches-ignore:
-      - master
+    branches:
+      - xr1710g
+      - kernel73
+      - kernel74
   workflow_dispatch:
 
 permissions:

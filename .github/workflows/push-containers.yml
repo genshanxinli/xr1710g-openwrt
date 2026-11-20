@@ -1,4 +1,5 @@
 name: Build and Push prebuilt tools container
+# push covers protected branches only; PR branches are covered by pull_request.
 
 on:
   push:
@@ -8,8 +9,10 @@ on:
       - 'tools/**'
       - '.github/workflows/push-containers.yml'
       - 'toolchain/**'
-    branches-ignore:
-      - master
+    branches:
+      - xr1710g
+      - kernel73
+      - kernel74
 
 permissions:
   contents: read
