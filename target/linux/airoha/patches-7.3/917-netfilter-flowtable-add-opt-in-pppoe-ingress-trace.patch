@@ -29,9 +29,11 @@ Collect with:
   trace-cmd record -e nf_flow_table:nf_flow_pppoe
   trace-cmd report
 
-This needs a kernel built with CONFIG_FTRACE (CONFIG_KERNEL_FTRACE=y in
-OpenWrt); the default airoha kernel has tracing off and compiles the
-tracepoint out.
+This needs a kernel built with CONFIG_TRACEPOINTS.  The airoha/an7581
+target now gets it from CONFIG_KERNEL_FTRACE=y plus
+CONFIG_KERNEL_ENABLE_DEFAULT_TRACERS=y (config/Config-kernel.in); a kernel
+built without tracing still compiles the event and its three call sites
+out.
 
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---

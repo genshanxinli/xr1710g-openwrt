@@ -217,3 +217,15 @@ claims:
     date: "2026-11-20"
     status: supported
     notes: "2026-11-20 04:38 UTC 在 r38047-a86ce12e27 上一条 SSH 内顺序执行 nft list flowtables / ls brif / fw4 print 得到；设备是共享机，别人 wifi reload 会改变 vif 集合，所以复测要在同一时刻取三份输出。日志侧有同批 reload already in progress, giving up，说明放弃的重载没有补跑。"
+
+  - id: nf-flow-pppoe-trace-compiled
+    claim: "airoha/an7581 的默认 7.3 内核现在会编入 nf_flow_pppoe tracepoint：config/Config-kernel.in 给 KERNEL_FTRACE 和 KERNEL_ENABLE_DEFAULT_TRACERS 加了 default y if TARGET_airoha_an7581，生成的 linux-7.3/.config 有 CONFIG_TRACEPOINTS=y，net/netfilter/nf_flow_table_ip.o 里有 __tracepoint_nf_flow_pppoe；同一份源码在改之前的 tracing-off 配置下该符号为 0。"
+    source:
+      - config/Config-kernel.in:377
+      - config/Config-kernel.in:400
+      - target/linux/airoha/patches-7.3/917-netfilter-flowtable-add-opt-in-pppoe-ingress-trace.patch:104
+      - https://github.com/genshanxinli/xr1710g-openwrt/issues/60
+    evidence: 实测
+    date: "2026-11-20"
+    status: supported
+    notes: "实测只到编译产物：干净 defconfig 得到 CONFIG_KERNEL_FTRACE=y 与 CONFIG_KERNEL_ENABLE_DEFAULT_TRACERS=y，内核 .config 有 CONFIG_TRACEPOINTS=y，nm 目标文件有 15 个 nf_flow_pppoe 符号；未验证：现网 r38047 镜像仍是 tracing-off，本机没有 PPPoE 会话（wan proto=dhcp，/proc/net/pppoe 0 条），从未采到真实 PPPoE 入向事件，available_events 要等新镜像启动后才会有该事件。"
