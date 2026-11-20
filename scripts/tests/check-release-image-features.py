@@ -148,7 +148,8 @@ def make_repo(root: Path, patches: bool = True, bad_patches: bool = False) -> Pa
 
 def make_build(root: Path, source: str = SOURCE_968_974, header: str = HEADER_BQL,
                stale: bool = False, bql_symbols: bool = True,
-               image_before_vmlinux: bool = False) -> Path:
+               image_before_vmlinux: bool = False,
+               vmlinux_version: str | None = None) -> Path:
     if CC is None:
         raise RuntimeError("a C compiler is needed for the build fixture")
     build = root / "build"
@@ -166,7 +167,15 @@ def make_build(root: Path, source: str = SOURCE_968_974, header: str = HEADER_BQ
     flags = ["-O2", "-g", "-c"]
     subprocess.run([CC, *flags, str(root / "stub.c"), "-o", str(driver / "airoha_eth.o")],
                    check=True, capture_output=True)
-    subprocess.run([CC, "-O2", "-g", str(root / "stub.c"), "-o", str(kernel / "vmlinux")],
+    # ``vmlinux_version`` gives the vmlinux a different build string than the
+    # Image, i.e. two binaries from different compiles that sit in one build
+    # directory with a healthy-looking mtime order.
+    vmlinux_src = root / "stub.c"
+    if vmlinux_version is not None:
+        vmlinux_src = root / "stub-vmlinux.c"
+        write(vmlinux_src, stub.replace(
+            "Linux version 7.3 test-build", f"Linux version 7.3 {vmlinux_version}"))
+    subprocess.run([CC, "-O2", "-g", str(vmlinux_src), "-o", str(kernel / "vmlinux")],
                    check=True, capture_output=True)
     write(build / "Image", b"Linux version 7.3 test-build\n" + b"K" * 64)
     # A healthy build: source oldest, then object, vmlinux, Image.
@@ -320,6 +329,14 @@ def test_build() -> None:
         build = make_build(root / "initramfs-relink", image_before_vmlinux=True)
         rc, out = run_gate("--repo", str(repo), "--build-dir", str(build), "--skip-image")
         check("Image older than vmlinux is not a failure", rc == 0, out[-400:])
+
+        # The converse: the mtimes look healthy but the two binaries describe
+        # different builds.  The build string is the judgement, so this must
+        # fail instead of passing on timestamps.
+        build = make_build(root / "buildid", vmlinux_version="test-build-other")
+        rc, out = run_gate("--repo", str(repo), "--build-dir", str(build), "--skip-image")
+        check("Image and vmlinux from different builds fail",
+              rc == 1 and "different builds" in out, out[-400:])
 
 
 def test_image() -> None:
