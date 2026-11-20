@@ -25,9 +25,9 @@ QDMA with another one use hardware LRO.
 Signed-off-by: OpenWrt <openwrt@example.org>
 ---
 
---- a/drivers/net/ethernet/airoha/airoha_eth.h	2026-10-18 15:26:32.891391560 +0800
-+++ b/drivers/net/ethernet/airoha/airoha_eth.h	2026-10-18 15:26:32.892975308 +0800
-@@ -579,6 +579,11 @@
+--- a/drivers/net/ethernet/airoha/airoha_eth.h
++++ b/drivers/net/ethernet/airoha/airoha_eth.h
+@@ -576,6 +576,11 @@ struct airoha_qdma {
  	void __iomem *regs;
  
  	int users;
@@ -39,9 +39,9 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
  	struct airoha_irq_bank irq_banks[AIROHA_MAX_NUM_IRQ_BANKS];
  
---- a/drivers/net/ethernet/airoha/airoha_eth.c	2026-10-18 15:26:32.890503579 +0800
-+++ b/drivers/net/ethernet/airoha/airoha_eth.c	2026-10-18 15:26:32.892162107 +0800
-@@ -544,6 +544,11 @@
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -542,6 +542,11 @@ static void airoha_dev_lro_enable(struct
  	int qdma_id = qdma - &eth->qdma[0];
  	int i, lro_queue_index = 0;
  
@@ -53,7 +53,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	if (airoha_fe_lro_is_enabled(eth, qdma_id))
  		return;
  
-@@ -571,6 +576,13 @@
+@@ -569,6 +574,13 @@ static void airoha_dev_lro_disable(struc
  	struct airoha_eth *eth = qdma->eth;
  	int qdma_id = qdma - &eth->qdma[0];
  
@@ -67,7 +67,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	if (!airoha_fe_lro_is_enabled(eth, qdma_id))
  		return;
  
-@@ -2196,22 +2208,9 @@
+@@ -2177,22 +2189,9 @@ static int airoha_dev_open(struct net_de
  	struct airoha_gdm_port *port = dev->port;
  	u32 pse_port = FE_PSE_PORT_PPE1;
  	struct airoha_qdma *qdma;
@@ -89,9 +89,9 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 -		return -EBUSY;
 -	}
  
- 	err = phylink_of_phy_connect(dev->phylink, netdev->dev.of_node, 0);
- 	if (err) {
-@@ -2608,13 +2607,6 @@
+ 	netif_tx_start_all_queues(netdev);
+ 	err = airoha_set_vip_for_gdm_port(dev, true);
+@@ -2585,13 +2584,6 @@ int airoha_get_fe_port(struct airoha_gdm
  static netdev_features_t airoha_dev_fix_features(struct net_device *netdev,
  						 netdev_features_t features)
  {

@@ -136,7 +136,7 @@
  MODULE_DEVICE_TABLE(of, of_platform_serial_table);
 --- a/drivers/tty/serial/8250/8250_port.c
 +++ b/drivers/tty/serial/8250/8250_port.c
-@@ -216,6 +216,14 @@
+@@ -216,6 +216,14 @@ static const struct serial8250_config ua
  		.rxtrig_bytes	= {1, 8, 16, 30},
  		.flags		= UART_CAP_FIFO | UART_CAP_AFE,
  	},

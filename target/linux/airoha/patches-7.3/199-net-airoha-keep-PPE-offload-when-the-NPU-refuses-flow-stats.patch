@@ -36,7 +36,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -671,6 +671,12 @@
+@@ -670,6 +670,12 @@ struct airoha_ppe {
  
  	struct airoha_foe_stats *foe_stats;
  	dma_addr_t foe_stats_dma;
@@ -65,7 +65,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  #define REG_FE_PSE_BUF_SET		0x0090
 --- a/drivers/net/ethernet/airoha/airoha_npu.c
 +++ b/drivers/net/ethernet/airoha/airoha_npu.c
-@@ -475,6 +475,15 @@
+@@ -450,6 +450,15 @@ static int airoha_npu_ppe_stats_setup(st
  	if (err)
  		goto out;
  
@@ -83,7 +83,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  				  size);
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -181,6 +181,14 @@
+@@ -144,6 +144,14 @@ static void airoha_ppe_hw_init(struct ai
  	sram_ppe_num_data_entries =
  		PPE_RAM_NUM_ENTRIES_SHIFT(sram_ppe_num_data_entries);
  
@@ -98,7 +98,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	for (i = 0; i < eth->soc->num_ppe; i++) {
  		airoha_fe_wr(eth, REG_PPE_TB_BASE(i),
  			     ppe->foe_dma + sram_tb_size);
-@@ -663,6 +671,9 @@
+@@ -618,6 +626,9 @@ static void airoha_ppe_foe_flow_stats_re
  {
  	int i, ppe_num_stats_entries;
  
@@ -108,7 +108,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
  	if (ppe_num_stats_entries < 0)
  		return;
-@@ -681,6 +692,9 @@
+@@ -636,6 +647,9 @@ static void airoha_ppe_foe_flow_stats_up
  	int ppe_num_stats_entries;
  	u8 nbq;
  
@@ -118,7 +118,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
  	if (ppe_num_stats_entries < 0)
  		return;
-@@ -1429,6 +1443,9 @@
+@@ -1307,6 +1321,9 @@ void airoha_ppe_foe_entry_get_stats(stru
  	struct airoha_npu *npu;
  	u32 index;
  
@@ -128,7 +128,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
  	if (ppe_num_stats_entries < 0)
  		return;
-@@ -1442,7 +1459,7 @@
+@@ -1320,7 +1337,7 @@ void airoha_ppe_foe_entry_get_stats(stru
  	rcu_read_lock();
  
  	npu = rcu_dereference(eth->npu);
@@ -137,7 +137,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  		u64 packets = ppe->foe_stats[index].packets;
  		u64 bytes = ppe->foe_stats[index].bytes;
  		struct airoha_foe_stats npu_stats;
-@@ -1574,8 +1591,26 @@
+@@ -1452,8 +1469,26 @@ static int airoha_ppe_offload_setup(stru
  	if (ppe_num_stats_entries > 0) {
  		err = npu->ops.ppe_init_stats(npu, ppe->foe_stats_dma,
  					      ppe_num_stats_entries);
