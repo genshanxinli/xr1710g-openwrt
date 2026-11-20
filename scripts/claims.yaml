@@ -259,3 +259,15 @@ claims:
     date: "2026-11-20"
     status: supported
     notes: "实测部分：r37994/r38034/r38047 三版固件上都复现 -16，且在三个 AP VIF 全部 disabled、一个 VIF 不剩时仍然 -16。代码部分只指向本仓用的 backports 版本（PKG_SOURCE_VERSION:=7.2），对应的 cfg80211/mac80211 源码不在 repo 内（dl/backports-7.2.tar.zst），所以 -16 的具体来源未在库内留下 file:line。"
+    notes: "来自 issue #31 的已验证事实清单；b12 三臂实验原始记录未入库，docs/ 被 .gitignore 忽略。issue #81 才把 decap 语义做成可选档。"
+
+  - id: soe-probe-off-by-default
+    claim: "990/970 的 SOE 只读探针在 an7581/config-7.3 里显式关掉（config-7.3:281 写 `# CONFIG_NET_AIROHA_SOE is not set`，Kconfig 里 `default n`），所以默认镜像里不编 `airoha_soe_probe.o`；在 7.3 树上 `yes \"\" | make ARCH=arm64 syncconfig` 只剩 0 个 `(NEW)` 符号。"
+    source:
+      - target/linux/airoha/an7581/config-7.3:281
+      - target/linux/airoha/patches-7.3/970-net-airoha-soe-readonly-probe.patch:37
+      - docs/kernel/618-patch-parity.md:133
+    evidence: 实测
+    date: "2026-11-20"
+    status: supported
+    notes: "2026-11-20 在 build_dir 的 linux-7.3 上实测：0 个 (NEW)；去掉 281 行后同一棵树恰好出现 1 个 (NEW)=NET_AIROHA_SOE，这行就是它缺席时 syncconfig 卡住的原因。未验证的是这套配置在新 untar 的树上重复一遍时要重新 apply 队列（本次 fresh tree 队列 338 个补丁全过）。"

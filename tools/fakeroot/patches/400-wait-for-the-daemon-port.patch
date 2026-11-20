@@ -1,21 +1,39 @@
 --- a/scripts/fakeroot.in
 +++ b/scripts/fakeroot.in
-@@ -142,6 +142,20 @@
+@@ -149,6 +149,38 @@
  FAKEROOTKEY=`echo $KEY_PID|cut -d: -f1`
  PID=`echo $KEY_PID|cut -d: -f2`
  
-+# The daemon prints its key as soon as it has bound the loopback port, but on
-+# a fast host the fork that reaches get_msg() can still be behind us, so the
-+# first client dies with "libfakeroot: connect: Connection refused" and
-+# apk mkpkg then fails the package build.  Wait, bounded, for the port to
-+# accept before handing the key to the child.
++# faked's parent prints the port before the forked daemon has reached
++# accept(), so the first client can die with "libfakeroot: connect:
++# Connection refused" and apk mkpkg then fails to pack.  Wait, bounded, for
++# a real one-shot connection before handing the key to the child.  Keep the
++# probe POSIX sh: the wrapper shebang comes from the host's CONFIG_SHELL, and
++# `exec 3<>/dev/tcp/...` is a bashism that fails silently under dash -- the
++# loop would then burn its whole budget without ever connecting and still
++# export the key too early.  bash uses /dev/tcp; every other shell uses
++# python3, which OpenWrt already requires on the build host, and lets python
++# own the 2 s budget so only one process is started.
 +if test -n "$FAKEROOTKEY"; then
-+  i=0
-+  while test $i -lt 200; do
-+    if (exec 3<>/dev/tcp/127.0.0.1/$FAKEROOTKEY) 2>/dev/null; then break; fi
-+    i=$((i+1))
-+    sleep 0.01
-+  done
++  if test -n "$BASH_VERSION"; then
++    i=0
++    while test $i -lt 200; do
++      (exec 3<>/dev/tcp/127.0.0.1/"$FAKEROOTKEY") 2>/dev/null && break
++      i=`expr $i + 1`
++      sleep 0.01 2>/dev/null
++    done
++  elif command -v python3 >/dev/null 2>&1; then
++    python3 -c 'import socket, sys, time
++deadline = time.time() + 2.0
++while True:
++    try:
++        socket.create_connection(("127.0.0.1", int(sys.argv[1])), 0.2).close()
++        sys.exit(0)
++    except OSError:
++        if time.time() >= deadline:
++            sys.exit(1)
++        time.sleep(0.005)' "$FAKEROOTKEY"
++  fi
 +fi
 +
  if [ "$WAITINTRAP" -eq 0 ]; then
