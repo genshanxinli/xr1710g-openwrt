@@ -440,7 +440,7 @@ normalize_mac() {
 }
 
 normalize_country() {
-	_cc=$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')
+	_cc=$(printf '%s' "$1" | tr 'a-z' 'A-Z')
 	case $_cc in
 	??) ;;
 	*) usage_error "--country must be a two-character code" ;;
@@ -1837,7 +1837,7 @@ else
 	die "neither ssh nor dbclient is installed on the AP"
 fi
 if [ -z "$COUNTRY" ]; then
-	COUNTRY=$(detect_country | tr '[:lower:]' '[:upper:]')
+	COUNTRY=$(detect_country | tr 'a-z' 'A-Z')
 	case $COUNTRY in
 	??)
 		case $COUNTRY in

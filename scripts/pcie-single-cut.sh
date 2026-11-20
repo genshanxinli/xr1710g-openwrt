@@ -173,7 +173,7 @@ read_reg() {
 		warn "devmem read failed at $ADDR${_rr_out:+: $_rr_out}"
 		return 1
 	fi
-	_rr_out=$(printf '%s' "$_rr_out" | tr -d '[:space:]')
+	_rr_out=$(printf '%s' "$_rr_out" | tr -d ' \n')
 	if ! parse_hex32 "$_rr_out"; then
 		warn "devmem returned an unexpected value at $ADDR: '$_rr_out'"
 		return 1
@@ -229,7 +229,7 @@ load_backup() {
 	fi
 	_lb_line=
 	IFS= read -r _lb_line < "$BACKUP_FILE" || true
-	_lb_line=$(printf '%s' "$_lb_line" | tr -d '[:space:]')
+	_lb_line=$(printf '%s' "$_lb_line" | tr -d ' \n')
 	if [ -z "$_lb_line" ]; then
 		warn "backup at $BACKUP_FILE is empty or unreadable"
 		return 1

@@ -170,7 +170,7 @@ md5_of() {
 
 size_of() {
 	[ -f "$1" ] || return 1
-	wc -c < "$1" | tr -d '[:space:]'
+	wc -c < "$1" | tr -d ' \n'
 }
 
 # Print every TLB version marker in the image, one per line.  The rv32 image

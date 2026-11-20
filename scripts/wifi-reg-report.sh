@@ -155,10 +155,14 @@ reg_global=$(printf '%s\n' "$reg_raw" | awk '
 		exit
 	}')
 
+# Case folding uses the ASCII range 'a-z' 'A-Z' on purpose.  The tr on this
+# image (BusyBox v1.38.0) does not implement the [:lower:]/[:upper:] classes:
+# it copies them through unchanged, so `echo cn | tr '[:lower:]' '[:upper:]'`
+# prints `cn` and the report would compare `cn` against `CN`.
 norm_country() {
 	case "${1:-}" in
 	[A-Za-z][A-Za-z])
-		printf '%s' "$1" | tr '[:lower:]' '[:upper:]'
+		printf '%s' "$1" | tr 'a-z' 'A-Z'
 		;;
 	esac
 }

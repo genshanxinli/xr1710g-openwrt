@@ -60,7 +60,7 @@ write_append_body() {
         # final newline. Separate the next append from that record so one torn
         # delimiter never corrupts all subsequent persisted buckets.
         if [ -s "$SAFE_PATH" ]; then
-            last_byte=$(tail -c 1 "$SAFE_PATH" 2>/dev/null | od -An -tu1 | tr -d '[:space:]')
+            last_byte=$(tail -c 1 "$SAFE_PATH" 2>/dev/null | od -An -tu1 | tr -d ' \n')
             [ "$last_byte" = 10 ] || printf '\n'
         fi
     fi

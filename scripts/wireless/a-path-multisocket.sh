@@ -108,7 +108,7 @@ is_mac() {
 }
 
 lower() {
-	printf '%s' "${1-}" | tr '[:upper:]' '[:lower:]'
+	printf '%s' "${1-}" | tr 'A-Z' 'a-z'
 }
 
 as_uint() {
