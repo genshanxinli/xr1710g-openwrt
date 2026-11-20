@@ -13,8 +13,8 @@
 # This script only arbitrates the two country values.  It does not choose a
 # channel or a width, and it does not start, stop or reload wifi.
 #
-#   * radios agree, or only one has a country: log the domain that will be
-#     requested and change nothing.
+#   * radios agree, only one has a country, or only one radio section exists:
+#     log the domain that will be requested and change nothing.
 #   * radios conflict and REG_PREFER is unset (the default): log the
 #     conflict and change nothing, so a deliberate per-radio setting is
 #     never rewritten behind the operator's back.
@@ -43,6 +43,16 @@
 
 set -u
 
+# /lib/functions.sh expands $IPKG_INSTROOT at source time:
+# package/base-files/files/lib/functions.sh:546 does
+# `[ -z "$IPKG_INSTROOT" ] && ...`.  OpenWrt's uci-defaults runner usually
+# exports it (empty) from the opkg context, but a real boot of r37994 did not,
+# and under `set -u` that expansion killed this script with
+# "IPKG_INSTROOT: parameter not set" before any arbitration ran.  Default the
+# variable *before* sourcing so the strict mode stays on and the source below
+# cannot die on it.
+: "${IPKG_INSTROOT:=}"
+
 # shellcheck source=/dev/null
 . /lib/functions.sh
 
@@ -52,9 +62,6 @@ case "$(board_name)" in
 gemtek,xr1710g-ubi) ;;
 *) exit 0 ;;
 esac
-
-uci -q get wireless.radio1 >/dev/null || exit 0
-uci -q get wireless.radio2 >/dev/null || exit 0
 
 DRY_RUN=0
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=1
@@ -67,12 +74,27 @@ log_msg() {
 	fi
 }
 
+# Neither section means there is nothing to arbitrate.  One section missing is
+# not a reason to stay silent: the "one band only" line below is exactly the
+# diagnostic that tells the operator which radio the domain came from.
+if ! uci -q get wireless.radio1 >/dev/null && ! uci -q get wireless.radio2 >/dev/null; then
+	log_msg "no radio1/radio2 in the wireless config, nothing to arbitrate"
+	exit 0
+fi
+
 # A value that netifd will actually apply: exactly two letters.  The empty
 # string and the '00' placeholder mean "no country" and are left alone.
+#
+# Case folding uses the ASCII range 'a-z' 'A-Z' on purpose.  The tr on this
+# image (BusyBox v1.38.0, /usr/bin/tr -> /bin/busybox) does not implement the
+# [:lower:]/[:upper:] classes: it copies them through unchanged, so
+# `echo cn | tr '[:lower:]' '[:upper:]'` prints `cn`.  With the class form
+# REG_PREFER=cn folded to `cn`, failed the CN/US check below, and the script
+# reported "only cn|us is supported" instead of arbitrating.
 norm_country() {
 	case "${1:-}" in
 	[A-Za-z][A-Za-z])
-		printf '%s' "$1" | tr '[:lower:]' '[:upper:]'
+		printf '%s' "$1" | tr 'a-z' 'A-Z'
 		;;
 	esac
 }
