@@ -1,0 +1,46 @@
+From: OpenWrt <openwrt@example.org>
+Date: Fri, 20 Nov 2026 18:05:00 +0800
+Subject: [PATCH] wifi: mt76: mt7996: pass the WCID to the WED PPE check on 7.4
+
+Linux 7.4-rc3 extended the WED PPE check interface with the WCID of the
+station the frame came from:
+
+  include/linux/soc/mediatek/mtk_wed.h
+  int (*ppe_check)(struct mtk_wed_device *dev, struct sk_buff *skb,
+                   u32 reason, u32 hash, u16 wcid);
+  #define mtk_wed_device_ppe_check(_dev, _skb, _reason, _hash, _wcid) ...
+
+7.3 still takes four arguments, so a five argument call only builds on 7.4
+and a four argument call only builds on 7.3.  Keep both.
+
+Pass msta->wcid.idx, the per-station index the WED looks the binding up by;
+the caller already returned early when msta is NULL.
+
+Lead to:
+
+  mt7996/mac.c:299:67: error: macro "mtk_wed_device_ppe_check" requires
+  5 arguments, but only 4 given
+  mt7996/mac.c:297:9: error: 'mtk_wed_device_ppe_check' undeclared (first
+  use in this function)
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+--- a/mt7996/mac.c
++++ b/mt7996/mac.c
+@@ -406,9 +406,16 @@
+ 	wdev = ieee80211_vif_to_wdev(vif);
+ 	skb->dev = wdev->netdev;
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 4, 0)
++	mtk_wed_device_ppe_check(&dev->mt76.mmio.wed, skb,
++				 FIELD_GET(MT_DMA_PPE_CPU_REASON, info),
++				 FIELD_GET(MT_DMA_PPE_ENTRY, info),
++				 msta->wcid.idx);
++#else
+ 	mtk_wed_device_ppe_check(&dev->mt76.mmio.wed, skb,
+ 				 FIELD_GET(MT_DMA_PPE_CPU_REASON, info),
+ 				 FIELD_GET(MT_DMA_PPE_ENTRY, info));
++#endif
+ }
+ 
+ static int
