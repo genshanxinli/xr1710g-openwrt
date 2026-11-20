@@ -97,6 +97,18 @@ die() {
 	exit 1
 }
 
+# --add and --remove both bounce every radio with "wifi reload", which is what
+# netwatchdog reacts to, so a real run holds it first.  The library fails
+# closed: nw_guard_take returns nonzero when netwatchdog is missing or the hold
+# cannot be taken, and the run is refused in that case.  The script owns its
+# own EXIT/INT/TERM/HUP trap, so the guard installs none of its own and is
+# cleaned up from that trap instead.
+NETWATCHDOG_GUARD=$(dirname "$0")/../lib/netwatchdog-guard.sh
+[ -r "$NETWATCHDOG_GUARD" ] ||
+	die "shared library not found: $NETWATCHDOG_GUARD"
+# shellcheck source=../lib/netwatchdog-guard.sh
+. "$NETWATCHDOG_GUARD"
+
 usage_error() {
 	printf '%s: %s\n' "$PROG" "$*" >&2
 	printf "Try '%s --help'.\n" "$PROG" >&2
@@ -382,6 +394,7 @@ cleanup() {
 				"$PROG" "$BAK" >&2
 		fi
 	fi
+	nw_guard_cleanup
 	exit "$_status"
 }
 
@@ -606,6 +619,13 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
+
+# Both actions reload wifi; hold netwatchdog for the whole run.  A test bench
+# with a staged --config still loads the radios, so it holds too: the hold is
+# about the board, not about which config file is written.
+nw_guard_init --apply --no-trap --label "6g-only-$ACTION"
+nw_guard_take ||
+	die "cannot take the netwatchdog hold; refusing to reload wifi.  Install netwatchdog, or set NWD_ALLOW_NO_SERVICE=1 for a run that expects no protection."
 
 case "$ACTION" in
 add)

@@ -34,7 +34,7 @@ if [ "$apply" -eq 1 ]; then
 else
 	nw_guard_init --dry-run
 fi
-nw_guard_take              # warning only; never aborts
+nw_guard_take || exit 1    # REQUIRED: the status is the caller's contract
 ... destructive steps, never reached in dry-run ...
 ```
 
@@ -44,14 +44,29 @@ owns its destructive steps and must gate them on its own apply flag; the guard
 only protects the hold.
 
 If the script already owns an EXIT/HUP/INT/TERM trap, pass `--no-trap` and call
-`nw_guard_cleanup` from that trap instead.
+`nw_guard_cleanup` from that trap instead -- as the last step, after the
+script's own rollback, so the hold covers the restore reload too.
+
+### Caller contract
+
+`nw_guard_take` returns 0 only when the destructive step is protected (the hold
+is held, was already held, or `NWD_ALLOW_NO_SERVICE=1` explicitly waived the
+service).  It returns 1 when the step must not run: no `netwatchdog` on the
+board, a failing or timed-out `hold on`, or a hold owned by another live
+process.  **Every caller must check the status and refuse its destructive step
+on nonzero** -- the guard cannot abort a shell that ignores it.
+
+All seven destructive experiment scripts do this with
+`nw_guard_take || die "..."`, so a board without `netwatchdog` now stops the
+script with an error instead of running the experiment unprotected.
+`NWD_ALLOW_NO_SERVICE=1` is the only way past it, and it prints a warning.
 
 ### Functions
 
 | Function | Purpose |
 |---|---|
 | `nw_guard_init ...` | parse mode/options, reset state, install the trap |
-| `nw_guard_take` | check the service, take the hold if it is off; warn only |
+| `nw_guard_take` | check the service, take the hold if it is off; nonzero means the caller must refuse |
 | `nw_guard_release` | release a hold this guard took; print the manual command on failure |
 | `nw_guard_cleanup` | release + write the JSON record; idempotent and trap-safe |
 | `nw_guard_state` | print `on`, `off` or `missing`; read-only, safe in a dry run |
@@ -61,9 +76,20 @@ and `NW_GUARD_RESUME_AT` after each call.
 
 ### Behavior
 
+- A missing `netwatchdog` fails closed: `nw_guard_take` returns 1 and the
+  caller refuses its destructive step.  `NWD_ALLOW_NO_SERVICE=1` downgrades
+  only this case to a warning, for an audit harness that has no service.
+- `hold on` and `hold off` run under `--timeout` (default 300 s).  A timeout
+  returns 124 to the guard and makes `nw_guard_take`/`nw_guard_release` fail;
+  a timed-out `hold on` never leaves a half-written hold behind and a timed-out
+  `hold off` never force-clears the hold file.
 - An already-active hold is left active and is never released by this guard.
-- A missing `netwatchdog` or a failing `hold on` is a warning only; the
-  experiment continues so its result can still be recorded.
+  The holder is recorded as `<pid> <start-epoch>` in `<hold>.owner`: a hold
+  owned by another live PID returns 1 (busy) instead of being stolen.
+- A hold whose owner PID is gone, or whose owner is older than
+  `--stale-minutes` (default 60), is reclaimed with a warning, so a SIGKILLed
+  run cannot wedge every later run.
+- `nw_guard_release` releases only a hold whose owner record is this PID.
 - A hold this guard took is released on EXIT, HUP, INT and TERM, including a
   nonzero exit or `set -e` abort.
 - A release failure prints the exact manual command to run and records it in
@@ -94,10 +120,13 @@ and `NW_GUARD_RESUME_AT` after each call.
 }
 ```
 
-`action` is one of `not-taken`, `skipped-dry-run`, `missing`, `unchanged`,
-`took`, `took-and-released`, `take-failed`, `took-release-failed`.
-`result` is one of `ok`, `dry-run`, `missing-service`, `hold-failed`,
-`hold-command-failed`, `release-failed`.
+`action` is one of `not-taken`, `skipped-dry-run`, `missing-allowed`,
+`refused`, `unchanged`, `denied-busy`, `took`, `took-and-released`,
+`timeout`, `take-failed`, `kept-foreign-hold`, `took-release-timeout`,
+`took-release-failed`.
+`result` is one of `ok`, `dry-run`, `missing-service-allowed`,
+`missing-service`, `busy`, `hold-timeout`, `hold-failed`,
+`hold-command-failed`, `not-owner`, `release-timeout`, `release-failed`.
 
 A release failure also prints:
 

@@ -225,6 +225,18 @@ die() {
 	exit 1
 }
 
+# A run rewrites the wireless config and bounces every radio with "wifi
+# reload", so it holds netwatchdog first.  The library fails closed:
+# nw_guard_take returns nonzero when netwatchdog is missing or the hold cannot
+# be taken, and the run is refused in that case.  This script owns its own
+# EXIT/INT/TERM/HUP trap, so the guard installs none and its cleanup is called
+# from the script's own cleanup instead.
+NETWATCHDOG_GUARD=$(dirname "$0")/../lib/netwatchdog-guard.sh
+[ -r "$NETWATCHDOG_GUARD" ] ||
+	die "shared library not found: $NETWATCHDOG_GUARD"
+# shellcheck source=../lib/netwatchdog-guard.sh
+. "$NETWATCHDOG_GUARD"
+
 warn() {
 	printf '%s: warning: %s\n' "$PROG" "$1" >&2
 }
@@ -1221,6 +1233,11 @@ prepare_run() {
 	trap 'cleanup 143' TERM
 	trap 'cleanup 129' HUP
 
+	nw_guard_init --apply --no-trap --label 6g-clear-air \
+		--result-json "$OUT/netwatchdog.json"
+	nw_guard_take ||
+		die "cannot take the netwatchdog hold; refusing to rewrite $CONFIG.  Install netwatchdog, or set NWD_ALLOW_NO_SERVICE=1 for a run that expects no protection."
+
 	say "output: $OUT"
 	say "config: $CONFIG (md5 $ORIG_MD5)"
 	printf 'manual restore: cp -p %s %s && wifi reload\n' "$BACKUP" "$CONFIG"
@@ -1797,6 +1814,9 @@ cleanup() {
 	if [ -n "$OUT" ]; then
 		printf 'artifacts: %s\n' "$OUT"
 	fi
+	# Release after the restore reload, so the hold covers the whole
+	# disruptive window including the rollback.
+	nw_guard_cleanup
 	exit "$_status"
 }
 

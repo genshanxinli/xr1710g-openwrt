@@ -208,6 +208,18 @@ die() {
 	exit 1
 }
 
+# --add-bss commits a temporary UCI section and bounces every radio with "wifi
+# reload", so it holds netwatchdog first.  The library fails closed:
+# nw_guard_take returns nonzero when netwatchdog is missing or the hold cannot
+# be taken, and the BSS is not created in that case.  This script owns its own
+# EXIT/INT/TERM/HUP trap, so the guard installs none and its cleanup is called
+# from the script's own cleanup instead.
+NETWATCHDOG_GUARD=$(dirname "$0")/../lib/netwatchdog-guard.sh
+[ -r "$NETWATCHDOG_GUARD" ] ||
+	die "shared library not found: $NETWATCHDOG_GUARD"
+# shellcheck source=../lib/netwatchdog-guard.sh
+. "$NETWATCHDOG_GUARD"
+
 warn() {
 	printf '%s: warning: %s\n' "$PROG" "$1" >&2
 }
@@ -1197,6 +1209,11 @@ create_bss() {
 	printf 'restore after a hard kill (SIGKILL): cp -p %s %s && wifi reload\n' \
 		"$WIRELESS_BACKUP" "$WIRELESS_CONFIG"
 
+	nw_guard_init --apply --no-trap --label 6g-rx-add-bss \
+		--result-json "$OUT/netwatchdog.json"
+	nw_guard_take ||
+		die "cannot take the netwatchdog hold; refusing to create the temporary BSS.  Install netwatchdog, or set NWD_ALLOW_NO_SERVICE=1 for a run that expects no protection."
+
 	_sec="rx6g_$$"
 	uci -q get "wireless.$_sec" >/dev/null 2>&1 &&
 		die "temporary UCI section wireless.$_sec already exists; remove it or restore the config first"
@@ -1325,6 +1342,8 @@ cleanup() {
 			_cleanup_rc=1
 		fi
 	fi
+	# Release after the restore reload, so the hold covers the rollback too.
+	nw_guard_cleanup
 	exit "$_cleanup_rc"
 }
 

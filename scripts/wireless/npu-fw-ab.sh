@@ -119,11 +119,22 @@ die() {
 	exit 2
 }
 
+# --run reboots the board, which is exactly what netwatchdog reacts to, so the
+# reboot needs an explicit hold.  The library fails closed: nw_guard_take
+# returns nonzero when netwatchdog is missing or the hold cannot be taken, and
+# --run refuses to reboot in that case.
+NETWATCHDOG_GUARD=$(dirname "$0")/../lib/netwatchdog-guard.sh
+[ -r "$NETWATCHDOG_GUARD" ] ||
+	die "shared library not found: $NETWATCHDOG_GUARD"
+# shellcheck source=../lib/netwatchdog-guard.sh
+. "$NETWATCHDOG_GUARD"
+
 cleanup() {
 	if [ -n "$tmpfile" ]; then
 		rm -f "$tmpfile"
 		tmpfile=
 	fi
+	nw_guard_cleanup
 }
 
 trap 'cleanup' 0
@@ -611,6 +622,11 @@ run() {
 		die "--run must be executed as root"
 	command -v reboot >/dev/null 2>&1 ||
 		die "reboot command not found"
+
+	nw_guard_init --apply --no-trap --label npu-fw-ab-run \
+		--result-json "$_bdir/netwatchdog.json"
+	nw_guard_take ||
+		die "cannot take the netwatchdog hold; refusing to reboot.  Install netwatchdog, or set NWD_ALLOW_NO_SERVICE=1 for an audit run that expects no protection."
 
 	_boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null) ||
 		_boot_id=unknown

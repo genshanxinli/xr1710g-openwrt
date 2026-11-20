@@ -215,6 +215,17 @@ die() {
 	exit 1
 }
 
+# --setup and --remove both bounce every radio with "wifi reload", so a real
+# run holds netwatchdog first.  The library fails closed: nw_guard_take returns
+# nonzero when netwatchdog is missing or the hold cannot be taken, and the run
+# is refused in that case.  This script owns its own EXIT/INT/TERM/HUP trap, so
+# the guard installs none and its cleanup is called from cleanup() instead.
+NETWATCHDOG_GUARD=$(dirname "$0")/../lib/netwatchdog-guard.sh
+[ -r "$NETWATCHDOG_GUARD" ] ||
+	die "shared library not found: $NETWATCHDOG_GUARD"
+# shellcheck source=../lib/netwatchdog-guard.sh
+. "$NETWATCHDOG_GUARD"
+
 have() {
 	command -v "$1" >/dev/null 2>&1
 }
@@ -906,6 +917,8 @@ cleanup() {
 	fi
 
 	release_lock
+	# Release after the restore reload, so the hold covers the rollback too.
+	nw_guard_cleanup
 	exit "$_rc"
 }
 
@@ -1358,6 +1371,11 @@ do_setup() {
 	trap on_term TERM
 	trap on_hup HUP
 
+	nw_guard_init --apply --no-trap --label mlo-2link-setup \
+		--result-json "$CAPTURE/netwatchdog.json"
+	nw_guard_take ||
+		die "cannot take the netwatchdog hold; refusing to add the MLO block.  Install netwatchdog, or set NWD_ALLOW_NO_SERVICE=1 for a run that expects no protection."
+
 	if state_active; then
 		if [ "$FORCE" = 1 ]; then
 			say "force: restoring the previous run first"
@@ -1522,6 +1540,11 @@ do_remove() {
 	trap on_int INT
 	trap on_term TERM
 	trap on_hup HUP
+
+	nw_guard_init --apply --no-trap --label mlo-2link-remove \
+		--result-json "$CAPTURE/netwatchdog.json"
+	nw_guard_take ||
+		die "cannot take the netwatchdog hold; refusing to remove the MLO block.  Install netwatchdog, or set NWD_ALLOW_NO_SERVICE=1 for a run that expects no protection."
 
 	BAK="$STATE_DIR/wireless.bak"
 	BAK_MD5="$STATE_DIR/wireless.bak.md5"

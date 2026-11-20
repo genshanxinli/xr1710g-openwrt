@@ -193,6 +193,18 @@ die() {
 	exit 1
 }
 
+# Each arm commits a new channel/width and bounces every radio with "wifi
+# reload", so the A/B holds netwatchdog for the whole run.  The library fails
+# closed: nw_guard_take returns nonzero when netwatchdog is missing or the hold
+# cannot be taken, and the run is refused in that case.  This script owns its
+# own EXIT/INT/TERM/HUP trap, so the guard installs none and its cleanup is
+# called from the script's own cleanup instead.
+NETWATCHDOG_GUARD=$(dirname "$0")/../lib/netwatchdog-guard.sh
+[ -r "$NETWATCHDOG_GUARD" ] ||
+	die "shared library not found: $NETWATCHDOG_GUARD"
+# shellcheck source=../lib/netwatchdog-guard.sh
+. "$NETWATCHDOG_GUARD"
+
 warn() {
 	printf '%s: %s\n' "$PROG" "$1" >&2
 }
@@ -811,6 +823,8 @@ cleanup() {
 	if [ "$RUN" = 1 ] && [ "$ROLLBACK_OK" != 1 ]; then
 		_st=1
 	fi
+	# Release after the rollback reload, so the hold covers the restore too.
+	nw_guard_cleanup
 	exit "$_st"
 }
 
@@ -1183,6 +1197,11 @@ trap 'exit 129' 1
 trap 'exit 130' 2
 trap 'exit 143' 15
 trap cleanup 0
+
+nw_guard_init --apply --no-trap --label ab-80-160 \
+	--result-json "$OUT/netwatchdog.json"
+nw_guard_take ||
+	die "cannot take the netwatchdog hold; refusing to retune radio1.  Install netwatchdog, or set NWD_ALLOW_NO_SERVICE=1 for a run that expects no protection."
 
 say "A/B 5 GHz 80 vs 160: client=$CLIENT iface=$IFACE procs=$PROCS window=${WINDOW}s"
 say "source: ${SOURCE}$([ "$SOURCE_DEFAULT" = 1 ] && echo ' (default iperf3)')"
