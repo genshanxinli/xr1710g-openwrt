@@ -34,21 +34,24 @@ claims:
     source:
       - target/linux/airoha/patches-7.3/209-net-airoha-size-the-SRAM-tables-the-way-the-hardware-sees-them.patch:14
       - target/linux/airoha/patches-7.3/209-net-airoha-size-the-SRAM-tables-the-way-the-hardware-sees-them.patch:36
+      - target/linux/airoha/patches-7.3/214-net-airoha-stop-paying-for-unused-flow-counters.patch:83
+      - target/linux/airoha/patches-7.3/9999-net-airoha-report-the-derived-IPv4-capacity-in-ppe-usage.patch:71
       - target/linux/airoha/an7581/config-7.3:279
     evidence: 代码
     date: "2026-11-15"
     status: supported
-    notes: "只在 FLOW_STATS=y 时成立；关掉计数器时整机表回到 32768。结论来自 patch 209、patch 212 的代码说明和 target config，未在硬件上 dump 表几何。"
+    notes: "只在 FLOW_STATS=y 且 NPU 接受流计数器时成立；patch 214 把它改成运行时条件（num_stats > 0 && !ppe->foe_stats_enabled 时不切 SRAM），所以同一份 config 在两台机器上可以是 24576 或 32768。ppe/usage 的 ipv4_capacity 打印当下生效的那一个，但硬件上的 dump 仍未采集。"
 
   - id: ppe-table-32768
     claim: "整机 PPE 表是 32768（SRAM 16384 + DRAM 16384 共享），不是 49152。"
     source:
       - https://github.com/genshanxinli/xr1710g-openwrt/issues/31
       - target/linux/airoha/patches-7.3/209-net-airoha-size-the-SRAM-tables-the-way-the-hardware-sees-them.patch:36
+      - target/linux/airoha/patches-7.3/214-net-airoha-stop-paying-for-unused-flow-counters.patch:83
     evidence: 代码
     date: "2026-11-15"
     status: refuted
-    notes: "对目标配置（FLOW_STATS=y）不成立：patch 209 记录硬件是 4096*2 + 16384 = 24576；32768 只在关闭流计数器时成立。issue #31 的这段文字没有同步 patch 209/212。"
+    notes: "对目标配置（FLOW_STATS=y 且 NPU 接受计数器）不成立：patch 209 记录硬件是 4096*2 + 16384 = 24576。32768 仍是另一条运行时分支（patch 214：NPU 拒绝计数器时 SRAM 不切，整机表就是 32768），不是 49152。issue #31 的这段文字没有同步 patch 209/212/214。"
 
   - id: ppe-19826-slots
     claim: "PPE 表有 19,826 个可用槽位。"

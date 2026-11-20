@@ -23,7 +23,7 @@
  #include <net/ipv6.h>
  #include <net/pkt_cls.h>
  #include <net/route.h>
-@@ -915,6 +917,105 @@ airoha_ppe_foe_commit_subflow_entry(struct airoha_ppe *ppe,
+@@ -920,6 +922,105 @@ airoha_ppe_foe_commit_subflow_entry(stru
  	return 0;
  }
  
@@ -129,7 +129,7 @@
  static void airoha_ppe_foe_insert_entry(struct airoha_ppe *ppe,
  					struct sk_buff *skb,
  					u32 hash, bool rx_wlan)
-@@ -924,7 +1025,7 @@ static void airoha_ppe_foe_insert_entry(struct airoha_ppe *ppe,
+@@ -929,7 +1030,7 @@ static void airoha_ppe_foe_insert_entry(
  	struct airoha_foe_entry *hwe;
  	bool commit_done = false;
  	struct hlist_node *n;
@@ -138,7 +138,7 @@
  
  	spin_lock_bh(&ppe_lock);
  
-@@ -961,7 +1062,7 @@ static void airoha_ppe_foe_insert_entry(struct airoha_ppe *ppe,
+@@ -966,7 +1067,7 @@ static void airoha_ppe_foe_insert_entry(
  	airoha_ppe_foe_set_bridge_addrs(&br, eth_hdr(skb));
  	e = rhashtable_lookup_fast(&ppe->l2_flows, &br,
  				   airoha_l2_flow_table_params);
@@ -147,7 +147,7 @@
  		airoha_ppe_foe_commit_subflow_entry(ppe, e, hash, rx_wlan);
  unlock:
  	spin_unlock_bh(&ppe_lock);
-@@ -972,8 +1073,20 @@ airoha_ppe_foe_l2_flow_commit_entry(struct airoha_ppe *ppe,
+@@ -977,8 +1078,20 @@ airoha_ppe_foe_l2_flow_commit_entry(stru
  				    struct airoha_flow_table_entry *e)
  {
  	struct airoha_flow_table_entry *prev;
@@ -168,7 +168,7 @@
  	prev = rhashtable_lookup_get_insert_fast(&ppe->l2_flows, &e->l2_node,
  						 airoha_l2_flow_table_params);
  	if (!prev)
-@@ -1109,6 +1222,7 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
+@@ -1114,6 +1227,7 @@ static int airoha_ppe_flow_offload_repla
  	struct airoha_flow_data data = {};
  	struct net_device *odev = NULL;
  	struct flow_action_entry *act;
@@ -176,7 +176,7 @@
  	u8 dsfield = 0, l4proto = 0;
  	struct airoha_foe_entry hwe;
  	int err, i, offload_type;
-@@ -1121,6 +1235,8 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
+@@ -1126,6 +1240,8 @@ static int airoha_ppe_flow_offload_repla
  	if (!flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_META))
  		return -EOPNOTSUPP;
  
@@ -185,7 +185,7 @@
  	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_CONTROL)) {
  		struct flow_match_control match;
  
-@@ -1287,6 +1403,8 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
+@@ -1292,6 +1408,8 @@ static int airoha_ppe_flow_offload_repla
  		return -ENOMEM;
  
  	e->cookie = f->cookie;
@@ -194,7 +194,7 @@
  	memcpy(&e->data, &hwe, sizeof(e->data));
  
  	err = airoha_ppe_foe_flow_commit_entry(eth->ppe, e);
-@@ -1649,6 +1767,7 @@ int airoha_ppe_init(struct airoha_eth *eth)
+@@ -1654,6 +1772,7 @@ int airoha_ppe_init(struct airoha_eth *e
  
  	ppe->dev.ops.setup_tc_block_cb = airoha_ppe_setup_tc_block_cb;
  	ppe->dev.ops.check_skb = airoha_ppe_check_skb;
@@ -212,7 +212,7 @@
  	} ops;
  
  	void *priv;
-@@ -42,6 +43,12 @@ static inline void airoha_ppe_dev_check_skb(struct airoha_ppe_dev *dev,
+@@ -42,6 +43,12 @@ static inline void airoha_ppe_dev_check_
  {
  	dev->ops.check_skb(dev, skb, hash, rx_wlan);
  }
@@ -225,7 +225,7 @@
  #else
  static inline struct airoha_ppe_dev *airoha_ppe_get_dev(struct device *dev)
  {
-@@ -63,6 +70,12 @@ static inline void airoha_ppe_dev_check_skb(struct airoha_ppe_dev *dev,
+@@ -63,6 +70,12 @@ static inline void airoha_ppe_dev_check_
  					    bool rx_wlan)
  {
  }

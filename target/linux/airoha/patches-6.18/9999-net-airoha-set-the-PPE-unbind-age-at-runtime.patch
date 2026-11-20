@@ -1,0 +1,134 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: add a writable ppe/unbind_age knob
+
+There is no register dump in this kernel's ppe directory yet, so the aging
+register cannot be read at all, let alone compared with the stock firmware's
+values.  Add ppe/unbind_age, 0644:
+
+  read:  PPE<n> min_pkts=<u> delta=<u> raw=<hex>    (one line per PPE)
+  write: "<min_pkts> <delta>"
+
+Both fields are required, so a write cannot leave half of the register at a
+value nobody asked for.  The range checks against FIELD_MAX() of the two
+masks run before the first write, so an out-of-range request cannot land on
+one PPE and be refused on the next; a bad request returns -EINVAL or -ERANGE
+and changes nothing.  Each PPE's REG_PPE_UNBIND_AGE is updated under its
+masks, and the write is refused with -EIO unless every PPE reads back the
+requested value - a field the hardware ignores must not look accepted.
+
+airoha_ppe_init() still leaves the register at its reset value, so this
+changes no default and no offload behaviour.  What is written holds until the
+next boot, which is what a register-level A/B experiment needs.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+--- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
+@@ -244,6 +244,98 @@
+ }
+ DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_foe_usage);
+ 
++/* tb_regs can show what PPE_UNBIND_AGE holds but not change it, so the
++ * driver's aging values cannot be compared with the stock firmware's without
++ * a reboot.  This node is that experiment: read "min_pkts delta raw" per
++ * PPE, write "min_pkts delta" to move both PPEs at once.  Nothing else in
++ * the driver writes this register, so what is written here stays until the
++ * next boot: a register-level knob, not a tuning interface.
++ */
++static int airoha_ppe_debugfs_unbind_age_show(struct seq_file *m,
++					      void *private)
++{
++	struct airoha_ppe *ppe = m->private;
++	struct airoha_eth *eth = ppe->eth;
++	int i;
++
++	for (i = 0; i < eth->soc->num_ppe; i++) {
++		u32 val = airoha_fe_rr(eth, REG_PPE_UNBIND_AGE(i));
++
++		seq_printf(m, "PPE%d min_pkts=%u delta=%u raw=%08x\n", i + 1,
++			   (u32)FIELD_GET(PPE_UNBIND_AGE_MIN_PACKETS_MASK, val),
++			   (u32)FIELD_GET(PPE_UNBIND_AGE_DELTA_MASK, val),
++			   val);
++	}
++
++	return 0;
++}
++
++static ssize_t airoha_ppe_debugfs_unbind_age_write(struct file *file,
++						   const char __user *ubuf,
++						   size_t count, loff_t *ppos)
++{
++	struct seq_file *m = file->private_data;
++	struct airoha_ppe *ppe = m->private;
++	struct airoha_eth *eth = ppe->eth;
++	u32 mask = PPE_UNBIND_AGE_MIN_PACKETS_MASK |
++		   PPE_UNBIND_AGE_DELTA_MASK;
++	u32 min_pkts, delta, val;
++	char buf[32];
++	int i;
++
++	if (count >= sizeof(buf))
++		return -EINVAL;
++	if (copy_from_user(buf, ubuf, count))
++		return -EFAULT;
++	buf[count] = '\0';
++
++	/* Both fields are required: one number alone would leave the other
++	 * half of the register at whatever it held, which is the half-written
++	 * state an A/B comparison must not have.
++	 */
++	if (sscanf(buf, "%u %u", &min_pkts, &delta) != 2)
++		return -EINVAL;
++
++	/* Reject an out-of-range request before the first write, so a bad
++	 * value cannot land on one PPE and be refused on the next.
++	 */
++	if (min_pkts > FIELD_MAX(PPE_UNBIND_AGE_MIN_PACKETS_MASK) ||
++	    delta > FIELD_MAX(PPE_UNBIND_AGE_DELTA_MASK))
++		return -ERANGE;
++
++	val = FIELD_PREP(PPE_UNBIND_AGE_MIN_PACKETS_MASK, min_pkts) |
++	      FIELD_PREP(PPE_UNBIND_AGE_DELTA_MASK, delta);
++
++	for (i = 0; i < eth->soc->num_ppe; i++)
++		airoha_fe_rmw(eth, REG_PPE_UNBIND_AGE(i), mask, val);
++
++	/* Read the register back: a field the hardware does not implement
++	 * reads as unchanged, and silently accepting that would report a
++	 * configuration that is not in effect.
++	 */
++	for (i = 0; i < eth->soc->num_ppe; i++) {
++		if ((airoha_fe_rr(eth, REG_PPE_UNBIND_AGE(i)) & mask) != val)
++			return -EIO;
++	}
++
++	return count;
++}
++
++static int airoha_ppe_debugfs_unbind_age_open(struct inode *inode,
++					      struct file *file)
++{
++	return single_open(file, airoha_ppe_debugfs_unbind_age_show,
++			   inode->i_private);
++}
++
++static const struct file_operations airoha_ppe_debugfs_unbind_age_fops = {
++	.open		= airoha_ppe_debugfs_unbind_age_open,
++	.read		= seq_read,
++	.write		= airoha_ppe_debugfs_unbind_age_write,
++	.llseek		= seq_lseek,
++	.release	= single_release,
++};
++
+ static int airoha_ppe_debugfs_tpid_show(struct seq_file *m, void *private)
+ {
+ 	struct airoha_ppe *ppe = m->private;
+@@ -309,6 +401,8 @@
+ 			    &airoha_ppe_debugfs_foe_usage_fops);
+ 	debugfs_create_file("tpid", 0444, ppe->debugfs_dir, ppe,
+ 			    &airoha_ppe_debugfs_tpid_fops);
++	debugfs_create_file("unbind_age", 0644, ppe->debugfs_dir, ppe,
++			    &airoha_ppe_debugfs_unbind_age_fops);
+ 	debugfs_create_file("ppe1_regs", 0444, ppe->debugfs_dir, ppe,
+ 			    &airoha_ppe_debugfs_ppe1_regs_fops);
+ 

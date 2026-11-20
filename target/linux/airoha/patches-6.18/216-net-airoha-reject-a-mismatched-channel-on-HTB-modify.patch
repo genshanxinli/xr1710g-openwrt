@@ -1,0 +1,95 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: reject a mismatched channel on HTB modify too
+
+Patch 201 put the channel/classid consistency check in
+airoha_tc_htb_alloc_leaf_queue() so that a leaf mapping to a channel the
+device never queues to is refused with an extack message.
+
+That function is reached only through TC_HTB_LEAF_ALLOC_QUEUE.  A class
+change arrives as TC_HTB_NODE_MODIFY and is dispatched straight to
+airoha_tc_htb_modify_queue():
+
+	airoha_tc_setup_qdisc_htb():
+	case TC_HTB_NODE_MODIFY:
+		return airoha_tc_htb_modify_queue(netdev, opt);
+
+so the check is skipped and the dead shaper still installs: the classid
+is taken modulo AIROHA_NUM_QOS_CHANNELS, the rate limit is programmed on
+a channel nothing feeds, tc reports success and the traffic runs
+unshaped.  "tc class add" is rejected while "tc class change" inserts
+the exact same state.
+
+Move the check into airoha_tc_htb_modify_queue().  The allocation path
+already calls it and unwinds qos_channel_map on error, so both entry
+points are covered by the move and no new helper is needed.
+
+Fixes: 201 ("net: airoha: reject a HTB leaf that cannot shape anything")
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -3503,6 +3503,7 @@
+ static int airoha_tc_htb_modify_queue(struct net_device *dev,
+ 				      struct tc_htb_qopt_offload *opt)
+ {
++	struct airoha_gdm_dev *gdm = netdev_priv(dev);
+ 	u32 channel = TC_H_MIN(opt->classid) % AIROHA_NUM_QOS_CHANNELS;
+ 	u32 rate = div_u64(opt->rate, 1000) << 3; /* kbps */
+ 	int err;
+@@ -3512,6 +3513,27 @@
+ 		return -EINVAL;
+ 	}
+ 
++	/* airoha_dev_select_queue() sends this net_device's traffic to one
++	 * fixed QoS channel, its GDM port id. A classid that maps to a
++	 * different channel programs a shaper that nothing feeds: tc accepts
++	 * the qdisc, reports no error, and the traffic runs unshaped. WAN is
++	 * GDM2, so the usual "classid 1:1" example silently does nothing
++	 * while 1:2 is the one that shapes.
++	 *
++	 * DSA user ports have no single channel (the tag selects it per
++	 * packet), so only the non-DSA case is checked.
++	 */
++	if (!netdev_uses_dsa(dev) && gdm->port &&
++	    channel != gdm->port->id % AIROHA_NUM_QOS_CHANNELS) {
++		NL_SET_ERR_MSG_FMT_MOD(opt->extack,
++				       "classid %x:%x maps to QoS channel %u, but %s uses channel %u",
++				       TC_H_MAJ(opt->classid) >> 16,
++				       TC_H_MIN(opt->classid), channel,
++				       netdev_name(dev),
++				       gdm->port->id % AIROHA_NUM_QOS_CHANNELS);
++		return -EINVAL;
++	}
++
+ 	err = airoha_qdma_set_tx_rate_limit(dev, channel, rate, opt->quantum);
+ 	if (err)
+ 		NL_SET_ERR_MSG_MOD(opt->extack,
+@@ -3528,28 +3550,6 @@
+ 	struct airoha_gdm_dev *dev = netdev_priv(netdev);
+ 	struct airoha_qdma *qdma;
+ 
+-	/* airoha_dev_select_queue() sends this net_device's traffic to one
+-	 * fixed QoS channel, its GDM port id. A leaf whose classid maps to a
+-	 * different channel therefore programs a shaper that nothing feeds:
+-	 * tc accepts the qdisc, reports no error, and the traffic runs
+-	 * unshaped. WAN is GDM2, so the usual "classid 1:1" example silently
+-	 * does nothing while 1:2 is the one that shapes. Refuse the mismatch
+-	 * rather than accept it.
+-	 *
+-	 * DSA user ports have no single channel (the tag selects it per
+-	 * packet), so only the non-DSA case is checked here.
+-	 */
+-	if (!netdev_uses_dsa(netdev) && dev->port &&
+-	    channel != dev->port->id % AIROHA_NUM_QOS_CHANNELS) {
+-		NL_SET_ERR_MSG_FMT_MOD(opt->extack,
+-				       "classid %x:%x maps to QoS channel %u, but %s uses channel %u",
+-				       TC_H_MAJ(opt->classid) >> 16,
+-				       TC_H_MIN(opt->classid), channel,
+-				       netdev_name(netdev),
+-				       dev->port->id % AIROHA_NUM_QOS_CHANNELS);
+-		return -EINVAL;
+-	}
+-
+ 	/* Here we need to check the requested QDMA channel is not already
+ 	 * in use by another net_device running on the same QDMA block.
+ 	 */

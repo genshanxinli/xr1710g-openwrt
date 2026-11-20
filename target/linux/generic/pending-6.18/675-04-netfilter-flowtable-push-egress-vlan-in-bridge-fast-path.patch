@@ -24,7 +24,7 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
 ---
 --- a/net/netfilter/nf_flow_table_ip.c
 +++ b/net/netfilter/nf_flow_table_ip.c
-@@ -367,6 +367,34 @@
+@@ -376,6 +376,34 @@ nf_flow_offload_lookup(struct nf_flowtab
  	return flow_offload_lookup(flow_table, &tuple);
  }
  
@@ -59,7 +59,7 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
  static int nf_flow_offload_forward(struct nf_flowtable_ctx *ctx,
  				   struct nf_flowtable *flow_table,
  				   struct flow_offload_tuple_rhash *tuplehash,
-@@ -400,6 +428,7 @@
+@@ -409,6 +437,7 @@ static int nf_flow_offload_forward(struc
  	flow_offload_refresh(flow_table, flow, false);
  
  	nf_flow_encap_pop(skb, tuplehash);
@@ -67,7 +67,7 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
  	thoff -= ctx->offset;
  
  	iph = ip_hdr(skb);
-@@ -689,6 +718,7 @@
+@@ -698,6 +727,7 @@ static int nf_flow_offload_ipv6_forward(
  	flow_offload_refresh(flow_table, flow, false);
  
  	nf_flow_encap_pop(skb, tuplehash);

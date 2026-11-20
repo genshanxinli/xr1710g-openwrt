@@ -1493,9 +1493,19 @@ print_soak_header() {
 }
 
 print_soak_row() {
+	# The wifi temperatures are "%.1f" strings (read_temp_c_or_na), so the
+	# maximum has to be taken with a float compare; "test -gt" aborts the
+	# row with "bad number" on the first decimal value.
 	wmax=$S_TW0
-	if [ "$S_TW1" != na ] && { [ "$wmax" = na ] || [ "$S_TW1" -gt "$wmax" ]; }; then wmax=$S_TW1; fi
-	if [ "$S_TW2" != na ] && { [ "$wmax" = na ] || [ "$S_TW2" -gt "$wmax" ]; }; then wmax=$S_TW2; fi
+	for _t in "$S_TW1" "$S_TW2"; do
+		[ "$_t" = na ] && continue
+		if [ "$wmax" = na ]; then
+			wmax=$_t
+		else
+			wmax=$(awk -v a="$wmax" -v b="$_t" \
+				'BEGIN { print (b + 0 > a + 0) ? b : a }')
+		fi
+	done
 	printf '%6ss %s %6s %6s %6s %6s %7s/%7s %6s/%6s %4s/%4s %3s %s\n' \
 		"$S_ELAPSED" "$(hms_utc)" "$S_TCPU" "$wmax" "$S_FREQ" "$S_RPM" \
 		"$S_TXPA" "$S_TXPB" "$S_RATE_A" "$S_RATE_B" "$S_ASSOC_A" "$S_ASSOC_B" \
@@ -1927,8 +1937,12 @@ cycles_summary() {
 				p = num($14); if (p != "") pkts += p
 				f = num($15); if (f != "") failed += f
 			} else {
-				outages++
-				o = num($18); if (o != "") outage += o
+				# Only a row that recorded association-loss seconds is
+				# an outage.  A cycle that failed while the station
+				# stayed associated is an iperf3/source failure and used
+				# to be counted here too, which reported outages with an
+				# empty events.log.
+				o = num($18); if (o != "" && o > 0) { outages++; outage += o }
 			}
 			if ($11 == "sta") stas++
 		}

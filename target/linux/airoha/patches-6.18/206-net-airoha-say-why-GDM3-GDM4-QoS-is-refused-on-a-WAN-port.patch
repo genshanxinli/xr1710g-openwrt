@@ -1,0 +1,50 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: say why GDM3/GDM4 QoS is refused on a WAN port
+
+Adding an offloaded HTB qdisc to a LAN port backed by GDM3 or GDM4 fails
+with -EBUSY when GDM2 already carries the WAN role.  That is structural,
+not a transient conflict: the GDM3/GDM4 offload path loops GDM2 back into
+the target port and forwards the shaped traffic from there, so it needs
+GDM2 to itself, and on boards where GDM2 is the WAN port there is no
+second path to shape through.
+
+The existing message ("QoS configured for WAN device") describes this as
+if some configuration had already claimed the resource, which sends people
+looking for a qdisc that is not there.  Report the two cases separately:
+a qdisc actually present on the WAN device, which the user can tear down,
+and GDM2 being the WAN port, which is a permanent property of the board.
+
+No behaviour change; the same requests are refused, with a message that
+matches what the hardware is doing.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -3234,10 +3234,23 @@
+ 
+ 	wan_dev = airoha_get_wan_gdm_dev(eth);
+ 	if (wan_dev) {
+-		if (test_bit(AIROHA_DEV_F_TX_QOS, &wan_dev->flags) ||
+-		    wan_dev->port->id == AIROHA_GDM2_IDX) {
++		if (test_bit(AIROHA_DEV_F_TX_QOS, &wan_dev->flags)) {
+ 			NL_SET_ERR_MSG_MOD(extack,
+-					   "QoS configured for WAN device");
++					   "QoS already configured for WAN device");
++			err = -EBUSY;
++			goto error_unlock;
++		}
++
++		if (wan_dev->port->id == AIROHA_GDM2_IDX) {
++			/* GDM3/GDM4 QoS works by looping GDM2 back into the
++			 * target port and forwarding the shaped traffic from
++			 * there, so it needs GDM2 to itself. On a board where
++			 * GDM2 carries the WAN role there is no second path
++			 * to shape through, which makes HW QoS on GDM3/GDM4
++			 * and a WAN port mutually exclusive.
++			 */
++			NL_SET_ERR_MSG_MOD(extack,
++					   "GDM2 carries the WAN port and is needed for the GDM3/GDM4 QoS loopback");
+ 			err = -EBUSY;
+ 			goto error_unlock;
+ 		}

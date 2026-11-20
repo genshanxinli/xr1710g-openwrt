@@ -1,0 +1,116 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: report PPE table occupancy and the derived IPv4 capacity
+
+This kernel's ppe directory has no occupancy node: ppe/entries walks every
+slot and ppe/bind lists the bound ones, so "how full is the table" has to be
+answered by counting lines.  Add ppe/usage, which counts only slots whose
+state is bound, splits the L2B entries out, and prints the software l2_flows
+rhashtable length beside them.
+
+The capacity an IPv4 flow can occupy is then reported separately from the
+hash space: entries is the array size, while ipv4_capacity accounts for the
+SRAM half the NPU takes for flow counters (4096 per PPE plus the DRAM half =
+24576) or, when the firmware refuses counters, all 32768.  ipv4_bound counts
+only bound IPv4 5-tuple, 3-tuple and DS-Lite entries, and ipv4_bound_pct
+divides by the capacity, not by entries.
+
+  entries <total> (sram <sram>, dram <dram>)
+  bound <n> (<pct>%) unbound <n>
+  l2b_bound <n> l2_flows_sw <n>
+  ipv4_capacity <usable> (sram <sram>, dram <dram>)
+  ipv4_bound <n> ipv4_bound_pct <pct>
+
+This is the occupancy node the 7.3 queue already has, so the two kernels
+report the same file with the same fields.  Nothing writes a register and no
+existing debugfs output changes.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+--- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
+@@ -174,6 +174,76 @@
+ }
+ DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_foe_bind);
+ 
++static int airoha_ppe_debugfs_foe_usage_show(struct seq_file *m,
++					    void *private)
++{
++	struct airoha_ppe *ppe = m->private;
++	u32 total = airoha_ppe_get_total_num_entries(ppe);
++	u32 sram = total - PPE_DRAM_NUM_ENTRIES;
++	u32 bound = 0, unbound = 0, l2b = 0, ipv4 = 0;
++	u32 capacity = sram + PPE_DRAM_NUM_ENTRIES;
++	struct airoha_eth *eth = ppe->eth;
++	int i;
++
++	/* The hardware age-out never clears a slot back to zero: an entry that
++	 * timed out keeps its tuple and only its state field changes. So
++	 * "invalid" here counts slots the driver has written and later
++	 * released, not slots that were never used.
++	 */
++	for (i = 0; i < total; i++) {
++		const struct airoha_foe_entry *hwe;
++		u32 state, type;
++
++		hwe = airoha_ppe_foe_get_entry(ppe, i);
++		if (!hwe)
++			continue;
++
++		state = FIELD_GET(AIROHA_FOE_IB1_BIND_STATE, hwe->ib1);
++		if (!state)
++			continue;
++
++		if (state == AIROHA_FOE_STATE_BIND) {
++			bound++;
++			type = FIELD_GET(AIROHA_FOE_IB1_BIND_PACKET_TYPE,
++					 hwe->ib1);
++			if (type == PPE_PKT_TYPE_BRIDGE) {
++				l2b++;
++			} else if (type == PPE_PKT_TYPE_IPV4_HNAPT ||
++				   type == PPE_PKT_TYPE_IPV4_ROUTE ||
++				   type == PPE_PKT_TYPE_IPV4_DSLITE) {
++				ipv4++;
++			}
++		} else {
++			unbound++;
++		}
++	}
++
++	seq_printf(m, "entries %u (sram %u, dram %u)\n", total, sram,
++		   total - sram);
++	seq_printf(m, "bound %u (%u%%) unbound %u\n", bound,
++		   total ? bound * 100 / total : 0, unbound);
++	seq_printf(m, "l2b_bound %u l2_flows_sw %u\n", l2b,
++		   atomic_read(&ppe->l2_flows.nelems));
++
++	/* entries above is the hash space and the size of the array the driver
++	 * allocates, which is not what an IPv4 flow can occupy: the SRAM tables
++	 * lose half of their slots when the NPU takes them for flow counters,
++	 * so the usable figure depends on the build and on whether the NPU
++	 * agreed to count.  Report it separately rather than redefining a
++	 * number existing parsers already read.
++	 */
++	if (eth->soc->num_ppe)
++		seq_printf(m, "ipv4_capacity %u (sram %u, dram %u)\n",
++			   capacity, sram, (u32)PPE_DRAM_NUM_ENTRIES);
++	else
++		seq_puts(m, "ipv4_capacity n/a\n");
++	seq_printf(m, "ipv4_bound %u ipv4_bound_pct %u\n", ipv4,
++		   capacity ? ipv4 * 100 / capacity : 0);
++
++	return 0;
++}
++DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_foe_usage);
++
+ static int airoha_ppe_debugfs_tpid_show(struct seq_file *m, void *private)
+ {
+ 	struct airoha_ppe *ppe = m->private;
+@@ -235,6 +305,8 @@
+ 			    &airoha_ppe_debugfs_foe_all_fops);
+ 	debugfs_create_file("bind", 0444, ppe->debugfs_dir, ppe,
+ 			    &airoha_ppe_debugfs_foe_bind_fops);
++	debugfs_create_file("usage", 0444, ppe->debugfs_dir, ppe,
++			    &airoha_ppe_debugfs_foe_usage_fops);
+ 	debugfs_create_file("tpid", 0444, ppe->debugfs_dir, ppe,
+ 			    &airoha_ppe_debugfs_tpid_fops);
+ 	debugfs_create_file("ppe1_regs", 0444, ppe->debugfs_dir, ppe,

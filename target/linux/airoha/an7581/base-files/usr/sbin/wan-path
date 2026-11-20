@@ -1,0 +1,438 @@
+#!/bin/sh
+#
+# wan-path - read-only WAN path diagnostic (issue #29).
+#
+# Prints the WAN path as the segments a packet actually crosses, in order:
+#
+#   netdev     network.wan proto, the logical netdev and the physical netdev
+#              behind it.  For proto=pppoe the session interface (pppoe-wan)
+#              is the logical device and network.wan.device is the physical
+#              one; the live session is cross-checked against /proc/net/pppoe.
+#   phy link   ethtool speed/duplex/link, with sysfs carrier/speed/duplex as
+#              the fallback when ethtool cannot answer.
+#   qdam       the QDMA/GDM id.  On AN7581 sysfs only exposes the ethernet
+#              controller (1fb50000.ethernet), so the id is looked up in the
+#              device-tree node behind <netdev>/device/of_node (or, when that
+#              symlink is absent, in the DT node whose "compatible" matches the
+#              controller's OF_COMPATIBLE_0).  Accepted properties are
+#              qdam-id, gdm-id, gdm and queue.  When none exists the field is
+#              reported unknown: the script never guesses a port number.
+#   flowtable  whether the physical netdev is a member of `nft list flowtables`.
+#   ppe        /sys/kernel/debug/ppe usage counters (entries/bound/unbound) and
+#              the per-interface entry count when the bind table names the
+#              netdev; otherwise that count stays unknown.
+#
+# Every probe is a read: uci get, ubus call, ethtool, nft list, and reads of
+# sysfs, procfs and debugfs.  The script never writes uci, never reloads, never
+# reboots and never writes sysfs.
+#
+# Exit status: 0 when every segment resolved, 1 when at least one segment is
+# unknown or the physical netdev is absent, 2 on a usage error.  --json prints
+# one JSON object with the same fields; unknown values are null.
+
+WP_SYS_NET=${WP_SYS_NET:-/sys/class/net}
+WP_PROC_NET=${WP_PROC_NET:-/proc/net}
+WP_DEBUGFS=${WP_DEBUGFS:-/sys/kernel/debug}
+WP_DT=${WP_DT:-/proc/device-tree}
+
+JSON=0
+PROTO=
+IFACE=wan
+LDEP=
+PHYS=
+PPP_IF=
+PPP_ID=
+PPP_SESS=false
+PRESENT=false
+CARRIER=unknown
+SPEED=
+DUPLEX=
+QDAM=
+FT_MEMBER=unknown
+FT_NAME=
+FT_FAM=
+PPE_ENTRIES=
+PPE_BOUND=
+PPE_UNBOUND=
+PPE_IF_ENTRIES=
+UNKNOWN=
+COMPLETE=false
+
+usage() {
+	cat <<'EOF'
+usage: wan-path [--json]
+
+Read-only WAN path diagnostic: netdev/PPPoE, PHY link, QDMA id, nft
+flowtable membership and PPE bind counters.
+
+Exit status: 0 every segment resolved, 1 unknown segment or missing netdev.
+EOF
+}
+
+add_unknown() {
+	UNKNOWN="$UNKNOWN${UNKNOWN:+ }$1"
+}
+
+jstr() {
+	if [ -z "$1" ]; then
+		printf 'null'
+		return
+	fi
+	printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+}
+
+jnum() {
+	if [ -z "$1" ]; then
+		printf 'null'
+	else
+		printf '%s' "$1"
+	fi
+}
+
+jbool() {
+	if [ "$1" = true ]; then printf 'true'; else printf 'false'; fi
+}
+
+jtri() {
+	case $1 in
+	yes) printf 'true' ;;
+	no) printf 'false' ;;
+	*) printf 'null' ;;
+	esac
+}
+
+read_trim() {
+	[ -r "$1" ] || return 1
+	tr -d '\000' < "$1" 2>/dev/null
+}
+
+# --- netdev ----------------------------------------------------------------
+
+resolve_netdev() {
+	PROTO=$(uci -q get network.wan.proto 2>/dev/null)
+	if [ -z "$PROTO" ]; then
+		PROTO=unknown
+		add_unknown proto
+	fi
+
+	dev=$(uci -q get network.wan.device 2>/dev/null)
+	[ -n "$dev" ] || dev=$(uci -q get network.wan.ifname 2>/dev/null)
+	if [ -z "$dev" ]; then
+		st=$(ubus call network.interface.wan status 2>/dev/null)
+		dev=$(printf '%s' "$st" | sed -n 's/.*"device": *"\([^"]*\)".*/\1/p' | tail -1)
+	fi
+
+	if [ "$PROTO" = pppoe ]; then
+		# The session interface is what owns the IP; the UCI device is the
+		# netdev the PPP session runs on.
+		if [ -d "$WP_SYS_NET/pppoe-$IFACE" ]; then
+			PPP_IF="pppoe-$IFACE"
+		else
+			for d in "$WP_SYS_NET"/pppoe-* "$WP_SYS_NET"/ppp[0-9]*; do
+				[ -e "$d" ] || continue
+				PPP_IF=${d##*/}
+				break
+			done
+		fi
+		if [ -n "$PPP_IF" ]; then
+			LDEP=$PPP_IF
+		else
+			LDEP=$dev
+		fi
+		if [ -z "$dev" ] && [ -n "$PPP_IF" ]; then
+			case $PPP_IF in
+			pppoe-*) dev=${PPP_IF#pppoe-} ;;
+			esac
+		fi
+		PHYS=$dev
+	else
+		PHYS=$dev
+		LDEP=$dev
+	fi
+	[ -n "$PHYS" ] || PHYS=$IFACE
+	[ -n "$LDEP" ] || LDEP=$PHYS
+
+	if [ -d "$WP_SYS_NET/$PHYS" ]; then
+		PRESENT=true
+	else
+		add_unknown physical_device
+	fi
+
+	# Live PPPoE session table: "Id Address Device" header plus one line per
+	# session.  A proto=pppoe interface with no line here has no session.
+	if [ -r "$WP_PROC_NET/pppoe" ]; then
+		n=$(sed -n '2,$p' "$WP_PROC_NET/pppoe" 2>/dev/null | grep -c '[^[:space:]]')
+		if [ "$n" -gt 0 ]; then
+			PPP_SESS=true
+			PPP_ID=$(sed -n '2,$p' "$WP_PROC_NET/pppoe" 2>/dev/null |
+				awk 'NF { print $1; exit }')
+		fi
+	fi
+}
+
+# --- phy link --------------------------------------------------------------
+
+link_speed() {
+	v=$1
+	case $v in
+	'' | 'Unknown!'* | -1 | 4294967295) printf '' ;;
+	*Mb/s) printf '%s' "${v%Mb/s}" ;;
+	*) printf '%s' "$v" ;;
+	esac
+}
+
+link_duplex() {
+	case $1 in
+	Full | full) printf 'full' ;;
+	Half | half) printf 'half' ;;
+	*) printf '' ;;
+	esac
+}
+
+resolve_link() {
+	[ "$PRESENT" = true ] || return 0
+
+	et=$(ethtool "$PHYS" 2>/dev/null)
+	if [ -n "$et" ]; then
+		sp=$(printf '%s' "$et" | sed -n 's/^[[:space:]]*Speed: *\([^[:space:]]*\).*/\1/p' | head -1)
+		dx=$(printf '%s' "$et" | sed -n 's/^[[:space:]]*Duplex: *\([^[:space:]]*\).*/\1/p' | head -1)
+		SPEED=$(link_speed "$sp")
+		DUPLEX=$(link_duplex "$dx")
+		if printf '%s' "$et" | grep -q 'Link detected: yes'; then
+			CARRIER=yes
+		elif printf '%s' "$et" | grep -q 'Link detected: no'; then
+			CARRIER=no
+		fi
+	fi
+
+	if [ -z "$SPEED" ]; then
+		SPEED=$(link_speed "$(read_trim "$WP_SYS_NET/$PHYS/speed")")
+	fi
+	if [ -z "$DUPLEX" ]; then
+		DUPLEX=$(link_duplex "$(read_trim "$WP_SYS_NET/$PHYS/duplex")")
+	fi
+	if [ "$CARRIER" = unknown ]; then
+		case $(read_trim "$WP_SYS_NET/$PHYS/carrier") in
+		1) CARRIER=yes ;;
+		0) CARRIER=no ;;
+		esac
+	fi
+}
+
+# --- qdam ------------------------------------------------------------------
+
+dt_node() {
+	n=$(readlink -f "$WP_SYS_NET/$1/device/of_node" 2>/dev/null)
+	if [ -n "$n" ] && [ -d "$n" ]; then
+		printf '%s' "$n"
+		return 0
+	fi
+
+	compat=$(sed -n 's/^OF_COMPATIBLE_0=\([^ ]*\).*/\1/p' \
+		"$WP_SYS_NET/$1/device/uevent" 2>/dev/null | head -1)
+	[ -n "$compat" ] || return 1
+	for d in "$WP_DT"/soc/ethernet@* "$WP_DT"/ethernet@*; do
+		[ -d "$d" ] || continue
+		c=$(read_trim "$d/compatible")
+		[ "$c" = "$compat" ] && { printf '%s' "$d"; return 0; }
+	done
+	return 1
+}
+
+resolve_qdam() {
+	[ "$PRESENT" = true ] || { add_unknown qdam_id; return; }
+	n=$(dt_node "$PHYS") || { add_unknown qdam_id; return; }
+	for p in qdam-id gdm-id gdm queue; do
+		v=$(read_trim "$n/$p")
+		if [ -n "$v" ]; then
+			QDAM=$v
+			return
+		fi
+	done
+	add_unknown qdam_id
+}
+
+# --- flowtable -------------------------------------------------------------
+
+ft_json() {
+	# nft pretty-prints its JSON on a stock device ("name": "ft",
+	# {"dev": [...]), so collapse the insignificant whitespace before
+	# matching.  The compact patterns below silently find nothing against
+	# a pretty-printed document, and every flowtable question then answers
+	# "no" instead of "we could not read it".
+	flat=$(printf '%s' "$1" | tr '\n\t' '  ' |
+		sed -e 's/: */:/g' -e 's/{ */{/g' -e 's/ *}/}/g' \
+		    -e 's/, */,/g' -e 's/\[ */[/g' -e 's/ *\]/]/g')
+	obj=$(printf '%s' "$flat" | grep -o '"flowtable":{[^}]*}' | head -1)
+	[ -n "$obj" ] || return 1
+	FT_NAME=$(printf '%s' "$obj" | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')
+	FT_FAM=$(printf '%s' "$obj" | sed -n 's/.*"family":"\([^"]*\)".*/\1/p')
+	# nft >= 1.1 names the device list "dev", older releases name it
+	# "devices".  Two plain greps rather than one optional-group regex,
+	# because BRE's optional group is a GNU extension.
+	devs=$(printf '%s' "$flat" | grep -o '"devices":\[[^]]*\]' | head -1)
+	[ -n "$devs" ] || devs=$(printf '%s' "$flat" | grep -o '"dev":\[[^]]*\]' | head -1)
+	if printf '%s' "$devs" | grep -q "\"$PHYS\""; then
+		FT_MEMBER=yes
+	else
+		FT_MEMBER=no
+	fi
+	return 0
+}
+
+ft_text() {
+	[ -n "$1" ] || { FT_MEMBER=no; return 0; }
+	FT_FAM=$(printf '%s' "$1" | awk '/^table / { print $2; exit }')
+	FT_NAME=$(printf '%s' "$1" | awk '/^[[:space:]]*flowtable / { print $2; exit }')
+	if printf '%s' "$1" | grep -Eq "devices *= *\\{[^}]*\"$PHYS\"" ||
+		printf '%s' "$1" | grep -Eq "devices *= *\\{[^}]*([ {])$PHYS([ ,}])"; then
+		FT_MEMBER=yes
+	else
+		FT_MEMBER=no
+	fi
+}
+
+resolve_flowtable() {
+	[ "$PRESENT" = true ] || { add_unknown flowtable; return; }
+	if ! command -v nft >/dev/null 2>&1; then
+		add_unknown flowtable
+		return
+	fi
+	if out=$(nft -j list flowtables 2>/dev/null) && [ -n "$out" ] &&
+		ft_json "$out"; then
+		return
+	fi
+	if out=$(nft list flowtables 2>/dev/null); then
+		ft_text "$out"
+		return
+	fi
+	add_unknown flowtable
+}
+
+# --- ppe -------------------------------------------------------------------
+
+# First number following a label anywhere in the usage dump, so the parse
+# survives either one line or several (busybox awk, no jq needed).
+num_field() {
+	printf '%s' "$1" | awk -v k="$2" '
+		{ for (i = 1; i < NF; i++) if ($i == k && $(i + 1) ~ /^[0-9]+$/) { print $(i + 1); exit } }'
+}
+
+resolve_ppe() {
+	u="$WP_DEBUGFS/ppe/usage"
+	if [ ! -r "$u" ]; then
+		add_unknown ppe_usage
+		add_unknown ppe_interface_entries
+		return
+	fi
+	usage=$(read_trim "$u")
+	PPE_ENTRIES=$(num_field "$usage" entries)
+	PPE_BOUND=$(num_field "$usage" bound)
+	PPE_UNBOUND=$(num_field "$usage" unbound)
+
+	# The 5-tuple dump has no netdev field on this SoC; only a bind table that
+	# literally names the netdev can attribute entries to this interface.
+	b="$WP_DEBUGFS/ppe/bind"
+	if [ -r "$b" ] && grep -q "$PHYS" "$b" 2>/dev/null; then
+		PPE_IF_ENTRIES=$(grep -c "$PHYS" "$b" 2>/dev/null)
+	else
+		add_unknown ppe_interface_entries
+	fi
+}
+
+# --- report ----------------------------------------------------------------
+
+print_text() {
+	printf 'wan-path: read-only WAN path diagnostic\n'
+	printf 'proto: %s\n' "$PROTO"
+	printf 'logical device: %s\n' "${LDEP:-unknown}"
+	printf 'physical device: %s\n' "${PHYS:-unknown}"
+	printf 'netdev present: %s\n' "$(jbool "$PRESENT")"
+	printf 'pppoe: session=%s interface=%s id=%s\n' "$(jbool "$PPP_SESS")" \
+		"${PPP_IF:-none}" "${PPP_ID:-none}"
+	printf 'link: carrier=%s speed=%s duplex=%s\n' "$CARRIER" \
+		"${SPEED:-unknown}" "${DUPLEX:-unknown}"
+	printf 'qdam: %s\n' "${QDAM:-unknown}"
+	if [ "$FT_MEMBER" = unknown ]; then
+		printf 'flowtable: unknown\n'
+	else
+		printf 'flowtable: member=%s name=%s family=%s\n' "$FT_MEMBER" \
+			"${FT_NAME:-unknown}" "${FT_FAM:-unknown}"
+	fi
+	printf 'ppe: entries=%s bound=%s unbound=%s interface_entries=%s\n' \
+		"${PPE_ENTRIES:-unknown}" "${PPE_BOUND:-unknown}" \
+		"${PPE_UNBOUND:-unknown}" "${PPE_IF_ENTRIES:-unknown}"
+	if [ -n "$UNKNOWN" ]; then
+		printf 'unknown: %s\n' "$UNKNOWN"
+	else
+		printf 'unknown: none\n'
+	fi
+	if [ "$COMPLETE" = true ]; then
+		printf 'status: complete\n'
+	else
+		printf 'status: incomplete\n'
+	fi
+}
+
+print_json() {
+	printf '{'
+	printf '"interface":%s,' "$(jstr "$IFACE")"
+	printf '"proto":%s,' "$(jstr "$PROTO")"
+	printf '"logical_device":%s,' "$(jstr "$LDEP")"
+	printf '"physical_device":%s,' "$(jstr "$PHYS")"
+	printf '"netdev_present":%s,' "$(jbool "$PRESENT")"
+	printf '"pppoe":{"session":%s,"interface":%s,"id":%s},' \
+		"$(jbool "$PPP_SESS")" "$(jstr "$PPP_IF")" "$(jstr "$PPP_ID")"
+	printf '"link":{"carrier":%s,"speed":%s,"duplex":%s},' \
+		"$(jtri "$CARRIER")" "$(jnum "$SPEED")" "$(jstr "$DUPLEX")"
+	printf '"qdam_id":%s,' "$(jstr "$QDAM")"
+	printf '"flowtable":{'
+	printf '"member":%s,' "$(jtri "$FT_MEMBER")"
+	printf '"name":%s,' "$(jstr "$FT_NAME")"
+	printf '"family":%s},' "$(jstr "$FT_FAM")"
+	printf '"ppe":{"entries":%s,"bound":%s,"unbound":%s,"interface_entries":%s},' \
+		"$(jnum "$PPE_ENTRIES")" "$(jnum "$PPE_BOUND")" \
+		"$(jnum "$PPE_UNBOUND")" "$(jnum "$PPE_IF_ENTRIES")"
+	printf '"unknown":['
+	first=1
+	for u in $UNKNOWN; do
+		[ "$first" = 1 ] || printf ','
+		jstr "$u"
+		first=0
+	done
+	printf '],'
+	printf '"complete":%s' "$COMPLETE"
+	printf '}\n'
+}
+
+main() {
+	for arg in "$@"; do
+		case $arg in
+		--json) JSON=1 ;;
+		--help | -h) usage; exit 0 ;;
+		*)
+			printf 'wan-path: unknown argument: %s\n' "$arg" >&2
+			exit 2
+			;;
+		esac
+	done
+
+	resolve_netdev
+	resolve_link
+	resolve_qdam
+	resolve_flowtable
+	resolve_ppe
+
+	if [ -z "$UNKNOWN" ]; then COMPLETE=true; else COMPLETE=false; fi
+
+	if [ "$JSON" = 1 ]; then
+		print_json
+	else
+		print_text
+	fi
+
+	[ -z "$UNKNOWN" ] && exit 0
+	exit 1
+}
+
+main "$@"

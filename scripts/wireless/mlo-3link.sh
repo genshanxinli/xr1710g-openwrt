@@ -112,11 +112,17 @@ STATION=
 STATION_LINKS=
 TRAFFIC_TOOL=
 TRAFFIC_OK=0
+# Loss ceiling for the ping window, in percent.  Before this, any loss below
+# 100% counted as success, so a 90%-loss window -- nine out of ten packets
+# dropped -- was reported as traffic-ok.
+TRAFFIC_MAX_LOSS=10
 TRAFFIC_TIMEOUT=0
 TRAFFIC_BITS=
 TRAFFIC_LOSS=
 TRAFFIC_TX=
 TRAFFIC_RX=
+# Set to 1 when the per-link byte counters did not move during the window.
+PER_LINK_NOBYTES=0
 RESULT=
 STOP=
 LINKS_AT_STOP=
@@ -1073,7 +1079,8 @@ traffic_window() {
 		[ -n "$TRAFFIC_LOSS" ] || TRAFFIC_LOSS=100
 		[ -n "$TRAFFIC_TX" ] || TRAFFIC_TX=$DURATION
 		[ -n "$TRAFFIC_RX" ] || TRAFFIC_RX=0
-		if [ "$_rc" -eq 0 ] && [ "$TRAFFIC_LOSS" -lt 100 ] && [ "$TRAFFIC_RX" -gt 0 ]; then
+		if [ "$_rc" -eq 0 ] && [ "$TRAFFIC_LOSS" -le "$TRAFFIC_MAX_LOSS" ] &&
+			[ "$TRAFFIC_RX" -gt 0 ]; then
 			TRAFFIC_OK=1
 		fi
 	fi
@@ -1082,7 +1089,8 @@ traffic_window() {
 
 per_link_deltas() {
 	# per_link_deltas BEFORE AFTER SECONDS ; print measured per-link rates and
-	# byte deltas.  Returns 1 when per-link counters are unavailable.
+	# byte deltas.  Returns 1 when per-link counters are unavailable, 2 when
+	# the counters exist but moved no byte.
 	_before=$1
 	_after=$2
 	_secs=$3
@@ -1096,6 +1104,7 @@ per_link_deltas() {
 				d = $4 - b[key]
 				if (d < 0) d = 0
 				rate[$2, $3] = d * 8 / secs / 1000000
+				bytes[$2] += d
 				seen[$2] = 1
 			}
 		}
@@ -1105,13 +1114,19 @@ per_link_deltas() {
 			if (!n) exit 1
 			sum_tx = 0
 			sum_rx = 0
+			sum_bytes = 0
 			for (l = 0; l < 16; l++) {
 				if (!(l in seen)) continue
 				printf "  link %d over %ss: tx %.2f Mbit/s, rx %.2f Mbit/s\n", l, secs, rate[l, "tx_bytes"] + 0, rate[l, "rx_bytes"] + 0
 				sum_tx += rate[l, "tx_bytes"]
 				sum_rx += rate[l, "rx_bytes"]
+				sum_bytes += bytes[l]
 			}
 			printf "  per-link sum over %ss: tx %.2f Mbit/s, rx %.2f Mbit/s\n", secs, sum_tx, sum_rx
+			# Every link read 0 byte: the counters exist but nothing
+			# moved.  Printing "0.00 Mbit/s" and returning 0 let the
+			# caller call this a pass; exit 2 marks "no data".
+			if (sum_bytes <= 0) exit 2
 		}
 	' "${STATE_DIR}/.fields-before.$$" "${STATE_DIR}/.fields-after.$$"
 	_rc=$?
@@ -1125,6 +1140,14 @@ classify_result() {
 	MLD=$(find_mld 2>/dev/null) || MLD=
 	[ -n "$MLD" ] && _links_now=$(link_count "$MLD")
 	case "$_links_now" in ''|*[!0-9]*) _links_now=0 ;; esac
+
+	# Per-link counters that exist but moved no byte mean the window carried
+	# no data, even when the tool reported success -- ping still counted a
+	# 90%-loss burst, iperf3 can report a rate for a link that sent nothing.
+	# Such a window is not traffic-ok.
+	if [ "$TRAFFIC_OK" = 1 ] && [ "$PER_LINK_NOBYTES" = 1 ]; then
+		TRAFFIC_OK=0
+	fi
 
 	if [ "$TRAFFIC_OK" = 1 ]; then
 		RESULT=traffic-ok
@@ -1154,6 +1177,9 @@ classify_result() {
 	elif [ "$TRAFFIC_TIMEOUT" = 1 ]; then
 		RESULT=traffic-timeout
 		STOP="the traffic command hit its time limit and the control plane did not match a clean black-hole"
+	elif [ "$PER_LINK_NOBYTES" = 1 ]; then
+		RESULT=traffic-failed
+		STOP="per-link counters moved no byte during the traffic window; that is not a pass"
 	else
 		RESULT=traffic-failed
 		STOP="the traffic window failed without a clean black-hole signature"
@@ -1705,12 +1731,24 @@ do_run() {
 	STATION_LINKS=$(station_link_count "$CAPTURE/station-before-traffic.txt" "$STATION")
 	case "$STATION_LINKS" in ''|*[!0-9]*) STATION_LINKS=0 ;; esac
 	say "station: $STATION; per-link data: ${STATION_LINKS} link(s)"
-	if [ "$STATION_LINKS" -eq 1 ] || [ "$STATION_LINKS" -eq 2 ]; then
+	# Both 0 and 3 must be handled: the predicate used to reject only 1 and
+	# 2, so "no per-link data" walked on into the traffic window and the run
+	# then reported a result for a station whose link count was never known.
+	case "$STATION_LINKS" in
+	3) ;;
+	0)
+		RESULT=station-no-perlink
+		STOP="iw station dump reports no per-link data for $STATION; the 3-link precondition cannot be verified"
+		say "result: $STOP; no traffic window and no retry"
+		exit 4
+		;;
+	*)
 		RESULT=station-not-3link
 		STOP="the station reports ${STATION_LINKS} link(s); a 3-link station is required for this negative test"
 		say "result: $STOP; no traffic window and no retry"
 		exit 4
-	fi
+		;;
+	esac
 	if ! print_station_rates "$CAPTURE/station-before-traffic.txt" "$STATION"; then
 		warn "per-link station rates are unavailable in iw station dump"
 	fi
@@ -1719,12 +1757,23 @@ do_run() {
 	capture_after
 	station_dump_to "$CAPTURE/station-after-traffic.txt"
 
+	per_link_rc=0
 	if per_link_deltas "$CAPTURE/station-before-traffic.txt" \
 		"$CAPTURE/station-after-traffic.txt" "$DURATION"; then
 		:
 	else
-		say "per-link traffic rates: unavailable (iw station dump has no per-link counters)"
+		per_link_rc=$?
 	fi
+	case "$per_link_rc" in
+	0) ;;
+	2)
+		PER_LINK_NOBYTES=1
+		say "per-link counters exist but moved no byte during the traffic window"
+		;;
+	*)
+		say "per-link traffic rates: unavailable (iw station dump has no per-link counters)"
+		;;
+	esac
 
 	classify_result
 	case "$RESULT" in

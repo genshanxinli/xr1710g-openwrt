@@ -1,8 +1,8 @@
 # AN7581 / MT7996 / NPU materials acquisition log
 
-**Status:** research log, last surveyed 2026-11-15 (UTC+08:00)
+**Status:** research log, last surveyed 2026-11-15; upstream/registry pass 2026-11-19 (UTC+08:00)
 **Tracking issue:** [#57](https://github.com/genshanxinli/xr1710g-openwrt/issues/57)
-**Registry follow-up:** [#87](https://github.com/genshanxinli/xr1710g-openwrt/issues/87)
+**Registry follow-up:** [#87](https://github.com/genshanxinli/xr1710g-openwrt/issues/87) — registry columns and upstream status are in §9
 
 This file tracks the hardware and firmware documentation this port still needs,
 where it was looked for, and the exact result of each attempt. It is a research
@@ -147,7 +147,44 @@ stronger claim than it is.
    #87 materials registry. Do not commit proprietary documents or firmware
    blobs to this repository; record the link, digest and custodian instead.
 
-## 9. Source provenance
+## 9. Upstream status (checked 2026-11-19)
+
+This section is the #87 registry view: what is already in this tree, what is
+only linked, and what is still absent. Rows follow the registry columns
+**material / type / URL or local path / date / SHA-256 or pin / status / notes**.
+Status words are the vocabulary from "How to read this log"; facts here were
+checked against the tree or the GitHub API, not inferred from a report.
+
+| Material | Type | URL or local path | Date | SHA-256 / pin | Status | Notes |
+|---|---|---|---|---|---|---|
+| mt76 package source | firmware + driver source | https://github.com/OpenWRT-fanboy/mt76-firmware | 2026-10-08 | `639e128702780b398c1c36782b77899ce6bcb1fa`; mirror `9dfa305e700a7b4d83619a16517e36151a5d06e4b5a1a6d48e97ef3b48b0761e` | 已入库 | Pin in `package/kernel/mt76/Makefile:9-14`; not a MediaTek release |
+| backports source | SDK | https://github.com/openwrt/backports/releases/download/backports-v7.2 | 7.2 | — | 已入库 | `package/kernel/mac80211/Makefile:13-22` |
+| openwrt/openwrt PR #22289 | PR | https://github.com/openwrt/openwrt/pull/22289 | 2026-03-06 | — | 已入库 | "airoha: add support for AN7581+MT7996 NPU firmware" |
+| openwrt/openwrt PR #22300 | PR | https://github.com/openwrt/openwrt/pull/22300 | 2026-03-06 | — | 已入库 | "airoha: an7581: disable NPU offload stats for eagle" |
+| openwrt/openwrt PR #21978 | PR | https://github.com/openwrt/openwrt/pull/21978 | 2026-02-13 | — | 已入库 | "airoha: fix EN7581 PCIe initialization and add x2 link support" |
+| openwrt/openwrt PR #22479 | PR | https://github.com/openwrt/openwrt/pull/22479 | 2026-03-20 | — | 已入库 | "airoha: Backport some missing airoha_eth upstream patches" |
+| openwrt/openwrt PR #26513 | PR | https://github.com/openwrt/openwrt/pull/26513 | 2026-11-11 | — | 已入库 | "airoha: nvmem: fix SMC function ID for eFuse read" |
+| Bridge/flowtable series `675-*` | patches | `target/linux/generic/pending-6.18/675-01..675-05` | 2026-11-19 | — | 已入库 | Only 01–05 exist; 675-02 is reported by #92/#160 to leave hunk rejects in `net/netfilter/nf_flow_table_path.c` on the 6.18 stack (pre-existing, not introduced here) |
+| bridger | package | `package/network/services/bridger/` | 2026-03-23 | `befa61b1b646c53774a2285df1609776fa2f3f7f` ("bridger: update to Git HEAD (2026-03-23)") | 已入库 | Local package; no upstream status claim beyond the pin |
+| EN7581 NPU firmware v08 | firmware | `package/firmware/linux-firmware/files/airoha/en7581_MT7996_npu_rv32.bin`, `..._npu_data.bin` | 2026-11-15 | `7068a987bb95e89129a69de10d598f234a4400023eb23aacc8eb377e5f0fe0ea` (rv32, 125,832 B); `6fd9506e399ebb309801ac2ecc74d3e10fa66731afc828c76fde8a67b2153f49` (data, 3,092 B) | 已入库 | Full hashes and the v03 upstream pair are in §2; `airoha_npu.bin` is absent from the tree |
+| PPPoE decap selector for #81 | patch | `target/linux/airoha/patches-7.3/9904-net-airoha-encode-pppoe-decap-with-psn.patch` (expected path) | — | — | 待索取 | `ls` finds no `9904*` file; issue #81 remains the only description of the intended decap=3 semantics. Do not cite a runtime `ppe/pppoe_decap` knob as present without reading it back on a booted device |
+| AN7581 / EN7581 datasheet or TRM | datasheet/TRM | — | — | — | 未公开 | Public channels exhausted on 2026-11-15 (§1); procurement/NDA is the remaining path |
+| MT7996 vendor register guide | TRM | — | — | — | 未公开 | MediaTek Online login required (§3); `device-ref` is not a substitute |
+| RTL8261BE / RTL8156B datasheets | datasheet | — | — | — | 未公开 | Realtek returned 301/404 (§4); distributor request remains |
+
+**Registry rules** (from #87):
+
+1. Every newly acquired item gets URL or local path, date, size, SHA-256 (files)
+   and one status word; a link without a date is not a registry entry.
+2. Inference and measurement stay separate. A merged upstream PR proves the
+   patch exists, not that this board runs it; an in-tree firmware blob proves
+   the file is present, not that the NPU firmware booted.
+3. Proprietary documents and firmware blobs are not committed here. Record the
+   link, digest and custodian instead.
+4. A missing public document is recorded as a dated negative result for named
+   channels; it is not evidence that the vendor holds nothing.
+
+## 10. Source provenance
 
 - Airoha AN7581 page, contact page and security page were fetched 2026-11-15
   (HTTP 200 each).
