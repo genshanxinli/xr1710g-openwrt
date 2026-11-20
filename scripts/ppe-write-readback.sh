@@ -998,7 +998,7 @@ do_write_path() {
 				    "restore command was not acknowledged; verify the" \
 				    "slot before resuming traffic."
 			else
-				warn "Do not reboot before reading the recovery section of scripts/ppe-write-readback.md."
+				warn "Do not reboot before reading the recovery section in the --help text of this script."
 			fi
 		fi
 		exit 1

@@ -76,7 +76,7 @@ emit() {
 
 # Map a known firmware md5 to its release label.  Add an entry only after
 # the image has been verified against a trusted source and its provenance
-# has been recorded in scripts/npu-firmware-7.8.md.
+# has been recorded in issue #87.
 known_hash() {
 	case "$1" in
 	550a8b3bf967a1e83bb1aaeca030ec7b)

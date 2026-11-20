@@ -43,7 +43,7 @@ both "the dump sits low" and "this geometry would put N of them high".
 status is INCONSISTENT when the dump contradicts the declared geometry:
 a dumped slot outside the table, or a 32768-entry declaration whose slots
 are all below 0x2000 (the b19-image pattern; see
-docs/soc-claims-audit-r2-2026-11-14.md A6).  That case exits 1.  A clean
+issue #31 comment A6).  That case exits 1.  A clean
 run exits 0.
 
 This is an offline, standard-library-only tool.  It opens a dump for

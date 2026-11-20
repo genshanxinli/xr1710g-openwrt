@@ -4,14 +4,14 @@ name: Check release image features
 # not merely in target/linux/airoha/patches-7.3.  The self-test job proves the
 # gate itself works on every change; the release-branch audit fails when the
 # branch that publishes images does not carry the changes (the release build
-# must also run the full build+image check, see docs/release-image-features-gate.md).
+# must also run the full build+image check; the criteria are in the script's --help).
 
 on:
   pull_request:
     paths:
       - 'scripts/check-release-image-features.py'
       - 'scripts/tests/check-release-image-features.py'
-      - 'docs/release-image-features-gate.md'
+      - 'scripts/check-release-image-features.py'
       - '.github/workflows/check-release-image-features.yml'
   push:
     branches:
@@ -19,7 +19,7 @@ on:
     paths:
       - 'scripts/check-release-image-features.py'
       - 'scripts/tests/check-release-image-features.py'
-      - 'docs/release-image-features-gate.md'
+      - 'scripts/check-release-image-features.py'
       - 'target/linux/airoha/patches-7.3/**'
       - '.github/workflows/check-release-image-features.yml'
   workflow_dispatch:

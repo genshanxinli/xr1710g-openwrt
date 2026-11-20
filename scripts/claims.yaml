@@ -158,7 +158,7 @@ claims:
   - id: baseline-lan4-1g-2026-11-20
     claim: "1000 Mb/s lan4 链路上，本移植单向 iperf3 吞吐为 TX 0.704 Gbit/s、RX 0.887 Gbit/s；该次流量没有被 PPE 绑定（bound_delta 0），按软件路径处理，CPU busy 约 9.5%（TX）/37.9%（RX）占墙钟。"
     source:
-      - "scripts/perf-baselines/lan4-1g-2026-11-20/record.md:1"
+      - "scripts/perf-baselines/lan4-1g-2026-11-20/result.json:1"
     evidence: 实测
     date: "2026-11-20"
     status: supported
@@ -172,13 +172,12 @@ claims:
     evidence: 推断
     date: "2026-11-15"
     status: unverified
-    notes: "来自 issue #31 的已验证事实清单；b12 三臂实验原始记录未入库，docs/ 被 .gitignore 忽略。issue #81 才把 decap 语义做成可选档。"
+    notes: "来自 issue #31 的已验证事实清单；b12 三臂实验原始记录未入库。issue #81 才把 decap 语义做成可选档。"
 
   - id: pbus-csr-0x18-reads-7
     claim: "XR1710G 上 pbus_csr（0x1fbe3400）的 0x18 偏移即 0x1fbe3418，开机后读 0x00000007。"
     source:
       - scripts/tests/fixtures/pbus_csr-1fbe3400.registers:12
-      - docs/pcie-single-cut.md:40
       - target/linux/airoha/dts/an7581.dtsi:589
     evidence: 实测
     date: "2026-11-20"
@@ -188,8 +187,6 @@ claims:
   - id: pcie-topology-xr1710g
     claim: "XR1710G 上 pcie0（1fc00000，domain 0000）以 x2 / 8.0 GT/s 训练并枚举 14c3:7990（mt7996e），pcie2（1fc40000，domain 0002）以 x1 / 5.0 GT/s 枚举 14c3:7991，pcie1（1fc20000）未枚举。"
     source:
-      - docs/pcie-single-cut.md:72
-      - docs/pcie-single-cut.md:80
       - target/linux/airoha/dts/an7581-xr1710g-ubi.dts:235
     evidence: 实测
     date: "2026-11-20"
@@ -199,7 +196,6 @@ claims:
   - id: reg-arbitrate-us-agree
     claim: "美规 XR1710G 出厂 radio1.country=radio2.country=US，运行 60_xr1710g-reg-arbitrate 只记一行 reg=US 日志、rc=0、不改 /etc/config/wireless。"
     source:
-      - docs/wifi-reg-arbitration.md:90
       - target/linux/airoha/an7581/base-files/etc/uci-defaults/60_xr1710g-reg-arbitrate:175
     evidence: 实测
     date: "2026-11-20"
@@ -210,7 +206,6 @@ claims:
     source:
       - scripts/check-npu-firmware.sh:28
       - scripts/check-npu-firmware.sh:82
-      - docs/wan-materials.md:51
     evidence: 代码
     date: "2026-11-20"
     status: supported
@@ -219,7 +214,6 @@ claims:
   - id: flowtable-ft-missing-wlan-vifs
     claim: "运行时已加载的 inet fw4 flowtable ft 的设备集合是 {lan2,lan3,lan4,wan}，不含 br-lan 里的 wlan vif；同一时刻 fw4 print 按当前状态会给出含 phy0.0-ap0/phy0.1-ap0 的集合，即已加载的 ft 是重载旧快照，缺口是重载竞争而不是 fw4 过滤。"
     source:
-      - docs/wan-wifi-path.md:88
       - target/linux/airoha/an7581/base-files/etc/hotplug.d/iface/51-bridge-hw-offload:17
       - target/linux/airoha/an7581/base-files/etc/hotplug.d/net/50-bridge-hw-offload:40
     evidence: 实测
@@ -242,8 +236,7 @@ claims:
   - id: wifi-self-loopback-not-possible
     claim: "XR1710G（mt7996e，单 wiphy phy0）上无法建立单机 AP+STA 环回：同一 phy 的发射不上自己的接收路径，任何 VIF 都关联不到自己承载的 BSS。"
     source:
-      - docs/perf/wireless-loopback-baseline.md:117
-      - docs/perf/wireless-loopback-baseline.md:162
+      - https://github.com/genshanxinli/xr1710g-openwrt/issues/191
     evidence: 实测
     date: "2026-11-20"
     status: supported
@@ -252,7 +245,7 @@ claims:
   - id: wifi-single-radio-one-channel
     claim: "phy0 的 per-radio valid interface combinations 是 #{ AP, mesh point } <= 16, #{ managed } <= 19, total <= 19, #channels <= 1, STA/AP BI must match，因此同一 radio 上的 AP 与 STA 只能共用一个信道，跨 band 环回被这条约束排除。"
     source:
-      - docs/perf/wireless-loopback-baseline.md:22
+      - https://github.com/genshanxinli/xr1710g-openwrt/issues/191
     evidence: 实测
     date: "2026-11-20"
     status: supported
@@ -261,7 +254,6 @@ claims:
   - id: wifi-managed-set-channel-rejected
     claim: "mac80211 上 managed VIF 不允许显式设置信道，iw set freq / set channel 一律返回 Resource busy (-16)；先锁信道再 connect 的规避手段在 mt7996e 上没有可行性。"
     source:
-      - docs/perf/wireless-loopback-baseline.md:23
       - package/kernel/mac80211/Makefile:13
     evidence: 实测
     date: "2026-11-20"

@@ -46,7 +46,8 @@ Examples::
     # After flashing the rebuilt image: verify the running system offline.
     scripts/check-release-image-features.py --capture /tmp/bql-capture.txt
 
-See docs/release-image-features-gate.md for the criteria, how to collect a
+Criteria live in the --help text and in scripts/tests/check-release-image-features.py;
+how to collect a
 capture, and the rollback procedure.
 """
 
@@ -760,7 +761,7 @@ def print_guidance() -> None:
     print("     under sustained TX load and re-run with --capture.")
     print("     <conduit> is the DSA conduit (readlink -f /sys/class/net/lan4/lower_*),")
     print("     not the physical port name: lan3/lan4 have no BQL group of their own.")
-    print("See docs/release-image-features-gate.md for the criteria and rollback.")
+    print("See --help for the criteria; the test file holds a worked example of every case.")
 
 
 def autodetect_build_dir(repo: Path) -> Path | None:

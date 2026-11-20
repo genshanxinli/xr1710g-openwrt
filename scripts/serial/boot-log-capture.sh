@@ -86,7 +86,7 @@ fi
 
 if [ "$via" = serial ] && [ "$have_serial" -eq 0 ]; then
 	echo "$prog: --via serial but no serial port is present" >&2
-	echo "$prog: attach the CH340 first, see docs/serial/console-setup.md" >&2
+	echo "$prog: attach the CH340 first (usbipd list / usbipd attach --wsl), 115200 8N1" >&2
 	exit 3
 fi
 

@@ -77,9 +77,11 @@ Three images are produced:
   system.
 - `...-ubi-chainload-uboot.itb` — a FIT that chain-loads OpenWrt's U-Boot.
 
-The flash layout is `vendor` + `chainloader` + `ubi` + `reserved_bmt`
-([`docs/ubi-layout.md`](docs/ubi-layout.md) explains why this board cannot use
-the two-partition reference layout). Device and this tree both report
+The flash layout is `vendor` + `chainloader` + `ubi` + `reserved_bmt`. It stays
+four partitions because the two-partition reference layout needs BL2/BL31
+written by the build (`target/linux/airoha/image/an7581.mk:1-5`) while this
+board's `vendor` partition is a vendor-signed AXON blob; this tree only
+produces `chainload-uboot.itb`. Device and this tree both report
 `compat_version 2.0`; images built from this tree upgrade in place.
 
 Cross-flashing a W1700K image is rejected by
@@ -119,10 +121,11 @@ A 2.0 unit shows `chainloader` at `0x00600000` (1 MiB), `reserved_bmt` at
 Any of those missing, or the compat value unreadable (treat unreadable as `1.0`),
 means the unit is not on the 2.0 layout — do not flash this tree's images onto it.
 
-Before you flash anything on hardware you would rather not lose, read
-[`docs/wan-recovery-gate.md`](docs/wan-recovery-gate.md): wiring, NAND backup,
-compatibility gate and the soft-brick rollback procedure, each row labelled
-with how it was verified.
+Before you flash anything on hardware you would rather not lose: capture the
+running `/proc/mtd` and `ubinfo -a` output over ssh, keep the vendor image and
+`ubootenv`/`ubootenv2` volumes, and verify the compat gate listed above before
+writing. Nothing here has been booted from the recovery image yet, so treat the
+recovery path as untested on hardware.
 
 ## What is included
 
@@ -146,16 +149,10 @@ with how it was verified.
 
 ## Documentation
 
-Start here; each file is cited from the issues it settles:
-
-- [`docs/MTU-POLICY.md`](docs/MTU-POLICY.md) — MTU 1500 policy (issue #100). Jumbo is a non-goal.
-- [`docs/wan-measurement-protocol.md`](docs/wan-measurement-protocol.md) — how WAN/PPPoE/Wi-Fi forwarding numbers are measured.
-- [`docs/wan-2.5g-gate.md`](docs/wan-2.5g-gate.md) — 2.5G WAN gate.
-- [`docs/wan-productization.md`](docs/wan-productization.md) — WAN productization defaults and rollback matrix.
-- [`docs/wan-recovery-gate.md`](docs/wan-recovery-gate.md) — flash-recovery gate.
-- [`docs/ubi-layout.md`](docs/ubi-layout.md) — why the layout is 4-partition, and what a 2-partition factory image would require (issue #8).
-- [`docs/wan-wifi-path.md`](docs/wan-wifi-path.md) — Wi-Fi forwarding path (mt7996 to GDM2).
-- [`docs/release-image-features-gate.md`](docs/release-image-features-gate.md) — release image feature gates (BQL, napi_complete_done), plus how to judge whether the embedded kernel is stale (build id + FIT payload hash, not `Image`/`vmlinux` mtimes) and which netdev to sample `inflight` on (the DSA conduit, not the physical port).
+This tree ships no prose documents; the evidence for every hardware claim lives
+in the issue that settles it and in the machine-checked ledger `scripts/claims.yaml`
+(`python3 scripts/check-claims.py --strict --max-unverified N`). Start from the
+issue index, then follow the `file:line` pointers in the ledger.
 
 ## Building
 
