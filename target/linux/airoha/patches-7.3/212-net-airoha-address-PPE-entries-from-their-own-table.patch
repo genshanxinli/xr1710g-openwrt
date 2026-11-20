@@ -34,10 +34,12 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -78,6 +78,32 @@
- 	return PPE_SRAM_NUM_ENTRIES;
- }
+@@ -73,6 +73,32 @@
+ 		return PPE_SRAM_NUM_ENTRIES - num_stats;
  
+ 	return PPE_SRAM_NUM_ENTRIES;
++}
++
 +/* The table is not a power of two once flow counters carve their slots out
 + * of the SRAM: 8192 - 4096 entries per PPE over two PPEs, plus the DRAM
 + * region, gives 24576.  Folding with "& (entries - 1)" would then only ever
@@ -62,12 +64,10 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +		       (hash & (PPE_SRAM_NUM_ENTRIES - 1));
 +
 +	return hash % num_entries;
-+}
-+
+ }
+ 
  static u32 airoha_ppe_get_total_sram_num_entries(struct airoha_ppe *ppe)
- {
- 	struct airoha_eth *eth = ppe->eth;
-@@ -654,13 +680,7 @@
+@@ -613,13 +639,7 @@
  	hash ^= hv1 ^ hv2 ^ hv3;
  	hash ^= hash >> 16;
  
@@ -82,7 +82,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  }
  
  static int airoha_ppe_foe_get_flow_stats_index(struct airoha_ppe *ppe,
-@@ -779,11 +799,19 @@
+@@ -738,13 +758,21 @@
  
  	if (hash < sram_num_entries) {
  		u32 *hwe = ppe->foe + hash * sizeof(struct airoha_foe_entry);
@@ -104,7 +104,9 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 -			     FIELD_PREP(PPE_SRAM_CTRL_ENTRY_MASK, hash) |
 +			     FIELD_PREP(PPE_SRAM_CTRL_ENTRY_MASK, entry) |
  			     PPE_SRAM_CTRL_REQ_MASK);
-@@ -834,10 +861,20 @@
+ 		if (read_poll_timeout_atomic(airoha_fe_rr, val,
+ 					     val & PPE_SRAM_CTRL_ACK_MASK,
+@@ -793,9 +821,19 @@
  static int airoha_ppe_foe_commit_sram_entry(struct airoha_ppe *ppe, u32 hash)
  {
  	struct airoha_foe_entry *hwe = ppe->foe + hash * sizeof(*hwe);
@@ -113,7 +115,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +	bool ppe2 = hash >= base;
  	u32 *ptr = (u32 *)hwe, val;
  	int i;
- 
++
 +	/* Address the entry relative to the PPE that owns it.  Writing the
 +	 * raw hash worked only as long as the hardware wrapped it to its own
 +	 * table size, and stopped working entirely once flow counters halved
@@ -122,11 +124,10 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +	 */
 +	if (ppe2)
 +		hash -= base;
-+
+ 
  	for (i = 0; i < sizeof(*hwe) / sizeof(*ptr); i++)
  		airoha_fe_wr(ppe->eth, REG_PPE_RAM_ENTRY(ppe2, i), ptr[i]);
- 
-@@ -1690,7 +1727,7 @@
+@@ -1572,7 +1610,7 @@
  	u16 now, diff;
  
  	if (hash >= num_entries)
