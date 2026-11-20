@@ -15,12 +15,16 @@ Checks, in order:
 
   source   the kernel build source carries both changes; if no build tree is
            given, the patch files in ``patches-7.3`` are checked instead.
-  build    the kernel was compiled after the source changed (mtime chain),
-           ``CONFIG_BQL=y`` is set, and the 974 accumulator functions are in
-           ``airoha_eth.o``/``vmlinux``.
+  build    the kernel was compiled after the source changed (mtime chain:
+           source -> object -> vmlinux only), ``CONFIG_BQL=y`` is set, and the
+           974 accumulator functions are in ``airoha_eth.o``/``vmlinux``.
+           ``Image`` being older than ``vmlinux`` is expected (OpenWrt links
+           the kernel twice) and is reported as a note, not a failure.
   image    the FIT image embeds exactly the kernel in ``$(KDIR)/Image`` (the
            sha256 of the extracted payload must match), so a new rootfs
-           cannot be shipped with an old kernel again.
+           cannot be shipped with an old kernel again.  Staleness is judged
+           by the embedded kernel's build string and payload hash, never by
+           the mtime order of ``Image`` and ``vmlinux``.
   capture  an offline capture of ``byte_queue_limits`` proves the running
            image lets BQL fill the queue: max ``inflight`` >= 64 KiB under
            sustained TX load.
@@ -701,7 +705,9 @@ def check_capture_stage(capture: Path, min_inflight: int, report: Report) -> boo
     if not values:
         report.fail(
             "capture has no byte_queue_limits/inflight samples; collect "
-            "/sys/class/net/<dev>/queues/tx-*/byte_queue_limits/inflight under sustained TX load"
+            "/sys/class/net/<conduit>/queues/tx-*/byte_queue_limits/inflight under sustained "
+            "TX load, where <conduit> is the DSA conduit (readlink -f "
+            "/sys/class/net/lan4/lower_*), not the physical port name"
         )
         return False
 
@@ -750,8 +756,10 @@ def print_guidance() -> None:
     print("  3. Re-run this check with --build-dir and --image-dir, then flash the")
     print("     new sysupgrade image through the normal procedure.")
     print("  4. After booting the new image, capture")
-    print("       /sys/class/net/<dev>/queues/tx-*/byte_queue_limits/inflight")
+    print("       /sys/class/net/<conduit>/queues/tx-*/byte_queue_limits/inflight")
     print("     under sustained TX load and re-run with --capture.")
+    print("     <conduit> is the DSA conduit (readlink -f /sys/class/net/lan4/lower_*),")
+    print("     not the physical port name: lan3/lan4 have no BQL group of their own.")
     print("See docs/release-image-features-gate.md for the criteria and rollback.")
 
 

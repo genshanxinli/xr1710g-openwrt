@@ -120,7 +120,7 @@ Start here; each file is cited from the issues it settles:
 - [`docs/wan-productization.md`](docs/wan-productization.md) — WAN productization defaults and rollback matrix.
 - [`docs/wan-recovery-gate.md`](docs/wan-recovery-gate.md) — flash-recovery gate.
 - [`docs/wan-wifi-path.md`](docs/wan-wifi-path.md) — Wi-Fi forwarding path (mt7996 to GDM2).
-- [`docs/release-image-features-gate.md`](docs/release-image-features-gate.md) — release image feature gates (BQL, napi_complete_done).
+- [`docs/release-image-features-gate.md`](docs/release-image-features-gate.md) — release image feature gates (BQL, napi_complete_done), plus how to judge whether the embedded kernel is stale (build id + FIT payload hash, not `Image`/`vmlinux` mtimes) and which netdev to sample `inflight` on (the DSA conduit, not the physical port).
 
 ## Building
 
