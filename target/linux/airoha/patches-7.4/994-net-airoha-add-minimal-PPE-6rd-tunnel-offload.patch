@@ -32,7 +32,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -555,6 +555,34 @@ struct airoha_foe_stats64 {
+@@ -546,6 +546,20 @@
  	u64 packets;
  };
  
@@ -50,49 +50,25 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +	u16 tunnel_mtu;		/* maximum inner packet size */
 +};
 +
-+/* Host-side parameters of an IPv6-in-IPv4 tunnel (6rd).  A 6rd entry uses
-+ * the PPE's generic tunnel fields: a tunnel bit plus a tunnel table index in
-+ * the route entry's data word, the maximum inner packet size in the meter
-+ * word, and the tunnel-decap bit ("rmt") in information block 1.  The driver
-+ * only maps values the flow offload API reports; it does not create, program
-+ * or tear down the tunnel or its table.
-+ */
-+struct airoha_ppe_6rd {
-+	bool tunnel;		/* flow is marked as 6rd */
-+	bool rmt;		/* remove the outer IPv4 header */
-+	u8 tunnel_id;		/* PPE tunnel table index */
-+	u16 tunnel_mtu;		/* maximum inner packet size */
-+};
-+
  struct airoha_flow_data {
  	struct ethhdr eth;
  
-@@ -584,9 +612,10 @@ struct airoha_flow_data {
- 		u16 sid;
- 		u8 num;
- 	} pppoe;
+@@ -596,6 +610,7 @@
+ 		u8 tunnel_id;
+ 		u16 tunnel_mtu;
+ 	} dslite;
 +	struct airoha_ppe_6rd sixrd;
-+};
  
--	/* Parameters of an IPv4-in-IPv6 DS-Lite decapsulation flow.  They
--	 * come from the IPv6 tunnel netdev the inner packet arrived on,
-+enum airoha_flow_entry_type {
- 	 * not from the flow dissector: the kernel exposes the inner IPv4
- 	 * tuple and the ingress ifindex, and the ingress device is the
- 	 * per-flow DS-Lite mark.
-@@ -992,9 +1021,10 @@ struct airoha_foe_entry *airoha_ppe_foe_
+ 	/* Meter group requested by a tc police action, or
+ 	 * AIROHA_PPE_METER_NONE.  Carried from the action parser to
+@@ -953,6 +968,7 @@
  int airoha_ppe_probe_entry_alias(struct airoha_ppe *ppe);
  void airoha_ppe_foe_entry_get_stats(struct airoha_ppe *ppe, u32 hash,
  				    struct airoha_foe_stats64 *stats);
 +bool airoha_ppe_6rd_enabled(void);
  
--/* DS-Lite decapsulation offload, default off.  Declared unconditionally
-- * because the flow path reads it whether or not debugfs is compiled in.
-+#ifdef CONFIG_DEBUG_FS
-+int airoha_ppe_debugfs_init(struct airoha_ppe *ppe);
-  */
- extern bool airoha_ppe_dslite;
- 
+ /* DS-Lite decapsulation offload, default off.  Declared unconditionally
+  * because the flow path reads it whether or not debugfs is compiled in.
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
 @@ -8,11 +8,13 @@
@@ -109,7 +85,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  #include <net/ipv6.h>
  #include <net/pkt_cls.h>
  #include <net/route.h>
-@@ -64,6 +66,21 @@ module_param(airoha_ppe_dslite, bool, 04
+@@ -64,6 +66,21 @@
  MODULE_PARM_DESC(airoha_ppe_dslite,
  		 "Offload IPv4-in-IPv6 DS-Lite decapsulation flows to the PPE");
  
@@ -131,7 +107,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static const struct rhashtable_params airoha_flow_table_params = {
  	.head_offset = offsetof(struct airoha_flow_table_entry, node),
  	.key_offset = offsetof(struct airoha_flow_table_entry, cookie),
-@@ -1412,7 +1429,9 @@ static void airoha_ppe_foe_flow_stats_up
+@@ -1412,7 +1429,9 @@
  
  	val = *ib2 & (AIROHA_FOE_IB2_NBQ | AIROHA_FOE_IB2_PSE_PORT |
  		      AIROHA_FOE_IB2_PSE_QOS | AIROHA_FOE_IB2_FAST_PATH);
@@ -142,7 +118,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
  	nbq = pse_port == 1 ? 6 : 5;
  	*ib2 &= ~(AIROHA_FOE_IB2_NBQ | AIROHA_FOE_IB2_PSE_PORT |
-@@ -2057,6 +2076,120 @@ static bool airoha_ppe_dslite_flow(struc
+@@ -2057,6 +2076,120 @@
  	return ret;
  }
  
@@ -263,7 +239,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
  					   struct flow_cls_offload *f)
  {
-@@ -2153,6 +2286,10 @@ static int airoha_ppe_flow_offload_repla
+@@ -2153,6 +2286,10 @@
  	    airoha_ppe_dslite_flow(eth, meta.key->ingress_ifindex, &data))
  		offload_type = PPE_PKT_TYPE_IPV4_DSLITE;
  
@@ -274,7 +250,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	flow_action_for_each(i, act, &rule->action) {
  		switch (act->id) {
  		case FLOW_ACTION_MANGLE:
-@@ -2198,11 +2335,40 @@ static int airoha_ppe_flow_offload_repla
+@@ -2198,11 +2335,40 @@
  
  			police = act;
  			break;
@@ -315,7 +291,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	if (!is_valid_ether_addr(data.eth.h_source) ||
  	    !is_valid_ether_addr(data.eth.h_dest))
  		return -EINVAL;
-@@ -2341,6 +2507,8 @@ static int airoha_ppe_flow_offload_repla
+@@ -2341,6 +2507,8 @@
  			goto put_smac;
  	}
  
@@ -326,7 +302,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  		err = -ENOMEM;
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -481,6 +481,73 @@ static int airoha_ppe_debugfs_dslite_sho
+@@ -481,6 +481,73 @@
  }
  DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_dslite);
  
@@ -400,7 +376,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  {
  	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-@@ -488,6 +555,14 @@ int airoha_ppe_debugfs_init(struct airoh
+@@ -488,6 +555,14 @@
   * an experiment.  A read would report nothing useful, so the file has no
   * read side at all.
   *

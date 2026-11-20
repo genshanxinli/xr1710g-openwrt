@@ -37,13 +37,10 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -555,9 +555,17 @@ struct airoha_foe_stats64 {
+@@ -546,6 +546,14 @@
  	u64 packets;
  };
  
--/* Host-side parameters of an IPv6-in-IPv4 tunnel (6rd).  A 6rd entry uses
-- * the PPE's generic tunnel fields: a tunnel bit plus a tunnel table index in
-- * the route entry's data word, the maximum inner packet size in the meter
 +/* Minimal multicast replication.  The PPE entry keeps the conduit PSE
 + * port and carries the DSA/switch destination bitmap in the L2 etype
 + * word; IB2.MULTICAST additionally keeps a CPU copy for members that are
@@ -52,33 +49,25 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 + */
 +#define AIROHA_PPE_MCAST_SWITCH_PORTS	6
 +
-+struct airoha_flow_data {
-+	struct ethhdr eth;
-+
-  * word, and the tunnel-decap bit ("rmt") in information block 1.  The driver
-  * only maps values the flow offload API reports; it does not create, program
-  * or tear down the tunnel or its table.
-@@ -612,10 +620,16 @@ struct airoha_flow_data {
- 		u16 sid;
- 		u8 num;
- 	} pppoe;
--	struct airoha_ppe_6rd sixrd;
-+
+ /* Host-side parameters of an IPv6-in-IPv4 tunnel (6rd).  A 6rd entry uses
+  * the PPE's generic tunnel fields: a tunnel bit plus a tunnel table index in
+  * the route entry's data word, the maximum inner packet size in the meter
+@@ -612,6 +620,12 @@
+ 	} dslite;
+ 	struct airoha_ppe_6rd sixrd;
+ 
 +	/* DSA/switch destination bitmap for a multicast flow, zero for a
 +	 * unicast flow.  A multicast flow is only offloaded when at least
 +	 * two switch ports can be replicated in hardware.
 +	 */
 +	u16 mcast_mask;
- };
- 
- enum airoha_flow_entry_type {
-+enum airoha_flow_entry_type {
- 	 * not from the flow dissector: the kernel exposes the inner IPv4
- 	 * tuple and the ingress ifindex, and the ingress device is the
- 	 * per-flow DS-Lite mark.
++
+ 	/* Meter group requested by a tc police action, or
+ 	 * AIROHA_PPE_METER_NONE.  Carried from the action parser to
+ 	 * airoha_ppe_foe_entry_prepare().
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -826,6 +826,97 @@ static int airoha_get_dsa_port(struct ne
+@@ -826,6 +826,97 @@
  #endif
  }
  
@@ -176,7 +165,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  static void airoha_ppe_foe_set_bridge_addrs(struct airoha_foe_bridge *br,
  					    struct ethhdr *eh)
  {
-@@ -1098,6 +1189,14 @@ static int airoha_ppe_foe_entry_prepare(
+@@ -1098,6 +1189,14 @@
  		}
  	}
  
@@ -191,7 +180,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	if (is_multicast_ether_addr(data->eth.h_dest))
  		val |= AIROHA_FOE_IB2_MULTICAST;
  
-@@ -1180,7 +1279,8 @@ static int airoha_ppe_foe_entry_prepare(
+@@ -1180,7 +1279,8 @@
  	if (wlan_etype >= 0) {
  		l2->etype = wlan_etype;
  	} else if (dsa_port >= 0) {
@@ -201,7 +190,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  		l2->etype |= !data->vlan.num ? BIT(15) : 0;
  	} else if (data->pppoe.num) {
  		l2->etype = ETH_P_PPP_SES;
-@@ -2370,12 +2470,29 @@ static int airoha_ppe_flow_offload_repla
+@@ -2370,9 +2470,26 @@
  	}
  
  	if (!is_valid_ether_addr(data.eth.h_source) ||
@@ -210,9 +199,6 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	     !is_multicast_ether_addr(data.eth.h_dest)))
  		return -EINVAL;
  
--	/* Allocate the meter only after every action and the L2 header
--	 * have been accepted: all the early returns above then stay
--	 * allocation-free, and from here on put_smac is the single
 +	/* A multicast flow cannot be sent to the single port of the
 +	 * unicast path.  Accept it only when the egress is a switch port
 +	 * and at least two members of its bridge can be replicated in
@@ -229,21 +215,15 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +			return -EOPNOTSUPP;
 +	}
 +
-+	/* A flow whose ingress and egress devices are both ports of the same
-+	 * bridge never leaves L2, so the PPE must forward it without touching
-+	 * the IP TTL.  Routing -- including entering or leaving the bridge --
- 	 * cleanup path.
- 	 */
- 	if (police) {
+ 	/* Allocate the meter only after every action and the L2 header
+ 	 * have been accepted: all the early returns above then stay
+ 	 * allocation-free, and from here on put_smac is the single
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -383,9 +383,112 @@ static int airoha_ppe_debugfs_tb_regs_sh
+@@ -383,6 +383,109 @@
  }
  DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_tb_regs);
  
--/* Read-only view of the opt-in per-flow meters.  The software record is
-- * what was requested; the register value next to it is what the PPE
-- * actually holds, so a dump can tell "never programmed" apart from
 +/* Bound multicast entries and their replication port masks.  The masks
 + * live in the entry itself: the DSA/switch port bitmap is the low part of
 + * the L2 etype word and the QDMA NBQ/channel fields select the egress
@@ -347,28 +327,18 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +}
 +DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_mcast);
 +
-+int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
-+{
-+	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-  * "programmed with a rate the driver did not intend".
-  */
- static int airoha_ppe_debugfs_meter_show(struct seq_file *m, void *private)
-@@ -558,11 +661,13 @@ int airoha_ppe_debugfs_init(struct airoh
- 			    &airoha_ppe_debugfs_bind_rate_fops);
- 	debugfs_create_file("tb_regs", 0444, ppe->debugfs_dir, ppe,
+ /* Read-only view of the opt-in per-flow meters.  The software record is
+  * what was requested; the register value next to it is what the PPE
+  * actually holds, so a dump can tell "never programmed" apart from
+@@ -560,6 +663,8 @@
  			    &airoha_ppe_debugfs_tb_regs_fops);
--	debugfs_create_file("6rd", 0444, ppe->debugfs_dir, ppe,
--			    &airoha_ppe_debugfs_6rd_fops);
+ 	debugfs_create_file("6rd", 0444, ppe->debugfs_dir, ppe,
+ 			    &airoha_ppe_debugfs_6rd_fops);
 +	debugfs_create_file("mcast", 0444, ppe->debugfs_dir, ppe,
 +			    &airoha_ppe_debugfs_mcast_fops);
  
  	return 0;
  }
-+	return 0;
-+}
-  * The tables are cleared, not the flows: pair it with
-  * "nft flush flowtable inet fw4 ft" or the conntrack entries that keep their
-  * IPS_OFFLOAD bit will keep sending packets to a table that no longer holds
 --- a/drivers/net/ethernet/airoha/airoha_regs.h
 +++ b/drivers/net/ethernet/airoha/airoha_regs.h
 @@ -345,6 +345,14 @@
