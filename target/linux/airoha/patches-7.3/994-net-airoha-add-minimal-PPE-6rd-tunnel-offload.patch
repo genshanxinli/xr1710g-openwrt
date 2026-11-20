@@ -32,7 +32,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -546,6 +546,20 @@ struct airoha_foe_stats64 {
+@@ -549,6 +549,20 @@
  	u64 packets;
  };
  
@@ -53,7 +53,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  struct airoha_flow_data {
  	struct ethhdr eth;
  
-@@ -602,6 +616,8 @@ struct airoha_flow_data {
+@@ -605,6 +619,8 @@
  		u8 tunnel_id;
  		u16 tunnel_mtu;
  	} dslite;
@@ -62,7 +62,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  };
  
  enum airoha_flow_entry_type {
-@@ -953,6 +969,7 @@ struct airoha_foe_entry *airoha_ppe_foe_get_entry(struct airoha_ppe *ppe,
+@@ -972,6 +988,7 @@
  int airoha_ppe_probe_entry_alias(struct airoha_ppe *ppe);
  void airoha_ppe_foe_entry_get_stats(struct airoha_ppe *ppe, u32 hash,
  				    struct airoha_foe_stats64 *stats);
@@ -78,12 +78,13 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  #include <net/dst_metadata.h>
 +#include <net/ip_tunnels.h>
  #include <net/ipv6.h>
+ #include <linux/if_vlan.h>
  #include <net/pkt_cls.h>
- #include <net/route.h>
-@@ -63,6 +64,21 @@ module_param(airoha_ppe_dslite, bool, 0444);
+@@ -83,6 +84,21 @@
+ module_param(airoha_ppe_dslite, bool, 0444);
  MODULE_PARM_DESC(airoha_ppe_dslite,
  		 "Offload IPv4-in-IPv6 DS-Lite decapsulation flows to the PPE");
- 
++
 +/* A 6rd entry still needs the outer IPv4 header from a PPE tunnel table
 + * entry, which this driver does not manage.  Mapping the host-side tunnel
 + * parameters onto the FOE entry is therefore opt-in: at 0 no flow is marked
@@ -98,11 +99,10 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +{
 +	return airoha_ppe_6rd;
 +}
-+
+ 
  static const struct rhashtable_params airoha_flow_table_params = {
  	.head_offset = offsetof(struct airoha_flow_table_entry, node),
- 	.key_offset = offsetof(struct airoha_flow_table_entry, cookie),
-@@ -1406,7 +1422,9 @@ static void airoha_ppe_foe_flow_stats_update(struct airoha_ppe *ppe,
+@@ -1455,7 +1471,9 @@
  
  	val = *ib2 & (AIROHA_FOE_IB2_NBQ | AIROHA_FOE_IB2_PSE_PORT |
  		      AIROHA_FOE_IB2_PSE_QOS | AIROHA_FOE_IB2_FAST_PATH);
@@ -113,7 +113,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
  	nbq = pse_port == 1 ? 6 : 5;
  	*ib2 &= ~(AIROHA_FOE_IB2_NBQ | AIROHA_FOE_IB2_PSE_PORT |
-@@ -2051,6 +2069,120 @@ static bool airoha_ppe_dslite_flow(struct airoha_eth *eth, u32 ifindex,
+@@ -2146,6 +2164,120 @@
  	return ret;
  }
  
@@ -234,7 +234,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
  					   struct flow_cls_offload *f)
  {
-@@ -2147,6 +2279,10 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
+@@ -2242,6 +2374,10 @@
  	    airoha_ppe_dslite_flow(eth, meta.key->ingress_ifindex, &data))
  		offload_type = PPE_PKT_TYPE_IPV4_DSLITE;
  
@@ -245,7 +245,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	flow_action_for_each(i, act, &rule->action) {
  		switch (act->id) {
  		case FLOW_ACTION_MANGLE:
-@@ -2191,20 +2327,49 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
+@@ -2286,9 +2422,38 @@
  
  			police = act;
  			break;
@@ -260,8 +260,8 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  		default:
  			return -EOPNOTSUPP;
  		}
- 	}
- 
++	}
++
 +	/* The underlay is the redirect target when the inner packet is
 +	 * encapsulated, and the device the tunnel packet arrived on when it
 +	 * is decapsulated.  Its MTU bounds the inner packet.
@@ -281,32 +281,21 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +			mtu = odev->mtu;
 +		}
 +		data.sixrd.tunnel_mtu = airoha_ppe_6rd_mtu(mtu);
-+	}
-+
- 	/* A DS-Lite decapsulation flow is plain IPv4-in-IPv6; a PPPoE
- 	 * session inside the tunnel would need both headers encoded,
- 	 * which this minimal path does not do.  This has to be decided
- 	 * before the meter is allocated: below the allocation the only
- 	 * way out is put_smac, so a plain return there leaks the group.
- 	 */
- 	if (offload_type == PPE_PKT_TYPE_IPV4_DSLITE && data.pppoe.num)
- 		return -EOPNOTSUPP;
- 
- 	if (!is_valid_ether_addr(data.eth.h_source) ||
- 	    !is_valid_ether_addr(data.eth.h_dest))
- 		return -EINVAL;
-@@ -2334,6 +2499,8 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
- 			goto put_smac;
  	}
  
-+	airoha_ppe_foe_entry_set_6rd(&hwe, &data);
+ 	/* A DS-Lite decapsulation flow is plain IPv4-in-IPv6; a PPPoE
+@@ -2430,6 +2595,8 @@
+ 		if (err)
+ 			goto put_smac;
+ 	}
 +
++	airoha_ppe_foe_entry_set_6rd(&hwe, &data);
+ 
  	e = kzalloc_obj(*e);
  	if (!e) {
- 		err = -ENOMEM;
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -581,6 +581,73 @@ static int airoha_ppe_debugfs_dslite_show(struct seq_file *m, void *private)
+@@ -591,6 +591,73 @@
  }
  DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_dslite);
  
@@ -380,7 +369,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  {
  	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-@@ -596,6 +663,8 @@ int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
+@@ -606,6 +673,8 @@
  			    &airoha_ppe_debugfs_bind_rate_fops);
  	debugfs_create_file("tb_regs", 0444, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_tb_regs_fops);
