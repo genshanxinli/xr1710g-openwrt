@@ -1,0 +1,33 @@
+From: Gilly1970 <gilroyscott1970@gmail.com>
+Date: Tue, 16 Jun 2026 16:46:39 +1000
+Subject: [PATCH] net: pcs: airoha: extend the manual RX calibration to the PON PCS
+
+745 extends the manual RX calibration window to E2 silicon for the
+Ethernet PCS (gdm4 / lan2). The PON PCS drives gdm2 -- on this board the
+WAN port -- and has the same autocalibration weakness: the manual path
+retries AIROHA_PCS_MAX_CALIBRATION_TRY times when FreqDet fails to lock,
+the autocalibration path has no equivalent retry.
+
+The PCS probe already reads AIROHA_SCU_PDIDR; just accept the PON PCS
+compatible string there as well. The runtime effect is unchanged on E1/E2
+silicon that 745 already covered for the Ethernet PCS, and it is what the
+Ethernet PCS does today, so a board that boots today still boots.
+
+Reported against the Gemtek W1700K (HW.2.0) as intermittent WAN failure;
+the XR1710G wires gdm2 to the same pon_pcs (an7581.dtsi:959
+pcs-handle = <&pon_pcs>).
+
+Ported from the out-of-tree W1700K 6.18 patch set (Gilly1970).
+---
+--- a/drivers/net/pcs/airoha/pcs-airoha-common.c
++++ b/drivers/net/pcs/airoha/pcs-airoha-common.c
+@@ -1213,7 +1213,8 @@
+ 	 * manual rx calibration is needed. Extend the manual-calibration
+ 	 * threshold to include E2 silicon.
+ 	 */
+-	if (device_is_compatible(dev, "airoha,an7581-pcs-eth")) {
++	if (device_is_compatible(dev, "airoha,an7581-pcs-eth") ||
++	    device_is_compatible(dev, "airoha,an7581-pcs-pon")) {
+ 		u32 val;
+ 
+ 		ret = regmap_read(priv->scu, AIROHA_SCU_PDIDR, &val);

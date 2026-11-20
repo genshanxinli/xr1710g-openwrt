@@ -1,0 +1,58 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: reject a HTB leaf that cannot shape anything
+
+airoha_dev_select_queue() steers a net_device's traffic to one fixed QoS
+channel, derived from the GDM port id.  The qdisc offset is taken from the
+class minor, modulo AIROHA_NUM_QOS_CHANNELS:
+
+	channel = TC_H_MIN(classid) % AIROHA_NUM_QOS_CHANNELS;
+
+Nothing ties the two together.  On the XR1710G the WAN port is GDM2, so
+its only usable channel is 2 and "tc class add dev wan root classid 1:2"
+is the sparse one.  The example a reader is most likely to copy,
+"classid 1:1", maps to channel 1 instead: the leaf is allocated, the
+driver accepts it, tc reports success, the shaper is programmed - and no
+packet is ever queued to it.  Traffic runs at full speed with a rate limit
+that looks configured, which is the worst possible outcome for a
+feature whose entire point is to slow traffic down.
+
+Reject the mismatch with an explicit extack message naming the channel the
+device actually uses, so the failure is immediate and self-explaining
+rather than silent.
+
+DSA user ports are left alone: the DSA tag selects the channel per packet,
+so a single user port has no one channel to compare against.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -3327,6 +3394,28 @@
+ 	struct airoha_gdm_dev *dev = netdev_priv(netdev);
+ 	struct airoha_qdma *qdma;
+ 
++	/* airoha_dev_select_queue() sends this net_device's traffic to one
++	 * fixed QoS channel, its GDM port id. A leaf whose classid maps to a
++	 * different channel therefore programs a shaper that nothing feeds:
++	 * tc accepts the qdisc, reports no error, and the traffic runs
++	 * unshaped. WAN is GDM2, so the usual "classid 1:1" example silently
++	 * does nothing while 1:2 is the one that shapes. Refuse the mismatch
++	 * rather than accept it.
++	 *
++	 * DSA user ports have no single channel (the tag selects it per
++	 * packet), so only the non-DSA case is checked here.
++	 */
++	if (!netdev_uses_dsa(netdev) && dev->port &&
++	    channel != dev->port->id % AIROHA_NUM_QOS_CHANNELS) {
++		NL_SET_ERR_MSG_FMT_MOD(opt->extack,
++				       "classid %x:%x maps to QoS channel %u, but %s uses channel %u",
++				       TC_H_MAJ(opt->classid) >> 16,
++				       TC_H_MIN(opt->classid), channel,
++				       netdev_name(netdev),
++				       dev->port->id % AIROHA_NUM_QOS_CHANNELS);
++		return -EINVAL;
++	}
++
+ 	/* Here we need to check the requested QDMA channel is not already
+ 	 * in use by another net_device running on the same QDMA block.
+ 	 */

@@ -1,0 +1,88 @@
+From: OpenWrt <openwrt@example.org>
+Date: Thu, 23 Oct 2026 22:40:00 +0800
+Subject: [PATCH] netfilter: nf_flow_table: keep TTL on flows bridged within one
+ bridge
+
+A flow that enters and leaves through two ports of the same bridge never
+leaves L2, so a bridge must not consume a hop's worth of TTL for it.  The
+hardware side already knows this (the airoha PPE driver clears BIND_TTL for
+such flows), but nf_flow_table_ip.c decremented unconditionally:
+
+	ip_decrease_ttl(iph);      (IPv4 forward)
+	ip6h->hop_limit--;         (IPv6 forward)
+
+On this target a flow only becomes a hardware entry after about 31 packets
+(REG_PPE_BIND_RATE is 0x1e), so every bridged flow lost a hop on its first 31
+packets before the hardware took over: with the sender at TTL 5, 29 of the
+first 31 packets were captured arriving with TTL 4.
+
+Both endpoints of an offloaded tuple are bridge ports, because the flowtable
+hooks ingress on the ports rather than on the bridge master.  Compare the two
+masters and skip the decrement when they are the same.  Packets with TTL 1
+never reach this code: they are rejected during tuple building.
+
+This patch lives under airoha/patches-7.3 rather than generic/pending-7.3
+because 915-01 quotes the same two lines as context.  Generic patches are
+applied first, so the decrement still has to be there when this one runs.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+--- a/net/netfilter/nf_flow_table_ip.c
++++ b/net/netfilter/nf_flow_table_ip.c
+@@ -497,6 +497,36 @@
+ 				       other->encap[0].id);
+ }
+ 
++/* A flow that enters and leaves through two ports of the same bridge never
++ * leaves L2, so it must be forwarded without touching the IP TTL.  This
++ * mirrors what the airoha PPE driver does when it programs the hardware
++ * entry; without it the packets that still traverse the software fast path
++ * before the hardware entry is installed lose a hop.
++ *
++ * Both endpoints of the tuple are bridge ports here: the flowtable hooks
++ * ingress on the ports themselves, not on the bridge master.
++ */
++static bool nf_flow_bridged_within_one_bridge(struct nf_flowtable_ctx *ctx,
++					      struct flow_offload_tuple_rhash *tuplehash)
++{
++	const struct flow_offload_tuple *tuple = &tuplehash->tuple;
++	struct net_device *outdev, *indev;
++	bool bridged = false;
++
++	if (!netif_is_bridge_port(ctx->in))
++		return false;
++
++	rcu_read_lock();
++	outdev = dev_get_by_index_rcu(ctx->net, tuple->out.ifidx);
++	indev = dev_get_by_index_rcu(ctx->net, tuple->iifidx);
++	bridged = outdev && indev && netif_is_bridge_port(outdev) &&
++		  netdev_master_upper_dev_get_rcu(outdev) ==
++		  netdev_master_upper_dev_get_rcu(indev);
++	rcu_read_unlock();
++
++	return bridged;
++}
++
+ static int nf_flow_offload_forward(struct nf_flowtable_ctx *ctx,
+ 				   struct nf_flowtable *flow_table,
+ 				   struct flow_offload_tuple_rhash *tuplehash,
+@@ -546,7 +576,8 @@
+ 				    FIELD_PREP(INET_DSCP_MASK,
+ 					       tuplehash->tuple.dscp));
+ 
+-	ip_decrease_ttl(iph);
++	if (!nf_flow_bridged_within_one_bridge(ctx, tuplehash))
++		ip_decrease_ttl(iph);
+ 	skb_clear_tstamp(skb);
+ 
+ 	if (flow_table->flags & NF_FLOWTABLE_COUNTER)
+@@ -1150,7 +1181,8 @@
+ 				    FIELD_PREP(INET_DSCP_MASK,
+ 					       tuplehash->tuple.dscp));
+ 
+-	ip6h->hop_limit--;
++	if (!nf_flow_bridged_within_one_bridge(ctx, tuplehash))
++		ip6h->hop_limit--;
+ 	skb_clear_tstamp(skb);
+ 
+ 	if (flow_table->flags & NF_FLOWTABLE_COUNTER)
