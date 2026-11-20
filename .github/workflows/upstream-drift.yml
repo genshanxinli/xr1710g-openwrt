@@ -1,0 +1,104 @@
+# Issue #189: keep the fork parent (OpenWRT-fanboy/OpenW1700k) visible without
+# trusting the GitHub "Sync fork" button, which only exists for same-named
+# branches and would replace xr1710g with the parent's default branch.
+#
+# This job is report-only on purpose. It never pushes, merges, rebases or
+# touches a branch: it runs scripts/track-upstream.sh, and when that exits 1
+# (drift) it opens at most one issue - or appends at most one comment when the
+# same drift fingerprint was not reported before - then fails so the drift
+# shows up in the Actions tab. Exit 2 (upstream refs unreadable, no merge-base,
+# fetch failed) also fails, but posts nothing: a transient network failure is
+# not a repo finding. The merge itself stays a human decision because upstream
+# force-pushes kernel73/kernel74/ubi2/snapshot/w1701k/failsafe2 - a pin from
+# last week is not a baseline.
+
+name: Upstream drift
+
+on:
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  drift:
+    name: OpenW1700k drift report
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Check out with full history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch the fork parent
+        run: |
+          set -eu
+          git remote add upstream https://github.com/OpenWRT-fanboy/OpenW1700k.git
+          git fetch --prune --quiet upstream
+          echo "upstream branches: $(git branch -r --list 'upstream/*' | wc -l)"
+
+      - name: Measure drift
+        id: measure
+        run: |
+          set +e
+          sh scripts/track-upstream.sh \
+            --local refs/remotes/origin/xr1710g \
+            --mirror refs/remotes/origin/kernel73 >drift.txt 2>&1
+          code=$?
+          set -e
+          cat drift.txt
+          echo "code=$code" >>"$GITHUB_OUTPUT"
+          echo "fingerprint=$(sha256sum drift.txt | cut -c1-12)" >>"$GITHUB_OUTPUT"
+          if [ "$code" -eq 2 ]; then
+            echo "::error::cannot measure upstream drift (exit 2) - see the log above"
+          fi
+
+      - name: Report drift in a single issue
+        if: steps.measure.outputs.code == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FP: ${{ steps.measure.outputs.fingerprint }}
+          TITLE: 'upstream drift: OpenW1700k is ahead of xr1710g'
+        run: |
+          set -eu
+          {
+            printf '自动检查（`.github/workflows/upstream-drift.yml`，只读）发现本仓落后于 fork 父仓库 `OpenWRT-fanboy/OpenW1700k`。\n\n'
+            printf '<!-- drift-fingerprint: %s -->\n\n' "$FP"
+            printf '```\n'
+            cat drift.txt
+            printf '```\n\n'
+            printf '落后分支或 `kernel73` 镜像内容不同，都是要人决定的事：上游会 force-push，上次记录的 pin 不能当基线复用。\n'
+            printf '同步流程见 README 与 #189；本 workflow 不会 push、merge 或 rebase。\n'
+          } >body.md
+          num=$(gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$num" ]; then
+            if gh issue view "$num" --json comments --jq '.comments[].body' | grep -qF "drift-fingerprint: $FP"; then
+              echo "同一份漂移已在 #$num 报过（fingerprint $FP），不再重复评论"
+            else
+              gh issue comment "$num" --body-file body.md
+              echo "已向 #$num 追加评论（fingerprint $FP）"
+            fi
+          else
+            gh issue create --title "$TITLE" --body-file body.md
+          fi
+
+      - name: Fail when drift was reported
+        if: steps.measure.outputs.code == '1'
+        run: |
+          echo "::error::upstream drift reported above; failing so it stays visible"
+          exit 1
+
+      - name: Fail when the measurement was impossible
+        if: steps.measure.outputs.code == '2'
+        run: exit 1
