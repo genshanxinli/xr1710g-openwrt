@@ -196,3 +196,32 @@ claims:
     date: "2026-11-20"
     status: supported
     notes: "只覆盖真值表第 4b 行（两 radio 同域）。同一台机还实测了 REG_PREFER=cn 归一化成 CN、无效值先告警。第 6a/6b 行（冲突 + REG_PREFER 命中其一，会 uci set + commit）需要设备处于冲突态，本机未做；CN 分支在美规机上仍然未验证。"
+
+  - id: wifi-self-loopback-not-possible
+    claim: "XR1710G（mt7996e，单 wiphy phy0）上无法建立单机 AP+STA 环回：同一 phy 的发射不上自己的接收路径，任何 VIF 都关联不到自己承载的 BSS。"
+    source:
+      - docs/perf/wireless-loopback-baseline.md:117
+      - docs/perf/wireless-loopback-baseline.md:162
+    evidence: 实测
+    date: "2026-11-20"
+    status: supported
+    notes: "自收判据取自 6 GHz ch37（ch_time_busy 占比 0.4%，介质几乎无他源）20 s 窗口 rx_mpdu_cnt 恒 0；对照取自同一条 managed VIF 打邻居 AP 成功（sta_state=2、tx_packets=1、rx_packets=14）、打自己 AP 返回 -2（ENOENT）且计数器全零。原始输出未提交进库（/tmp 在重刷后清空），文件内嵌了关键行。该结论针对 mt7996e + r38047，不是对 mt76 全系的断言。"
+
+  - id: wifi-single-radio-one-channel
+    claim: "phy0 的 per-radio valid interface combinations 是 #{ AP, mesh point } <= 16, #{ managed } <= 19, total <= 19, #channels <= 1, STA/AP BI must match，因此同一 radio 上的 AP 与 STA 只能共用一个信道，跨 band 环回被这条约束排除。"
+    source:
+      - docs/perf/wireless-loopback-baseline.md:22
+    evidence: 实测
+    date: "2026-11-20"
+    status: supported
+    notes: "读自 `iw phy phy0 info`（r38047）；三个 radio 的组合条款各自完全相同，全局条款是 #{ IBSS, managed, AP, mesh point } <= 57, total <= 57, #channels <= 3，那是跨 radio 的总量，不放宽单 radio 的 1 信道限制。同一 radio 内的 STA 侧 chanctx 请求在已有 AP chanctx 时返回 EBUSY（iw dev <sta> set freq 5745 80 5775 → Resource busy -16），即便三个 AP 全禁用仍复现。"
+
+  - id: wifi-managed-set-channel-rejected
+    claim: "mac80211 上 managed VIF 不允许显式设置信道，iw set freq / set channel 一律返回 Resource busy (-16)；先锁信道再 connect 的规避手段在 mt7996e 上没有可行性。"
+    source:
+      - docs/perf/wireless-loopback-baseline.md:23
+      - package/kernel/mac80211/Makefile:13
+    evidence: 实测
+    date: "2026-11-20"
+    status: supported
+    notes: "实测部分：r37994/r38034/r38047 三版固件上都复现 -16，且在三个 AP VIF 全部 disabled、一个 VIF 不剩时仍然 -16。代码部分只指向本仓用的 backports 版本（PKG_SOURCE_VERSION:=7.2），对应的 cfg80211/mac80211 源码不在 repo 内（dl/backports-7.2.tar.zst），所以 -16 的具体来源未在库内留下 file:line。"
