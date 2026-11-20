@@ -6,7 +6,9 @@ Two hotplug scripts share /var/lock/bridge-hw-offload.lock:
   hotplug.d/iface/51-bridge-hw-offload  holds it for the whole settle loop
       (BR_HW_SETTLE_TIMEOUT, default 120 s) plus the recheck sleep
       (RECHECK_DELAY, default 40 s) -- up to 160 s.
-  hotplug.d/net/50-bridge-hw-offload    waits on it with `flock -w N`.
+  hotplug.d/net/50-bridge-hw-offload    waits on it with a bounded retry loop
+      on `flock -n` -- N one-second attempts, because busybox's flock (the only
+      flock the image has) rejects `-w`.
 
 If N is shorter than the iface script's critical section, every member
 change that overlaps the settle loop is dropped instead of queued.  That
@@ -42,8 +44,10 @@ def read(path):
 
 
 def net_lock_wait():
-    match = re.search(r"flock\s+-w\s+(\d+)\s+9", read(NET_SCRIPT))
-    assert match, "50-bridge-hw-offload no longer takes the lock with flock -w N"
+    # A retry loop, not `flock -w N`: busybox's flock has no -w.  The bound is
+    # the retry count, one second per try.
+    match = re.search(r'\[ "\$waits" -lt (\d+) \]', read(NET_SCRIPT))
+    assert match, "50-bridge-hw-offload no longer bounds its flock -n retry loop"
     return int(match.group(1))
 
 

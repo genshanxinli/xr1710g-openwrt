@@ -29,8 +29,10 @@
 # The split is: this script owns the *boot-time* half (wait for membership to
 # settle, then reload once), and /etc/hotplug.d/net/50-bridge-hw-offload owns
 # the *member-change* half (a vif joining or leaving after boot).  Both write
-# the same lock, which is why it is flock -w and not flock -n: a member
-# change during the settle window must queue, not be dropped.
+# the same lock, which is why it waits instead of giving up on the first
+# failed try: a member change during the settle window must queue, not be
+# dropped.  That wait is a retry loop on "flock -n", because busybox's flock
+# (the only flock on the image) has no -w.
 #
 # nf_call_{ip,ip6}tables is not touched here.  It is a bridge attribute that
 # only has to be set once, /etc/hotplug.d/net/50-nf-bridge-call already does
@@ -59,13 +61,24 @@ mkdir -p /var/lock 2>/dev/null
 
 (
 	exec 9>/var/lock/bridge-hw-offload.lock
-	# -w, not -n: the lock serialises reloads, it does not mean "drop the
-	# second caller".  A bridge member arriving while the settle loop runs
-	# must queue up, not be silently ignored.
-	flock -w 10 9 || {
-		logger -t bridge-hw-offload "reload already in progress, giving up"
-		exit 0
-	}
+	# The lock serialises reloads, it does not mean "drop the second caller".
+	# A bridge member arriving while the settle loop runs must queue up, not be
+	# silently ignored.
+	#
+	# Ten one-second attempts on "flock -n" instead of "flock -w 10": busybox's
+	# flock (/usr/bin/flock -> ../../bin/busybox) takes [-sxun] FD and nothing
+	# else, so -w is an unknown option and the guard below fired on every boot
+	# with the lock never even contended.  Same 10 s ceiling, works on busybox
+	# and util-linux alike.
+	waits=0
+	while ! flock -n 9; do
+		[ "$waits" -lt 10 ] || {
+			logger -t bridge-hw-offload "reload already in progress, giving up"
+			exit 0
+		}
+		waits=$((waits + 1))
+		sleep 1
+	done
 	seen=""; prev=""; stable=0; waited=0
 	while [ "$waited" -lt "$SETTLE_TIMEOUT" ]; do
 		cur=$(ls "${SYS_NET}/${BRIDGE}/brif" 2>/dev/null | sort | tr '\n' ' ')
