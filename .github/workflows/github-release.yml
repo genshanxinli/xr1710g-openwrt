@@ -17,8 +17,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # A checkout on its own carries no artifacts. When the job runs in a
+      # workspace that already has a finished build (self-hosted runner), pack
+      # the package feeds into one asset: a release asset cannot keep the
+      # targets/<board>/<subtarget>/packages layout that apk needs, a tarball
+      # can.
+      - name: Pack distfeeds
+        run: |
+          if [ -d bin/targets ] || [ -d bin/packages ]; then
+            ./scripts/build-distfeeds.sh distfeeds
+            tar -czf distfeeds.tar.gz -C distfeeds .
+          else
+            echo "no build output in the workspace, skipping distfeeds"
+          fi
+
       - name: Release
         uses: softprops/action-gh-release@v3
         with:
           draft: true
           prerelease: true
+          fail_on_unmatched_files: false
+          files: |
+            distfeeds.tar.gz
+            bin/targets/**/*.itb
+            bin/targets/**/*.manifest
+            bin/targets/**/sha256sums
+            bin/targets/**/profiles.json
