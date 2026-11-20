@@ -22,6 +22,16 @@ include $(INCLUDE_DIR)/package.mk
 include $(INCLUDE_DIR)/host-build.mk
 include $(INCLUDE_DIR)/meson.mk
 
+# apk uses le32toh/htole32 and friends (src/apk_defines.h, src/adb.h) as if the
+# C library always provided them, plus qsort_r/AT_FDCWD/unshare. On glibc those
+# live behind __USE_MISC, which is only enabled by _DEFAULT_SOURCE/_GNU_SOURCE;
+# upstream relies on add_project_arguments('-D_GNU_SOURCE') in its meson.build
+# for that. Keep the guarantee on our side as well: our host flag set
+# (rules.mk: HOST_CFLAGS) carries no feature macro, so with an apk snapshot
+# whose meson.build lacks that argument, or with any strict ISO host flag, the
+# host build dies with "implicit declaration of function 'le32toh'".
+HOST_CFLAGS += -D_GNU_SOURCE
+
 define Package/apk/default
   SECTION:=base
   CATEGORY:=Base system
