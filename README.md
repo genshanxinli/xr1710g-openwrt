@@ -85,6 +85,11 @@ serial/TTL recovery. Cross-flashing a W1700K image is rejected by
 against the running board, because the bootloader would otherwise happily
 boot the other board's device tree.
 
+Before you flash anything on hardware you would rather not lose, read
+[`docs/wan-recovery-gate.md`](docs/wan-recovery-gate.md): wiring, NAND backup,
+compatibility gate and the soft-brick rollback procedure, each row labelled
+with how it was verified.
+
 ## What is included
 
 - Full Cone NAT (`nft-fullcone`) with hardware and software flow offloading
