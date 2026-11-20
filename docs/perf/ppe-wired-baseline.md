@@ -201,6 +201,11 @@ ssh root@192.168.1.1 'echo 10 10 > /sys/kernel/debug/ppe/bind_rate; cat /sys/ker
 运行镜像 `r37994-44d4267ca7` 正是本仓 `xr1710g` HEAD `44d4267ca7`。这条不一致本次**不处理**、
 也不改 `claims.yaml`，但 `ppe-table-24576` 需要在出货镜像上重核。
 
+后来在 [`docs/wan-ppe-pppoe-findings.md`](../wan-ppe-pppoe-findings.md) 第 1 节给出解释
+（该文只是引用代码，没有新的硬件测量）：两种几何打印同一行 `entries`，本机 `sram 16384`
+说明本次启动的计数器 carve-out 没生效（patch 214:83 分支），24576 只在 NPU 收下计数器时成立。
+本节的“未处理”状态因此改为“有代码解释、仍需硬件收口”。
+
 ## 局限
 
 * **单臂、纯有线、1G**：`lan4` 上限 1000 Mb/s，`wan` 无 carrier，主机无 2.5G/10G 口。
