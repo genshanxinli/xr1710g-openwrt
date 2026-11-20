@@ -374,6 +374,21 @@ config KERNEL_KALLSYMS
 config KERNEL_FTRACE
 	bool "Compile the kernel with tracing support"
 	depends on !TARGET_uml
+	default y if TARGET_airoha_an7581
+	help
+	  Compiles the kernel with the tracing menu (CONFIG_FTRACE) and the
+	  infrastructure behind it.  Without CONFIG_FTRACE the tracepoint
+	  definitions under include/trace/events/ are compiled to empty
+	  static inlines, so every trace_*() call in the tree becomes a no-op
+	  and nothing but a rebuild + reflash can bring the events back.
+
+	  On airoha/an7581 this is on by default: the box is debugged with
+	  tracepoints (netfilter flowtable, PPE offload, NAPI) and an event
+	  that is compiled out is indistinguishable from one that never
+	  fires.  It cannot be turned on from the target kernel config
+	  instead: target/linux/<board>/config-<ver> is merged before the
+	  CONFIG_KERNEL_* copy of this file (include/kernel-defaults.mk:117)
+	  and loses on every symbol this menu also sets.
 
 config KERNEL_FTRACE_SYSCALLS
 	bool "Trace system calls"
@@ -382,6 +397,14 @@ config KERNEL_FTRACE_SYSCALLS
 config KERNEL_ENABLE_DEFAULT_TRACERS
 	bool "Trace process context switches and events"
 	depends on KERNEL_FTRACE
+	default y if TARGET_airoha_an7581
+	help
+	  Selects CONFIG_ENABLE_DEFAULT_TRACERS, which is the smallest option
+	  that pulls in CONFIG_TRACING (and with it CONFIG_TRACEPOINTS,
+	  CONFIG_EVENT_TRACING, the ring buffer and tracefs) without the
+	  function tracer's mcount instrumentation of every function.  This
+	  is what makes tracepoints in /sys/kernel/tracing/available_events
+	  observable at all.
 
 config KERNEL_FUNCTION_TRACER
 	bool "Function tracer"
