@@ -57,7 +57,7 @@
  
  static enum flow_offload_xmit_type nft_xmit_type(struct dst_entry *dst)
  {
-@@ -41,7 +44,7 @@
+@@ -41,7 +44,7 @@ static bool nft_is_valid_ether_device(co
  	return true;
  }
  
@@ -66,17 +66,18 @@
  				     const struct dst_entry *dst_cache,
  				     const struct nf_conn *ct,
  				     enum ip_conntrack_dir dir, u8 *ha,
-@@ -49,9 +52,6 @@
+@@ -49,10 +52,6 @@ static int nft_dev_fill_forward_path(con
  {
  	const void *daddr = &ct->tuplehash[!dir].tuple.src.u3;
  	struct net_device *dev = dst_cache->dev;
 -	struct net_device_path_ctx ctx = {
 -		.dev = dev,
+-		.ieee80211 = true,
 -	};
  	struct neighbour *n;
  	u8 nud_state;
  
-@@ -60,6 +60,9 @@
+@@ -61,6 +60,9 @@ static int nft_dev_fill_forward_path(con
  		goto out;
  	}
  
@@ -86,25 +87,27 @@
  	n = dst_neigh_lookup(dst_cache, daddr);
  	if (!n)
  		return -1;
-@@ -74,9 +77,8 @@
+@@ -75,9 +77,9 @@ static int nft_dev_fill_forward_path(con
  		return -1;
  
  out:
 -	ether_addr_copy(ctx.daddr, ha);
 -
 -	return dev_fill_forward_path(&ctx, stack);
++	ctx->dev = dev;
 +	ether_addr_copy(ctx->daddr, ha);
 +	return dev_fill_forward_path(ctx, stack);
  }
  
  struct nft_forward_info {
-@@ -105,12 +107,12 @@
+@@ -106,13 +108,13 @@ static void nft_dev_path_info(const stru
  
  	for (i = 0; i < stack->num_paths; i++) {
  		path = &stack->path[i];
 +		info->indev = path->dev;
  		switch (path->type) {
  		case DEV_PATH_ETHERNET:
+ 		case DEV_PATH_IEEE80211:
  		case DEV_PATH_DSA:
  		case DEV_PATH_VLAN:
  		case DEV_PATH_PPPOE:
@@ -112,7 +115,7 @@
  			if (is_zero_ether_addr(info->h_source))
  				memcpy(info->h_source, path->dev->dev_addr, ETH_ALEN);
  
-@@ -152,18 +154,21 @@
+@@ -155,18 +157,21 @@ static void nft_dev_path_info(const stru
  				info->num_encaps++;
  				break;
  			case DEV_PATH_BR_VLAN_UNTAG:
@@ -138,7 +141,7 @@
  			break;
  		}
  	}
-@@ -194,25 +199,55 @@
+@@ -197,25 +202,55 @@ static bool nft_flowtable_find_dev(const
  	return found;
  }
  
@@ -202,7 +205,7 @@
  
  	route->tuple[!dir].in.ifindex = info.indev->ifindex;
  	for (i = 0; i < info.num_encaps; i++) {
-@@ -228,17 +263,52 @@
+@@ -231,17 +266,52 @@ static void nft_dev_forward_path(struct
  		route->tuple[dir].out.hw_ifindex = info.hw_outdev->ifindex;
  		route->tuple[dir].xmit_type = info.xmit_type;
  	}
@@ -259,7 +262,7 @@
  	switch (nft_pf(pkt)) {
  	case NFPROTO_IPV4:
  		fl.u.ip4.daddr = ct->tuplehash[dir].tuple.src.u3.ip;
-@@ -269,13 +339,25 @@
+@@ -272,13 +342,25 @@ int nft_flow_route(const struct nft_pkti
  		return -ENOENT;
  	}
  
