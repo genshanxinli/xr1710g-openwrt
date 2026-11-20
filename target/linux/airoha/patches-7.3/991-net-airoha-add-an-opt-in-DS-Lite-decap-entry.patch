@@ -57,6 +57,13 @@ Supporting changes:
     live FLOW_CFG bit and every DS-Lite entry with its tunnel ID, MTU,
     rmt bit, flow label and priority.
 
+The DS-Lite/PPPoE refusal is decided before the meter group is
+allocated.  Placing it after the allocation, where it started, turned
+every such flow into a permanently lost group: the group was taken, its
+refcount set and its register programmed, and the plain return skipped
+put_smac, so 63 refused rules exhausted the pool and made every later
+tc police fail with -EBUSY.
+
 Everything else is untouched: table capacity, BND_AGE, PPPoE bit 22, L2B,
 QoS, multicast.  Non-DS-Lite flows keep every new field at its memset
 value, i.e. zero.
@@ -76,7 +83,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -389,6 +389,15 @@ struct airoha_foe_mac_info {
+@@ -392,6 +392,15 @@
  #define AIROHA_FOE_TUNNEL			BIT(6)
  #define AIROHA_FOE_TUNNEL_ID			GENMASK(5, 0)
  
@@ -92,7 +99,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  #define AIROHA_FOE_TUNNEL_MTU			GENMASK(31, 16)
  #define AIROHA_FOE_ACNT_GRP3			GENMASK(15, 9)
  #define AIROHA_FOE_METER_GRP3			GENMASK(8, 5)
-@@ -572,6 +581,27 @@ struct airoha_flow_data {
+@@ -575,6 +584,27 @@
  	 * airoha_ppe_foe_entry_prepare().
  	 */
  	u8 meter;
@@ -120,7 +127,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  };
  
  enum airoha_flow_entry_type {
-@@ -924,6 +954,11 @@ int airoha_ppe_probe_entry_alias(struct airoha_ppe *ppe);
+@@ -943,6 +973,11 @@
  void airoha_ppe_foe_entry_get_stats(struct airoha_ppe *ppe, u32 hash,
  				    struct airoha_foe_stats64 *stats);
  
@@ -142,9 +149,9 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  #include <linux/ip.h>
  #include <linux/ipv6.h>
  #include <linux/module.h>
-@@ -46,6 +47,22 @@ module_param(airoha_ppe_3t, bool, 0444);
- MODULE_PARM_DESC(airoha_ppe_3t,
- 		 "Offload flows without L4 ports as 3-tuple PPE entries");
+@@ -68,6 +69,22 @@
+ MODULE_PARM_DESC(pppoe_vlan_refuse,
+ 		 "Refuse PPPoE-over-VLAN flows the PPE cannot express instead of programming a wrong entry");
  
 +/* Offload IPv4-in-IPv6 DS-Lite decapsulation flows to the PPE.  Off by
 + * default: only the positive path of the entry fields is known from the
@@ -165,7 +172,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static const struct rhashtable_params airoha_flow_table_params = {
  	.head_offset = offsetof(struct airoha_flow_table_entry, node),
  	.key_offset = offsetof(struct airoha_flow_table_entry, cookie),
-@@ -645,6 +662,14 @@ static void airoha_ppe_hw_init(struct airoha_ppe *ppe)
+@@ -694,6 +711,14 @@
  			airoha_fe_set(eth, REG_PPE_PPE_FLOW_CFG(i),
  				      PPE_FLOW_CFG_IP4_NAT_MASK |
  				      PPE_FLOW_CFG_IP6_3T_ROUTE_MASK);
@@ -180,7 +187,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	}
  
  	for (i = 0; i < ARRAY_SIZE(eth->ports); i++) {
-@@ -1067,6 +1092,36 @@ static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
+@@ -1117,6 +1142,36 @@
  		hwe->bridge.data = qdata;
  		hwe->bridge.ib2 = val;
  		l2 = &hwe->bridge.l2.common;
@@ -217,21 +224,20 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	} else if (type >= PPE_PKT_TYPE_IPV6_ROUTE_3T) {
  		hwe->ipv6.data = qdata;
  		hwe->ipv6.ib2 = val;
-@@ -1127,10 +1182,11 @@ static int airoha_ppe_foe_entry_set_ipv4_tuple(struct airoha_foe_entry *hwe,
+@@ -1177,9 +1232,10 @@
  			t = &hwe->ipv4.new_tuple;
  			break;
  		}
 -		fallthrough;
--	case PPE_PKT_TYPE_IPV4_DSLITE:
- 		t = &hwe->ipv4.orig_tuple;
- 		break;
-+	case PPE_PKT_TYPE_IPV4_DSLITE:
-+		t = &hwe->dslite.ip4;
++		t = &hwe->ipv4.orig_tuple;
 +		break;
+ 	case PPE_PKT_TYPE_IPV4_DSLITE:
+-		t = &hwe->ipv4.orig_tuple;
++		t = &hwe->dslite.ip4;
+ 		break;
  	case PPE_PKT_TYPE_IPV4_ROUTE:
  		/* A 3-tuple entry keeps the pre-NAT addresses in the first
- 		 * tuple and the rewrite in the second one, the same way the
-@@ -1197,6 +1253,15 @@ static u32 airoha_ppe_foe_get_entry_hash(struct airoha_ppe *ppe,
+@@ -1247,6 +1303,15 @@
  		hv2 = hwe->ipv4.orig_tuple.dest_ip;
  		hv3 = hwe->ipv4.orig_tuple.src_ip;
  		break;
@@ -247,7 +253,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	case PPE_PKT_TYPE_IPV6_ROUTE_3T:
  	case PPE_PKT_TYPE_IPV6_ROUTE_5T:
  		hv1 = hwe->ipv6.src_ip[3] ^ hwe->ipv6.dest_ip[3];
-@@ -1221,7 +1286,6 @@ static u32 airoha_ppe_foe_get_entry_hash(struct airoha_ppe *ppe,
+@@ -1271,7 +1336,6 @@
  		hv3 = l2->common.dest_mac_hi;
  		break;
  	}
@@ -255,22 +261,22 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	case PPE_PKT_TYPE_IPV6_6RD:
  	default:
  		WARN_ON_ONCE(1);
-@@ -1298,6 +1362,14 @@ static void airoha_ppe_foe_flow_stats_update(struct airoha_ppe *ppe,
- 	if (unlikely(!ppe->foe_stats_enabled))
- 		return;
+@@ -1346,6 +1410,14 @@
+ 	u8 nbq;
  
+ 	if (unlikely(!ppe->foe_stats_enabled))
++		return;
++
 +	/* The counter path below stores the IB2 routing bits in the
 +	 * entry's tunnel_mtu word.  A DS-Lite entry owns that word for the
 +	 * real inner MTU, so keep these flows off the hardware counters
 +	 * instead of silently corrupting the MTU.
 +	 */
 +	if (type == PPE_PKT_TYPE_IPV4_DSLITE)
-+		return;
-+
- 	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
- 	if (ppe_num_stats_entries < 0)
  		return;
-@@ -1952,6 +2024,33 @@ static int airoha_ppe_entry_idle_time(struct airoha_ppe *ppe,
+ 
+ 	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
+@@ -2048,6 +2120,33 @@
  	return airoha_ppe_get_entry_idle_time(ppe, e->data.ib1);
  }
  
@@ -304,7 +310,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
  					   struct flow_cls_offload *f)
  {
-@@ -1967,7 +2066,7 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
+@@ -2063,7 +2162,7 @@
  	u8 dsfield = 0, l4proto = 0, meter = AIROHA_PPE_METER_NONE;
  	struct airoha_foe_entry hwe;
  	struct net_device *indev;
@@ -313,7 +319,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	int err, i, offload_type;
  	u16 addr_type = 0;
  
-@@ -2036,6 +2135,18 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
+@@ -2132,6 +2231,18 @@
  		return -EOPNOTSUPP;
  	}
  
@@ -332,21 +338,23 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	flow_action_for_each(i, act, &rule->action) {
  		switch (act->id) {
  		case FLOW_ACTION_MANGLE:
-@@ -2102,6 +2213,13 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
- 		data.meter = meter;
+@@ -2180,6 +2291,15 @@
+ 			return -EOPNOTSUPP;
+ 		}
  	}
- 
++
 +	/* A DS-Lite decapsulation flow is plain IPv4-in-IPv6; a PPPoE
 +	 * session inside the tunnel would need both headers encoded,
-+	 * which this minimal path does not do.
++	 * which this minimal path does not do.  This has to be decided
++	 * before the meter is allocated: below the allocation the only
++	 * way out is put_smac, so a plain return there leaks the group.
 +	 */
 +	if (offload_type == PPE_PKT_TYPE_IPV4_DSLITE && data.pppoe.num)
 +		return -EOPNOTSUPP;
-+
- 	/* A flow whose ingress and egress devices are both ports of the same
- 	 * bridge never leaves L2, so the PPE must forward it without touching
- 	 * the IP TTL.  Routing -- including entering or leaving the bridge --
-@@ -2180,9 +2298,11 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
+ 
+ 	if (!is_valid_ether_addr(data.eth.h_source) ||
+ 	    !is_valid_ether_addr(data.eth.h_dest))
+@@ -2276,9 +2396,11 @@
  		case FLOW_ACT_MANGLE_HDR_TYPE_TCP:
  		case FLOW_ACT_MANGLE_HDR_TYPE_UDP:
  			err = airoha_ppe_flow_mangle_ports(act, &data);
@@ -358,10 +366,12 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  			break;
  		case FLOW_ACT_MANGLE_HDR_TYPE_ETH:
  			/* handled earlier */
-@@ -2196,6 +2316,18 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
- 			goto put_smac;
- 	}
+@@ -2290,6 +2412,18 @@
  
+ 		if (err)
+ 			goto put_smac;
++	}
++
 +	/* Packet type 3 carries only the inner original tuple; there is no
 +	 * second tuple to hold the NAT rewrite.  A decapsulation flow that
 +	 * needs address or port translation therefore cannot be encoded
@@ -372,14 +382,12 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +	if (offload_type == PPE_PKT_TYPE_IPV4_DSLITE && nat_rewrite) {
 +		err = -EOPNOTSUPP;
 +		goto put_smac;
-+	}
-+
+ 	}
+ 
  	if (addr_type == FLOW_DISSECTOR_KEY_IPV4_ADDRS) {
- 		err = airoha_ppe_foe_entry_set_ipv4_tuple(&hwe, &data, true);
- 		if (err)
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -124,7 +124,6 @@ static int airoha_ppe_debugfs_foe_show(struct seq_file *m, void *private,
+@@ -124,7 +124,6 @@
  
  		switch (type) {
  		case PPE_PKT_TYPE_IPV4_HNAPT:
@@ -387,10 +395,11 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  			src_port = &hwe->ipv4.new_tuple.src_port;
  			dest_port = &hwe->ipv4.new_tuple.dest_port;
  			src_addr = &hwe->ipv4.new_tuple.src_ip;
-@@ -134,6 +133,20 @@ static int airoha_ppe_debugfs_foe_show(struct seq_file *m, void *private,
+@@ -133,6 +132,20 @@
+ 			airoha_debugfs_ppe_print_tuple(m, src_addr, dest_addr,
  						       src_port, dest_port,
  						       ipv6);
- 			break;
++			break;
 +		case PPE_PKT_TYPE_IPV4_DSLITE:
 +			/* Packet type 3 has no new tuple: the bytes at
 +			 * ipv4.new_tuple are the outer flow label and
@@ -404,11 +413,10 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +						  hwe->dslite.l2.meter),
 +				   !!(hwe->ib1 &
 +				      AIROHA_FOE_IB1_BIND_TUNNEL_DECAP));
-+			break;
+ 			break;
  		default:
  			break;
- 		}
-@@ -508,6 +521,66 @@ static int airoha_ppe_debugfs_meter_show(struct seq_file *m, void *private)
+@@ -508,6 +521,66 @@
  }
  DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_meter);
  
@@ -475,7 +483,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  {
  	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-@@ -523,6 +596,8 @@ int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
+@@ -523,6 +596,8 @@
  			    &airoha_ppe_debugfs_bind_rate_fops);
  	debugfs_create_file("tb_regs", 0444, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_tb_regs_fops);
