@@ -1,4 +1,5 @@
 name: Build and Push prebuilt tools container
+# push covers protected branches only; PR branches are covered by pull_request.
 
 on:
   push:
