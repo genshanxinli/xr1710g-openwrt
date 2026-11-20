@@ -246,6 +246,77 @@ class RegArbitrateTest(unittest.TestCase):
         self.assertIn("would log: reg=CN", result.stdout)
         self.assertEqual(self.fx.store.read_text(), before)
 
+    def test_four_state_matrix_changes_nothing(self):
+        """The four non-conflict uci states: log only, never write.
+
+        This is the truth table in docs/wifi-reg-arbitration.md, rows 1-4.
+        Every row must leave the uci store byte-identical and log exactly one
+        line: the switch must not "helpfully" fill in a country.
+        """
+        cases = [
+            # (country1, country2, expected log prefix)
+            ("", "", "reg=00 (no usable radio country)"),
+            ("US", "", "reg=US (radio1 only)"),
+            ("", "CN", "reg=CN (radio2 only)"),
+            ("CN", "cn", "reg=CN,"),
+        ]
+        for country1, country2, expected in cases:
+            with self.subTest(country1=country1, country2=country2):
+                self.fx.set_uci("wireless.radio1.country", country1)
+                self.fx.set_uci("wireless.radio2.country", country2)
+                self.fx.set_uci("wireless.radio1.channel", "149")
+                self.fx.set_uci("wireless.radio2.channel", "37")
+                before = self.fx.store.read_text()
+                result = self.fx.run()
+                self.assert_run(result)
+                self.assertTrue(self.fx.logged()[0].startswith(expected),
+                                self.fx.logged()[0])
+                self.assertEqual(self.fx.store.read_text(), before)
+
+    def test_placeholder_00_is_treated_as_no_country(self):
+        # '00' is what netifd/cfg80211 leave behind for "world domain"; it must
+        # not be mistaken for a real two-letter country and arbitrated.
+        self.fx.set_uci("wireless.radio1.country", "00")
+        self.fx.set_uci("wireless.radio2.country", "US")
+        before = self.fx.store.read_text()
+        result = self.fx.run(prefer="us")
+        self.assert_run(result)
+        self.assertIn("reg=US (radio2 only)", self.fx.logged()[0])
+        self.assertEqual(self.fx.store.read_text(), before)
+
+    def test_prefer_cn_keeps_radio1(self):
+        # Mirror of test_prefer_arbitrates_and_is_idempotent: the CN arm must
+        # keep the radio that already holds CN and move the other one.
+        self.fx.set_uci("wireless.radio1.country", "CN")
+        self.fx.set_uci("wireless.radio2.country", "US")
+        result = self.fx.run(prefer="cn")
+        self.assert_run(result)
+        self.assertIn("kept radio1", self.fx.logged()[0])
+        self.assertIn("reg=CN,", self.fx.logged()[0])
+        after = self.fx.store.read_text()
+        self.assertIn("wireless.radio2.country=CN\n", after)
+        self.assertEqual(after.count("wireless.radio2.country="), 1)
+
+    def test_invalid_prefer_is_reported_then_warn_only_on_conflict(self):
+        self.fx.set_uci("wireless.radio1.country", "CN")
+        self.fx.set_uci("wireless.radio2.country", "US")
+        before = self.fx.store.read_text()
+        result = self.fx.run(prefer="jp")
+        self.assert_run(result, logs=2)
+        self.assertIn("ignoring REG_PREFER='jp'", self.fx.logged()[0])
+        self.assertIn("no change", self.fx.logged()[1])
+        self.assertEqual(self.fx.store.read_text(), before)
+
+    def test_prefer_on_agreeing_radios_is_ignored(self):
+        self.fx.set_uci("wireless.radio1.country", "US")
+        self.fx.set_uci("wireless.radio2.country", "US")
+        before = self.fx.store.read_text()
+        result = self.fx.run(prefer="cn")
+        self.assert_run(result)
+        self.assertIn("REG_PREFER=CN ignored: radios already agree",
+                      self.fx.logged()[0])
+        self.assertEqual(self.fx.store.read_text(), before)
+
     def test_exported_ipkg_instroot_is_harmless(self):
         self.fx.set_uci("wireless.radio1.country", "US")
         self.fx.set_uci("wireless.radio2.country", "US")
