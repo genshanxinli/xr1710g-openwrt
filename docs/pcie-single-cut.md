@@ -116,6 +116,7 @@ PCI_ID=14C3:7990
 ## 5. 交付物怎么钉住这些数字
 
 - `scripts/tests/fixtures/pbus_csr-1fbe3400.registers`：第 2 节那份 dump 的**原文**（63 行，带来源头注释）。
+- 台账条目（`scripts/claims.yaml`）：`pbus-csr-0x18-reads-7`（`实测`，supported）与 `pcie-topology-xr1710g`（`实测`，supported），`python3 scripts/check-claims.py` 通过。
 - `scripts/tests/test_pcie_single_cut.py`：
   - `DeviceEvidenceTest`：fixture 必须覆盖 `0x18`、`0x18 == 0x7`、脚本 `ADDR` 必须等于 dtsi `pbus_csr` 基址 + `0x18`、
     且 dtsi 里没有窗口覆盖 `0x18`；

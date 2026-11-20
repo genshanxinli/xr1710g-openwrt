@@ -145,7 +145,11 @@ CN 分支（真值表 6b 行）需要 `wireless.radio1.country` 与 `wireless.ra
 **脚本自身不选信道/带宽**，所以“CN 域下 5 GHz 160 MHz 与 6 GHz 320 MHz 是否真的同时起来”不在本文件范围内；
 那需要 `scripts/wifi-reg-report.sh` 的实际起网结果，本机也没有 CN 域可测。
 
-## 6. 复跑方式
+## 6. 台账与复跑方式
+
+`scripts/claims.yaml` 里的 `reg-arbitrate-us-agree`（`实测`，supported）只覆盖真值表第 4b 行；
+6a/6b 两行仍是 `未验证`，不得当成既有事实引用。
+
 
 ```
 python3 -m unittest scripts/tests/test_reg_arbitrate.py     # 14 用例，纯离线
