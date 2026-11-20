@@ -164,3 +164,35 @@ claims:
     date: "2026-11-15"
     status: unverified
     notes: "来自 issue #31 的已验证事实清单；b12 三臂实验原始记录未入库，docs/ 被 .gitignore 忽略。issue #81 才把 decap 语义做成可选档。"
+
+  - id: pbus-csr-0x18-reads-7
+    claim: "XR1710G 上 pbus_csr（0x1fbe3400）的 0x18 偏移即 0x1fbe3418，开机后读 0x00000007。"
+    source:
+      - scripts/tests/fixtures/pbus_csr-1fbe3400.registers:12
+      - docs/pcie-single-cut.md:40
+      - target/linux/airoha/dts/an7581.dtsi:589
+    evidence: 实测
+    date: "2026-11-20"
+    status: supported
+    notes: "来自 /sys/kernel/debug/regmap/dummy-syscon@0x000000001fbe3400/registers 的整份 dump（63 行，r38047-a86ce12e27，kernel 7.3）。只证明读数；0x7 的字段语义仍是推断，an7581.dtsi 的三个 mediatek,pbus-csr 窗口（0x0-0x4 / 0x8-0xc / 0x10-0x14）都不覆盖 0x18，即没有 in-tree 消费者。写 0x0 能否关掉 pcie_single_cut、能否改善延迟：未验证（本机无 CONFIG_DEVMEM/devmem）。"
+
+  - id: pcie-topology-xr1710g
+    claim: "XR1710G 上 pcie0（1fc00000，domain 0000）以 x2 / 8.0 GT/s 训练并枚举 14c3:7990（mt7996e），pcie2（1fc40000，domain 0002）以 x1 / 5.0 GT/s 枚举 14c3:7991，pcie1（1fc20000）未枚举。"
+    source:
+      - docs/pcie-single-cut.md:72
+      - docs/pcie-single-cut.md:80
+      - target/linux/airoha/dts/an7581-xr1710g-ubi.dts:235
+    evidence: 实测
+    date: "2026-11-20"
+    status: supported
+    notes: "宽度/速率取自 /sys/bus/pci/devices/*/current_link_* 当前值；该机 dmesg 只剩 22 行、开机枚举段已滚掉，所以“开机时如何训练起来的”没有留证。与板级 DT 一致：num-lanes=<2>，&pcie1 disabled，&pcie2 okay。"
+
+  - id: reg-arbitrate-us-agree
+    claim: "美规 XR1710G 出厂 radio1.country=radio2.country=US，运行 60_xr1710g-reg-arbitrate 只记一行 reg=US 日志、rc=0、不改 /etc/config/wireless。"
+    source:
+      - docs/wifi-reg-arbitration.md:90
+      - target/linux/airoha/an7581/base-files/etc/uci-defaults/60_xr1710g-reg-arbitrate:175
+    evidence: 实测
+    date: "2026-11-20"
+    status: supported
+    notes: "只覆盖真值表第 4b 行（两 radio 同域）。同一台机还实测了 REG_PREFER=cn 归一化成 CN、无效值先告警。第 6a/6b 行（冲突 + REG_PREFER 命中其一，会 uci set + commit）需要设备处于冲突态，本机未做；CN 分支在美规机上仍然未验证。"
