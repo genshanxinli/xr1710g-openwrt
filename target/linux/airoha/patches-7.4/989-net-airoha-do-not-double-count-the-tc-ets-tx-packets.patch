@@ -1,0 +1,56 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Subject: [PATCH] net: airoha: do not double count the tc-ets tx packets
+
+airoha_qdma_get_tx_ets_stats() treats the two QDMA channel counters
+(REG_CNTR_VAL(channel << 1) and REG_CNTR_VAL((channel << 1) + 1)) as two
+independent sources and hands their summed delta to the qdisc bstats, so
+`tc class show` reports about twice the packets the port transmitted.
+
+They are not independent sources.  The second slot counts every packet
+the channel transmitted; the first counts the subset of those the CPU
+submitted (fwd >= cpu).  The measured delta(cpu+fwd)/delta(gdm1) of 2.08
+on the XR1710G is exactly that double count (perf-roadmap Q22, M1.13b):
+hardware forwarding is delta(fwd) - delta(cpu) and the offload ratio is
+that share over delta(fwd), so fwd/(cpu+fwd) ratios are not meaningful.
+
+Report delta(fwd) alone as the channel's tx_packets.  cpu_tx_packets and
+fwd_tx_packets stay separate and both are still advanced on every query,
+so the next delta of either slot starts from the same instant; only the
+value handed to the qdisc changes.
+
+This is an accounting fix, not a performance change: forwarding is
+untouched, and so are dev->stats.tx_ok_pkts and the port MIBs.  No
+throughput conclusion is drawn from this patch.
+
+Board check: over the same window, `tc class show` tx packets divided by
+the port MIB tx packets must be 1 +/- 0.01.
+
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -3157,12 +3157,20 @@ static int airoha_qdma_get_tx_ets_stats(
+ 	cpu_tx_packets = airoha_qdma_rr(qdma, REG_CNTR_VAL(channel << 1));
+ 	fwd_tx_packets = airoha_qdma_rr(qdma,
+ 					REG_CNTR_VAL((channel << 1) + 1));
+-	tx_packets = (u32)(cpu_tx_packets -
+-			   dev->qos_stats[channel].cpu_tx_packets);
+-	tx_packets += (u32)(fwd_tx_packets -
+-			    dev->qos_stats[channel].fwd_tx_packets);
++	/* fwd counts every packet the channel transmitted and cpu the
++	 * subset of them the CPU submitted (fwd >= cpu): the two slots are
++	 * stages of the same channel, not independent sources.  Adding both
++	 * deltas counted the CPU-submitted packets twice and inflated the
++	 * qdisc stats by about cpu/fwd.  Report the channel total only.
++	 */
++	tx_packets = (u32)(fwd_tx_packets -
++			   dev->qos_stats[channel].fwd_tx_packets);
+ 
+ 	_bstats_update(opt->stats.bstats, 0, tx_packets);
++
++	/* Both baselines advance together so the next query takes its two
++	 * deltas over the same window.
++	 */
+ 	dev->qos_stats[channel].cpu_tx_packets = cpu_tx_packets;
+ 	dev->qos_stats[channel].fwd_tx_packets = fwd_tx_packets;
+ 

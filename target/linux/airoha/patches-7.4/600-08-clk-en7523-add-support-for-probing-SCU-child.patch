@@ -1,0 +1,37 @@
+--- a/drivers/clk/clk-en7523.c
++++ b/drivers/clk/clk-en7523.c
+@@ -5,6 +5,7 @@
+ #include <linux/clk-provider.h>
+ #include <linux/io.h>
+ #include <linux/mfd/syscon.h>
++#include <linux/of_platform.h>
+ #include <linux/platform_device.h>
+ #include <linux/phy.h>
+ #include <linux/phy/phy.h>
+@@ -152,6 +153,7 @@ struct en_clk_priv {
+ };
+ 
+ struct en_clk_soc_data {
++	bool probe_child;
+ 	u32 num_clocks;
+ 	const struct clk_ops pcie_ops;
+ 	int (*hw_init)(struct platform_device *pdev,
+@@ -1400,7 +1402,17 @@ static int en7523_clk_probe(struct platf
+ 	if (r)
+ 		return r;
+ 
+-	return of_clk_add_hw_provider(node, of_clk_hw_onecell_get, clk_data);
++	r = of_clk_add_hw_provider(node, of_clk_hw_onecell_get, clk_data);
++	if (r)
++		return r;
++
++	if (soc_data->probe_child) {
++		r = of_platform_populate(node, NULL, NULL, &pdev->dev);
++		if (r)
++			return r;
++	}
++
++	return 0;
+ }
+ 
+ static const struct en_clk_soc_data en7523_data = {
