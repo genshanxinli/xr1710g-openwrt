@@ -11,7 +11,24 @@ claim is reused.  This checker only enforces the bookkeeping:
     resolves to an existing line in this checkout;
   * ids are unique;
   * an inference-only claim (``evidence: 推断``) is not promoted to
-    ``status: supported``.
+    ``status: supported``;
+  * every ``status: supported`` row carries a hook that can prove it: a
+    ``verify:`` assertion (re-checked by scripts/claims-verify.py), or
+    ``manual: true`` together with ``verified_at: <sha>``.
+
+Evidence classes and the policy this checker enforces (also re-stated in
+``--help`` because a rule that only lives in a commit message is forgotten):
+
+  A config  Kconfig symbol value in a shipped config   -> FAIL on mismatch
+  B symbol  symbol inside a built artifact             -> FAIL, SKIP without one
+  C text    path:line exact substring                  -> FAIL on mismatch
+  D device  sysfs/debugfs value on the box             -> warn + unverified, or
+                                                         manual: true with a sha
+
+``needs-reverify``: when ``verified_at`` is older than HEAD and a cited path
+changed in between, scripts/claims-verify.py prints a warning.  It is a
+warning today only because the ledger has not been re-baselined yet; it turns
+into a failure after that pass.  The reason lives here, not in a commit.
 
 The ledger is deliberately kept to a small YAML subset so this checker runs
 with the Python standard library on any build host (no PyYAML package):
@@ -47,7 +64,12 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-FIELDS = ("id", "claim", "source", "evidence", "date", "status", "notes")
+FIELDS = (
+    "id", "claim", "source", "evidence", "date", "status", "notes",
+    "verify", "manual", "verified_at",
+)
+LIST_FIELDS = ("source", "verify")
+VERIFY_VERBS = ("symbol", "kconfig", "text", "device")
 REQUIRED_FIELDS = ("id", "claim", "source", "evidence", "date", "status")
 EVIDENCE_VALUES = ("实测", "代码", "推断")
 STATUS_VALUES = ("supported", "refuted", "unverified")
@@ -57,6 +79,8 @@ FIELD_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 URL_RE = re.compile(r"^https?://[^\s/]+(?:/[^\s]*)?$")
 FILE_LINE_RE = re.compile(r"^([^\s:][^:]*):(\d+)$")
+VERIFY_ITEM_RE = re.compile(r"^(symbol|kconfig|text|device):\s*\S")
+SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
 
 class LedgerError(Exception):
@@ -129,6 +153,7 @@ def _new_record(line: int) -> dict:
         "__line__": line,
         "__field_lines__": {},
         "__source_lines__": [],
+        "__verify_lines__": [],
     }
 
 
@@ -138,11 +163,13 @@ def _set_field(record: dict, key: str, value: str, line: int) -> None:
     if key in record["__field_lines__"]:
         raise LedgerError(line, f"duplicate field {key!r}")
     record["__field_lines__"][key] = line
-    if key == "source":
+    if key in LIST_FIELDS:
         if value:
-            raise LedgerError(line, "field 'source' must be a block list, one '- entry' per line")
-        record["source"] = []
-        record["__source_lines__"] = []
+            raise LedgerError(
+                line, f"field {key!r} must be a block list, one '- entry' per line"
+            )
+        record[key] = []
+        record[f"__{key}_lines__"] = []
         return
     if not value:
         raise LedgerError(line, f"field {key!r} needs a value on the same line")
@@ -153,7 +180,7 @@ def parse_ledger(text: str) -> list[dict]:
     """Parse the ledger subset into records, annotating lines for errors."""
     records: list[dict] = []
     current: dict | None = None
-    in_source_list = False
+    in_list: str | None = None
     seen_claims = False
 
     for number, raw in enumerate(text.splitlines(), 1):
@@ -180,7 +207,7 @@ def parse_ledger(text: str) -> list[dict]:
                 raise LedgerError(number, "'claims:' must be followed by a block sequence")
             seen_claims = True
             current = None
-            in_source_list = False
+            in_list = None
             continue
 
         if not seen_claims:
@@ -190,16 +217,16 @@ def parse_ledger(text: str) -> list[dict]:
             if content == "-":
                 current = _new_record(number)
                 records.append(current)
-                in_source_list = False
+                in_list = None
                 continue
             if not content.startswith("- "):
                 raise LedgerError(number, f"expected a '- ' claim entry, got {content!r}")
             current = _new_record(number)
             records.append(current)
-            in_source_list = False
+            in_list = None
             key, value = _split_field(content[2:], number)
             _set_field(current, key, value, number)
-            in_source_list = key == "source"
+            in_list = key if key in LIST_FIELDS and value == "" else None
             continue
 
         if indent == 4:
@@ -207,17 +234,17 @@ def parse_ledger(text: str) -> list[dict]:
                 raise LedgerError(number, "field line outside a claim entry")
             key, value = _split_field(content, number)
             _set_field(current, key, value, number)
-            in_source_list = key == "source" and value == ""
+            in_list = key if key in LIST_FIELDS and value == "" else None
             continue
 
         if indent == 6:
-            if current is None or not in_source_list:
-                raise LedgerError(number, "source item without a 'source:' field")
+            if current is None or in_list is None:
+                raise LedgerError(number, "list item without a 'source:' or 'verify:' field")
             if not content.startswith("- "):
-                raise LedgerError(number, f"expected a '- ' source item, got {content!r}")
+                raise LedgerError(number, f"expected a '- ' list item, got {content!r}")
             item = _parse_scalar(content[2:], number)
-            current["source"].append(item)
-            current["__source_lines__"].append(number)
+            current[in_list].append(item)
+            current[f"__{in_list}_lines__"].append(number)
             continue
 
         raise LedgerError(number, "unexpected indentation (expected 0, 2, 4 or 6 spaces)")
@@ -327,6 +354,39 @@ def validate(records: list[dict]) -> list[tuple[int, str | None, str]]:
         if "notes" in record and not record["notes"].strip():
             add("notes", "field 'notes' must not be empty when present")
 
+        if "verify" in record:
+            for index, item in enumerate(record["verify"]):
+                line = (
+                    record["__verify_lines__"][index]
+                    if index < len(record["__verify_lines__"])
+                    else field_lines.get("verify", start)
+                )
+                if not VERIFY_ITEM_RE.match(item):
+                    problems.append(
+                        (line, claim_id,
+                         f"verify item {item!r}: expected "
+                         "'symbol: | kconfig: | text: | device: <args>'")
+                    )
+
+        if "manual" in record and record["manual"] not in ("true", "false"):
+            add("manual", "field 'manual' must be 'true' or 'false'")
+
+        if "verified_at" in record and not SHA_RE.fullmatch(record["verified_at"]):
+            add("verified_at", "field 'verified_at' must be a commit sha (7..40 hex chars)")
+
+        if record.get("manual") == "true" and "verified_at" not in record:
+            add("verified_at", "manual: true needs verified_at: <sha> so a re-check has a baseline")
+
+        if record.get("status") == "supported" and not record.get("verify"):
+            if not (record.get("manual") == "true" and record.get("verified_at")):
+                add(
+                    "status",
+                    "a 'supported' claim needs a hook that can prove it: "
+                    "verify: (machine-checked by scripts/claims-verify.py) or "
+                    "manual: true with verified_at: <sha>; otherwise the row is "
+                    "format-green only, so demote it to 'unverified'",
+                )
+
         if record.get("evidence") == "推断" and record.get("status") == "supported":
             add(
                 "status",
@@ -346,7 +406,21 @@ def _display_path(path: Path) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         description="Validate scripts/claims.yaml (the XR1710G hardware claim ledger).",
+        epilog=(
+            "Policy stashed here so it outlives the commit that introduced it:\n"
+            "  * every 'supported' row needs a hook: verify: (re-checked by\n"
+            "    scripts/claims-verify.py) or manual: true + verified_at: <sha>.\n"
+            "    Rows without one are format-green only -- they fail here.\n"
+            "  * evidence classes in claims-verify.py: A config / B symbol / C text\n"
+            "    mismatch -> FAIL; B without an artifact and D device without the\n"
+            "    box -> SKIP; D behaviour claims outside a run stay unverified or\n"
+            "    manual: true with the sha of the run.\n"
+            "  * needs-reverify (verified_at..HEAD touched a cited path) is a\n"
+            "    WARNING in claims-verify.py until the ledger is re-baselined once;\n"
+            "    then it becomes a failure.  See scripts/claims-verify.py --help."
+        ),
     )
     parser.add_argument(
         "--ledger",
