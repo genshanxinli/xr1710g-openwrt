@@ -1,0 +1,16 @@
+--- a/.github/workflows/build.yml
++++ b/.github/workflows/build.yml
+@@ -73,6 +73,13 @@
+             -exec cp {} ../out/ \;
+           ls -la ../out
+ 
++      - name: Collect distfeeds
++        run: |
++          cd openwrt
++          ./scripts/build-distfeeds.sh ../distfeeds
++          tar -czf ../out/distfeeds-${{ env.source }}.tar.gz -C .. distfeeds
++          ls -la ../out
++
+       - name: Upload artifacts
+         uses: actions/upload-artifact@v4
+         with:
