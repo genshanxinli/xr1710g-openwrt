@@ -182,6 +182,10 @@ EXPECTED_NSS=2
 TARGET_GBIT=2.5
 RAW_DIR=
 DRY_RUN=0
+CHECK_ROWS=
+RESULT_JSON=
+SEL_W=
+PLAN_REASON=
 
 SERVER_PID=
 WATCH_PID=
@@ -568,6 +572,164 @@ iface_ssid() {
 		sed -n 's/^[[:space:]]*ssid \(.*\)$/\1/p' | head -1
 }
 
+# --------------------------------------------------------------------------
+# Channel plan validity.  A row is only a legal 6 GHz block when the whole
+# width fits inside the band, not merely when its centre frequency is inside
+# it: a 320 MHz block centred on 7115 MHz reaches 7275 MHz, past the 7125 MHz
+# upper edge.  Before this check the discovery range alone accepted
+# ch233/7115 MHz/320 MHz and the row was printed as ok.
+#
+# 5945 MHz is the lower edge of the 6 GHz band (the first 20 MHz channel,
+# ch1, is centred on 5955 MHz); 7125 MHz is the upper edge.
+CH_BAND_LO=5945
+CH_BAND_HI=7125
+
+# channel_block_reason CENTRE WIDTH [CENTER1 [CENTER2]]
+#
+# Prints the reason the block is not a legal 6 GHz channel block, one line,
+# or nothing when it is legal.  CENTRE is the centre frequency of the block
+# (channel1 of a 320 MHz block, i.e. center1, when the caller knows it; the
+# primary channel frequency otherwise).  Every frequency that is given must
+# lie inside the band, and the block extent CENTRE +/- WIDTH/2 must lie
+# inside the band as well.
+channel_block_reason() {
+	_cbr_centre=$1
+	_cbr_width=$2
+	_cbr_c1=${3:-}
+	_cbr_c2=${4:-}
+
+	case $_cbr_width in
+	'' | *[!0-9]*) printf 'width missing or not an integer' ; return 0 ;;
+	esac
+	case $_cbr_width in
+	20 | 40 | 80 | 160 | 320) ;;
+	*) printf 'width %s MHz is not a 6 GHz channel width' "$_cbr_width" ; return 0 ;;
+	esac
+	case $_cbr_centre in
+	'' | *[!0-9]*) printf 'centre frequency missing or not an integer' ; return 0 ;;
+	esac
+	_cbr_half=$((_cbr_width / 2))
+	for _cbr_f in "$_cbr_centre" "$_cbr_c1" "$_cbr_c2"; do
+		[ -n "$_cbr_f" ] || continue
+		case $_cbr_f in
+		*[!0-9]*) printf '%s is not an integer frequency' "$_cbr_f" ; return 0 ;;
+		esac
+		if [ "$_cbr_f" -lt "$CH_BAND_LO" ] || [ "$_cbr_f" -gt "$CH_BAND_HI" ]; then
+			printf '%s MHz is outside the 6 GHz band (%s-%s MHz)' \
+				"$_cbr_f" "$CH_BAND_LO" "$CH_BAND_HI"
+			return 0
+		fi
+	done
+	if [ $((_cbr_centre - _cbr_half)) -lt "$CH_BAND_LO" ]; then
+		printf '%s MHz - %s MHz = %s MHz is below the 6 GHz band edge %s MHz' \
+			"$_cbr_centre" "$_cbr_half" "$((_cbr_centre - _cbr_half))" "$CH_BAND_LO"
+		return 0
+	fi
+	if [ $((_cbr_centre + _cbr_half)) -gt "$CH_BAND_HI" ]; then
+		printf '%s MHz + %s MHz = %s MHz is above the 6 GHz band edge %s MHz' \
+			"$_cbr_centre" "$_cbr_half" "$((_cbr_centre + _cbr_half))" "$CH_BAND_HI"
+		return 0
+	fi
+	return 0
+}
+
+# row_num LINE KEY...: the first integer value of any of KEY in one flat
+# JSON object.  The plan rows handed to --check-rows are flat and one object
+# per line, and the device has no jq, so sed is enough.
+row_num() {
+	_rn_line=$1
+	shift
+	for _rn_key in "$@"; do
+		_rn_v=$(printf '%s\n' "$_rn_line" |
+			sed -n "s/.*\"$_rn_key\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p")
+		if [ -n "$_rn_v" ]; then
+			printf '%s' "$_rn_v"
+			return 0
+		fi
+	done
+	return 0
+}
+
+# check_rows SOURCE: validate a plan file ("-" for stdin) and print one
+# JSONL verdict per row on stdout.  Exits 0 when every row is a legal 6 GHz
+# block, 1 when at least one row is not.  --result-json writes a summary
+# with invalid_rows, so a caller can gate on a file instead of on stdout.
+check_rows() {
+	_cr_input=$1
+	_cr_n=0
+	_cr_bad=0
+	_cr_first=1
+	_cr_invalid_json=
+	if [ "$_cr_input" = - ]; then
+		_cr_input=/dev/stdin
+	elif [ ! -r "$_cr_input" ]; then
+		usage_error "cannot read --check-rows file $1"
+	fi
+	while IFS= read -r _cr_row; do
+		[ -n "$_cr_row" ] || continue
+		_cr_n=$((_cr_n + 1))
+		_cr_ch=$(row_num "$_cr_row" channel ch)
+		_cr_freq=$(row_num "$_cr_row" center_freq freq_mhz freq)
+		_cr_w=$(row_num "$_cr_row" width width_mhz)
+		_cr_c1=$(row_num "$_cr_row" center1 center1_mhz)
+		_cr_c2=$(row_num "$_cr_row" center2 center2_mhz)
+		# The block is centred on center1 when the row names it, and on
+		# the primary frequency otherwise.
+		if [ -z "${_cr_c1:-}" ] && [ -z "${_cr_freq:-}" ]; then
+			_cr_reason='row has no centre frequency'
+		else
+			_cr_reason=$(channel_block_reason "${_cr_c1:-${_cr_freq:-}}" \
+				"${_cr_w:-}" "${_cr_freq:-}" "${_cr_c2:-}")
+		fi
+		if [ -n "$_cr_reason" ]; then
+			_cr_bad=$((_cr_bad + 1))
+			_cr_status=invalid
+			printf 'INVALID: row %s ch%s center %s MHz width %s MHz: %s\n' \
+				"$_cr_n" "${_cr_ch:-?}" "${_cr_c1:-${_cr_freq:-?}}" \
+				"${_cr_w:-?}" "$_cr_reason" >&2
+		else
+			_cr_status=ok
+		fi
+		printf '{"row":%s,"channel":%s,"center_freq":%s,"width":%s,"center1":%s,"center2":%s,"status":"%s","invalid_reason":%s}\n' \
+			"$_cr_n" "$(json_number_or_null "${_cr_ch:-}")" \
+			"$(json_number_or_null "${_cr_freq:-}")" \
+			"$(json_number_or_null "${_cr_w:-}")" \
+			"$(json_number_or_null "${_cr_c1:-}")" \
+			"$(json_number_or_null "${_cr_c2:-}")" \
+			"$_cr_status" "$(json_string_or_null "$_cr_reason")"
+		if [ -n "$_cr_reason" ]; then
+			if [ "$_cr_first" = 1 ]; then
+				_cr_first=0
+			else
+				_cr_invalid_json="$_cr_invalid_json,"
+			fi
+			_cr_invalid_json="$_cr_invalid_json{\"row\":$_cr_n,\"channel\":$(json_number_or_null "${_cr_ch:-}"),\"center1\":$(json_number_or_null "${_cr_c1:-}"),\"width\":$(json_number_or_null "${_cr_w:-}"),\"invalid_reason\":$(json_string_or_null "$_cr_reason")}"
+		fi
+	done <"$_cr_input"
+
+	if [ -n "$RESULT_JSON" ]; then
+		case $RESULT_JSON in
+		-*) usage_error "--result-json must not start with '-'" ;;
+		esac
+		_cr_ok=false
+		[ "$_cr_bad" -eq 0 ] && _cr_ok=true
+		{
+			printf '{\n'
+			printf '  "schema": "6g320-matrix/check/v1",\n'
+			printf '  "checked_rows": %s,\n' "$_cr_n"
+			printf '  "invalid_rows": %s,\n' "$_cr_bad"
+			printf '  "ok": %s,\n' "$_cr_ok"
+			printf '  "invalid": [%s]\n' "$_cr_invalid_json"
+			printf '}\n'
+		} >"$RESULT_JSON.tmp" 2>/dev/null &&
+			mv "$RESULT_JSON.tmp" "$RESULT_JSON" 2>/dev/null ||
+			die "cannot write $RESULT_JSON"
+	fi
+	say "$_cr_n row(s) checked, $_cr_bad invalid"
+	[ "$_cr_bad" -eq 0 ] || exit 1
+	exit 0
+}
+
 discover_candidates() {
 	# prints "iface|channel|frequency|width|center1" for every AP BSS on
 	# 5945-7125 MHz with width 320.
@@ -602,13 +764,10 @@ EOF
 		case $_center in
 		''|*[!0-9]*) _center= ;;
 		esac
-		# A 320 MHz block occupies centre +/-160 MHz and must fit inside
-		# the 6 GHz band (5945-7125 MHz).  The channel-number range alone
-		# accepted ch233 (7115 MHz), whose extent runs to 7275 MHz -- past
-		# the band edge -- and the row was then printed as ok.
-		_centre=${_center:-$_freq}
-		[ $((_centre - 160)) -ge 5945 ] || continue
-		[ $((_centre + 160)) -le 7125 ] || continue
+		# centre1 is the centre of the 320 MHz block; without it the
+		# primary frequency is the best available anchor.
+		[ -z "$(channel_block_reason "${_center:-$_freq}" "$_width" "$_freq" "$_center")" ] ||
+			continue
 		printf '%s|%s|%s|%s|%s\n' \
 			"$_if" "$_ch" "$_freq" "$_width" "$_center"
 	done
@@ -920,6 +1079,15 @@ EOF
 	AP_CHANNEL=$_ch
 	AP_FREQ=$_freq
 	AP_CENTER=$_center
+	# The width the client had at selection time.  The later pre-arm gate
+	# compares against this instead of against a bare "must be 320 MHz": an
+	# explicitly named 160-only client was selected on purpose, so it is
+	# measured rather than skipped, while a client that was at 320 MHz and
+	# dropped must still stop the run.
+	SEL_W=$_w
+	# The AP's own block must be a legal 6 GHz block; when it is not, every
+	# arm of this row is invalid whatever the throughput says.
+	PLAN_REASON=$(channel_block_reason "${AP_CENTER:-$AP_FREQ}" 320 "$AP_FREQ" "$AP_CENTER")
 	# The client's own rate width can be below the AP's 320 MHz.  Say it:
 	# the row then measures a narrower channel than its title claims.
 	case $_w in
@@ -1131,6 +1299,8 @@ run_arm() {
 	_invalid=
 	_error=
 	_gbit=
+	[ -n "$PLAN_REASON" ] &&
+		note_invalid "AP channel plan is not a legal 6 GHz 320 MHz block: $PLAN_REASON"
 	_bytes=
 	_secs=
 	_tcp_retr=
@@ -1636,6 +1806,22 @@ while [ $# -gt 0 ]; do
 	--raw-dir=*)
 		RAW_DIR=${1#*=}
 		;;
+	--check-rows)
+		[ $# -ge 2 ] || usage_error "--check-rows needs a value"
+		CHECK_ROWS=$2
+		shift
+		;;
+	--check-rows=*)
+		CHECK_ROWS=${1#*=}
+		;;
+	--result-json)
+		[ $# -ge 2 ] || usage_error "--result-json needs a value"
+		RESULT_JSON=$2
+		shift
+		;;
+	--result-json=*)
+		RESULT_JSON=${1#*=}
+		;;
 	--)
 		shift
 		[ $# -eq 0 ] || usage_error "unexpected argument: $1"
@@ -1711,6 +1897,15 @@ if [ -n "$CLIENT_DRIVER" ]; then
 fi
 if [ -n "$CLIENT_FIRMWARE" ]; then
 	CLIENT_FIRMWARE=$(one_line "$CLIENT_FIRMWARE")
+fi
+
+# --------------------------------------------------------------------------
+# --check-rows: offline channel plan check.  Runs before anything reads the
+# radio, so a caller can validate saved rows on any machine.
+# --------------------------------------------------------------------------
+
+if [ -n "$CHECK_ROWS" ]; then
+	check_rows "$CHECK_ROWS"
 fi
 
 # --------------------------------------------------------------------------
@@ -1814,9 +2009,16 @@ I_SIG=$S_SIG
 I_W320=0
 [ "$I_TXW" = 320 ] && I_W320=1
 [ "$I_RXW" = 320 ] && I_W320=1
-if [ "$I_W320" != 1 ]; then
-	say "client $CLIENT_MAC is no longer at 320 MHz before the arms (tx ${I_TXW:-?}, rx ${I_RXW:-?} MHz)"
+# Only a client that was at 320 MHz when it was selected and has since
+# dropped below it is a hardware skip.  A client selected at 160 MHz on
+# purpose (--client-mac naming a 160-only station) is measured: gating on
+# I_W320 alone made every such row unreachable.
+if [ "$I_W320" != 1 ] && [ "${SEL_W:-}" = 320 ]; then
+	say "client $CLIENT_MAC dropped from 320 MHz to ${I_WIDTH:-?} MHz before the arms (tx ${I_TXW:-?}, rx ${I_RXW:-?} MHz)"
 	skip_no_client
+fi
+if [ "$I_W320" != 1 ]; then
+	add_warning "client $CLIENT_MAC measures at ${I_WIDTH:-?} MHz, not 320 MHz; this row is a sub-320 MHz result"
 fi
 if [ -z "$I_SIG" ]; then
 	add_warning "station signal unavailable"
