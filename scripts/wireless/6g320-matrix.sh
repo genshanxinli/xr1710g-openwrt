@@ -602,6 +602,13 @@ EOF
 		case $_center in
 		''|*[!0-9]*) _center= ;;
 		esac
+		# A 320 MHz block occupies centre +/-160 MHz and must fit inside
+		# the 6 GHz band (5945-7125 MHz).  The channel-number range alone
+		# accepted ch233 (7115 MHz), whose extent runs to 7275 MHz -- past
+		# the band edge -- and the row was then printed as ok.
+		_centre=${_center:-$_freq}
+		[ $((_centre - 160)) -ge 5945 ] || continue
+		[ $((_centre + 160)) -le 7125 ] || continue
 		printf '%s|%s|%s|%s|%s\n' \
 			"$_if" "$_ch" "$_freq" "$_width" "$_center"
 	done
@@ -840,7 +847,13 @@ select_client() {
 			_w320=0
 			[ "$_txw" = 320 ] && _w320=1
 			[ "$_rxw" = 320 ] && _w320=1
-			[ "$_w320" = 1 ] || continue
+			# An automatic pick must negotiate 320 MHz.  An explicitly
+			# named client is kept whatever its width: dropping it here
+			# made every 160-only row unreachable, so a downgrade looked
+			# like an absent station instead of a measured result.
+			if [ "$_w320" = 0 ] && [ "$_m" != "$CLIENT_MAC" ]; then
+				continue
+			fi
 			_w=$(eff_width "$_txw" "$_rxw")
 			_n=$(eff_nss "$_txn" "$_rxn")
 			if [ -n "$_found" ]; then
@@ -907,6 +920,13 @@ EOF
 	AP_CHANNEL=$_ch
 	AP_FREQ=$_freq
 	AP_CENTER=$_center
+	# The client's own rate width can be below the AP's 320 MHz.  Say it:
+	# the row then measures a narrower channel than its title claims.
+	case $_w in
+	''|*[!0-9]*) ;;
+	*) [ "$_w" -lt 320 ] &&
+		add_warning "client $CLIENT_MAC negotiated ${_w} MHz, not 320 MHz" ;;
+	esac
 	# Every candidate is a 320 MHz BSS; this is the AP width, not the
 	# client's direction-specific rate width.
 	AP_WIDTH=320

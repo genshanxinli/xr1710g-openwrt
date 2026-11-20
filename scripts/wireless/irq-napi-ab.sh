@@ -222,19 +222,6 @@ parse_cpu_list() {
 	printf '%s' "${out# }"
 }
 
-cpu_at_index() {
-	local want="$1" i=0 c
-
-	for c in $CPUS; do
-		i=$((i + 1))
-		[ "$i" -eq "$want" ] && {
-			printf '%s' "$c"
-			return 0
-		}
-	done
-	return 1
-}
-
 arm_requested() {
 	local want="$1" a
 
@@ -1229,15 +1216,33 @@ EOF
 		done
 		SPLIT_MAP=${map_ok# }
 	else
-		local i=0 ncpu=0 cpu
+		local i=0 ncpu=0 cpu c k targets=
+		# cpu0 is the boot CPU: arch_timer (~2.5M IRQs/s) and the
+		# housekeeping IRQs already saturate it, so moving a candidate
+		# IRQ there changes nothing and the split arm reads as a no-op.
+		# Round-robin over the remaining online CPUs, and fall back to
+		# the full list on a single-CPU system.
 		for cpu in $CPUS; do
+			[ "$cpu" -eq 0 ] || targets="$targets $cpu"
+		done
+		[ -n "$targets" ] || targets=$CPUS
+		for cpu in $targets; do
 			ncpu=$((ncpu + 1))
 		done
 		SPLIT_MAP=
 		if [ -n "$IRQ_WRITABLE" ] && [ "$ncpu" -gt 0 ]; then
 			for irq in $IRQ_WRITABLE; do
 				i=$((i + 1))
-				cpu=$(cpu_at_index $(( (i - 1) % ncpu + 1 )))
+				k=$(( (i - 1) % ncpu + 1 ))
+				cpu=
+				for c in $targets; do
+					k=$((k - 1))
+					if [ "$k" -eq 0 ]; then
+						cpu=$c
+						break
+					fi
+				done
+				[ -n "$cpu" ] || continue
 				SPLIT_MAP="$SPLIT_MAP $irq:$cpu"
 			done
 			SPLIT_MAP=${SPLIT_MAP# }
@@ -1699,7 +1704,10 @@ measure_arm() {
 	fi
 	WINDOW_S=$(awk -v a="$up_before" -v b="$up_after" \
 		'BEGIN { if (a != "" && b != "" && b >= a) printf "%.2f", b - a; else print "0" }')
-	[ "$WINDOW_S" = 0 ] && WINDOW_S=$WINDOW
+	# The value above is "%.2f", so a string compare against 0 never matched
+	# and WINDOW_S stayed "0.00"; every later rate divided by it.  Compare
+	# numerically and fall back to the requested window when it is zero.
+	awk -v s="$WINDOW_S" 'BEGIN { exit !(s + 0 > 0) }' || WINDOW_S=$WINDOW
 
 	collect_arm
 	if [ "$AP_TX_DELTA_BYTES" = unavailable ]; then

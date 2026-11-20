@@ -194,6 +194,7 @@ WORK_MD5=
 SEL_IFACE=
 SEL_PHY=
 SEL_FREQ=
+SEL_WIDTH=
 SEL_SSID=
 SEL_MAC=
 SEL_6G_ONLY=
@@ -773,8 +774,8 @@ refresh_live() {
 	awk '
 		function flush() {
 			if (iface != "")
-				printf "%s|%s|%s|%s|%s|%s\n", iface, phy, freq, ssid, type, addr
-			iface = ""; ssid = ""; type = ""; freq = ""; addr = ""
+				printf "%s|%s|%s|%s|%s|%s|%s\n", iface, phy, freq, ssid, type, addr, width
+			iface = ""; ssid = ""; type = ""; freq = ""; addr = ""; width = ""
 		}
 		/^phy#/ {
 			flush()
@@ -792,8 +793,17 @@ refresh_live() {
 			if (line ~ /^ssid /) { ssid = substr(line, 6); next }
 			if (line ~ /^type /) { type = substr(line, 6); next }
 			if (line ~ /^channel /) {
-				split(line, a, /[ ()]+/)
+				n = split(line, a, /[ ()]+/)
 				freq = a[3]
+				# "width: 320 MHz" is the negotiated width (iw prints the
+				# colon); without it a clear arm that silently dropped to
+				# 160 MHz compared a different airtime against the loaded
+				# arm.
+				for (i = 1; i < n; i++)
+					if (a[i] == "width" || a[i] == "width:") {
+						width = a[i + 1]
+						break
+					}
 				next
 			}
 			if (line ~ /^addr /) { addr = substr(line, 6); next }
@@ -894,11 +904,14 @@ wait_for_ssid_gone() {
 }
 
 set_sel_from_record() {
-	# $1 iface|phy|freq|ssid|type|addr, $2 optional 6G-only status
+	# $1 iface|phy|freq|ssid|... (a live record or a candidate row),
+	# $2 optional 6G-only status.  The width is taken from the live record
+	# of the selected interface, because a candidate row has no width field.
 	SEL_IFACE=$(printf '%s' "$1" | cut -d'|' -f1)
 	SEL_PHY=$(printf '%s' "$1" | cut -d'|' -f2)
 	SEL_FREQ=$(printf '%s' "$1" | cut -d'|' -f3)
 	SEL_SSID=$(printf '%s' "$1" | cut -d'|' -f4)
+	SEL_WIDTH=$(live_iface_record "$SEL_IFACE" 2>/dev/null | cut -d'|' -f7)
 	[ -n "${2:-}" ] && SEL_6G_ONLY=$2
 	TOKEN_PATH=$(find_token_path "$SEL_PHY" || true)
 }
@@ -1958,17 +1971,31 @@ verify_clear_arm() {
 	fi
 	wait_for_sta "$SEL_IFACE" "$SEL_MAC" 1 ||
 		require_check FAIL "clear arm: STA $SEL_MAC is not associated"
-	while IFS= read -r _ssid; do
-		[ -n "$_ssid" ] || continue
-		if awk -F'|' -v s="$_ssid" '
-			$5 == "AP" && $4 == s && ($3 + 0) < 5925 { found = 1 }
-			END { exit !found }
-		' "$TMP_LIVE"; then
-			require_check FAIL "clear arm: SSID '$_ssid' is still served on a non-6G band"
-			return 0
-		fi
-	done <"$TMP_DISABLED_SSIDS"
-	require_check PASS "clear arm: no disabled SSID remains on a 5/2.4 GHz AP"
+
+	# The 6G BSS must keep the width it had before the reload.  A clear arm
+	# that quietly came back at 160 MHz measures a different airtime than
+	# the loaded arm, so the whole comparison would be void.
+	_livew=$(printf '%s' "$_rec" | cut -d'|' -f7)
+	if [ -z "$_livew" ] || [ "$_livew" = 0 ]; then
+		require_check FAIL "clear arm: 6G AP $SEL_IFACE reports no channel width"
+	elif [ -n "$SEL_WIDTH" ] && [ "$_livew" != "$SEL_WIDTH" ]; then
+		require_check FAIL "clear arm: 6G AP $SEL_IFACE width ${SEL_WIDTH} MHz -> ${_livew} MHz after the reload"
+	else
+		require_check PASS "clear arm: 6G AP $SEL_IFACE keeps ${_livew} MHz"
+	fi
+
+	# Scan every live AP record, not only the sections this script disabled:
+	# an SSID that was already off in the config, or one on a band the
+	# disable pass did not cover, still breaks the "clear air" claim.
+	_left=$(awk -F'|' '
+		$5 == "AP" && ($3 + 0) > 0 && ($3 + 0) < 5925 { printf "%s(%s MHz) ", $1, $3 }
+	' "$TMP_LIVE")
+	if [ -n "$_left" ]; then
+		require_check FAIL "clear arm: these AP BSS are still up below 6 GHz: ${_left% }"
+	else
+		require_check PASS "clear arm: no AP BSS is up on a 5/2.4 GHz channel"
+	fi
+
 	_6g_ssid_live=$(live_6g_ap_by_ssid "$SEL_SSID" || true)
 	if [ -n "$SEL_SSID" ]; then
 		if [ -n "$_6g_ssid_live" ]; then
