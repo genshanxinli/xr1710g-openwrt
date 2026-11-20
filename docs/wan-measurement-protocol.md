@@ -4,6 +4,12 @@
 **适用**：XR1710G WAN 路径（1G / 2.5G / 10G、PPPoE、LRO、PPE 流表）的吞吐与 CPU 成本对比。
 **关联**：#30、#26、#44、#70、#85、#86、#90、#102。
 
+**本机边界（先读）**：这台 XR1710G 当前**没有 PPPoE peer**（无 `pppd` 进程、无 `ppp*` 网络设备、
+`/etc/config/network` 无 `pppoe` 段），`wan` 是 `NO-CARRIER`（`speed` 读作 `-1`、`ethtool`
+`Speed: Unknown!`），即**也没有 2.5G/10G 对端**；唯一 up 的以太口是 `lan4` 1 Gbit/s。
+实测证据与逐条标注见 [`docs/wan-ppe-pppoe-findings.md`](wan-ppe-pppoe-findings.md) 第 0 节。
+所以第 3 节的 B/C/D 三臂**在这台机器上无法执行**，只能写 `BLOCKED`；本节其余规则与硬件无关。
+
 本文只规定“怎样测才算数”。仓库里已有的 5.77 Gbit/s、2340/2400/2450 Mbit/s 等数字来自
 不同链路、不同方向或不同配置，不应直接当作 1G 或 10G 的基线；详见
 [`docs/MTU-POLICY.md`](MTU-POLICY.md) 与 `research/lead/triage/` 下的证据记录。
@@ -18,26 +24,31 @@
    uname -a
    ```
 
-2. 路由器侧先确认 WAN 设备与链路速率，不接受“口插上了”作为证据：
+2. 路由器侧先确认 WAN 设备与链路速率，不接受“口插上了”作为证据。注意本机是 busybox `ip`，
+   **不接受 `-br`/`-d`**（实测 `ip -br link show wan` 直接打 usage、退出码 1），写成不带 `-br`：
 
    ```sh
-   ip -br link show wan
-   cat /sys/class/net/wan/speed
-   ethtool wan | sed -n '/Speed:/p'
+   ip link show wan                      # 看 NO-CARRIER / state
+   cat /sys/class/net/wan/speed          # 无 carrier 时读作 -1，不是 0
+   ethtool wan | sed -n '/Speed:/p'      # 无 carrier 时是 "Unknown!"
    ```
 
 3. 每个 arm 开始前，在 **iperf3 服务端** 检查监听。服务端没在监听，这一臂直接判无效，
-   不进入统计：
+   不进入统计。命令按服务端在哪台机器选，见下面 1.4 —— **不要无条件抄 `ss`**：
 
    ```sh
-   ss -ltnp | grep :5201
+   # 服务端是普通 Linux 主机
+   ssh "$SERVER" "ss -ltn | grep -q ':5201'"
+
+   # 服务端是这台路由器（镜像里没有 ss）
+   ssh root@192.168.1.1 "netstat -ltn | grep -q ':5201'"
    ```
 
 4. 记录本臂的完整环境，缺一项就标 `UNVERIFIED`：
 
    | 项 | 取值来源 |
    |---|---|
-   | WAN 设备与驱动 | `ip -br link`、`ethtool -i wan` |
+   | WAN 设备与驱动 | `ip link show wan`（busybox `ip` 不收 `-br`）、`ethtool -i wan` |
    | 链路速率/双工 | `cat /sys/class/net/wan/speed`、`ethtool wan` |
    | MTU | `cat /sys/class/net/wan/mtu`（PPPoE 同时记 `pppoe-wan`） |
    | `ppe/pppoe_decap` | `cat /sys/kernel/debug/ppe/pppoe_decap`（不存在就写 `absent`） |
@@ -45,6 +56,72 @@
    | flowtable 设备 | `nft list flowtables` |
    | PPE 绑定条目 | `grep -c ' BND ' /sys/kernel/debug/ppe/entries`（只读） |
    | CPU/IRQ | `mpstat -P ALL 1 1`、`grep -E 'qdma\|eth' /proc/interrupts` |
+
+### 1.4 监听断言：本机没有 `ss`
+
+实测（本次，`ssh root@192.168.1.1 'command -v ss || echo NO_SS'`）：
+
+```
+NO_SS
+```
+
+同一台机器 `command -v iperf3` 也无输出 —— 设备侧的 `iperf3` 是侧载 APK，重启后要重装
+（`docs/perf/ppe-wired-baseline.md` 的 iperf3 一行）。所以“`ss -ltnp`”这条断言只在这些场合成立：
+服务端是一台有 iproute2 的 Linux 主机，或另一台带 `ss` 的盒子。**把 `ss` 当通用写法，
+在被测设备上跑就是错的** —— 它会把一个正常监听的臂判无效，或者反过来，一个没监听的臂
+因为断言命令本身“找不到命令”而被当成“有输出”放过。
+
+按服务端位置选命令：
+
+| 服务端在哪 | 断言命令 |
+|---|---|
+| 这台路由器（OpenWrt 镜像） | `ssh root@192.168.1.1 "netstat -ltn \| grep -q ':PORT'"` |
+| 一台普通 Linux 主机 | `ssh "$SERVER" "ss -ltn \| grep -q ':PORT'"`（`-p` 需要 root，`-ltn` 够用） |
+| 就在当前 shell 的机器上 | 用下面的 `listen_check` 函数，并 25 × `sleep 1` 轮询 |
+
+本机 `netstat` 实测输出（读的是本机 22/80/53，`-ltnp` 能出 PID/Program 列，模式与看 5201 时相同）：
+
+```
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name    
+tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN      1924/dropbear
+tcp        0      0 0.0.0.0:80              0.0.0.0:*               LISTEN      2560/uhttpd
+tcp        0      0 127.0.0.1:53            0.0.0.0:*               LISTEN      3583/dnsmasq
+```
+
+可直接复制，两个分支只用一个：
+
+```sh
+# 1) 服务端在路由器上
+ssh root@192.168.1.1 "netstat -ltn | grep -q ':$PORT'" && echo LISTENING || echo NOT_LISTENING
+
+# 2) 服务端在普通 Linux 主机上
+ssh "$SERVER" "ss -ltn | grep -q ':$PORT'" && echo LISTENING || echo NOT_LISTENING
+
+# 3) 服务端就在本机：等到监听，或 25 s 后作废
+listen_check() {   # $1 = port，只有端口真的在 LISTEN 才返回 0
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn 2>/dev/null | grep -q ":$1"
+  else
+    netstat -ltn 2>/dev/null | grep -q ":$1"
+  fi
+}
+```
+
+三条纪律：
+
+1. **必须 `grep -q ':PORT'` 看退出码。** 只跑 `netstat -ltnp` 永远有表头输出，那不是断言。
+2. **把这次的退出码写进结果文件**，不要写“脚本保证 peer 在监听” —— 断言的是你这次看到的东西。
+3. 设备上 `sleep` 不接受小数（`sleep 0.5` 报错），轮询用 `sleep 1`；主机上才用 `sleep 0.2`。
+
+### 1.5 仓库脚本的现状（这是缺口，不是协议）
+
+| 位置 | 监听断言 | 说明 |
+|---|---|---|
+| `scripts/bench-10g-unidirectional.sh:99-103` | **没有** | 帮助文本只写 “The peer must have "iperf3 -s" listening; it is not started by this harness.”，脚本里没有 `ss`/`netstat`/端口探测。用它跑之前，必须在本机手工执行 1.4 的断言并把退出码记进 `RESULT_DIR` |
+| `tools/wan-bench/2.5g.sh:156`、`:167` | `ssh PEER 'ss -ltnp \| grep :PORT'` | peer 是普通 Linux 主机时成立；peer 若是路由器（无 `ss`），这条断言恒失败，正常臂会被判无效 —— 换 `netstat -ltn` |
+| `docs/wan-2.5g-gate.md:59` | 同一句 `ss -ltnp` | 同上 |
+
+三处都还没有改代码，本文件只记录缺口；改脚本是单独一次改动，不要在同一臂里顺手改。
 
 ## 2. 单变量规则
 
@@ -71,6 +148,11 @@
 | C | PPPoE 入向，`ppe/pppoe_decap=0` | 同上，先写 0 并回读 |  |  |  |  |  |  |  |
 | D | PPPoE 入向，`ppe/pppoe_decap=3`（#81，实验档） | 同上，先写 3 并回读 |  |  |  |  |  |  |  |
 
+本机实测（本次）：`ls /sys/kernel/debug/ppe/` 只有 `6rd bind bind_rate dslite entries entry_alias flush
+mcast meter ppe1_regs tb_regs tpid unbind_age usage`，**没有 `pppoe_decap`**，`cat` 报
+`No such file or directory`。所以在这台机器上 C/D 连开关都不存在（写 `BLOCKED`），
+B 没有 PPPoE peer（见开头“本机边界”），只有 A 能在 `lan4` 1G 本地终结的意义上执行。
+
 表内不填任何数字。数字只从当次原始 JSON 里抄，抄完在“原始日志”列写文件名。
 
 **入向必须用 `-R`。** 只跑发送方向会把 PPPoE push 与 decap 混在一起；#30 要判的是
@@ -82,8 +164,11 @@
 # 0) 服务端（LAN 侧）启动，单次
 iperf3 -s -1 -p 5201
 
-# 1) 本机检查服务端监听；失败则本臂无效
-ss -ltnp | grep :5201
+# 1) 检查服务端监听；失败则本臂无效（命令按服务端位置选，见 1.4）
+ssh root@192.168.1.1 "netstat -ltn | grep -q ':5201'" \
+  || { echo "arm invalid: no listener on 5201" >&2; exit 1; }
+# 服务端是普通 Linux 主机时换成：
+# ssh "$SERVER" "ss -ltn | grep -q ':5201'"
 
 # 2) 记录本臂环境到 env-<arm>.txt（见第 1 节）
 
@@ -111,7 +196,7 @@ PY
 
 以下任一情况，本臂作废并记录原因；不要“再跑一次取好看的”：
 
-- `ss -ltnp | grep :PORT` 无输出（服务端没起）；
+- 监听断言退出码非 0（服务端没起）。断言命令按服务端位置选：路由器上用 `netstat -ltn | grep -q ':PORT'`，普通 Linux 主机上用 `ss -ltn`，见 1.4；
 - 链路速率不是预期档位（1G 臂出现 2500/10000，或 10G 臂只有 1000）；
 - 有 `retr` 但没记，或只记了 `SUM` 没记 sender/receiver；
 - 实验后 `nft list flowtables` 与实验前不一致且未回滚；
@@ -125,7 +210,7 @@ mkdir -p /root/wan-exp-$(date -u +%Y%m%dT%H%M%SZ)
 cp /etc/config/network /etc/config/firewall /root/wan-exp-*/
 uci export network > /root/wan-exp-*/network.uci
 nft list ruleset > /root/wan-exp-*/nft.before
-ip -br addr > /root/wan-exp-*/ip.before
+ip addr > /root/wan-exp-*/ip.before          # 本机 busybox ip 不收 -br
 
 # 失败/结束后
 cp /root/wan-exp-*/network /etc/config/network
@@ -152,13 +237,17 @@ nft list ruleset > /root/wan-exp-*/nft.after
 ```sh
 # 文档存在，且包含关键约束
 test -f docs/wan-measurement-protocol.md
-grep -n 'ss -ltnp | grep :5201' docs/wan-measurement-protocol.md
+grep -n 'NO_SS' docs/wan-measurement-protocol.md
+grep -n 'netstat -ltn | grep -q' docs/wan-measurement-protocol.md
+grep -n 'bench-10g-unidirectional.sh:99-103' docs/wan-measurement-protocol.md
 grep -n -- '-R' docs/wan-measurement-protocol.md
 grep -n '5.77' docs/wan-measurement-protocol.md
 grep -n 'UNVERIFIED' docs/wan-measurement-protocol.md
+# 不应再出现“无条件用 ss”的写法（1.4/1.5 提到 ss 都带条件）
+grep -n '^ss -ltnp' docs/wan-measurement-protocol.md && echo "FAIL: ss 仍被当作通用写法"
 
 # 四臂表头存在且没有填数字
 sed -n '/| Arm | 路径 |/,/^$/p' docs/wan-measurement-protocol.md
 ```
 
-预期：三条 `grep` 均命中；表格行只有表头与空单元格，不含 `Mbit/s` 数值。
+预期：前 7 条 `grep` 均命中；最后一条**不应**命中（命中说明又出现了把 `ss` 当通用写法的段落）；四臂表只有表头与空单元格，不含 `Mbit/s` 数值。
