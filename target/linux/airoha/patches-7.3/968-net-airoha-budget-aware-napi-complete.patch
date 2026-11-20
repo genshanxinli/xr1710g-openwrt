@@ -1,0 +1,35 @@
+From: OpenWrt <openwrt@example.org>
+Date: Thu, 19 Nov 2026 19:30:00 +0800
+Subject: [PATCH] net: airoha: pass the NAPI budget to napi_complete_done()
+
+Both NAPI polls still end with a bare napi_complete(napi) call, which
+throws away the number of packets processed in this round.  Drivers that
+call napi_complete_done(napi, done) let the core account the budget, keep
+GRO going and expose the completion to BQL.  Use the budget-aware call in
+airoha_qdma_rx_napi_poll() and airoha_qdma_tx_napi_poll(); no other
+behaviour changes.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+
+diff --git a/drivers/net/ethernet/airoha/airoha_eth.c b/drivers/net/ethernet/airoha/airoha_eth.c
+index f57893d..cbe101a 100644
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -1253,7 +1253,7 @@ static int airoha_qdma_rx_napi_poll(struct napi_struct *napi, int budget)
+ 		done += cur;
+ 	} while (cur && done < budget);
+ 
+-	if (done < budget && napi_complete(napi)) {
++	if (done < budget && napi_complete_done(napi, done)) {
+ 		struct airoha_qdma *qdma = q->qdma;
+ 		int i, qid = q - &qdma->q_rx[0];
+ 		int intr_reg = qid < RX_DONE_HIGH_OFFSET ? QDMA_INT_REG_IDX1
+@@ -1579,7 +1579,7 @@ static int airoha_qdma_tx_napi_poll(struct napi_struct *napi, int budget)
+ 				IRQ_CLEAR_LEN_MASK, (done & 0x7f));
+ 	}
+ 
+-	if (done < budget && napi_complete(napi))
++	if (done < budget && napi_complete_done(napi, done))
+ 		airoha_qdma_irq_enable(&qdma->irq_banks[0], QDMA_INT_REG_IDX0,
+ 				       TX_DONE_INT_MASK(id));
+ 
