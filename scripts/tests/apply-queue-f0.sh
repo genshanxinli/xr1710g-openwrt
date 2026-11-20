@@ -113,6 +113,7 @@ for d in $DIRS; do
 		if [ $rc -eq 0 ]; then
 			ok=$((ok + 1))
 			echo "$name ok"
+			[ "$VERBOSE" = 1 ] && echo "$out" | grep -E 'offset|fuzz' | sed 's/^/#   /'
 			applied=$((applied + 1))
 			# -f keeps patch from asking, -F0 keeps it from guessing.
 			patch -p1 -f -F0 --no-backup-if-mismatch <"$p" >/dev/null 2>&1 || {
@@ -134,7 +135,7 @@ for d in $DIRS; do
 		# Offset of the hunks that did apply: a non-zero offset means the
 		# hunk landed somewhere else in the file even without fuzz.
 		for o in $(echo "$out" |
-			sed -n 's/.*(offset \(-\{0,1\}\)[0-9]\+ lines).*/\1/p' | head -40); do
+			sed -nE 's/.*\(offset (-?[0-9]+) lines\).*/\1/p' | head -40); do
 			o=${o#-}
 			[ "${o:-0}" -gt "$offset_max" ] && offset_max=$o
 		done
