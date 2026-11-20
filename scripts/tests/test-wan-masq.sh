@@ -12,17 +12,23 @@
 # an actual state machine and not just a log assertion.
 #
 # Usage: scripts/tests/test-wan-masq.sh
-# Exit status is 0 when every case passes, 1 on the first failure.
+# Exit status is 0 when every case passes, 1 if any case failed.  A failure
+# does not stop the run: every case still executes, so one red run against a
+# stale copy (WAN_MASQ_UNDER_TEST=...) lists everything that copy gets wrong.
 
 set -u
 
 REPO_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-MASQ="$REPO_ROOT/target/linux/airoha/an7581/base-files/usr/sbin/wan-masq"
+# WAN_MASQ_UNDER_TEST lets the same cases run against a saved copy (the red
+# half of a red/green check), e.g. WAN_MASQ_UNDER_TEST=/tmp/old/wan-masq.
+MASQ="${WAN_MASQ_UNDER_TEST:-$REPO_ROOT/target/linux/airoha/an7581/base-files/usr/sbin/wan-masq}"
 BASE_FILES="$REPO_ROOT/target/linux/airoha/an7581/base-files"
+
+FAILED=0
 
 fail() {
 	printf 'FAIL: %s\n' "$*" >&2
-	exit 1
+	FAILED=1
 }
 
 [ -f "$MASQ" ] || fail "$MASQ is missing"
@@ -108,6 +114,17 @@ if isinstance(value, str):
 ' "$expr"
 STUB
 
+cat >"$STUBS/nft" <<'STUB'
+#!/bin/sh
+# nft stub: only "list chain inet fw4 srcnat_wan" is modelled.  The chain body
+# comes from FAKE_NFT_CHAIN (one rule per line); an empty value means the chain
+# does not exist, which is what `nft list chain` reports as an error.
+printf '%s\n' "$*" >>"$FAKE_LOG"
+[ "${1:-}" = list ] && [ "${5:-}" = srcnat_wan ] || exit 1
+[ -n "${FAKE_NFT_CHAIN:-}" ] || exit 1
+printf 'table inet fw4 {\n\tchain srcnat_wan {\n%s\n\t}\n}\n' "$FAKE_NFT_CHAIN"
+STUB
+
 cat >"$STUBS/fw-init" <<'STUB'
 #!/bin/sh
 printf 'reload %s\n' "$*" >>"$FAKE_LOG"
@@ -152,7 +169,11 @@ reset_case() {
 	FAKE_PROTO=""
 	FAKE_UBUS_EMPTY=""
 	FAKE_FW_RELOAD_RC=0
-	export FAKE_PROTO FAKE_UBUS_EMPTY FAKE_FW_RELOAD_RC
+	# Live ruleset seen by the nft stub: one IPv4 masquerade rule in
+	# srcnat_wan, i.e. the state the store above describes.
+	FAKE_NFT_CHAIN='		meta nfproto ipv4 masquerade'
+	unset WM_NFT
+	export FAKE_PROTO FAKE_UBUS_EMPTY FAKE_FW_RELOAD_RC FAKE_NFT_CHAIN
 }
 
 # run <args...>: captures stdout/stderr and the exit status in RC.
@@ -211,7 +232,36 @@ expect_rc 0
 expect_out 'zone:  firewall.@zone[1] (wan)'
 expect_out 'proto: dhcp'
 expect_out 'masq:  1'
+expect_out 'live:  masquerade on'
 expect_no_writes
+
+begin status-live-fullcone-counts-as-masq
+reset_case
+# defaults.fullcone makes fw4 emit "fullcone" instead of "masquerade"; the
+# zone still SNATs, so status must not call it off.
+FAKE_PROTO=pppoe
+FAKE_NFT_CHAIN='		meta nfproto ipv4 fullcone'
+run status
+expect_rc 0
+expect_out 'live:  masquerade on'
+
+begin status-live-off
+reset_case
+# Store says 1 but the running ruleset has no srcnat_wan at all: exactly the
+# "committed but not live" divergence the reload check exists for.
+FAKE_PROTO=pppoe
+FAKE_NFT_CHAIN=""
+run status
+expect_rc 0
+expect_out 'live:  masquerade off'
+
+begin status-live-unknown-without-nft
+reset_case
+FAKE_PROTO=pppoe
+export WM_NFT="$WORK/no-such-nft"
+run status
+expect_rc 0
+expect_out 'live:  unknown (cannot run'
 
 begin status-unset
 reset_case
@@ -358,6 +408,17 @@ run off
 expect_rc 0
 expect_no_writes
 
+begin off-is-allowed-when-proto-is-not-pppoe
+reset_case
+# The operator already moved the WAN to dhcp with masq 1 left behind: off must
+# still work, otherwise the only way out is --force.
+FAKE_PROTO=dhcp
+run off
+expect_rc 0
+expect_writes 'delete firewall.@zone[1].masq
+commit firewall'
+expect_out 'masq 1 -> deleted on zone wan'
+
 # --- reload -----------------------------------------------------------------
 
 begin reload-ok
@@ -368,6 +429,49 @@ run on --reload
 expect_rc 0
 expect_out 'firewall reloaded'
 grep -q '^reload reload$' "$FAKE_LOG" || fail "$CASE: the init script was not asked to reload"
+grep -q '^list chain inet fw4 srcnat_wan$' "$FAKE_LOG" ||
+	fail "$CASE: the live ruleset was not read back"
+
+begin reload-accepts-fullcone
+reset_case
+sed -i '/firewall\.@zone\[1\]\.masq/d' "$FAKE_UCI_STORE"
+FAKE_PROTO=pppoe
+FAKE_NFT_CHAIN='		meta nfproto ipv4 fullcone'
+run on --reload
+expect_rc 0
+expect_out 'firewall reloaded'
+
+begin reload-mismatch-on-is-reported
+reset_case
+sed -i '/firewall\.@zone\[1\]\.masq/d' "$FAKE_UCI_STORE"
+FAKE_PROTO=pppoe
+# init says it reloaded, but nothing reached the kernel: masquerade is still
+# absent from srcnat_wan.
+FAKE_NFT_CHAIN=""
+run on --reload
+expect_rc 6
+expect_err 'shows masquerade off, not on'
+expect_writes 'set firewall.@zone[1].masq=1
+commit firewall'
+
+begin reload-verifies-off
+reset_case
+FAKE_PROTO=pppoe
+FAKE_NFT_CHAIN=""
+run off --reload
+expect_rc 0
+expect_out 'firewall reloaded'
+
+begin reload-mismatch-off-is-reported
+reset_case
+FAKE_PROTO=pppoe
+# The option was deleted, but the zone chain still masquerades: reload did not
+# take effect.
+run off --reload
+expect_rc 6
+expect_err 'shows masquerade on, not off'
+expect_writes 'delete firewall.@zone[1].masq
+commit firewall'
 
 begin reload-failure-is-reported
 reset_case
@@ -406,4 +510,8 @@ expect_err 'usage: wan-masq status'
 run bogus
 expect_rc 2
 
+[ "$FAILED" = 0 ] || {
+	printf 'wan-masq cases failed\n' >&2
+	exit 1
+}
 printf 'all wan-masq cases passed\n'
