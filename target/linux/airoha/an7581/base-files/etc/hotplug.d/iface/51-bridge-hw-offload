@@ -32,7 +32,7 @@
 # the same lock, which is why it waits instead of giving up on the first
 # failed try: a member change during the settle window must queue, not be
 # dropped.  That wait is a retry loop on "flock -n", because busybox's flock
-# (the only flock on the image) has no -w.
+# (the only flock on the image) has no timed-wait option.
 #
 # nf_call_{ip,ip6}tables is not touched here.  It is a bridge attribute that
 # only has to be set once, /etc/hotplug.d/net/50-nf-bridge-call already does
@@ -65,11 +65,11 @@ mkdir -p /var/lock 2>/dev/null
 	# A bridge member arriving while the settle loop runs must queue up, not be
 	# silently ignored.
 	#
-	# Ten one-second attempts on "flock -n" instead of "flock -w 10": busybox's
+	# Ten one-second attempts on "flock -n" instead of a timed wait: busybox's
 	# flock (/usr/bin/flock -> ../../bin/busybox) takes [-sxun] FD and nothing
-	# else, so -w is an unknown option and the guard below fired on every boot
-	# with the lock never even contended.  Same 10 s ceiling, works on busybox
-	# and util-linux alike.
+	# else, so "-w 10 9" was an unknown option and the guard below fired on
+	# every boot with the lock never even contended.  Same 10 s ceiling, works
+	# on busybox and util-linux alike.
 	waits=0
 	while ! flock -n 9; do
 		[ "$waits" -lt 10 ] || {
