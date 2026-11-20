@@ -1,0 +1,35 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] watchdog: airoha: publish a non-zero minimum timeout
+
+airoha_wdt_probe() fills in max_timeout but never min_timeout, so the
+watchdog device keeps the zero that devm_kzalloc() left in it and the
+core publishes min_timeout=0 to userspace - the AN7581 reports
+"min=0" in /sys/class/watchdog/watchdog0/min_timeout.
+
+watchdog_timeout_invalid() has no special case for zero, so a
+WDIOC_SETTIMEOUT request of 0 passes validation and reaches
+airoha_wdt_set_timeout(), which stores 0 in wdog_dev->timeout;
+airoha_wdt_start() then programs WDT_TIMER_LOAD_VALUE with
+timeout * wdt_freq, i.e. zero ticks, and the board resets on the next
+watchdog tick rather than at a timeout the caller chose.
+
+Publishing one second as the minimum makes the core reject such a
+request with -EINVAL before the register is touched.  The counter runs
+at 150 MHz, so every value above zero is representable; one second is
+the shortest period that is still a watchdog period and cannot be read
+as "disabled".  procd's 28 s default is well above it and unaffected.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+
+--- a/drivers/watchdog/airoha_wdt.c
++++ b/drivers/watchdog/airoha_wdt.c
+@@ -158,6 +158,8 @@
+ 	wdog_dev->ops = &airoha_wdt_ops;
+ 	/* Bus 300MHz, watchdog 150MHz, 28 seconds */
+ 	wdog_dev->max_timeout = FIELD_MAX(WDT_TIMER_VAL) / airoha_wdt->wdt_freq;
++	/* A zero-tick load value resets the board on the next tick */
++	wdog_dev->min_timeout = 1;
+ 	wdog_dev->parent = dev;
+ 
+ 	watchdog_set_drvdata(wdog_dev, airoha_wdt);
