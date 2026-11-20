@@ -8,8 +8,10 @@ on:
       - 'tools/**'
       - '.github/workflows/push-containers.yml'
       - 'toolchain/**'
-    branches-ignore:
-      - master
+    branches:
+      - xr1710g
+      - kernel73
+      - kernel74
 
 permissions:
   contents: read

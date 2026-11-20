@@ -17,8 +17,10 @@ on:
       - 'package/**'
       - 'target/linux/generic/**'
       - 'toolchain/**'
-    branches-ignore:
-      - master
+    branches:
+      - xr1710g
+      - kernel73
+      - kernel74
   workflow_dispatch:
 
 permissions:
