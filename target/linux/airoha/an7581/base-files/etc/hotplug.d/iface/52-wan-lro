@@ -53,9 +53,17 @@
 #
 # ifup, ifupdate and ifdown of one interface can overlap - netifd does not wait
 # for a hotplug handler before starting the next event - so the body runs under
-# the same flock -w 10 idiom as 51-bridge-hw-offload: one writer at a time, the
-# later event queues behind the earlier one instead of interleaving with it,
-# and the wait is bounded so a stuck caller cannot hold the hotplug path open.
+# one flock: one writer at a time, the later event queues behind the earlier
+# one instead of interleaving with it, and the wait is bounded so a stuck
+# caller cannot hold the hotplug path open.
+#
+# The bound is a retry loop, not "flock -w 10".  busybox's flock is the only
+# flock a stock image has (/usr/bin/flock -> ../../bin/busybox) and it takes
+# [-sxun] FD and nothing else, so "-w 10 9" is an unknown option: that call
+# exited 1, the guard below logged "giving up", and the whole body never ran.
+# Measured on the board 2026-11-20: ifup, ifupdate, ifdown, ifup produced four
+# give-up lines and LRO stayed off.  Ten one-second attempts on -n keep the
+# same bound and work on busybox and util-linux alike.
 [ "$ACTION" = ifup ] || [ "$ACTION" = ifupdate ] || [ "$ACTION" = ifdown ] || exit 0
 [ "$INTERFACE" = wan ] || exit 0
 
@@ -71,14 +79,20 @@ command -v ethtool >/dev/null || {
 	LOCK_DIR="${WAN_LRO_LOCK_DIR:-/var/lock}"
 	mkdir -p "$LOCK_DIR" 2>/dev/null
 	exec 9>"$LOCK_DIR/wan-lro.lock"
-	# -w, not -n: the lock serialises the toggle, it does not mean "drop the
-	# second caller".  An ifdown arriving while an ifup still runs must queue
-	# behind it, otherwise the two ethtool calls interleave and the winner is
-	# decided by timing rather than by event order.
-	flock -w 10 9 || {
-		logger -t wan-lro "another LRO change is in progress, giving up"
-		exit 0
-	}
+	# -n with a retry loop, not -w: see the note above.  The lock serialises
+	# the toggle, it does not mean "drop the second caller" - an ifdown
+	# arriving while an ifup still runs must queue behind it, otherwise the two
+	# ethtool calls interleave and the winner is decided by timing rather than
+	# by event order.  Only after ten one-second attempts is the caller dropped.
+	waits=0
+	while ! flock -n 9; do
+		[ "$waits" -lt 10 ] || {
+			logger -t wan-lro "another LRO change is in progress, giving up"
+			exit 0
+		}
+		waits=$((waits + 1))
+		sleep 1
+	done
 
 	# LRO lives on the physical netdev, not on the stacked one.  When the WAN
 	# is PPPoE, netifd reports $DEVICE=pppoe-wan and l3_device is pppoe-wan

@@ -52,10 +52,12 @@
 # list from live netifd state anyway - so there is nothing here worth an extra
 # "fw4 reload" that would drop every flow on the link.
 #
-# The body runs under the same flock -w 10 idiom as
-# 51-bridge-hw-offload: ifup and ifupdate of the same interface can overlap, and
-# two concurrent flowtable updates would fight over the same transaction.  The
-# wait is bounded so a stuck caller cannot hold the hotplug path open.
+# The body runs under one flock: ifup and ifupdate of the same interface can
+# overlap, and two concurrent flowtable updates would fight over the same
+# transaction.  The wait is bounded so a stuck caller cannot hold the hotplug
+# path open - a retry loop on "flock -n", because busybox's flock is the only
+# flock a stock image has and it has no -w ("[-sxun] FD" is the whole usage),
+# so the "flock -w 10" this used to be exited 1 and the body never ran.
 
 [ "$ACTION" = ifup ] || [ "$ACTION" = ifupdate ] || exit 0
 [ "$INTERFACE" = "${PF_IFACE:-wan}" ] || exit 0
@@ -105,10 +107,15 @@ fi
 	LOCK_DIR="${PF_LOCK_DIR:-/var/lock}"
 	mkdir -p "$LOCK_DIR" 2>/dev/null
 	exec 9>"$LOCK_DIR/pppoe-flowtable.lock"
-	flock -w 10 9 || {
-		logger -t pppoe-flowtable "another flowtable change is in progress, giving up"
-		exit 0
-	}
+	waits=0
+	while ! flock -n 9; do
+		[ "$waits" -lt 10 ] || {
+			logger -t pppoe-flowtable "another flowtable change is in progress, giving up"
+			exit 0
+		}
+		waits=$((waits + 1))
+		sleep 1
+	done
 
 	LIST="$(nft list flowtable inet fw4 ft 2>/dev/null)" || {
 		logger -t pppoe-flowtable "fw4 has no inet flowtable ft, nothing to add"
