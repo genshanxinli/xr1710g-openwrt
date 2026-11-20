@@ -47,13 +47,12 @@ mkdir -p /var/lock 2>/dev/null
 	# list from before the wlan vifs were re-created.  scripts/tests/
 	# test_bridge_hw_offload_lock.py keeps the two numbers consistent.
 	#
-	# The bound is a retry loop on "flock -n", not "flock -w 200".  busybox's
-	# flock is the only flock a stock image has (/usr/bin/flock ->
-	# ../../bin/busybox) and it takes [-sxun] FD and nothing else, so
-	# "-w 200 9" is an unknown option: it exits 1, and every member change
-	# would take the give-up branch while still looking bounded in the source.
-	# Two hundred one-second attempts keep the same 200 s ceiling and work on
-	# busybox and util-linux alike.
+	# The bound is a retry loop on "flock -n", not a timed wait.  busybox's flock
+	# is the only flock a stock image has (/usr/bin/flock -> ../../bin/busybox)
+	# and it takes [-sxun] FD and nothing else, so the old "-w 200 9" was an
+	# unknown option: it exited 1, and every member change took the give-up
+	# branch while still looking bounded in the source.  Two hundred one-second
+	# attempts keep the same 200 s ceiling and work on busybox and util-linux.
 	waits=0
 	while ! flock -n 9; do
 		[ "$waits" -lt 200 ] || {

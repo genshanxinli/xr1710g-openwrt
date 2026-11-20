@@ -57,7 +57,7 @@
 # transaction.  The wait is bounded so a stuck caller cannot hold the hotplug
 # path open - a retry loop on "flock -n", because busybox's flock is the only
 # flock a stock image has and it has no -w ("[-sxun] FD" is the whole usage),
-# so the "flock -w 10" this used to be exited 1 and the body never ran.
+# so the timed wait this used to be exited 1 and the body never ran.
 
 [ "$ACTION" = ifup ] || [ "$ACTION" = ifupdate ] || exit 0
 [ "$INTERFACE" = "${PF_IFACE:-wan}" ] || exit 0

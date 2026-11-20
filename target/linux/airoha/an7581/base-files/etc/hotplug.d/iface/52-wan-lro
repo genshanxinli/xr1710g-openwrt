@@ -57,7 +57,7 @@
 # one instead of interleaving with it, and the wait is bounded so a stuck
 # caller cannot hold the hotplug path open.
 #
-# The bound is a retry loop, not "flock -w 10".  busybox's flock is the only
+# The bound is a retry loop, not a timed wait.  busybox's flock is the only
 # flock a stock image has (/usr/bin/flock -> ../../bin/busybox) and it takes
 # [-sxun] FD and nothing else, so "-w 10 9" is an unknown option: that call
 # exited 1, the guard below logged "giving up", and the whole body never ran.
