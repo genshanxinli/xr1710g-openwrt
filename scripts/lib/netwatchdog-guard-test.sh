@@ -447,6 +447,52 @@ assert_eq "idempotent hold on" 1 "$(call_count "$TMP/twice/calls" '^hold on$')"
 assert_eq "idempotent hold off" 1 "$(call_count "$TMP/twice/calls" '^hold off$')"
 assert_json "$TMP/twice/guard.json" "idempotent result JSON is valid"
 
+# --- the adopter contract: a caller that checks the status stops -----------
+# The library cannot abort a shell that ignores nw_guard_take, so the contract
+# is "check the status and refuse".  This consumer mirrors the seven scripts.
+mkdir -p "$TMP/enforce"
+cat >"$TMP/enforce/consumer.sh" <<'ENFORCE_EOF'
+#!/bin/sh
+set -u
+lib=$1
+out=$2
+cmd=$3
+# shellcheck source=/dev/null
+. "$lib"
+nw_guard_init --apply --no-trap --hold-file "$out/hold" --command "$cmd"
+nw_guard_take || {
+	printf 'refused\n' >"$out/refused"
+	exit 1
+}
+printf 'ran\n' >"$out/ran"
+exit 0
+ENFORCE_EOF
+PATH="$STUB:$PATH" NW_STUB_LOG="$TMP/enforce/calls" NW_STUB_HOLD_FILE="$TMP/enforce/hold" \
+	run_shell "$TMP/enforce/consumer.sh" "$LIB" "$TMP/enforce" netwatchdog-does-not-exist \
+	>"$TMP/enforce/stdout" 2>"$TMP/enforce/stderr"
+RC=$?
+assert_eq "adopter refuses when the service is missing" 1 "$RC"
+assert_file "$TMP/enforce/refused" "adopter records the refusal"
+assert_no_file "$TMP/enforce/ran" "adopter never reaches the destructive step"
+assert_no_file "$TMP/enforce/hold" "adopter writes no hold"
+assert_grep 'refusing the destructive step' "$TMP/enforce/stderr" \
+	"adopter sees why it stopped"
+
+# --- adoption: every destructive experiment script uses the guard ---------
+# A guard nobody calls protects nothing.  These are the seven scripts that
+# bounce radios, commit wireless config or reboot the board.
+TOP=$(cd "$(dirname -- "$0")/.." && pwd) || TOP=
+for _adopter in \
+	npu-fw-ab.sh 6g-only.sh 6g-clear-air.sh 6g-rx.sh ab-80-160.sh edca-6g-ab.sh mlo-2link.sh
+do
+	_af=$TOP/wireless/$_adopter
+	assert_file "$_af" "$_adopter exists"
+	assert_grep 'netwatchdog-guard\.sh' "$_af" "$_adopter sources the guard"
+	assert_grep 'nw_guard_take ||' "$_af" "$_adopter checks the take status"
+	assert_grep 'nw_guard_cleanup' "$_af" "$_adopter releases the hold from its own trap"
+	assert_grep 'no-trap' "$_af" "$_adopter keeps its own trap"
+done
+
 # --- summary ---------------------------------------------------------------
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

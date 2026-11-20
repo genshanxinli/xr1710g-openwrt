@@ -219,6 +219,18 @@ die() {
 	exit 1
 }
 
+# The hostapd mechanism commits tx_burst and bounces every radio with "wifi
+# reload", so a run holds netwatchdog first.  The library fails closed:
+# nw_guard_take returns nonzero when netwatchdog is missing or the hold cannot
+# be taken, and the run is refused in that case.  This script owns its own
+# EXIT/INT/TERM/HUP trap, so the guard installs none and its cleanup is called
+# from the script's own on_exit instead.
+NETWATCHDOG_GUARD=$(dirname "$0")/../lib/netwatchdog-guard.sh
+[ -r "$NETWATCHDOG_GUARD" ] ||
+	die "shared library not found: $NETWATCHDOG_GUARD"
+# shellcheck source=../lib/netwatchdog-guard.sh
+. "$NETWATCHDOG_GUARD"
+
 note() { printf '%s\n' "$*" >&2; }
 
 say() { printf '%s\n' "$*"; }
@@ -1240,6 +1252,8 @@ on_exit() {
 		write_result "$_rc" 2>/dev/null || true
 		say "Result: $RESULT_DIR/result.json"
 	fi
+	# Release after the restore reload, so the hold covers the rollback too.
+	nw_guard_cleanup
 	exit "$_rc"
 }
 
@@ -1579,6 +1593,11 @@ trap 'on_exit $?' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
+
+nw_guard_init --apply --no-trap --label edca-6g-ab \
+	--result-json "$RESULT_DIR/netwatchdog.json"
+nw_guard_take ||
+	die "cannot take the netwatchdog hold; refusing to change EDCA.  Install netwatchdog, or set NWD_ALLOW_NO_SERVICE=1 for a run that expects no protection."
 
 say "6G EDCA A/B: AP $IFACE (phy $PHY_NAME), STA $STATION, target ${TARGET:-?}"
 say "Mechanism: $MECHANISM${RADIO_SECTION:+ (radio $RADIO_SECTION)}; arms 0/63/171 TU"
