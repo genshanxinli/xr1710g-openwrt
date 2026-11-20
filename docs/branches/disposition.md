@@ -34,7 +34,7 @@
 | `agent/upstream-sync-86d15e9d44d6` | 826 / 342 | 2026-11-19 18:40 | 无（#189 的 sync 尝试） | 见「六分支探索线」 | keep-as-mirror | 分支独有内容仍在，且是唯一持有该 rebase 结果的引用 |
 | `deliver/offline-round1` | 833 / 342 | 2026-11-19 19:04 | #200（docs+harnesses） | 见「六分支探索线」 | keep-as-mirror | 同线，含 #200 尚未合入的文档与 harness |
 | `impl/101-bql-inflight` | 827 / 342 | 2026-11-19 19:20 | 无 | `b5a1724cc1` 线；独有 968/974 两个补丁 | **先不要删**（另一 agent 正在搬运 968/974） | 内容不在任何 PR 里 |
-| `impl/19-lan10g-diag` | 827 / 342 | 2026-11-19 19:19 | #174 只落了简化版 | diag 脚本的 `field_value` 续行修复（24 行，**没有 PR 覆盖**） | keep → 补 PR 后 delete | #174 落的是不处理续行的版本，分支版本是真修复 |
+| `impl/19-lan10g-diag` | 827 / 342 | 2026-11-19 19:19 | #174 只落了简化版 | diag 脚本的 `field_value` 续行修复（+24/−4，**本 PR 已落地**） | keep → 门槛满足后 delete | #174 落的是不处理续行的版本，修复已由本 PR 补上 |
 | `impl/29-wan-path` | 827 / 342 | 2026-11-19 18:58 | #200（wan-path 与测试） | 见「六分支探索线」 | keep → #200 合并后 delete | wan-path 与 `wan-path-test.sh` 只在 #200 里 |
 | `xr1710g-ubus-test` | 826 / 342 | 2026-11-19 15:00 | 无 | 与 `agent/upstream-sync-86d15e9d44d6` **树完全相同** | keep-as-mirror | 同线的镜像 tips，删其一前先确认另一份仍在 |
 
@@ -71,11 +71,23 @@
 | `edc2b6f2bf` | mt7996 txfree 截断/令牌泄漏 | 同上，`origin/kernel73` 祖先 |
 | `be9f844dc8` | 7.3 兼容补丁（iptables/jool/libbpf/linux-atm/mac80211） | 同上，`origin/kernel73` 祖先 |
 | `6d2a544019` | kernel 7.3 pt 3：更新补丁 | 同上，`origin/kernel73` 祖先 |
-| `ce8c96e21c` | mt76 补丁栈对着 **2026-10-28 pinned source** 重排（删 0013/0014，重编号到 0018–0025） | **未落地**：`xr1710g` 仍保有 0013/0014/0005，说明它钉的是更老的 mt76 源 |
-| `8ba6129916` | 删掉重复的 mac80211 `424-...TXQ-scheduling-round.patch` | **未落地**：`xr1710g` 仍有该文件 |
-| `86974b29bf` | firewall4 fullcone 补丁对着 `2026-11-08~3722eadc` 重刷（+20/−16） | **未落地**：`xr1710g` 的 002 补丁是旧锚 |
+| `ce8c96e21c` | mt76 补丁栈对着 **2026-10-28 pinned source** 重排（删 0013/0014，重编号到 0018–0025） | **不适用当前 HEAD**（见下节，实测）→ 归 #189 pin bump |
+| `8ba6129916` | 删掉重复的 mac80211 `424-...TXQ-scheduling-round.patch` | **前提在 HEAD 不成立**（HEAD 没有 015，424 是唯一副本，删掉即回退修复）→ 放弃 |
+| `86974b29bf` | firewall4 fullcone 补丁对着 `2026-11-08~3722eadc` 重刷（+20/−16） | **不适用当前 HEAD**（重锚版在 HEAD 的旧源上 2/5 hunk 失败）→ 归 #189 pin bump |
 
-结论：**真正悬空的是 3 个"对新上游基线做补丁栈重排"的提交**（`ce8c96e21c`、`8ba6129916`、`86974b29bf`）。它们只在探索线上，而且只在探索线上，因为它们针对的 mt76/mac80211/firewall4 源比 `xr1710g` 钉的更新。这不是"忘了落地的功能"，是"rebase 到新上游时的副产物"——但在 #189 决定要不要吃这次 rebase 之前，不能删掉唯一持有它们的引用。
+结论：**3 个"对新上游基线做补丁栈重排"的提交在当前 HEAD 上都还不成立**——两个只在 mt76/firewall4 的 pin 抬到 2026-10-28 / 2026-11-08 之后才需要，一个的前提（HEAD 同时带 015 与 424）在 HEAD 根本不存在。它们不是"忘了落地的功能"，而是 rebase 到新上游时的副产物；实测证据见下节。
+
+### 三个栈重排提交的逐条判定（2026-11-20 实测）
+
+实测方式：把 `dl/` 里 HEAD 真正钉的源码解到 `/home/l1n/projects/.scratch/`（`br-mt76`、`br-fw4`、`br-mac80211`），按 `package/*/Makefile` 里的 `PKG_SOURCE_DATE`/`PKG_SOURCE_VERSION` 对应版本，用 `scripts/patch-kernel.sh:38` 的构建等效命令顺序应用（`patch -f -p1`，默认 fuzz 2），不用 `-F0` 报数只用来说明栈对 fuzz 的依赖。
+
+| 提交 | 判定 | 实测证据 |
+| --- | --- | --- |
+| `ce8c96e21c` | ① 不适用 → 只在 pin bump 时需要 | HEAD 钉 `mt76 2026-10-08~639e1287`（`package/kernel/mt76/Makefile:11-13`）。HEAD 自有 20 个补丁顺序应用：`applied=20 failed=0`，`*.rej` 0 个，结果与真实 `build_dir/target-aarch64_cortex-a53_musl/linux-airoha_an7581/mt76-2026.10.08~639e1287` **逐字节一致**（`.c`/`.h` 差异 0 个）。严格 `-F0` 同一序列是 `applied=12 failed=8`，即栈依赖默认 fuzz，但构建路径（`scripts/patch-kernel.sh` 用 `-f -p1`）与真实 build_dir 已证明可用。反向验证：把分支那 21 个补丁（含 100/101）打到 10-08 源上 → `applied=20 failed=1`，失败的是 `0010-enable-firmware-txpower-limit.patch`（1/2 hunk）。分支栈删 0013/0014 是因为 `0936617dc5`(2026-10-28) 已把这两个修复合进上游；HEAD 的 0013/0014 在 10-08 上仍然需要。 |
+| `8ba6129916` | ① 放弃（前提不成立；照搬会回退修复） | HEAD 的 `package/kernel/mac80211/patches/subsys/` 里没有 `015-*.patch`（`ls .../subsys/ | grep 015` 无输出），`grep -rl schedule_open package/kernel/mac80211/patches/` 只命中 `424-wifi-mac80211-do-not-reset-the-TXQ-scheduling-round.patch`；`backports-7.2` 原树仍是旧逻辑（`net/mac80211/tx.c:4329-4335` 的 `local->schedule_round[ac] = 0`），424 单独 `patch --dry-run` 干净应用（exit 0，hunk 偏移 +1 / −1）。所以 HEAD 上 424 是**唯一**携带该修复的补丁；提交信息里"015 与 424 重复"描述的是探索线（那条线另外带了 015），不是 `xr1710g`。 |
+| `86974b29bf` | ① 不适用 → 只在 pin bump 时需要 | HEAD 钉 `firewall4 2025-03-17~b6e51575`；`001`+`002` 在干净源上 `patch --dry-run` 双双 exit 0。分支重锚的 002 打到 2025-03-17 上 → `2 out of 5 hunks FAILED`（hunk #2@1647、hunk #5@2431）。语义与 HEAD 版一致（`ruleset.uc` 插入点、`fw4.uc` 的 `fullcone` 选项、新增 `zone-fullcone.uc` 模板全同），差别只是锚点行号（`fw4.uc` 474/1495 → 527/1632）。 |
+
+三条都属"#189 决定吃这次 rebase（抬 mt76/firewall4 pin）时一起做"的范畴，本 PR 不落。
 
 ### 各分支的独有文件内容
 
@@ -84,15 +96,37 @@
 | `deliver/offline-round1` | `docs/wan-{productization,recovery-gate,wifi-path,2.5g-gate,measurement-protocol}.md`、`.github/research/materials.md` §9、`scripts/pppoe-4path.sh`、`tools/wan-bench/2.5g.sh` | #200（open） |
 | `impl/29-wan-path` | `target/linux/airoha/an7581/base-files/usr/sbin/wan-path`、`scripts/tests/wan-path-test.sh` | #200（open） |
 | `impl/101-bql-inflight` | `...968-net-airoha-budget-aware-napi-complete.patch`（35 行）、`...974-net-airoha-bql-accounting-helpers.patch`（89 行） | 无（另一 agent 正在搬运） |
-| `impl/19-lan10g-diag` | `xr1710g-lan10g-diag` 的 `field_value` 续行拼接修复（24 行） | **无**（#174 落的是简化版） |
+| `impl/19-lan10g-diag` | `xr1710g-lan10g-diag` 的 `field_value` 续行拼接修复（+24/−4） | **已落地（本 PR）**：`108113f982` 原样进 `xr1710g`，见下节 |
 | `xr1710g-ubus-test` / `agent/upstream-sync-86d15e9d44d6` | 无（= 线基底 + 3 个未落地的栈重排） | — |
+
+### 本次落地的代码改动
+
+| 文件 | 改动 | 证据 |
+| --- | --- | --- |
+| `target/linux/airoha/an7581/base-files/usr/sbin/xr1710g-lan10g-diag` | `field_value()` 读完整续行列表（+24/−4）。HEAD 的旧版"第一处匹配即 `exit`"，所以 `ethtool lan4` 的 `Advertised link modes` 只报 `10baseT/Half 10baseT/Full`，丢掉 `100baseT / 1000baseT / 2500baseT` | 基线 blob `25dfca0ded` = HEAD 该文件 blob；修复版 blob `108113f982` = `00f55cbbb2` 的版本（两者 base blob 完全相同，逐字节等同） |
+| `scripts/tests/test_lan10g_diag_field_value.py` | 上述函数的单测：续行拼接、伙伴列表、单行键不变、缺失键为空、不吞下一个键 | `python3 -m unittest scripts.tests.test_lan10g_diag_field_value` → 5 passed；换回旧实现 → 2 failed |
+
+fixture 就是 `ethtool lan4` 的真实输出形态（`Advertised link modes` 与 `Link partner advertised link modes` 各 4 行续行）。实测结果：
+
+```
+旧：Advertised link modes -> 10baseT/Half 10baseT/Full
+新：Advertised link modes -> 10baseT/Half 10baseT/Full 100baseT/Half 100baseT/Full 1000baseT/Full 2500baseT/Full
+```
+
+设备侧只读复核（不改设备状态）：
+
+```sh
+ethtool lan4 | sed -n '/Advertised link modes/,/Advertised pause/p'
+grep -A2 'advertised modes' /var/log/lan10g-diag.log   # 需存在 /etc/xr1710g-10g-lab.enable
+```
+
 
 ### 删除门槛（六分支共用，全部满足才可删）
 
 1. PR #200 已 merge（docs 五份 + 四个 harness + wan-path 与测试都进 `xr1710g`）。
 2. 968/974 两个补丁以 blob 相等的形式出现在 `xr1710g:target/linux/airoha/patches-7.3/`（搬运它的 PR 合并后核对 `git rev-parse`）。
-3. `impl/19-lan10g-diag` 的 `field_value` 续行修复要么单独 PR 落地，要么由维护者在 #189（或后继 issue）写明放弃。
-4. 三个栈重排提交（`ce8c96e21c`、`8ba6129916`、`86974b29bf`）要么在 `xr1710g` 的新基线上重做落地，要么由 #189 写明"这次 rebase 不做"。
+3. ~~`impl/19-lan10g-diag` 的 `field_value` 续行修复要么单独 PR 落地，要么由维护者在 #189（或后继 issue）写明放弃。~~ **已满足**：本 PR 携带该修复（+24/−4，blob `108113f982`）与单测 `scripts/tests/test_lan10g_diag_field_value.py`。
+4. ~~三个栈重排提交（`ce8c96e21c`、`8ba6129916`、`86974b29bf`）要么在 `xr1710g` 的新基线上重做落地，要么由 #189 写明这次 rebase 不做。~~ **已判定**：`8ba6129916` 前提不成立（放弃）；`ce8c96e21c` / `86974b29bf` 实测在 HEAD 的 pin 上不成立，只在 #189 抬 mt76→2026-10-28、firewall4→2026-11-08 时随之落地（证据见上节）。
 5. #189 记录本次 sync 的结论（采用 / 放弃），保证 607 个上游提交 + 上述 3 个重排提交不再只有探索线一个引用。
 
 过了这五条，判定可以退化成一条可执行的检查：
