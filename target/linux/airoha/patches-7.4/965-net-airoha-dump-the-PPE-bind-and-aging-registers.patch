@@ -1,31 +1,6 @@
-From: OpenWrt <openwrt@example.org>
-Date: Sat, 24 Oct 2026 11:40:00 +0800
-Subject: [PATCH] net: airoha: dump the PPE bind and aging registers
-
-The driver never writes REG_PPE_BIND_LIMIT0/1, REG_PPE_UNBIND_AGE, or
-the six aging-enable bits in REG_PPE_TB_CFG.  mtk_ppe programs all
-three registers with specific values, so either this hardware has
-usable reset values and the driver is leaning on them, or the fields
-are inert here.  Nothing in the kernel can tell the difference: there
-is no /dev/mem, no devmem, and ethtool -d is not implemented for this
-driver.
-
-Add /sys/kernel/debug/ppe/tb_regs, a read-only dump of the three
-registers plus the aging-enable bits decoded out of TB_CFG.
-
-It answers the question: this hardware ships with usable reset values.
-Both PPEs read back bind_limit0 0fa00fa0 (quarter 4000, half 4000),
-bind_limit1 00011f40 (full 8000, non_l4 1), unbind_age 03e80003
-(min_packets 1000, delta 3) -- the same shape mtk_ppe programs -- and
-TB_CFG has AGE_TCP_FIN, AGE_UDP, AGE_TCP, AGE_UNBIND and AGE_NON_L4
-set.  The driver is leaning on those values, not losing them.  Do not
-program them.
-
-Signed-off-by: OpenWrt <openwrt@example.org>
----
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -322,6 +322,49 @@ static const struct file_operations airo
+@@ -322,6 +322,49 @@
  	.release	= single_release,
  };
  
@@ -75,12 +50,15 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  {
  	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-@@ -335,6 +378,8 @@ int airoha_ppe_debugfs_init(struct airoh
+@@ -335,6 +378,8 @@
  			    &airoha_ppe_debugfs_foe_alias_fops);
  	debugfs_create_file("bind_rate", 0644, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_bind_rate_fops);
+-
+-	return 0;
+-}
 +	debugfs_create_file("tb_regs", 0444, ppe->debugfs_dir, ppe,
 +			    &airoha_ppe_debugfs_tb_regs_fops);
- 
- 	return 0;
- }
++
++	return 0;
++}

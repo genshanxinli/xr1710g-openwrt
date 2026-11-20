@@ -1,21 +1,3 @@
-From beb56181a370b003b12f657239b510435cae2c9d Mon Sep 17 00:00:00 2001
-From: Christian Marangi <ansuelsmth@gmail.com>
-Date: Fri, 17 Jan 2025 13:23:13 +0100
-Subject: [PATCH] net: airoha: add phylink support
-
-Add phylink support for each GDM port. For GDM1 add the internal interface
-mode as the only supported mode. For GDM2/3/4 add the required
-configuration of the PCS to make the external PHY or attached SFP cage
-work.
-
-These needs to be defined in the GDM port node using the pcs-handle
-property.
-
-Update and provide a .get/set_link_ksettings function that use phylink
-for ethtool OPs now that we fully support phylink.
-
-Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
----
 --- a/drivers/net/ethernet/airoha/Kconfig
 +++ b/drivers/net/ethernet/airoha/Kconfig
 @@ -20,6 +20,7 @@
@@ -328,10 +310,11 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  };
 --- a/drivers/net/ethernet/airoha/airoha_regs.h
 +++ b/drivers/net/ethernet/airoha/airoha_regs.h
-@@ -376,6 +376,18 @@
+@@ -375,6 +375,18 @@
+ #define IP_ASSEMBLE_NBQ_MASK		GENMASK(20, 16)
  #define IP_FRAGMENT_PORT_MASK		GENMASK(8, 5)
  #define IP_FRAGMENT_NBQ_MASK		GENMASK(4, 0)
- 
++
 +#define REG_FE_GDM4_TMBI_FRAG		0x2028
 +#define GDM4_SGMII1_TX_WEIGHT_MASK	GENMASK(31, 26)
 +#define GDM4_SGMII1_TX_FRAG_SIZE_MASK	GENMASK(25, 16)
@@ -343,7 +326,6 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
 +#define GDM4_SGMII1_RX_FRAG_SIZE_MASK	GENMASK(25, 16)
 +#define GDM4_SGMII0_RX_WEIGHT_MASK	GENMASK(15, 10)
 +#define GDM4_SGMII0_RX_FRAG_SIZE_MASK	GENMASK(9, 0)
-+
+ 
  #define REG_MC_VLAN_EN			0x2100
  #define MC_VLAN_EN_MASK			BIT(0)
- 

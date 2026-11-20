@@ -1,35 +1,3 @@
-From: OpenWrt <openwrt@example.org>
-Date: Sun, 15 Nov 2026 10:15:00 +0800
-Subject: [PATCH] net: airoha: let the NAPI weight be tuned
-
-The QDMA RX and TX completion NAPI instances are registered with the
-default weight of 64.  At 10G a round that drains 64 1500-byte frames is
-about 96 KiB, so the rings are refilled in short rounds and the next
-interrupt is raised while NAPI is still walking the ring.  Whether a
-different weight helps is measurable only on the board, and the value was
-not reachable from userspace at all: the driver is built in, so trying
-one meant editing the source and rebuilding the kernel.
-
-Add a napi_weight module parameter, default 64, and pass it explicitly
-to netif_napi_add_weight() for the RX queues and to
-netif_napi_add_tx_weight() for the TX completion queues.  A weight over
-NAPI_POLL_WEIGHT makes the core print a one-time netdev_err_once notice;
-that notice is upstream behaviour and the driver still uses the value.
-
-The parameter is a module_param_cb rather than a plain
-module_param_named: the latter writes the word straight into the
-variable, and the requested 16..512 range has to clamp instead of fail,
-so a typo on the command line cannot turn the knob into a boot failure.
-The clamp is reported once through dev_warn.  A clamp requested before
-probe (kernel command line) is reported as soon as the device exists;
-a write after probe takes effect on the next probe, as the weight is
-latched when a NAPI instance is registered.
-
-Expose the current value as /sys/kernel/debug/qdma/napi_weight so an A/B
-run can record which weight it actually used.
-
-Signed-off-by: OpenWrt <openwrt@example.org>
----
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
 @@ -9,6 +9,8 @@
@@ -209,7 +177,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  		airoha_qdma_set(&eth->qdma[i], REG_QDMA_GLOBAL_CFG,
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -834,6 +834,7 @@ struct airoha_eth {
+@@ -829,6 +829,7 @@
  	u32 updmem_seq;
  
  	struct dentry *debugfs_dir;

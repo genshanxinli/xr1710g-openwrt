@@ -1,0 +1,182 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Thu, 20 Nov 2026 13:00:00 +0800
+Subject: [PATCH] net/airoha: report PPPoE-over-VLAN flows the PPE cannot express
+
+A PPPoE session stacked on an 802.1Q tag needs two headers stripped on
+ingress.  The flowtable can only tell a driver about one of them:
+
+  - include/net/flow_offload.h:181-187 ends the flow action enum at
+    FLOW_ACTION_PPPOE_PUSH; there is no FLOW_ACTION_PPPOE_POP, and the
+    whole tree has no such symbol.
+  - net/netfilter/nf_flow_table_offload.c:706-720 turns the 8021Q level
+    of the ingress tuple into FLOW_ACTION_VLAN_POP and skips every other
+    encapsulation level silently, so the PPPoE session never appears in
+    the action list.  Nothing else carries it: the driver sees a rule
+    with vlan_pop = 1 and pppoe_pop = 0 and no hint that a session sits
+    underneath.
+  - drivers/net/ethernet/airoha/airoha_ppe.c handles
+    FLOW_ACTION_VLAN_POP with a bare "break;" and records no state, so
+    the FOE entry it builds keeps VLAN_LAYER/PPM at zero and the PPPoE
+    bind bits clear.  The hardware would strip nothing and match the
+    session header as if it were the L3 payload -- a silently
+    misprogrammed WAN entry, which is what #83 is about.
+
+This patch gives the driver the missing fact and makes it say so:
+
+  - flow_cls_offload gains a pppoe_decap bit;
+    nf_flow_offload_init() sets it from tuple->encap, i.e. exactly where
+    nf_flow_tuple_encap() recorded ETH_P_PPP_SES.
+  - airoha_ppe_flow_offload_replace() reports the combination of that
+    bit with a VLAN_POP action once per ratelimit window, naming both
+    actions ("vlan_pop=1 pppoe_pop=0").
+  - a new module parameter pppoe_vlan_refuse (bool, 0644, default 0)
+    selects the second half: at 1 the combination is refused with
+    -EOPNOTSUPP, so nf_flow_table_offload() leaves the flow in the
+    software path instead of installing the entry above.  At 0 the
+    driver keeps the behaviour it had before this patch byte for byte.
+
+Single-level PPPoE is untouched: pppoe_decap is set for it too, but the
+report only fires when a VLAN_POP action is present as well.
+
+This is a software capability probe, not a claim about the hardware.
+Whether a PPE entry can be told to strip VLAN and PPPoE in one pass is
+still unknown; a selectable per-flow decap semantic (the decap=3 draft
+tracked in issue 81) needs FLOW_ACTION_PPPOE_POP to exist in the kernel
+and something to emit it (nft userspace emits no such action today), so
+it stays blocked on upstream netfilter and is deliberately not faked
+here. Adding the enum member locally was rejected: it would fork a
+kernel-internal ABI that every driver and every nft build in the tree
+shares, while nothing on the system would ever produce the action.
+
+Not exercised on hardware: the XR1710G on the bench has no PPPoE WAN, so
+the negative path is code-reviewed and compile-tested only.
+
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/include/net/flow_offload.h
++++ b/include/net/flow_offload.h
+@@ -699,6 +699,13 @@
+ 	struct flow_rule *rule;
+ 	struct flow_stats stats;
+ 	u32 classid;
++	/* One of the headers the tuple has to strip on ingress is a PPPoE
++	 * session.  Entering the flowtable there is no FLOW_ACTION_PPPOE_POP
++	 * to carry that level in the rule's action list -- the flow action
++	 * enum only has FLOW_ACTION_PPPOE_PUSH -- so this bit is the only
++	 * channel a driver has to learn about it.
++	 */
++	bool pppoe_decap;
+ };
+ 
+ enum offload_act_command  {
+--- a/net/netfilter/nf_flow_table_offload.c
++++ b/net/netfilter/nf_flow_table_offload.c
+@@ -896,6 +896,21 @@
+ 				 const struct flow_offload_tuple *tuple,
+ 				 struct netlink_ext_ack *extack)
+ {
++	int i;
++
++	/* The rule can only describe a strip through FLOW_ACTION_VLAN_POP:
++	 * this kernel has no FLOW_ACTION_PPPOE_POP, so a PPPoE level in the
++	 * tuple's encapsulation list has no action to represent it and would
++	 * silently disappear between the tuple and the driver.  Export the
++	 * fact instead of dropping it.
++	 */
++	for (i = 0; i < tuple->encap_num; i++) {
++		if (tuple->encap[i].proto == htons(ETH_P_PPP_SES)) {
++			cls_flow->pppoe_decap = true;
++			break;
++		}
++	}
++
+ 	cls_flow->common.protocol = proto;
+ 	cls_flow->common.prio = priority;
+ 	cls_flow->common.extack = extack;
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -47,6 +47,26 @@
+ module_param(airoha_ppe_3t, bool, 0444);
+ MODULE_PARM_DESC(airoha_ppe_3t,
+ 		 "Offload flows without L4 ports as 3-tuple PPE entries");
++
++/* A PPPoE session inside an 802.1Q tag needs two headers stripped on
++ * ingress.  The flowtable can only express one of them: this kernel's flow
++ * action enum has FLOW_ACTION_VLAN_POP but no FLOW_ACTION_PPPOE_POP, so
++ * nf_flow_table_offload() emits the VLAN strip and the PPPoE level survives
++ * only as flow_cls_offload::pppoe_decap.  The PPE cannot express the double
++ * peel either -- the entry keeps VLAN_LAYER/PPM at zero and the PPPoE bind
++ * bits clear, which tells the hardware to strip nothing and match the
++ * session header as if it were the L3 payload.
++ *
++ * Detection and the warning are always on: a silently misprogrammed WAN
++ * entry is worse than a noisy log line.  Refusing the rule is opt-in,
++ * because at 0 the driver has to keep the behaviour it had before this
++ * patch; set it to 1 to return -EOPNOTSUPP for the combination and leave
++ * those flows in the software path.
++ */
++static bool airoha_ppe_pppoe_vlan_refuse;
++module_param_named(pppoe_vlan_refuse, airoha_ppe_pppoe_vlan_refuse, bool, 0644);
++MODULE_PARM_DESC(pppoe_vlan_refuse,
++		 "Refuse PPPoE-over-VLAN flows the PPE cannot express instead of programming a wrong entry");
+ 
+ static const struct rhashtable_params airoha_flow_table_params = {
+ 	.head_offset = offsetof(struct airoha_flow_table_entry, node),
+@@ -2398,9 +2418,57 @@
+ 	return 0;
+ }
+ 
++/* PPPoE over VLAN needs two ingress headers stripped and the PPE entry
++ * cannot express that.  The rule can only carry one of the two strips: this
++ * kernel's flow action enum has FLOW_ACTION_VLAN_POP but no
++ * FLOW_ACTION_PPPOE_POP, so a flow whose tuple holds both levels arrives
++ * with vlan_pop = 1 and nothing at all for the session.  The level that the
++ * action list had to drop survives as flow_cls_offload::pppoe_decap; report
++ * the combination here, and refuse it when pppoe_vlan_refuse is set so the
++ * flow stays in the software path instead of getting an entry that cannot
++ * strip the session header.
++ */
++static int airoha_ppe_flow_offload_pppoe_vlan(struct airoha_eth *eth,
++					      struct flow_cls_offload *f)
++{
++	struct flow_rule *rule = flow_cls_offload_flow_rule(f);
++	const struct flow_action_entry *act;
++	const char *tail;
++	bool vlan_pop = false;
++	int i;
++
++	if (!f->pppoe_decap)
++		return 0;
++
++	flow_action_for_each(i, act, &rule->action) {
++		if (act->id == FLOW_ACTION_VLAN_POP)
++			vlan_pop = true;
++	}
++
++	if (!vlan_pop)
++		return 0;
++
++	tail = airoha_ppe_pppoe_vlan_refuse ?
++	       ", refusing it: this kernel has no FLOW_ACTION_PPPOE_POP" :
++	       ", programming a single-strip entry";
++
++	dev_warn_ratelimited(eth->dev,
++			     "PPPoE over VLAN: vlan_pop=1 pppoe_pop=0%s\n", tail);
++
++	return airoha_ppe_pppoe_vlan_refuse ? -EOPNOTSUPP : 0;
++}
++
+ static int airoha_ppe_flow_offload_cmd(struct airoha_eth *eth,
+ 				       struct flow_cls_offload *f)
+ {
++	int err;
++
++	if (f->command == FLOW_CLS_REPLACE) {
++		err = airoha_ppe_flow_offload_pppoe_vlan(eth, f);
++		if (err)
++			return err;
++	}
++
+ 	switch (f->command) {
+ 	case FLOW_CLS_REPLACE:
+ 		return airoha_ppe_flow_offload_replace(eth, f);

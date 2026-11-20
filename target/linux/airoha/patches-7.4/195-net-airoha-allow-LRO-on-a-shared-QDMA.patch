@@ -1,43 +1,3 @@
-From: OpenWrt <openwrt@example.org>
-Subject: [PATCH] net: airoha: allow LRO on a QDMA shared by several devices
-
-LRO is enabled and disabled on the QDMA, not on the net_device, and on
-the AN7581 two devices can sit on the same QDMA (on the XR1710G the CPU
-port and the 10G LAN port both use QDMA0).
-
-The LRO patch therefore had to refuse the second device:
-
-	required to disable LRO on QDMA%d
-	return -EBUSY;
-
-and it also stripped NETIF_F_LRO from the feature set of every device
-sharing a used QDMA, which made LRO impossible on the LAN side of the
-board.  Both are unnecessary: the RX ring is shared, but the driver
-picks the destination net_device per packet from the source port stored
-in the DMA descriptor (airoha_qdma_get_gdm_dev), so aggregating frames
-from two ports into one ring cannot deliver a frame to the wrong device.
-
-Turn the enable/disable pair into a reference count instead, so the
-block is programmed when the first device asks for LRO and torn down
-only when the last one stops asking.  This lets a device sharing its
-QDMA with another one use hardware LRO.
-
-Signed-off-by: OpenWrt <openwrt@example.org>
----
---- a/drivers/net/ethernet/airoha/airoha_eth.h
-+++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -576,6 +576,11 @@
- 	void __iomem *regs;
- 
- 	int users;
-+	/* Number of net_devices on this QDMA that asked for LRO. LRO is a
-+	 * per-QDMA block, shared by every device queued on it, so one
-+	 * device tearing down must not disable it for the others.
-+	 */
-+	int lro_users;
- 
- 	struct airoha_irq_bank irq_banks[AIROHA_MAX_NUM_IRQ_BANKS];
- 
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
 @@ -542,6 +542,11 @@
@@ -103,4 +63,18 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 -
  	return features;
  }
+ 
+--- a/drivers/net/ethernet/airoha/airoha_eth.h
++++ b/drivers/net/ethernet/airoha/airoha_eth.h
+@@ -576,6 +576,11 @@
+ 	void __iomem *regs;
+ 
+ 	int users;
++	/* Number of net_devices on this QDMA that asked for LRO. LRO is a
++	 * per-QDMA block, shared by every device queued on it, so one
++	 * device tearing down must not disable it for the others.
++	 */
++	int lro_users;
+ 
+ 	struct airoha_irq_bank irq_banks[AIROHA_MAX_NUM_IRQ_BANKS];
  

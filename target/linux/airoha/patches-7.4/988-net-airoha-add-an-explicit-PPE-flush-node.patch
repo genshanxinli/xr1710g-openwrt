@@ -1,78 +1,23 @@
-From: OpenWrt <openwrt@example.org>
-Date: Sun, 15 Nov 2026 10:45:00 +0800
-Subject: [PATCH] net: airoha: add a write-only debugfs node that flushes the
- PPE tables
-
-The PPE tables are filled from userspace through the flowtable, but there
-is no way to empty them again after probe: airoha_ppe_flush_sram_entries()
-runs once from airoha_ppe_init(), and every file under
-/sys/kernel/debug/ppe/ is either read-only or a single-value knob.  A
-repeated fill experiment therefore starts each round on top of the
-previous round's entries: the D2 fill arm's bound cannot be compared
-across rounds even though the instrument itself is sound.
-
-The residue covers both halves of the hash space.  The SRAM half holds
-hardware entries that can outlive the driver's bookkeeping; the DRAM half
-is the coherent buffer the PPE reads its entries from and is never zeroed
-again once probe is over.  Clearing only one half leaves
-/sys/kernel/debug/ppe/usage counting the other as bound.
-
-Expose /sys/kernel/debug/ppe/flush, write-only (mode 0200).  Writing "1"
-returns both tables to their post-probe state:
-
- - the SRAM half is cleared through the same per-entry control-register
-   handshake the probe-time clear uses, with the live geometry, so with
-   flow counters in use each PPE contributes its real 4096 entries and no
-   write ever names an entry the hardware does not have;
- - the DRAM half is zeroed in the coherent buffer, which is the table the
-   PPE walks.
-
-The flush takes flow_offload_mutex so the live geometry cannot change under
-it (airoha_ppe_hw_init() reprograms the per-PPE SRAM size once the NPU
-accepts flow counters, and it runs under that mutex), and ppe_lock so an
-offload cannot land between two commits.  A failed handshake stops the
-flush, names the PPE and the entry in the kernel log and returns -EIO;
-nothing reports success for a table it did not clear.  Any value other
-than "1" is refused with -EINVAL, so a typo cannot clear the hardware in
-the middle of an experiment.
-
-The node clears the tables, not the flows.  It does not clear conntrack:
-flows offloaded into the flowtable keep their IPS_OFFLOAD bit and their
-packets are still handed to the PPE instead of being forwarded in
-software, so the node has to be paired with
-
-    nft flush flowtable inet fw4 ft
-
-On its own it turns those flows into silent drops.  It is a manual
-experiment knob and must never be driven by a script; nothing calls it
-automatically, and a kernel that never writes the file behaves exactly as
-before.
-
-The intended order is: stop the flows (netwatchdog hold), flush the
-flowtable, write the node, replay the traffic, sample.  Build-tested with
-the OpenWrt arm64 7.3 kernel (airoha_ppe.o and airoha_ppe_debugfs.o); the
-"bound back to 0" readback needs the board and belongs to the bench.
-
-Signed-off-by: OpenWrt <openwrt@example.org>
----
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
 @@ -19,6 +19,11 @@
+ 
  #include "airoha_regs.h"
  #include "airoha_eth.h"
- 
++
 +/* The write-only debugfs "flush" node in airoha_ppe_debugfs.c is the only
 + * caller, so the prototype stays here instead of moving to airoha_eth.h.
 + */
 +int airoha_ppe_flush_tables(struct airoha_ppe *ppe);
-+
+ 
  /* Serialize airoha_gdm_dev flags, QDMA pointer and PPE CPU port
   * configuration.
-  */
-@@ -2019,6 +2024,67 @@ static int airoha_ppe_flush_sram_entries
- 	return 0;
- }
+@@ -2092,6 +2097,67 @@
+ 	}
  
+ 	return 0;
++}
++
 +/* Clear both PPE tables on behalf of the write-only "flush" debugfs node, so
 + * a repeated fill experiment can start from bound 0 instead of inheriting
 + * the previous round's entries.  The range follows the live geometry: when
@@ -132,32 +77,27 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +	mutex_unlock(&flow_offload_mutex);
 +
 +	return err ? -EIO : 0;
-+}
-+
+ }
+ 
  static struct airoha_npu *airoha_ppe_npu_get(struct airoha_eth *eth)
- {
- 	struct airoha_npu *npu = airoha_npu_get(eth->dev);
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -7,6 +7,11 @@
+@@ -6,6 +6,11 @@
+ 
  #include "airoha_eth.h"
  #include "airoha_regs.h"
- 
++
 +/* Defined in airoha_ppe.c, which owns the table geometry and the SRAM
 + * control-register handshake; this file only exposes the write trigger.
 + */
 +int airoha_ppe_flush_tables(struct airoha_ppe *ppe);
-+
+ 
  static void airoha_debugfs_ppe_print_tuple(struct seq_file *m,
  					   void *src_addr, void *dest_addr,
- 					   u16 *src_port, u16 *dest_port,
-@@ -365,9 +370,56 @@ static int airoha_ppe_debugfs_tb_regs_sh
+@@ -418,6 +423,53 @@
  }
- DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_tb_regs);
+ DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_l2b);
  
--/* The L2B fields in the PPE window: 64 words starting at FE 0xe00.  The
-- * ethertype enable mask sits at 0xe8c and the 8-entry ethertype table at
-- * 0xed0..0xedc, eight slots in four words.
 +/* Write-only (0200) node that returns both PPE tables to the state they have
 + * after probe, so a repeated fill experiment can start from bound 0 again.
 + * It accepts exactly "1"; every other value is refused rather than
@@ -205,22 +145,17 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +	.write		= airoha_ppe_debugfs_flush_write,
 +};
 +
-+int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
-+{
-+	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-  */
- #define AIROHA_PPE_L2B_BASE		0x0e00
- #define AIROHA_PPE_L2B_WORDS		64
-@@ -433,8 +485,10 @@ int airoha_ppe_debugfs_init(struct airoh
- 			    &airoha_ppe_debugfs_bind_rate_fops);
- 	debugfs_create_file("tb_regs", 0444, ppe->debugfs_dir, ppe,
- 			    &airoha_ppe_debugfs_tb_regs_fops);
--	debugfs_create_file("l2b", 0444, ppe->debugfs_dir, ppe,
--			    &airoha_ppe_debugfs_l2b_fops);
+ int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
+ {
+ 	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
+@@ -436,5 +488,8 @@
+ 	debugfs_create_file("l2b", 0444, ppe->debugfs_dir, ppe,
+ 			    &airoha_ppe_debugfs_l2b_fops);
+ 
+-	return 0;
+-}
 +	debugfs_create_file("flush", 0200, ppe->debugfs_dir, ppe,
 +			    &airoha_ppe_debugfs_flush_fops);
- 
- 	return 0;
- }
++
 +	return 0;
 +}

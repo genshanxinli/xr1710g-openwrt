@@ -1,28 +1,3 @@
-From: OpenWrt <openwrt@example.org>
-Subject: [PATCH] net: airoha: npu: add a read-only tunnel mailbox probe
-
-debugfs npu/tunnel_probe exposes the mailbox state that carries tunnel
-mails without writing a single register.  Function slot 1 is the tunnel
-handler and it is dispatched on core 0's mailbox queue, so the probe
-reads MBQ0 CTRL0..3 and prints them with the CTRL3 status bits, the
-version string embedded in the rv32 firmware image and the tunnel packet
-counter when the running image publishes one.
-
-The doorbell (CTRL2) is never touched and no register is programmed, so
-the probe cannot queue a mail, change tunnel state or disturb the live
-mailbox.  It is the read-only first step for the tunnel offload work:
-on a stock v08 unit it shows whether slot 1 exists before any VXLAN,
-SRv6, MAP-T or L4S handling is considered.  The tunnel counter lives in
-the NDBG block of the Clanker firmware; stock v08 does not publish that
-block, so the count is reported as unavailable rather than as zero.
-Regenerated for 7.4: this sits on the bounce-buffer ceiling the
-support-map patch already raised, so it no longer redefines
-AIROHA_NPU_MBOX_SIZE or edits the include list.  The probe registers
-into the shared npu/ debugfs directory that patch creates; a second
-debugfs_create_dir("npu") returns -EEXIST and silently drops the file.
-
-Signed-off-by: OpenWrt <openwrt@example.org>
----
 --- a/drivers/net/ethernet/airoha/airoha_npu.c
 +++ b/drivers/net/ethernet/airoha/airoha_npu.c
 @@ -34,6 +34,17 @@
@@ -242,7 +217,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
 --- a/include/linux/soc/airoha/airoha_offload.h
 +++ b/include/linux/soc/airoha/airoha_offload.h
-@@ -69,6 +69,7 @@
+@@ -82,6 +82,7 @@
  #define NPU_NUM_IRQ		6
  #define NPU_RX0_DESC_NUM	512
  #define NPU_RX1_DESC_NUM	512
@@ -250,7 +225,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
  /* CTRL */
  #define NPU_RX_DMA_DESC_LAST_MASK	BIT(29)
-@@ -182,6 +183,11 @@
+@@ -195,6 +196,11 @@
  
  	struct airoha_foe_stats __iomem *stats;
  

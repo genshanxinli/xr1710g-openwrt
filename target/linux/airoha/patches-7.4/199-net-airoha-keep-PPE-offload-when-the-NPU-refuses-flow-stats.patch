@@ -1,41 +1,24 @@
-From: OpenWrt <openwrt@example.org>
-Subject: [PATCH] net: airoha: keep PPE offload when the NPU refuses flow stats
-
-With CONFIG_NET_AIROHA_FLOW_STATS enabled, airoha_ppe_offload_setup()
-asks the NPU firmware for the counter region and treats any failure as
-fatal:
-
-	err = npu->ops.ppe_init_stats(npu, ppe->foe_stats_dma,
-				      ppe_num_stats_entries);
-	if (err)
-		goto error_npu_put;
-
-so a firmware that does not implement PPE_FUNC_SET_WAIT_FLOW_STATS_SETUP
-ends up with no offload at all - the feature that is the whole point of
-the driver - instead of offload without counters.
-
-The firmware also reports success with a zero npu_stats_addr when its
-internal SRAM pool is exhausted, and that zero address was being handed
-to devm_ioremap().
-
-Treat flow statistics as the optional capability they are: warn and
-continue without them, remember the decision in a new foe_stats_enabled
-flag so the statistics paths become no-ops, and reject a zero counter
-address as a refusal.
-
-While the counters are in use the counted flows are steered to port 6
-(the CDM3 path to the NPU), which is flow controlled separately from the
-other ports; clear PSE_PORT6_SHARE_DIS so that port takes part in the
-shared-buffer flow control.  Without counters the port is left alone.
-
-Based on the upstream "[PATCH net v3] net: airoha: keep PPE offload when
-NPU refuses flow stats" by Chad Monroe / Sayantan Nandy.
-
-Signed-off-by: OpenWrt <openwrt@example.org>
----
+--- a/drivers/net/ethernet/airoha/airoha_npu.c
++++ b/drivers/net/ethernet/airoha/airoha_npu.c
+@@ -450,6 +450,15 @@ static int airoha_npu_ppe_stats_setup(st
+ 	if (err)
+ 		goto out;
+ 
++	/* The firmware answers success with a zero address when its SRAM pool
++	 * has no room left for the counters, so a zero address is a refusal
++	 * and must not reach devm_ioremap().
++	 */
++	if (!ppe_data->stats_info.npu_stats_addr) {
++		err = -ENOSPC;
++		goto out;
++	}
++
+ 	npu->stats = devm_ioremap(npu->dev,
+ 				  ppe_data->stats_info.npu_stats_addr,
+ 				  size);
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -670,6 +670,12 @@ struct airoha_ppe {
+@@ -670,6 +670,12 @@
  
  	struct airoha_foe_stats *foe_stats;
  	dma_addr_t foe_stats_dma;
@@ -62,30 +45,13 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  #define PSE_FQ_LIMIT_MASK		GENMASK(14, 0)
  
  #define REG_FE_PSE_BUF_SET		0x0090
---- a/drivers/net/ethernet/airoha/airoha_npu.c
-+++ b/drivers/net/ethernet/airoha/airoha_npu.c
-@@ -450,6 +450,15 @@ static int airoha_npu_ppe_stats_setup(st
- 	if (err)
- 		goto out;
- 
-+	/* The firmware answers success with a zero address when its SRAM pool
-+	 * has no room left for the counters, so a zero address is a refusal
-+	 * and must not reach devm_ioremap().
-+	 */
-+	if (!ppe_data->stats_info.npu_stats_addr) {
-+		err = -ENOSPC;
-+		goto out;
-+	}
-+
- 	npu->stats = devm_ioremap(npu->dev,
- 				  ppe_data->stats_info.npu_stats_addr,
- 				  size);
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -144,6 +144,14 @@ static void airoha_ppe_hw_init(struct ai
+@@ -143,6 +143,14 @@
+ 		sram_ppe_num_data_entries -= sram_num_stats_entries;
  	sram_ppe_num_data_entries =
  		PPE_RAM_NUM_ENTRIES_SHIFT(sram_ppe_num_data_entries);
- 
++
 +	/* Counted flows are steered through port 6, the CDM3 path to the NPU,
 +	 * and that port is flow controlled separately from the others. Let it
 +	 * take part in shared-buffer flow control only while counters are in
@@ -93,11 +59,10 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +	 */
 +	if (sram_num_stats_entries > 0 && ppe->foe_stats_enabled)
 +		airoha_fe_clear(eth, PSE_FC_CFG, PSE_PORT6_SHARE_DIS);
-+
+ 
  	for (i = 0; i < eth->soc->num_ppe; i++) {
  		airoha_fe_wr(eth, REG_PPE_TB_BASE(i),
- 			     ppe->foe_dma + sram_tb_size);
-@@ -622,6 +630,9 @@ static void airoha_ppe_foe_flow_stats_re
+@@ -622,6 +630,9 @@
  {
  	int i, ppe_num_stats_entries;
  
@@ -107,17 +72,17 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
  	if (ppe_num_stats_entries < 0)
  		return;
-@@ -640,6 +651,9 @@ static void airoha_ppe_foe_flow_stats_up
+@@ -639,6 +650,9 @@
+ 	u32 index, pse_port, val, *data, *ib2, *meter;
  	int ppe_num_stats_entries;
  	u8 nbq;
- 
++
 +	if (unlikely(!ppe->foe_stats_enabled))
 +		return;
-+
+ 
  	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
  	if (ppe_num_stats_entries < 0)
- 		return;
-@@ -1312,6 +1326,9 @@ void airoha_ppe_foe_entry_get_stats(stru
+@@ -1311,6 +1325,9 @@
  	struct airoha_npu *npu;
  	u32 index;
  
@@ -127,7 +92,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
  	if (ppe_num_stats_entries < 0)
  		return;
-@@ -1325,7 +1342,7 @@ void airoha_ppe_foe_entry_get_stats(stru
+@@ -1324,7 +1341,7 @@
  	rcu_read_lock();
  
  	npu = rcu_dereference(eth->npu);
@@ -136,7 +101,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  		u64 packets = ppe->foe_stats[index].packets;
  		u64 bytes = ppe->foe_stats[index].bytes;
  		struct airoha_foe_stats npu_stats;
-@@ -1457,8 +1474,26 @@ static int airoha_ppe_offload_setup(stru
+@@ -1456,8 +1473,26 @@
  	if (ppe_num_stats_entries > 0) {
  		err = npu->ops.ppe_init_stats(npu, ppe->foe_stats_dma,
  					      ppe_num_stats_entries);

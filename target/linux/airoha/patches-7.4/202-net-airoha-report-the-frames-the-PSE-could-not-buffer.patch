@@ -1,27 +1,3 @@
-From: OpenWrt <openwrt@example.org>
-Subject: [PATCH] net: airoha: report the frames the PSE could not buffer
-
-The PSE pools the packet buffer shared by every GDM and CDM port: 2 MiB
-of 128-byte pages, 16384 in total, of which the per-port reserves already
-claim 4320.  When a port's reserve and its share of the common pool are
-both exhausted the frame is dropped in hardware, and nothing in the
-current driver says so.  The only visible symptom is an unexplained
-throughput ceiling; "ethtool -S" reports nothing, /proc/net/dev reports
-nothing, and the drop is invisible to every tool on the box.
-
-REG_FE_GDM_RX_FC_DROP_CNT counts exactly those frames and is already
-defined in airoha_regs.h, but no code reads it.  Read it next to the
-other RX MIBs, keep the wrap-around delta in a separate accumulator so
-it is not mixed into rx_over_errors (which counts QDMA-side overflows of
-a different cause), and expose it through the named ethtool statistics
-alongside the other drop counters.
-
-That also gives the shared-pool troubleshooting a positive signal: a
-non-zero rx_fc_drops with an idle CPU means the buffer is too small for
-the port, not that the link is congested.
-
-Signed-off-by: OpenWrt <openwrt@example.org>
----
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
 @@ -2109,6 +2109,14 @@ static void airoha_update_hw_stats(struc
@@ -121,7 +97,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -269,6 +269,10 @@ struct airoha_hw_stats {
+@@ -269,6 +269,10 @@
  	u64 tx_drops;
  	u64 rx_crc_error;
  	u64 rx_over_errors;
@@ -132,7 +108,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	/* ethtool stats */
  	u64 tx_broadcast;
  	u64 tx_multicast;
-@@ -298,6 +302,7 @@ struct airoha_hw_stats {
+@@ -298,6 +302,7 @@
  		u32 rx_errors;
  		u32 rx_crc_error;
  		u32 rx_over_errors;

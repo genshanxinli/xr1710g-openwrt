@@ -1,57 +1,6 @@
-From: OpenWrt <openwrt@example.org>
-Subject: [PATCH] net: airoha: stop paying for flow counters the NPU never provides
-
-Two separate ways the driver gives away offload capacity.
-
-The first is the counter carve-out.  airoha_ppe_get_num_stats_entries()
-answers from the build and the SoC alone, so every AN7581 reserves
-PPE_STATS_NUM_ENTRIES worth of each PPE's SRAM for counters before anyone
-has asked the NPU whether it can count at all.  On a board whose NPU
-answers -EINVAL, airoha_ppe_offload_setup() sets foe_stats_enabled to
-false and the warning says "continuing without counters" - but the SRAM is
-still carved out.  Half of each PPE stays unusable for the life of the
-boot to hold counters that were never handed to the NPU.  Keep the
-question "could this build count" separate from "is it counting now": the
-capability answer sizes the buffer that gets handed over, while the
-geometry answer decides the carve-out, and only the second one has to look
-at foe_stats_enabled.  Nothing allocates less because of this - the buffer
-is still sized for the capability, and the geometry only shrinks.
-
-The second is the DRAM half of the table.  The hardware has 16384 entries
-there and the driver already programs everything they need: TB_BASE points
-straight at the buffer, DRAM_TB_NUM_ENTRY holds shift(16384), and the hash
-mode is set.  Only PPE_DRAM_TABLE_EN and, symmetrically with the SRAM
-side's PPE_SRAM_HASH1_EN, PPE_DRAM_HASH1_EN are missing, so the enable
-mask clears them and the hardware never looks at the region.  airoha_ppe_
-get_total_num_entries() counts those 16384 entries anyway, which is what
-makes it hurt: fold_hash() spreads hashes over [0, 32768) while
-airoha_ppe_foe_commit_entry() only programs the ones below the SRAM total,
-and the rest fall out of the function with err still 0.  The flow gets
-marked HW_OFFLOAD and is then forwarded by the CPU.
-
-Turning the table on makes those hashes land somewhere the hardware
-actually searches.  No write path is needed: this table is host memory
-that TB_BASE addresses directly, so the memcpy that commit_entry() already
-does is the write, and dmam_alloc_coherent() has zeroed the region, which
-BIND_STATE reads as AIROHA_FOE_STATE_INVALID - a miss, exactly what the
-hardware does today.  The worst case of getting this wrong is therefore
-the behaviour we already have, not a false hit.
-
-Keep folding on the hash the hardware reported rather than re-deriving a
-slot, so driver and hardware cannot disagree about which entry a flow
-owns; the only remaining way to leave commit_entry() without programming
-anything is a hash past the end of the table, which folding rules out, and
-that now reports -EINVAL instead of claiming success.
-
-A readback after the programming warns once per PPE if the bit did not
-stick, because the failure is silent otherwise: the entries would simply
-never match.
-
-Signed-off-by: OpenWrt <openwrt@example.org>
----
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -35,7 +35,13 @@ static const struct rhashtable_params ai
+@@ -35,7 +35,13 @@
  	.automatic_shrinking = true,
  };
  
@@ -66,7 +15,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  {
  	if (!IS_ENABLED(CONFIG_NET_AIROHA_FLOW_STATS))
  		return -EOPNOTSUPP;
-@@ -46,9 +52,25 @@ static int airoha_ppe_get_num_stats_entr
+@@ -46,9 +52,25 @@
  	return PPE_STATS_NUM_ENTRIES;
  }
  
@@ -93,7 +42,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
  	if (num_stats > 0) {
  		struct airoha_eth *eth = ppe->eth;
-@@ -172,7 +194,7 @@ void airoha_ppe_set_xmit_frame_size(stru
+@@ -172,7 +194,7 @@
  static void airoha_ppe_hw_init(struct airoha_ppe *ppe)
  {
  	u32 sram_ppe_num_data_entries = airoha_ppe_get_sram_num_entries(ppe);
@@ -102,7 +51,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	u32 sram_tb_size, dram_num_entries;
  	struct airoha_eth *eth = ppe->eth;
  	int i, sram_num_stats_entries;
-@@ -212,6 +234,7 @@ static void airoha_ppe_hw_init(struct ai
+@@ -212,6 +234,7 @@
  			      PPE_SRAM_TABLE_EN_MASK |
  			      PPE_SRAM_HASH1_EN_MASK |
  			      PPE_DRAM_TABLE_EN_MASK |
@@ -110,7 +59,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  			      PPE_SRAM_HASH0_MODE_MASK |
  			      PPE_SRAM_HASH1_MODE_MASK |
  			      PPE_DRAM_HASH0_MODE_MASK |
-@@ -219,6 +242,8 @@ static void airoha_ppe_hw_init(struct ai
+@@ -219,6 +242,8 @@
  			      FIELD_PREP(PPE_SRAM_TABLE_EN_MASK, 1) |
  			      FIELD_PREP(PPE_SRAM_HASH1_EN_MASK, 1) |
  			      FIELD_PREP(PPE_SRAM_HASH1_MODE_MASK, 1) |
@@ -119,10 +68,11 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  			      FIELD_PREP(PPE_DRAM_HASH1_MODE_MASK, 3));
  
  		airoha_fe_rmw(eth, REG_PPE_TB_CFG(i),
-@@ -234,6 +259,20 @@ static void airoha_ppe_hw_init(struct ai
+@@ -233,6 +258,20 @@
+ 					 sram_ppe_num_data_entries) |
  			      FIELD_PREP(PPE_DRAM_TB_NUM_ENTRY_MASK,
  					 dram_num_entries));
- 
++
 +		/* The driver does not control this field, so make sure the
 +		 * hardware accepted it.  The whole point of the DRAM half is
 +		 * that fold_hash() spreads hashes across it; if the table is
@@ -136,11 +86,10 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +			dev_warn(eth->dev,
 +				 "PPE%u: DRAM table did not come up, %u entries unreachable\n",
 +				 i + 1, PPE_DRAM_NUM_ENTRIES);
-+
+ 
  		airoha_fe_rmw(eth, REG_PPE_BIND_RATE(i),
  			      PPE_BIND_RATE_L2B_BIND_MASK |
- 			      PPE_BIND_RATE_BIND_MASK,
-@@ -925,12 +964,27 @@ static int airoha_ppe_foe_commit_entry(s
+@@ -925,12 +964,27 @@
  				       u32 hash, bool rx_wlan)
  {
  	u32 sram_num_entries = airoha_ppe_get_total_sram_num_entries(ppe);
@@ -169,7 +118,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	memcpy(&hwe->d, &e->d, sizeof(*hwe) - sizeof(hwe->ib1));
  	wmb();
  
-@@ -1813,6 +1867,13 @@ int airoha_ppe_init(struct airoha_eth *e
+@@ -1812,6 +1866,13 @@
  	if (!ppe->foe_check_time)
  		return -ENOMEM;
  

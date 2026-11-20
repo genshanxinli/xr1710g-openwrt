@@ -1,29 +1,3 @@
-From: OpenWrt <openwrt@example.org>
-Date: Sat, 24 Oct 2026 09:00:00 +0800
-Subject: [PATCH] net: airoha: make the PPE bind rate a runtime knob
-
-The PPE promotes an UNBIND entry to BIND once it sustains
-REG_PPE_BIND_RATE packets per second.  The driver hardcodes 30, which is
-what MediaTek's SDK and upstream mtk_ppe use, and there was no way to
-measure what a different value does: the register is not reachable from
-userspace (no /dev/mem, no devmem, no debugfs register window) and the
-driver is built in, so a new threshold meant a new kernel.
-
-Split the two halves of the register into ppe->bind_rate_l3 and
-ppe->bind_rate_l2b, route the write through airoha_ppe_apply_bind_rate(),
-and expose it as /sys/kernel/debug/ppe/bind_rate ("l3 [l2b]").
-
-Having measured, lower the default from 30 to 10.  Sampling while the
-flows are still alive, at 30 a 15-, 20- or 30-packet flow binds 0 of 15
-and at 10 all 15 do; from 60 packets up both rates bind everything.
-Those short flows are most of what a home network forwards -- DNS,
-mDNS, DHCP renewals, TCP handshakes -- so at 30 none of them reach the
-hardware.  Going lower is not free: at 5, 400 six-packet micro-flows
-bind 400 of 400 and fill the table with entries that will never see a
-second packet; at 10 they bind 1 of 400.
-
-Signed-off-by: OpenWrt <openwrt@example.org>
----
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
 @@ -709,6 +709,14 @@
@@ -41,7 +15,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	struct dentry *debugfs_dir;
  };
  
-@@ -858,6 +866,7 @@
+@@ -859,6 +867,7 @@
  
  #ifdef CONFIG_DEBUG_FS
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe);
@@ -51,7 +25,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  {
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -202,6 +202,36 @@
+@@ -229,6 +229,36 @@
  		      __field_prep(FP_EGRESS_MTU_MASK(index), len));
  }
  
@@ -88,7 +62,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static void airoha_ppe_hw_init(struct airoha_ppe *ppe)
  {
  	u32 sram_ppe_num_data_entries = airoha_ppe_get_sram_num_entries(ppe);
-@@ -284,11 +314,7 @@
+@@ -311,11 +341,7 @@
  				 "PPE%u: DRAM table did not come up, %u entries unreachable\n",
  				 i + 1, PPE_DRAM_NUM_ENTRIES);
  
@@ -101,9 +75,9 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
  		airoha_fe_wr(eth, REG_PPE_HASH_SEED(i), PPE_HASH_SEED);
  		airoha_fe_clear(eth, REG_PPE_PPE_FLOW_CFG(i),
-@@ -2141,6 +2167,8 @@
- 
- 	err = airoha_ppe_foe_flow_commit_entry(eth->ppe, e);
+@@ -2215,6 +2241,8 @@
+ 	ppe->dev.priv = ppe;
+ 	ppe->eth = eth;
  	eth->ppe = ppe;
 +	ppe->bind_rate_l3 = AIROHA_PPE_DEFAULT_BIND_RATE;
 +	ppe->bind_rate_l2b = AIROHA_PPE_DEFAULT_BIND_RATE;
@@ -187,8 +161,11 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  			    &airoha_ppe_debugfs_foe_usage_fops);
  	debugfs_create_file("entry_alias", 0444, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_foe_alias_fops);
+-
+-	return 0;
+-}
 +	debugfs_create_file("bind_rate", 0644, ppe->debugfs_dir, ppe,
 +			    &airoha_ppe_debugfs_bind_rate_fops);
- 
- 	return 0;
- }
++
++	return 0;
++}
