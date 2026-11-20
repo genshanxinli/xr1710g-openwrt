@@ -9,9 +9,9 @@
 # link packet/error/drop counters).
 #
 # It is read-only.  It changes no address, route, bridge, firewall or module
-# state; the only write is the report under /var/log (or /tmp).  It refuses to
-# run unless /etc/xr1710g-10g-lab.enable exists, so it is inert on a normal
-# deployment.
+# state; its only writes are the report under /var/log (or /tmp) and, when it
+# is explicitly asked to, the marker itself.  It refuses to run unless
+# /etc/xr1710g-10g-lab.enable exists, so it is inert on a normal deployment.
 #
 # Nothing in the image creates that marker, so the diagnostic can never run
 # by itself: opt in with `xr1710g-lan10g-diag --enable`, which creates the
@@ -315,7 +315,11 @@ scan_port() {
 main() {
 	case ${1:-} in
 	--enable)
-		if : > "$MARKER"; then
+		# The redirect runs in a subshell: `: > $MARKER` is a special
+		# builtin, so a failed redirect kills the whole shell (ash and dash
+		# alike) before the failure branch is reached, and the "cannot
+		# create" line is never printed.
+		if ( : > "$MARKER" ) 2>/dev/null; then
 			printf '%s\n' "enabled: created $MARKER, rerun for the diagnostic"
 			return 0
 		fi

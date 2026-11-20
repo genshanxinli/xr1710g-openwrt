@@ -11,6 +11,7 @@ first matching line truncates the report to ``10baseT/*``.
 
 import re
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -90,16 +91,54 @@ class FieldValueTest(unittest.TestCase):
         # which fails the whole program and empties every field, including
         # the single-line ones.  gawk accepts the bare form, so running the
         # function on the host does not catch it; this is the textual guard.
+        # POSIX class tokens are stripped first, because [[:alnum:]] carries
+        # its own "[" and "]" and hides a bare "/" that follows it.
         # ponytail: no behavioural busybox run here, the device repro in PR
         # is the behavioural check.
+        normalized = re.sub(r"\[:[a-z]+:\]", "", self.function)
         self.assertIsNone(
-            re.search(r"\[[^\]]*(?<!\\)/[^\]]*\]", self.function),
+            re.search(r"\[[^\]]*(?<!\\)/[^\]]*\]", normalized),
             "unescaped '/' inside a bracket expression breaks BusyBox awk")
 
     def test_next_key_does_not_leak(self):
         # "Advertised pause frame use" follows the mode list; the mode
         # value must not swallow it.
         self.assertNotIn("pause", self.field_value("Advertised link modes"))
+
+
+class EnableFlagTest(unittest.TestCase):
+    """`--enable` must report its own failure instead of dying in a redirect."""
+
+    def run_enable(self, marker):
+        # The script hardcodes MARKER=/etc/...; rewrite it in a scratch copy
+        # so the test never touches /etc.
+        with tempfile.TemporaryDirectory() as td:
+            copy = Path(td) / "diag.sh"
+            copy.write_text(SCRIPT.read_text().replace(
+                "MARKER=/etc/xr1710g-10g-lab.enable",
+                f"MARKER={marker}", 1))
+            copy.chmod(0o755)
+            return subprocess.run(["sh", str(copy), "--enable"],
+                                  capture_output=True, text=True)
+
+    def test_enable_creates_marker(self):
+        with tempfile.TemporaryDirectory() as td:
+            marker = Path(td) / "lab.enable"
+            out = self.run_enable(marker)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertIn("enabled: created", out.stdout)
+            self.assertTrue(marker.exists())
+
+    def test_enable_into_unwritable_dir_reports_and_fails(self):
+        # `: > $MARKER` is a special builtin: a failed redirect terminates the
+        # shell outright, so without a subshell guard the script exits with
+        # the shell's own diagnosis instead of its "cannot create" line.
+        # Compare stderr exactly: the shell prefixes its message with the
+        # shell name ("dash: 1: ...", "sh: line 0: ..."), the script does not.
+        marker = "/nonexistent-dir/xr1710g-10g-lab.enable"
+        out = self.run_enable(marker)
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertEqual(out.stderr.strip(), f"cannot create {marker}")
 
 
 if __name__ == "__main__":
