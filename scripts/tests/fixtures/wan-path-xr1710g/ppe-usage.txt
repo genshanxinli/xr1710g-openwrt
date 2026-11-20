@@ -1,0 +1,5 @@
+entries 32768 (sram 16384, dram 16384)
+bound 0 (0%) unbound 0
+l2b_bound 0 l2_flows_sw 0
+ipv4_capacity 32768 (sram 16384, dram 16384)
+ipv4_bound 0 ipv4_bound_pct 0
