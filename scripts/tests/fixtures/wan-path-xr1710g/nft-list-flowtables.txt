@@ -1,0 +1,16 @@
+table inet fw4 {
+	flowtable ft {
+		hook ingress priority filter
+		devices = { "lan2", "lan3", "lan4", "wan" }
+		flags offload
+		counter
+	}
+}
+table bridge fw4 {
+	flowtable fb {
+		hook ingress priority filter
+		devices = { "lan2", "lan3", "lan4" }
+		flags offload
+		counter
+	}
+}

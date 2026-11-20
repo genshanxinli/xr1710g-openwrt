@@ -105,6 +105,18 @@ boot the other board's device tree.
 - The hardware LuCI pages are part of the image: Airoha NPU, flow sense, fan
   control, Wi-Fi 7 and MLO.
 
+## Documentation
+
+Start here; each file is cited from the issues it settles:
+
+- [`docs/MTU-POLICY.md`](docs/MTU-POLICY.md) — MTU 1500 policy (issue #100). Jumbo is a non-goal.
+- [`docs/wan-measurement-protocol.md`](docs/wan-measurement-protocol.md) — how WAN/PPPoE/Wi-Fi forwarding numbers are measured.
+- [`docs/wan-2.5g-gate.md`](docs/wan-2.5g-gate.md) — 2.5G WAN gate.
+- [`docs/wan-productization.md`](docs/wan-productization.md) — WAN productization defaults and rollback matrix.
+- [`docs/wan-recovery-gate.md`](docs/wan-recovery-gate.md) — flash-recovery gate.
+- [`docs/wan-wifi-path.md`](docs/wan-wifi-path.md) — Wi-Fi forwarding path (mt7996 to GDM2).
+- [`docs/release-image-features-gate.md`](docs/release-image-features-gate.md) — release image feature gates (BQL, napi_complete_done).
+
 ## Building
 
 Use the CI in [`genshanxinli/xr1710g-builds`](https://github.com/genshanxinli/xr1710g-builds),

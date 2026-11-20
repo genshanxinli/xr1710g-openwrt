@@ -21,14 +21,21 @@
 #   ppe        /sys/kernel/debug/ppe usage counters (entries/bound/unbound) and
 #              the per-interface entry count when the bind table names the
 #              netdev; otherwise that count stays unknown.
+#   state      the verdict line: the first segment the path stops at, in that
+#              order - no-netdev, no-pppoe-session, no-carrier,
+#              carrier-unknown, up.  It is derived from the segments above and
+#              never guessed; on this board (proto=dhcp, carrier 0, no PPPoE
+#              session) it prints `state: no-carrier (...)` instead of leaving
+#              the reader to infer a verdict from the counters.
 #
 # Every probe is a read: uci get, ubus call, ethtool, nft list, and reads of
 # sysfs, procfs and debugfs.  The script never writes uci, never reloads, never
 # reboots and never writes sysfs.
 #
-# Exit status: 0 when every segment resolved, 1 when at least one segment is
-# unknown or the physical netdev is absent, 2 on a usage error.  --json prints
-# one JSON object with the same fields; unknown values are null.
+# Exit status: 0 only when the state is `up` and every segment resolved; 1 when
+# the path stops at a segment, when at least one segment is unknown, or when the
+# physical netdev is absent; 2 on a usage error.  --json prints one JSON object
+# with the same fields; unknown values are null.
 
 WP_SYS_NET=${WP_SYS_NET:-/sys/class/net}
 WP_PROC_NET=${WP_PROC_NET:-/proc/net}
@@ -56,6 +63,7 @@ PPE_BOUND=
 PPE_UNBOUND=
 PPE_IF_ENTRIES=
 UNKNOWN=
+STATE=
 COMPLETE=false
 
 usage() {
@@ -65,7 +73,9 @@ usage: wan-path [--json]
 Read-only WAN path diagnostic: netdev/PPPoE, PHY link, QDMA id, nft
 flowtable membership and PPE bind counters.
 
-Exit status: 0 every segment resolved, 1 unknown segment or missing netdev.
+Exit status: 0 when the path is up and every segment resolved; 1 when the
+path stops at a segment, when a segment is unknown, or when the physical
+netdev is missing.
 EOF
 }
 
@@ -340,6 +350,53 @@ resolve_ppe() {
 	fi
 }
 
+# --- state -----------------------------------------------------------------
+
+# The one-line verdict: which segment the path dies on, in the order a packet
+# crosses them.  This box (proto=dhcp, carrier 0, no session) is exactly the
+# case this exists for - without it the reader gets a list of counters and has
+# to work out that "carrier=no" means nothing above the PHY can ever come up.
+# It is derived only from segments already resolved above, never guessed.
+resolve_state() {
+	if [ "$PRESENT" != true ]; then
+		STATE=no-netdev
+	elif [ "$PROTO" = pppoe ] && [ "$PPP_SESS" != true ]; then
+		STATE=no-pppoe-session
+	elif [ "$CARRIER" = no ]; then
+		STATE=no-carrier
+	elif [ "$CARRIER" != yes ]; then
+		STATE=carrier-unknown
+	else
+		STATE=up
+	fi
+}
+
+state_detail() {
+	case $STATE in
+	no-netdev)
+		printf 'physical device %s is not in %s' "$PHYS" "$WP_SYS_NET"
+		;;
+	no-pppoe-session)
+		printf 'proto=pppoe but no session in %s/pppoe; the path stops before the PPP layer' \
+			"$WP_PROC_NET"
+		;;
+	no-carrier)
+		printf 'carrier 0 on %s: the path stops at the PHY or the cable, nothing above it can come up' \
+			"$PHYS"
+		# Only claim this when the session table really is empty, so the
+		# detail stays true for a PPPoE box whose link dropped after dial-up.
+		[ "$PPP_SESS" = true ] || printf ', no PPPoE session either'
+		;;
+	carrier-unknown)
+		printf 'no ethtool link answer and no carrier file on %s' "$PHYS"
+		;;
+	up)
+		printf 'link up on %s; flowtable and PPE below are the offload layer, not the cause of a no-WAN report' \
+			"$PHYS"
+		;;
+	esac
+}
+
 # --- report ----------------------------------------------------------------
 
 print_text() {
@@ -372,6 +429,7 @@ print_text() {
 	else
 		printf 'status: incomplete\n'
 	fi
+	printf 'state: %s (%s)\n' "$STATE" "$(state_detail)"
 }
 
 print_json() {
@@ -401,6 +459,8 @@ print_json() {
 		first=0
 	done
 	printf '],'
+	printf '"state":%s,' "$(jstr "$STATE")"
+	printf '"state_detail":%s,' "$(jstr "$(state_detail)")"
 	printf '"complete":%s' "$COMPLETE"
 	printf '}\n'
 }
@@ -424,6 +484,7 @@ main() {
 	resolve_ppe
 
 	if [ -z "$UNKNOWN" ]; then COMPLETE=true; else COMPLETE=false; fi
+	resolve_state
 
 	if [ "$JSON" = 1 ]; then
 		print_json
@@ -431,7 +492,10 @@ main() {
 		print_text
 	fi
 
-	[ -z "$UNKNOWN" ] && exit 0
+	# Non-zero when the path is not up: either a segment is unknown, or the
+	# state above says which one it stops at.  A down link must never read as a
+	# clean report just because every other counter happened to be readable.
+	[ "$STATE" = up ] && [ -z "$UNKNOWN" ] && exit 0
 	exit 1
 }
 
