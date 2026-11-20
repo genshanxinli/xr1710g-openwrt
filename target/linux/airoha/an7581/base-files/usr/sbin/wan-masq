@@ -53,15 +53,21 @@
 # The lock is this script's own, so it does not serialise against fw4 itself;
 # /etc/init.d/firewall reload is procd's job and procd queues the call.
 #
+# "off" is deliberately not gated on the WAN proto.  Turning masquerade off is
+# never the risky direction: a box moved from pppoe to dhcp with masq 1 still
+# set would otherwise have no way back short of --force.
+#
 # Exit status: 0 success or already in the requested state, 1 the zone or the
-# config is unusable, 2 usage error, 3 WAN proto is not pppoe, 4 explicit
-# masq 0 without --force, 5 the write failed, 6 fw4 reload failed (the uci
-# change is committed but not live), 7 the lock could not be taken.
+# config is unusable, 2 usage error, 3 "on" while the WAN proto is not pppoe,
+# 4 explicit masq 0 without --force, 5 the write failed, 6 the uci change is
+# committed but not live (fw4 reload failed, or the reloaded ruleset does not
+# show the requested state), 7 the lock could not be taken.
 
 CONF="${WM_FW_CONF:-/etc/config/firewall}"
 BAK="$CONF.bak-wan-masq"
 LOCK="${WM_LOCK:-/var/lock/wan-masq.lock}"
 FW_INIT="${WM_FW_INIT:-/etc/init.d/firewall}"
+NFT="${WM_NFT:-nft}"
 ZONE=wan
 NETIF=wan
 
@@ -75,9 +81,12 @@ usage: wan-masq status
            Read-only.
   on       set masq 1 on the "wan" zone.  Refused unless the WAN proto is
            pppoe, and refused over an explicit masq 0 unless --force.
-  off      delete the masq option from the "wan" zone.
-  --reload reload the firewall afterwards (on/off only).  A failed reload is
-           reported and exits 6; the uci change is already committed.
+  off      delete the masq option from the "wan" zone.  Always allowed: only
+           "on" needs the WAN proto to be pppoe.
+  --reload reload the firewall afterwards (on/off only) and check that the
+           reloaded ruleset really shows the requested state.  A failed reload
+           or a ruleset that disagrees is reported and exits 6; the uci change
+           is already committed.
 EOF
 	exit 2
 }
@@ -106,6 +115,24 @@ wan_proto() {
 	echo "$p"
 }
 
+# Live IPv4 masquerade for this zone, read out of the running fw4 ruleset.
+# fw4 renders it as one extra statement in "chain srcnat_<zone>" of table
+# inet fw4 (/usr/share/firewall4/templates/ruleset.uc:341 builds that chain,
+# :330-361 pick fullcone vs the zone-masq include): "masquerade" normally, or
+# "fullcone" when defaults.fullcone is set, which implies snat
+# (/usr/share/ucode/fw4.uc:2254-2261).  Text output is used, not `nft -j`, so
+# this keeps working across nft versions; the zone chain is emitted whether or
+# not the WAN device is up (verified on the XR1710G with the WAN in dhcp/down
+# and masq 1: srcnat_wan carries the fullcone rule).
+# Prints "on"/"off".  Returns 1 when nft itself cannot be run, i.e. when the
+# answer cannot be known at all; an absent chain simply means "off".
+live_masq() {
+	command -v "$NFT" >/dev/null 2>&1 || return 1
+	"$NFT" list chain inet fw4 "srcnat_$ZONE" 2>/dev/null |
+		grep -Eq 'nfproto ipv4[[:space:]]+(masquerade|fullcone)' && echo on ||
+		echo off
+}
+
 do_status() {
 	z=$(zone_index) || {
 		echo "no zone named '$ZONE' in $CONF" >&2
@@ -119,6 +146,11 @@ do_status() {
 	printf 'zone:  firewall.@zone[%s] (%s)\n' "$z" "$ZONE"
 	printf 'proto: %s\n' "$(wan_proto)"
 	printf 'masq:  %s\n' "${m:-unset}"
+	if l=$(live_masq); then
+		printf 'live:  masquerade %s\n' "$l"
+	else
+		printf 'live:  unknown (cannot run %s)\n' "$NFT"
+	fi
 	if [ -e "$BAK" ]; then
 		printf 'backup: %s\n' "$BAK"
 	fi
@@ -146,11 +178,15 @@ done
 [ -n "$ACTION" ] || usage
 [ "$ACTION" = status ] && do_status
 
-PROTO=$(wan_proto)
-if [ "$PROTO" != pppoe ] && [ "$FORCE" -ne 1 ]; then
-	echo "refusing: network.$NETIF proto is '${PROTO:-unknown}', not pppoe" >&2
-	echo "re-run with --force if you really mean to change WAN masquerade" >&2
-	exit 3
+# Only "on" cares what the WAN proto is.  Refusing "off" because the operator
+# already switched the WAN to dhcp is how masq 1 gets stranded.
+if [ "$ACTION" = on ]; then
+	PROTO=$(wan_proto)
+	if [ "$PROTO" != pppoe ] && [ "$FORCE" -ne 1 ]; then
+		echo "refusing: network.$NETIF proto is '${PROTO:-unknown}', not pppoe" >&2
+		echo "re-run with --force if you really mean to change WAN masquerade" >&2
+		exit 3
+	fi
 fi
 
 z=$(zone_index) || {
@@ -214,11 +250,21 @@ z=$(zone_index) || {
 	echo "masq ${cur:-unset} -> $([ "$ACTION" = on ] && echo 1 || echo deleted) on zone $ZONE"
 
 	[ "$RELOAD" -eq 1 ] || exit 0
-	if "$FW_INIT" reload >/dev/null 2>&1; then
-		echo "firewall reloaded"
-	else
+	if ! "$FW_INIT" reload >/dev/null 2>&1; then
 		echo "firewall reload failed: the uci change is committed but not live" >&2
 		exit 6
 	fi
+	# init.d/firewall returning 0 only means fw4 was asked; it says nothing
+	# about what the kernel now holds.  Read it back.
+	want=$([ "$ACTION" = on ] && echo on || echo off)
+	got=$(live_masq) || {
+		echo "cannot verify the live ruleset: $NFT cannot read table inet fw4" >&2
+		exit 6
+	}
+	if [ "$got" != "$want" ]; then
+		echo "firewall reload returned 0 but the live ruleset shows masquerade $got, not $want: the uci change is committed but not live" >&2
+		exit 6
+	fi
+	echo "firewall reloaded"
 	exit 0
 )
