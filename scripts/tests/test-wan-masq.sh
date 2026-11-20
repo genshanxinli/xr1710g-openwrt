@@ -162,6 +162,11 @@ run() {
 	WM_ERR=$(cat "$WORK/stderr")
 }
 
+begin() {
+	CASE=$1
+	printf 'ok   %s\n' "$CASE"
+}
+
 expect_rc() {
 	[ "$WM_RC" = "$1" ] || fail "$CASE: exit $WM_RC, expected $1 (stderr: $WM_ERR)"
 }
@@ -198,7 +203,7 @@ expect_untouched_config() {
 
 # --- status -----------------------------------------------------------------
 
-CASE=status-stock
+begin status-stock
 reset_case
 FAKE_PROTO=dhcp
 run status
@@ -208,7 +213,7 @@ expect_out 'proto: dhcp'
 expect_out 'masq:  1'
 expect_no_writes
 
-CASE=status-unset
+begin status-unset
 reset_case
 sed -i '/firewall.@zone\[1\].masq/d' "$FAKE_UCI_STORE"
 FAKE_PROTO=pppoe
@@ -217,7 +222,7 @@ expect_rc 0
 expect_out 'masq:  unset'
 expect_no_writes
 
-CASE=status-falls-back-to-uci-proto
+begin status-falls-back-to-uci-proto
 reset_case
 # No ubus status at all (interface not configured): the configured proto is
 # still the answer.
@@ -226,7 +231,7 @@ run status
 expect_rc 0
 expect_out 'proto: pppoe'
 
-CASE=status-no-wan-zone
+begin status-no-wan-zone
 reset_case
 sed -i '/firewall.@zone\[1\]/d' "$FAKE_UCI_STORE"
 run status
@@ -235,7 +240,7 @@ expect_err "no zone named 'wan'"
 
 # --- on ---------------------------------------------------------------------
 
-CASE=on-pppoe-sets-once
+begin on-pppoe-sets-once
 reset_case
 sed -i '/firewall.@zone\[1\].masq/d' "$FAKE_UCI_STORE"
 FAKE_PROTO=pppoe
@@ -248,7 +253,7 @@ expect_out 'masq unset -> 1 on zone wan'
 cmp -s "$WM_FW_CONF.bak-wan-masq" "$WORK/firewall.orig" ||
 	fail "$CASE: backup is not the pre-change config"
 
-CASE=on-is-idempotent
+begin on-is-idempotent
 reset_case
 sed -i '/firewall.@zone\[1\].masq/d' "$FAKE_UCI_STORE"
 FAKE_PROTO=pppoe
@@ -264,7 +269,7 @@ expect_out 'already 1 on zone wan'
 cmp -s "$WM_FW_CONF.bak-wan-masq" "$WORK/firewall.orig" ||
 	fail "$CASE: the backup was replaced on a no-op run"
 
-CASE=on-stock-config-is-noop
+begin on-stock-config-is-noop
 reset_case
 # The shipped firewall.config already carries "option masq 1" for wan
 # (package/network/config/firewall/files/firewall.config:23), so on a stock box
@@ -276,7 +281,7 @@ expect_no_writes
 expect_out 'already 1 on zone wan'
 expect_untouched_config
 
-CASE=on-refuses-dhcp
+begin on-refuses-dhcp
 reset_case
 sed -i '/firewall.@zone\[1\].masq/d' "$FAKE_UCI_STORE"
 FAKE_PROTO=dhcp
@@ -285,7 +290,7 @@ expect_rc 3
 expect_no_writes
 expect_err "proto is 'dhcp', not pppoe"
 
-CASE=on-respects-explicit-zero
+begin on-respects-explicit-zero
 reset_case
 sed -i 's/^firewall\.@zone\[1\]\.masq\t1$/firewall.@zone[1].masq\t0/' "$FAKE_UCI_STORE"
 FAKE_PROTO=pppoe
@@ -294,7 +299,7 @@ expect_rc 4
 expect_no_writes
 expect_err 'explicit masq 0; --force to override'
 
-CASE=on-force-overrides-explicit-zero
+begin on-force-overrides-explicit-zero
 reset_case
 sed -i 's/^firewall\.@zone\[1\]\.masq\t1$/firewall.@zone[1].masq\t0/' "$FAKE_UCI_STORE"
 FAKE_PROTO=pppoe
@@ -303,7 +308,7 @@ expect_rc 0
 expect_writes 'set firewall.@zone[1].masq=1
 commit firewall'
 
-CASE=on-targets-the-zone-by-name
+begin on-targets-the-zone-by-name
 reset_case
 # wan is not @zone[1] here.  The zone is found by name, so the write must land
 # on @zone[2] and nowhere else - the case that catches index guessing.
@@ -325,7 +330,7 @@ commit firewall'
 
 # --- off --------------------------------------------------------------------
 
-CASE=off-deletes-the-option
+begin off-deletes-the-option
 reset_case
 FAKE_PROTO=pppoe
 run off
@@ -335,7 +340,7 @@ commit firewall'
 expect_out 'masq 1 -> deleted on zone wan'
 [ -f "$WM_FW_CONF.bak-wan-masq" ] || fail "$CASE: no backup was written"
 
-CASE=off-is-idempotent
+begin off-is-idempotent
 reset_case
 sed -i '/firewall.@zone\[1\].masq/d' "$FAKE_UCI_STORE"
 FAKE_PROTO=pppoe
@@ -345,7 +350,7 @@ expect_no_writes
 expect_out 'already off on zone wan'
 expect_untouched_config
 
-CASE=off-treats-explicit-zero-as-off
+begin off-treats-explicit-zero-as-off
 reset_case
 sed -i 's/^firewall\.@zone\[1\]\.masq\t1$/firewall.@zone[1].masq\t0/' "$FAKE_UCI_STORE"
 FAKE_PROTO=pppoe
@@ -355,7 +360,7 @@ expect_no_writes
 
 # --- reload -----------------------------------------------------------------
 
-CASE=reload-ok
+begin reload-ok
 reset_case
 sed -i '/firewall.@zone\[1\].masq/d' "$FAKE_UCI_STORE"
 FAKE_PROTO=pppoe
@@ -364,7 +369,7 @@ expect_rc 0
 expect_out 'firewall reloaded'
 grep -q '^reload reload$' "$FAKE_LOG" || fail "$CASE: the init script was not asked to reload"
 
-CASE=reload-failure-is-reported
+begin reload-failure-is-reported
 reset_case
 sed -i '/firewall.@zone\[1\].masq/d' "$FAKE_UCI_STORE"
 FAKE_PROTO=pppoe
@@ -376,7 +381,7 @@ expect_err 'reload failed: the uci change is committed but not live'
 expect_writes 'set firewall.@zone[1].masq=1
 commit firewall'
 
-CASE=no-reload-by-default
+begin no-reload-by-default
 reset_case
 sed -i '/firewall.@zone\[1\].masq/d' "$FAKE_UCI_STORE"
 FAKE_PROTO=pppoe
@@ -386,14 +391,14 @@ expect_rc 0
 
 # --- the script has no automatic caller -------------------------------------
 
-CASE=no-auto-invocation
+begin no-auto-invocation
 # The whole design premise: nothing in the boot path, hotplug or uci-defaults
 # may call this script, so masquerade can only move when a human moves it.
 auto=$(grep -rl 'wan-masq' "$BASE_FILES/etc" \
 	"$REPO_ROOT/package/network/config/firewall/files" 2>/dev/null)
 [ -z "$auto" ] || fail "$CASE: an automatic caller exists: $auto"
 
-CASE=usage
+begin usage
 reset_case
 run
 expect_rc 2
