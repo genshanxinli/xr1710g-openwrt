@@ -15,8 +15,10 @@ WLAN_FUNC_SET_WAIT_TX_BUF_SPACE_HW_BASE on the band1 interface IDs
 window out of the NPU with one rate-limited warning, so the existing
 host injection path keeps working.
 
-Expose the requested/allocated/present state and the window sizes
-through a read-only npu_band1_tx debugfs file.  The band0/band2 windows,
+Expose the requested/allocated/present state, the window DMA addresses and
+the window sizes through a read-only npu_band1_tx debugfs file.  The same
+file prints the band0/band2 window addresses, so the missing band1 window
+is visible on a device that boots with the parameter off.  The band0/band2 windows,
 hif2 and the qid assignment are unchanged, and the default configuration
 does not take any new code path.
 
@@ -168,7 +170,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 
 --- a/mt7996/debugfs.c
 +++ b/mt7996/debugfs.c
-@@ -1151,6 +1151,28 @@
+@@ -1151,6 +1151,41 @@
  	return 0;
  }
  
@@ -182,7 +184,20 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	seq_printf(s, "allocated: %d\n", dev->npu_band1_tx.allocated);
 +	seq_printf(s, "present: %d\n", dev->npu_band1_tx.present);
 +
-+	for (i = 0; i < ARRAY_SIZE(dev->npu_band1_tx.size); i++) {
++	/* The band0/band2 windows are the reference layout; printing their DMA
++	 * addresses makes the band1 window (or its absence) directly comparable.
++	 */
++	for (i = 0; i < MT7996_NPU_TXD_SIZE; i++)
++		seq_printf(s, "band0_window%d_addr: 0x%llx\n", i,
++			   (unsigned long long)dev->npu_txd_addr[i]);
++	for (i = 0; i < MT7996_NPU_TXD_SIZE; i++)
++		seq_printf(s, "band2_window%d_addr: 0x%llx\n", i,
++			   (unsigned long long)
++			   dev->npu_txd_addr[MT7996_NPU_TXD_SIZE + i]);
++
++	for (i = 0; i < MT7996_NPU_TXD_SIZE; i++) {
++		seq_printf(s, "window%d_addr: 0x%llx\n", i,
++			   (unsigned long long)dev->npu_band1_tx.addr[i]);
 +		seq_printf(s, "window%d_size: %u\n", i,
 +			   dev->npu_band1_tx.size[i]);
 +		total += dev->npu_band1_tx.size[i];
@@ -197,7 +212,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  int mt7996_init_debugfs(struct mt7996_dev *dev)
  {
  	struct dentry *dir;
-@@ -1162,7 +1184,9 @@
+@@ -1162,7 +1192,9 @@
  	debugfs_create_file("xmit-queues", 0400, dir, dev,
  			    &mt7996_xmit_queues_fops);
  	debugfs_create_file("tx_stats", 0400, dir, dev, &mt7996_tx_stats_fops);
