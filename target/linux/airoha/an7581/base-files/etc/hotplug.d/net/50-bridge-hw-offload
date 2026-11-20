@@ -37,12 +37,24 @@ mkdir -p /var/lock 2>/dev/null
 	# -w, not -n: the lock serialises reloads, it does not mean "drop the
 	# second caller".  A member arriving while the boot-time settle loop in
 	# hotplug.d/iface/51 still runs must queue up, not be silently ignored.
-	flock -w 10 9 || {
-		logger -t bridge-hw-offload "reload already in progress, giving up"
+	#
+	# The wait must therefore outlive that loop, which holds the lock for the
+	# whole settle window: BR_HW_SETTLE_TIMEOUT (120 s) plus RECHECK_DELAY
+	# (40 s) is 160 s, so 200 s.  With the original 10 s every member change
+	# that overlapped the settle loop was dropped instead of queued --
+	# measured on r38047 as 54 consecutive "giving up" lines in logread and
+	# 0 successful reloads, which is how the live flowtables kept a device
+	# list from before the wlan vifs were re-created.  scripts/tests/
+	# test_bridge_hw_offload_lock.py keeps the two numbers consistent.
+	flock -w 200 9 || {
+		logger -t bridge-hw-offload "reload still running after 200 s, giving up"
 		exit 0
 	}
 	sleep 3
-	/etc/init.d/firewall reload >/dev/null 2>&1
+	BR_HW_RELOAD="${BR_HW_RELOAD:-/etc/init.d/firewall reload}"
+	# Unquoted on purpose: the default is two words, and the test harness
+	# substitutes its own command through this variable.
+	$BR_HW_RELOAD >/dev/null 2>&1
 ) &
 
 exit 0
