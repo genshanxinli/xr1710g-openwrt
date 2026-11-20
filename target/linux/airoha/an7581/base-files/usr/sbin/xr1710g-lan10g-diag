@@ -116,17 +116,37 @@ ethtool_speed() {
 }
 
 # Value of a "Key: value" line from ethtool output, empty when absent.
+# ethtool wraps long lists over indented continuation lines; keep reading
+# those until the next "Key:" line so the summary is not truncated.
 field_value() {
 	printf '%s\n' "$1" | awk -v key="$2" '
+		BEGIN { found = 0; done = 0; value = "" }
 		{
 			line = $0
 			sub(/^[ \t]+/, "", line)
-			if (index(line, key ":") == 1) {
-				value = substr(line, length(key) + 2)
-				sub(/^[ \t]+/, "", value)
-				print value
-				exit
+			if (done)
+				next
+			if (!found) {
+				if (index(line, key ":") == 1) {
+					found = 1
+					value = substr(line, length(key) + 2)
+					sub(/^[ \t]+/, "", value)
+				}
+				next
 			}
+			if (line == "" || line ~ /^[A-Za-z][A-Za-z0-9 ()/._-]*:/) {
+				print value
+				done = 1
+				next
+			}
+			if (value == "")
+				value = line
+			else
+				value = value " " line
+		}
+		END {
+			if (found && !done)
+				print value
 		}'
 }
 
