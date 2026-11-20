@@ -94,6 +94,8 @@ fi
 norm_country() {
 	case "${1:-}" in
 	[A-Za-z][A-Za-z])
+		# BusyBox tr has no [:lower:]/[:upper:] classes; keep the range.
+		# shellcheck disable=SC2018,SC2019
 		printf '%s' "$1" | tr 'a-z' 'A-Z'
 		;;
 	esac
