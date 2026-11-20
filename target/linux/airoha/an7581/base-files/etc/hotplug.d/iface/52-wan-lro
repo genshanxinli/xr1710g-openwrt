@@ -20,7 +20,7 @@
 #      (net/bridge/br_device.c), which has no NETIF_F_LRO, so br-lan can never
 #      pass LRO down.  ethtool -K lan2 rx-lro on fails while lan2 is enslaved
 #      and the feature appears again the moment it is released.  Verified on
-#      hardware: 2026-10-21, docs/community-onhardware-2026-10-21b.md section 2.4.
+#      hardware: 2026-10-21, issue #191 comment 6897351558 section 2.4.
 #
 #   2. If a port is taken out of the bridge to get around point 1, it then
 #      really does share QDMA0 with the DSA conduit (airoha_dev_set_qdma()

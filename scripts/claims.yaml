@@ -109,8 +109,8 @@ claims:
   - id: fullcone-udp-only
     claim: "内置 nft-fullcone 只对 UDP 实现真正的 full-cone；其他协议等价于 MASQUERADE，模块加载失败时 fw4 回退普通 NAT。"
     source:
-      - README.md:90
-      - README.md:92
+      - README.md:132
+      - README.md:134
     evidence: 代码
     date: "2026-11-15"
     status: supported
@@ -120,7 +120,7 @@ claims:
     claim: "当前树的 CPU OPP 表最高 1.2 GHz（an7581.dtsi 的 opp-1200000000），不是 issue #1 验收里写的 1.35 GHz。"
     source:
       - target/linux/airoha/dts/an7581.dtsi:231
-      - README.md:96
+      - target/linux/airoha/dts/an7581.dtsi:242
     evidence: 代码
     date: "2026-11-15"
     status: supported

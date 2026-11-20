@@ -2,7 +2,7 @@
 #
 # Turn on bridge IGMP/MLD snooping for br-lan on the Gemtek XR1710G.
 #
-# Roadmap I17 (docs/SOC-CEILING-ROADMAP-2026-11-14.md, section 6): every
+# Roadmap I17 (issue #3 comment F2, section 6): every
 # multicast group is flooded to every LAN port because the LAN bridge has
 # snooping off. The kernel half is already there -- CONFIG_BRIDGE_IGMP_SNOOPING
 # is enabled in target/linux/generic/config-7.3 -- and netifd knows the

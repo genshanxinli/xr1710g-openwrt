@@ -7,7 +7,7 @@
 # channel 1 carrying 39 neighbour BSSes at 66% airtime, while channel 149
 # is quiet *and* has a 5 dB higher regulatory ceiling than channel 36
 # (28 vs 23 dBm on this board), and channel 37 is a 6 GHz PSC that supports
-# EHT320 at 30 dBm. See docs/wifi-signal-survey-2026-10-21.md.
+# EHT320 at 30 dBm. See issue #191 comment 6897351558.
 #
 # Every option below is a plain UCI setting, so it is trivially reversible
 # with `uci revert`; nothing here touches the EEPROM, the regdb, the SKU
