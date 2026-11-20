@@ -25,7 +25,18 @@
 #      re-associate, then measure.
 #   4. Loaded arm: copy the saved pre-clear configuration back (all SSIDs
 #      enabled again), wifi reload, wait for the same STA, measure.
-#   5. Print one row per arm and the clear -> loaded delta, restore the
+#   5. The loaded arm must run a real out-of-band interferer: the script
+#      finds an AP BSS on the interferer band (default 5 GHz) with an
+#      associated station and keeps iperf3/ping traffic on it for the whole
+#      loaded arm.  Without one the run is INVALID, because "loaded" then
+#      only means "more of our own 6 GHz traffic" and proves nothing.
+#      --rounds N repeats the pair A/B/A/B; every row is tagged with its
+#      round.  The clear arm is verified with a real "iw dev <if> scan" on
+#      the 6 GHz channel: the same-channel BSS count is recorded, and a
+#      scan that returns no records is UNKNOWN (the arm cannot be called
+#      clean).
+#
+#   6. Print one row per arm and the clear -> loaded delta, restore the
 #      original /etc/config/wireless from the backup in the trap, verify
 #      the md5 is byte-identical, and verify the radio sections did not
 #      change.
@@ -174,6 +185,14 @@ PORT=5201
 SETTLE=3
 WAIT_STA=60
 WAIT_BSS=30
+ROUNDS=1
+DEFAULT_INTERFERER=5g:0:tcp
+INTERFERER_SPEC=
+INTERFERER_BAND=
+INTERFERER_CH=
+INTERFERER_LOAD=
+INTERFERER_RATE=
+INTERFERER_TARGET=
 CREATE_BSS=0
 DRY_RUN=0
 OUT_OPT=
@@ -210,7 +229,24 @@ SAFETY_BACKUP=
 SAFETY_BACKUP_OWNED=0
 CLEANUP_DONE=0
 FAILED=0
+INVALID=0
+INVALID_REASONS=
 IPERF_PID=
+ROUND=0
+INTERFERER_IFACE=
+INTERFERER_STA=
+INTERFERER_SSID=
+INTERFERER_STATUS=
+INTERFERER_NOTE=
+INTERFERER_ERR=
+INTERFERER_PID=
+INTERFERER_LOG=
+SCAN_FILE=
+SCAN_RECORDS=
+SCAN_SAME=
+SCAN_NEAR=
+SCAN_OWN=
+SCAN_NAMES=
 
 # --- small helpers ----------------------------------------------------
 
@@ -322,6 +358,21 @@ Station and BSS selection:
 
 Traffic:
   --duration SEC     iperf3 seconds per direction per arm (default 20)
+  --interferer SPEC  out-of-band load for the loaded arm, as
+                     band:channel:load[:rate_mbps][:target]
+                       band    5g (default) or 2.4g
+                       channel the interferer channel, 0 for any
+                       load    tcp (default), udp or ping
+                       rate    optional Mbit/s cap for tcp/udp
+                       target  optional IP of the interferer station; when
+                               omitted it is resolved from the ARP table of
+                               the interferer AP
+                     The loaded arm keeps this traffic running on the
+                     interferer band; without an interferer that the script
+                     can find and measure, the run is INVALID
+                     (NO_INTERFERER / NO_INTERFERER_EVIDENCE).
+  --rounds N         repeat the A/B pair N times, alternating A/B/A/B, and
+                     report every round plus the mean (default 1)
   --parallel N       iperf3 streams per direction (default 4)
   --port PORT        iperf3 server port on the STA (default 5201)
 
@@ -446,6 +497,16 @@ parse_args() {
 			SYSFS_NET=$2
 			shift 2
 			;;
+		--rounds)
+			need_value "$1" $# "${2:-}"
+			ROUNDS=$2
+			shift 2
+			;;
+		--interferer)
+			need_value "$1" $# "${2:-}"
+			INTERFERER_SPEC=$2
+			shift 2
+			;;
 		--create-bss)
 			CREATE_BSS=1
 			shift
@@ -478,6 +539,13 @@ parse_args() {
 	check_uint SETTLE 0 3600 "settle"
 	check_uint WAIT_STA 0 3600 "wait-sta"
 	check_uint WAIT_BSS 1 3600 "wait-bss"
+	check_uint ROUNDS 1 20 "rounds"
+
+	# The loaded arm needs a real out-of-band interferer; the default is a
+	# 5 GHz TCP source on whichever 5 GHz BSS has a client.
+	[ -n "$INTERFERER_SPEC" ] || INTERFERER_SPEC=$DEFAULT_INTERFERER
+	interferer_parse || usage_error "--interferer $INTERFERER_SPEC: $INTERFERER_ERR"
+	[ "$INTERFERER_LOAD" = ping ] || [ -n "$INTERFERER_RATE" ] || :
 
 	[ -n "$SSID" ] || usage_error "--ssid must not be empty"
 	[ "${#SSID}" -le 32 ] || usage_error "--ssid is longer than 32 bytes"
@@ -1549,6 +1617,312 @@ run_iperf() {
 	fi
 }
 
+# --- interferer and clear-air scan ------------------------------------
+
+channel_to_freq() {
+	# $1 channel number, prints the centre frequency in MHz (0 for "any").
+	case ${1:-0} in
+	0) printf '0'; return 0 ;;
+	14) printf '2484'; return 0 ;;
+	1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13)
+		printf '%s' $((2407 + 5 * ${1:-0}))
+		return 0
+		;;
+	esac
+	printf '%s' $((5000 + 5 * ${1:-0}))
+}
+
+interferer_parse() {
+	# Splits INTERFERER_SPEC into band/channel/load/rate/target.  Returns
+	# nonzero and sets INTERFERER_ERR on a malformed spec.
+	INTERFERER_ERR=
+	_rest=$INTERFERER_SPEC
+	_band=${_rest%%:*}
+	[ "$_band" != "$_rest" ] || {
+		INTERFERER_ERR="expected band:channel:load[:rate_mbps[:target]]"
+		return 1
+	}
+	case $_band in
+	5g | 5G) INTERFERER_BAND=5g ;;
+	2.4g | 2g | 24g | 2400) INTERFERER_BAND=2.4g ;;
+	*)
+		INTERFERER_ERR="band must be 5g or 2.4g, not '$_band'"
+		return 1
+		;;
+	esac
+	_rest=${_rest#*:}
+	_ch=${_rest%%:*}
+	[ "$_ch" != "$_rest" ] || {
+		INTERFERER_ERR="expected band:channel:load[:rate_mbps[:target]]"
+		return 1
+	}
+	is_uint "$_ch" || {
+		INTERFERER_ERR="channel must be a non-negative integer, not '$_ch'"
+		return 1
+	}
+	INTERFERER_CH=$_ch
+	_rest=${_rest#*:}
+	_load=${_rest%%:*}
+	[ -n "$_load" ] || _load=tcp
+	case $_load in
+	tcp | udp | ping) INTERFERER_LOAD=$_load ;;
+	*)
+		INTERFERER_ERR="load must be tcp, udp or ping, not '$_load'"
+		return 1
+		;;
+	esac
+	INTERFERER_RATE=
+	INTERFERER_TARGET=
+	[ "$_load" != "$_rest" ] || return 0
+	_rest=${_rest#*:}
+	_rate=${_rest%%:*}
+	if [ -n "$_rate" ]; then
+		is_uint "$_rate" && [ "$_rate" -ge 1 ] && [ "$_rate" -le 10000 ] || {
+			INTERFERER_ERR="rate must be 1..10000 Mbit/s, not '$_rate'"
+			return 1
+		}
+		INTERFERER_RATE=$_rate
+	fi
+	[ "$_rate" != "$_rest" ] || return 0
+	_rest=${_rest#*:}
+	case $_rest in
+	'') ;;
+	-*) INTERFERER_ERR="target must not start with '-'" ; return 1 ;;
+	*[!A-Za-z0-9.:%_-]*)
+		INTERFERER_ERR="target contains unsupported characters"
+		return 1
+		;;
+	esac
+	INTERFERER_TARGET=$_rest
+	return 0
+}
+
+interferer_arp() {
+	# $1 AP iface, $2 station MAC; prints the IPv4 address the AP knows about
+	# that station, so the generator needs no extra option in the common case.
+	command -v ip >/dev/null 2>&1 || return 1
+	ip neigh show dev "$1" 2>/dev/null | awk -v m="$2" '
+		tolower($3) == m { print $1; exit }
+	'
+}
+
+interferer_probe() {
+	# Finds the interferer AP BSS and one of its stations, plus the address
+	# the generator can send to.  Sets INTERFERER_STATUS to ok or
+	# NO_INTERFERER and INTERFERER_NOTE to the reason; never exits.
+	INTERFERER_STATUS=NO_INTERFERER
+	INTERFERER_NOTE=
+	INTERFERER_IFACE=
+	INTERFERER_STA=
+	INTERFERER_SSID=
+	INTERFERER_RESOLVED=
+	refresh_live
+	_want=$(channel_to_freq "$INTERFERER_CH")
+	_cands=$TMP_DIR/interferer-candidates.txt
+	awk -F'|' -v f="$_want" -v band="$INTERFERER_BAND" '
+		$5 == "AP" {
+			freq = $3 + 0
+			if (band == "5g") {
+				if (freq < 4900 || freq > 5925) next
+			} else if (freq < 2400 || freq > 2500) next
+			if (f != 0 && freq != f) next
+			printf "%s|%s|%s\n", $1, freq, $4
+		}
+	' "$TMP_LIVE" >"$_cands"
+	if [ ! -s "$_cands" ]; then
+		INTERFERER_NOTE="no AP BSS is up on $INTERFERER_BAND channel $INTERFERER_CH (0 = any); the loaded arm would carry only our own 6G traffic"
+		return 1
+	fi
+	_nosta=
+	while IFS='|' read -r _ci _cfreq _cssid; do
+		[ -n "$_ci" ] || continue
+		_sta=$(station_macs "$_ci" | awk 'NF { print tolower($0); exit }')
+		if [ -z "$_sta" ]; then
+			_nosta="$_nosta $_ci"
+			continue
+		fi
+		_tgt=$INTERFERER_TARGET
+		if [ -z "$_tgt" ]; then
+			_tgt=$(interferer_arp "$_ci" "$_sta" || true)
+		fi
+		if [ -z "$_tgt" ]; then
+			INTERFERER_NOTE="station $_sta on $_ci ($_cfreq MHz) has no ARP entry; pass the address as the fifth SPEC field (${INTERFERER_BAND}:${INTERFERER_CH}:${INTERFERER_LOAD}:rate:IP)"
+			return 1
+		fi
+		INTERFERER_IFACE=$_ci
+		INTERFERER_STA=$_sta
+		INTERFERER_SSID=$_cssid
+		INTERFERER_RESOLVED=$_tgt
+		INTERFERER_STATUS=ok
+		INTERFERER_NOTE="band=$INTERFERER_BAND channel=$_cfreq iface=$_ci ssid=${_cssid:-(hidden)} sta=$_sta target=$_tgt load=$INTERFERER_LOAD${INTERFERER_RATE:+@${INTERFERER_RATE}M}"
+		return 0
+	done <"$_cands"
+	INTERFERER_NOTE="AP BSS on $INTERFERER_BAND has no associated station (checked:${_nosta:- none}); no client can carry the interferer traffic"
+	return 1
+}
+
+interferer_snapshot() {
+	# $1 output file; AP and station counters of the interferer flow.
+	{
+		for _c in tx_bytes rx_bytes tx_packets; do
+			printf '%s=%s\n' "$_c" \
+				"$(cat "$SYSFS_NET/$INTERFERER_IFACE/statistics/$_c" 2>/dev/null ||
+					echo n/a)"
+		done
+		"$IW" dev "$INTERFERER_IFACE" station dump >"$1.station" 2>/dev/null ||
+			: >"$1.station"
+		for _c in tx_bytes rx_bytes; do
+			printf 'sta_%s=%s\n' "$_c" \
+				"$(station_value "$1.station" "$INTERFERER_STA" "$_c" ||
+					echo n/a)"
+		done
+	} >"$1"
+}
+
+kv_delta() {
+	# $1 before file, $2 after file, $3 key= line name; prints the delta or n/a
+	_b=$(awk -F= -v k="$3" '$1 == k { print $2; exit }' "$1")
+	_a=$(awk -F= -v k="$3" '$1 == k { print $2; exit }' "$2")
+	num_delta "$_b" "$_a"
+}
+
+interferer_start() {
+	# Puts real out-of-band traffic on the interferer BSS for the whole
+	# loaded arm.  Nothing here touches the 6 GHz interface under test.
+	[ "$INTERFERER_STATUS" = ok ] || return 1
+	_secs=$((DURATION * 2 + SETTLE + 30))
+	say "loaded arm: interferer $INTERFERER_SPEC via $INTERFERER_IFACE -> $INTERFERER_RESOLVED"
+	case $INTERFERER_LOAD in
+	ping)
+		need_cmd ping
+		set -- ping -i 1 -s 1400 -c $((_secs * 2)) "$INTERFERER_RESOLVED"
+		;;
+	*)
+		need_cmd "$IPERF3"
+		set -- "$IPERF3" -c "$INTERFERER_RESOLVED" -p "$PORT" -t "$_secs"
+		[ "$INTERFERER_LOAD" = udp ] && set -- "$@" -u
+		[ -n "$INTERFERER_RATE" ] && set -- "$@" -b "${INTERFERER_RATE}M"
+		;;
+	esac
+	INTERFERER_LOG=$OUT/interferer-round$ROUND.log
+	log_cmd "$@"
+	"$@" >"$INTERFERER_LOG" 2>&1 &
+	INTERFERER_PID=$!
+	say "  interferer pid $INTERFERER_PID (log $INTERFERER_LOG)"
+	interferer_snapshot "$OUT/interferer-round$ROUND-before.txt"
+}
+
+interferer_stop_and_verify() {
+	# The loaded arm only counts as "loaded" when the generator really ran
+	# and really moved bytes on the interferer band: its own 6G traffic is
+	# not interference.
+	if [ -z "$INTERFERER_PID" ]; then
+		invalid "NO_INTERFERER: the loaded arm ran without a running generator"
+		return 0
+	fi
+	if ! kill -0 "$INTERFERER_PID" 2>/dev/null; then
+		invalid "INTERFERER_DIED: the $INTERFERER_LOAD generator exited during the loaded arm; see $INTERFERER_LOG"
+	fi
+	kill "$INTERFERER_PID" 2>/dev/null || true
+	wait "$INTERFERER_PID" 2>/dev/null || true
+	INTERFERER_PID=
+	interferer_snapshot "$OUT/interferer-round$ROUND-after.txt"
+	_ap_tx=$(kv_delta "$OUT/interferer-round$ROUND-before.txt" \
+		"$OUT/interferer-round$ROUND-after.txt" tx_bytes)
+	_sta_tx=$(kv_delta "$OUT/interferer-round$ROUND-before.txt" \
+		"$OUT/interferer-round$ROUND-after.txt" sta_tx_bytes)
+	{
+		printf 'round=%s\n' "$ROUND"
+		printf 'spec=%s\n' "$INTERFERER_SPEC"
+		printf 'iface=%s\n' "$INTERFERER_IFACE"
+		printf 'sta=%s\n' "$INTERFERER_STA"
+		printf 'target=%s\n' "$INTERFERER_RESOLVED"
+		printf 'ap_tx_bytes=%s\n' "$_ap_tx"
+		printf 'sta_tx_bytes=%s\n' "$_sta_tx"
+	} >"$OUT/interferer-round$ROUND.txt"
+	case $_ap_tx in
+	'' | n/a)
+		invalid "NO_INTERFERER_EVIDENCE: AP tx_bytes delta is unavailable on $INTERFERER_IFACE"
+		;;
+	0)
+		invalid "NO_INTERFERER_EVIDENCE: the $INTERFERER_LOAD generator moved no bytes on $INTERFERER_IFACE (station $_sta_tx B); the loaded arm carried no out-of-band load"
+		;;
+	*)
+		if [ "$_sta_tx" = "n/a" ] || [ -z "$_sta_tx" ] || [ "$_sta_tx" -le 0 ]; then
+			invalid "NO_INTERFERER_EVIDENCE: the interferer station counter did not move ($_sta_tx B); the traffic did not reach $INTERFERER_STA over the air"
+			return 0
+		fi
+		check PASS "loaded arm: interferer $INTERFERER_SPEC carried ${_ap_tx} B AP tx / ${_sta_tx} B station tx on $INTERFERER_IFACE"
+		;;
+	esac
+}
+
+scan_clear_air() {
+	# A real scan on the measured 6 GHz interface: "the air was clear" is
+	# evidence (how many BSS sit on our channel), not an inference from our
+	# own counters.
+	SCAN_FILE=$OUT/scan-round$ROUND-$SEL_IFACE.txt
+	SCAN_RECORDS=0
+	SCAN_SAME=0
+	SCAN_NEAR=0
+	if ! "$IW" dev "$SEL_IFACE" scan >"$SCAN_FILE" 2>"$SCAN_FILE.err"; then
+		check UNKNOWN "clear arm: iw dev $SEL_IFACE scan failed ($(tail -n 1 "$SCAN_FILE.err" 2>/dev/null || true))"
+		invalid "SCAN_UNKNOWN: no scan result on $SEL_IFACE; the clear arm cannot be called co-channel clean"
+		return 0
+	fi
+	_counts=$(awk -v want="$SEL_FREQ" '
+		function flush() {
+			if (!seen)
+				return
+			if (assoc || (own != "" && ssid == own)) {
+				own_bss++
+			} else {
+				n++
+				if (f == want) {
+					same++
+					if (same <= 4)
+						same_list = same_list sprintf(" \"%s\"", ssid == "" ? "(hidden)" : ssid)
+				} else if (f > 0 && f - want <= 160 && want - f <= 160)
+					near++
+			}
+			seen = 0
+		}
+		$1 == "BSS" {
+			flush()
+			seen = 1
+			assoc = (index($0, "-- associated") > 0)
+			f = 0
+			ssid = ""
+			next
+		}
+		$1 == "freq:" { f = $2 + 0; next }
+		$1 == "SSID:" { sub(/^SSID: /, ""); ssid = $0; next }
+		END {
+			flush()
+			printf "%d %d %d %d%s\n", n + 0, same + 0, near + 0, own_bss + 0, same_list
+		}
+	' "$SCAN_FILE")
+	SCAN_RECORDS=$(printf '%s' "$_counts" | awk '{ print $1 }')
+	SCAN_SAME=$(printf '%s' "$_counts" | awk '{ print $2 }')
+	SCAN_NEAR=$(printf '%s' "$_counts" | awk '{ print $3 }')
+	SCAN_OWN=$(printf '%s' "$_counts" | awk '{ print $4 }')
+	SCAN_NAMES=$(printf '%s' "$_counts" | awk '{$1 = $2 = $3 = $4 = ""; sub(/^ /, ""); print}')
+	printf 'round %s scan: %s BSS visible, %s on %s MHz, %s within 160 MHz\n' \
+		"$ROUND" "$SCAN_RECORDS" "$SCAN_SAME" "$SEL_FREQ" "$SCAN_NEAR" |
+		sed 's/^/  /' | while IFS= read -r _line; do say "$_line"; done
+	printf 'round=%s records=%s same_channel=%s near_160=%s own=%s names=%s\n' \
+		"$ROUND" "$SCAN_RECORDS" "$SCAN_SAME" "$SCAN_NEAR" "$SCAN_OWN" \
+		"${SCAN_NAMES:-none}" >>"$OUT/scan.txt"
+	if [ "$SCAN_RECORDS" -eq 0 ]; then
+		check UNKNOWN "clear arm: iw dev $SEL_IFACE scan returned no BSS records"
+		invalid "SCAN_UNKNOWN: the scan saw nothing, so the same-channel claim is unverified"
+	elif [ "$SCAN_SAME" -gt 0 ]; then
+		invalid "CO_CHANNEL_BSS: $SCAN_SAME BSS on $SEL_FREQ MHz (${SCAN_NAMES:-no SSID}; $SCAN_NEAR more within 160 MHz); the clear arm is not co-channel clean"
+	else
+		check PASS "clear arm: scan sees $SCAN_RECORDS BSS, none on $SEL_FREQ MHz ($SCAN_NEAR within 160 MHz, $SCAN_OWN own)"
+	fi
+}
+
 # --- one arm ----------------------------------------------------------
 
 measure_arm() {
@@ -1647,10 +2021,11 @@ measure_arm() {
 		_ap_tx_m=$(awk -v v="$_ap_tx_d" 'BEGIN { if (v == "n/a" || v == "") print "n/a"; else printf "%.2f", v / 1048576 }')
 		_ap_rx_m=$(awk -v v="$_ap_rx_d" 'BEGIN { if (v == "n/a" || v == "") print "n/a"; else printf "%.2f", v / 1048576 }')
 
-		printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+		printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
 			"$_arm" "$_dir" "$_mbps_m" "$_st_tx_m" "$_st_rx_m" \
 			"$_st_retr_d" "$_st_fail_d" "$_st_rdrop_d" "$_ap_tx_m" "$_ap_rx_m" \
 			"$_tok_sw" "$_tok_npu0" "$_tok_npu1" "$_ipf_retr" "$_st_sig" "${_ipf_bytes:-n/a}" \
+			"$ROUND" \
 			>>"$OUT/arms.tsv"
 		say "  $_display: ${_mbps_m} Mbit/s; station tx/rx ${_st_tx_m}/${_st_rx_m} MiB, retries ${_st_retr_d}, failed ${_st_fail_d}; AP tx/rx ${_ap_tx_m}/${_ap_rx_m} MiB; token ${_tok_sw}/${_tok_wed:-n/a}, npu_rx ${_tok_npu0:-n/a}/${_tok_npu1:-n/a}"
 		say "  link: tx ${_st_tx_rate:-n/a} | rx ${_st_rx_rate:-n/a} | signal ${_st_sig:-n/a} dBm"
@@ -1660,22 +2035,44 @@ measure_arm() {
 # --- results ----------------------------------------------------------
 
 arm_mbps() {
-	# $1 arm, $2 direction; prints the measured Mbit/s or nothing.
+	# $1 round, $2 arm, $3 direction; prints the measured Mbit/s or nothing.
 	[ -f "$OUT/arms.tsv" ] || return 1
-	awk -F'|' -v a="$1" -v d="$2" '$1 == a && $2 == d { print $3; exit }' "$OUT/arms.tsv"
+	awk -F'|' -v r="$1" -v a="$2" -v d="$3" \
+		'$17 == r && $1 == a && $2 == d { print $3; exit }' "$OUT/arms.tsv"
+}
+
+arm_count() {
+	# Number of rounds that produced at least one row.
+	awk -F'|' 'NF >= 17 { r[$17] = 1 } END { print length(r) + 0 }' "$OUT/arms.tsv"
 }
 
 check() {
-	# $1 PASS|WARN|FAIL, $2 detail
+	# $1 PASS|WARN|UNKNOWN|FAIL, $2 detail
 	case $1 in
 	PASS) printf '  check: PASS %s\n' "$2" ;;
 	WARN) printf '  check: WARN %s\n' "$2" ;;
+	UNKNOWN) printf '  check: UNKNOWN %s\n' "$2" ;;
 	*)
 		printf '  check: FAIL %s\n' "$2"
 		FAILED=1
 		;;
 	esac
 	[ -n "$OUT" ] && printf '%s|%s\n' "$1" "$2" >>"$OUT/checks.txt"
+}
+
+invalid() {
+	# $1 reason.  The numbers may still be recorded, but the run cannot be
+	# called ok: a missing interferer, a generator that moved no bytes, or a
+	# scan that could not see the channel all void the A/B claim.  Unlike
+	# check FAIL this does not abort the run; the verdict and the exit status
+	# carry it.
+	_reason=$1
+	[ "$ROUND" -gt 0 ] && _reason="round $ROUND: $1"
+	INVALID=1
+	INVALID_REASONS="${INVALID_REASONS}${INVALID_REASONS:+; }$_reason"
+	printf '  check: INVALID %s\n' "$1"
+	touch "$OUT/verdict.invalid" 2>/dev/null || :
+	printf 'INVALID|%s\n' "$1" >>"$OUT/checks.txt" 2>/dev/null || :
 }
 
 require_check() {
@@ -1687,10 +2084,10 @@ require_check() {
 print_results() {
 	[ -f "$OUT/arms.tsv" ] || die "no arm results in $OUT/arms.tsv"
 	: >"$OUT/summary.csv"
-	printf 'arm,direction,mbps,station_tx_mib,station_rx_mib,tx_retries,tx_failed,rx_drop_misc,ap_tx_mib,ap_rx_mib,token_sw,npu_rx0_q,npu_rx1_q,iperf_retransmits,signal_dbm,iperf_bytes\n' >>"$OUT/summary.csv"
+	printf 'round,arm,direction,mbps,station_tx_mib,station_rx_mib,tx_retries,tx_failed,rx_drop_misc,ap_tx_mib,ap_rx_mib,token_sw,npu_rx0_q,npu_rx1_q,iperf_retransmits,signal_dbm,iperf_bytes\n' >>"$OUT/summary.csv"
 	awk -F'|' '{
-		printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n",
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+		printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n",
+			$17, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
 	}' "$OUT/arms.tsv" >>"$OUT/summary.csv"
 
 	emit ""
@@ -1704,38 +2101,73 @@ print_results() {
 		emit "BSS: SSID not visible in iw dev; --iface selects the 6G BSS"
 	fi
 	emit ""
-	emit "arm    direction  Mbit/s   st_tx_MiB st_rx_MiB  retr  fail  drop  AP_tx_MiB AP_rx_MiB  token_sw npu0 npu1 ip_retr"
+	emit "rnd arm    direction  Mbit/s   st_tx_MiB st_rx_MiB  retr  fail  drop  AP_tx_MiB AP_rx_MiB  token_sw npu0 npu1 ip_retr"
 	awk -F'|' '{
-		printf "%-6s %-9s %8s  %9s %9s  %4s  %4s  %4s  %9s %9s  %8s %4s %4s %7s\n",
-			$1, ($2 == "ap2sta" ? "AP->STA" : "STA->AP"), $3, $4, $5,
+		printf "%3s %-6s %-9s %8s  %9s %9s  %4s  %4s  %4s  %9s %9s  %8s %4s %4s %7s\n",
+			$17, $1, ($2 == "ap2sta" ? "AP->STA" : "STA->AP"), $3, $4, $5,
 			$6, $7, $8, $9, $10, $11, $12, $13, $14
 	}' "$OUT/arms.tsv" | while IFS= read -r _line; do
 		emit "$_line"
 	done
 	emit ""
+	: >"$OUT/rounds.txt"
 	for _dir in ap2sta sta2ap; do
 		if [ "$_dir" = "ap2sta" ]; then
 			_display="AP->STA"
 		else
 			_display="STA->AP"
 		fi
-		_c=$(arm_mbps clear "$_dir" || true)
-		_l=$(arm_mbps loaded "$_dir" || true)
-		if [ -z "$_c" ] || [ -z "$_l" ]; then
-			emit "delta $_display: n/a (clear=$_c loaded=$_l)"
-			continue
+		_r=1
+		_pcts=
+		_ok_rounds=0
+		while [ "$_r" -le "$ROUNDS" ]; do
+			_c=$(arm_mbps "$_r" clear "$_dir" || true)
+			_l=$(arm_mbps "$_r" loaded "$_dir" || true)
+			if [ -z "$_c" ] || [ -z "$_l" ]; then
+				emit "delta $_display round $_r: n/a (clear=${_c:-missing} loaded=${_l:-missing})"
+				printf '%s|%s|%s|%s|%s\n' "$_r" "$_dir" "${_c:-n/a}" "${_l:-n/a}" n/a >>"$OUT/rounds.txt"
+				_r=$((_r + 1))
+				continue
+			fi
+			_diff=$(awk -v c="$_c" -v l="$_l" 'BEGIN { printf "%.1f", l - c }')
+			_pct=$(awk -v c="$_c" -v l="$_l" 'BEGIN {
+				if (c > 0) printf "%.1f", (l - c) / c * 100
+				else print "n/a"
+			}')
+			emit "delta $_display round $_r: clear $_c -> loaded $_l Mbit/s; loaded is ${_pct}% vs clear (absolute ${_diff} Mbit/s)"
+			printf '%s|%s|%s|%s|%s\n' "$_r" "$_dir" "$_c" "$_l" "$_pct" >>"$OUT/rounds.txt"
+			case $_pct in
+			n/a) ;;
+			*)
+				_pcts="$_pcts $_pct"
+				_ok_rounds=$((_ok_rounds + 1))
+				;;
+			esac
+			_r=$((_r + 1))
+		done
+		if [ "$_ok_rounds" -gt 1 ]; then
+			_mean=$(printf '%s\n' "$_pcts" | awk 'NF { s += $1; n++ } END { if (n) printf "%.1f", s / n; else print "n/a" }')
+			_spread=$(printf '%s\n' "$_pcts" |
+				awk 'NF { if (n == 0 || $1 < lo) lo = $1; if (n == 0 || $1 > hi) hi = $1; n++ }
+					END { if (n) printf "%.1f", hi - lo; else print "n/a" }')
+			emit "delta $_display mean over $_ok_rounds rounds: ${_mean}% (spread ${_spread} percentage points)"
 		fi
-		_diff=$(awk -v c="$_c" -v l="$_l" 'BEGIN { printf "%.1f", l - c }')
-		_pct=$(awk -v c="$_c" -v l="$_l" 'BEGIN {
-			if (c > 0) printf "%.1f", (l - c) / c * 100
-			else print "n/a"
-		}')
-		emit "delta $_display: clear $_c -> loaded $_l Mbit/s; loaded is ${_pct}% vs clear (absolute ${_diff} Mbit/s)"
 	done
 	emit ""
-	_clear_md5=$(grep '^clear ' "$OUT/md5.txt" 2>/dev/null | awk '{ print $2 }')
-	_loaded_md5=$(grep '^loaded ' "$OUT/md5.txt" 2>/dev/null | awk '{ print $2 }')
+	_clear_md5=$(awk '/^clear / { print $2; exit }' "$OUT/md5.txt" 2>/dev/null)
+	_loaded_md5=$(awk '/^loaded / { print $2; exit }' "$OUT/md5.txt" 2>/dev/null)
 	emit "config: original $ORIG_MD5, clear arm $_clear_md5, loaded arm $_loaded_md5"
+	emit "rounds: $ROUNDS requested, $(arm_count) with results"
+	if [ "$INVALID" = 1 ]; then
+		emit "verdict: INVALID ($INVALID_REASONS)"
+		printf 'INVALID\n' >"$OUT/verdict"
+	elif [ "$FAILED" = 1 ]; then
+		emit "verdict: FAIL (see the check lines above)"
+		printf 'FAIL\n' >"$OUT/verdict"
+	else
+		emit "verdict: ok"
+		printf 'ok\n' >"$OUT/verdict"
+	fi
 }
 
 # --- cleanup and trap -------------------------------------------------
@@ -1810,6 +2242,7 @@ cleanup() {
 	fi
 
 	[ "$FAILED" = 1 ] && _status=1
+	[ "$INVALID" = 1 ] && _status=1
 	[ -n "$TMP_DIR" ] && rm -rf "$TMP_DIR"
 	if [ -n "$OUT" ]; then
 		printf 'artifacts: %s\n' "$OUT"
@@ -1840,10 +2273,10 @@ dry_run() {
 	_recs=$(awk -F'|' '$5 == "AP" && ($3 + 0) >= 5925 && ($3 + 0) <= 7125' "$TMP_LIVE")
 	if [ -n "$_recs" ]; then
 		printf '  live 6G AP BSSes:\n'
-		printf '%s\n' "$_recs" | while IFS='|' read -r _if _phy _freq _ssid _type _addr; do
+		printf '%s\n' "$_recs" | while IFS='|' read -r _if _phy _freq _ssid _type _addr _width; do
 			_n=$(station_macs "$_if" | awk 'NF { n++ } END { print n + 0 }')
-			printf '    %s  phy %s  %s MHz  SSID "%s"  stations %s\n' \
-				"$_if" "$_phy" "$_freq" "${_ssid:-(hidden)}" "$_n"
+			printf '    %s  phy %s  %s MHz  width %s MHz  SSID "%s"  stations %s\n' \
+				"$_if" "$_phy" "$_freq" "${_width:-unknown}" "${_ssid:-(hidden)}" "$_n"
 		done
 	else
 		printf '  live 6G AP BSSes: none\n'
@@ -1857,7 +2290,18 @@ dry_run() {
 		_plan=$(cfg_245_ap_records | awk -F'|' 'NF == 4 && $4 != "1" { printf "%s%s", sep, ($1 != "" ? $1 : $2); sep = " " }')
 		printf '  clear arm: disable 5G/2.4G AP SSIDs%s, keep the 6G BSS and radios\n' \
 			"${_plan:+ (${_plan})}"
-		printf '  loaded arm: restore the pre-clear configuration\n'
+		printf '  loaded arm: restore the pre-clear configuration and keep the interferer running\n'
+		interferer_probe || true
+		printf '  interferer: %s (%s)\n' "$INTERFERER_STATUS" "$INTERFERER_NOTE"
+		if [ "$INTERFERER_STATUS" != ok ]; then
+			printf '  interferer: the loaded arm would be INVALID (NO_INTERFERER)\n'
+		fi
+		_r=1
+		while [ "$_r" -le "$ROUNDS" ]; do
+			printf '  round %s: clear -> loaded\n' "$_r"
+			_r=$((_r + 1))
+		done
+		printf '  clear-arm scan: iw dev <6G if> scan, same-channel BSS counted (no records = UNKNOWN)\n'
 		printf '  source AP->STA: %s\n' "$(iperf_command ap2sta)"
 		printf '  source STA->AP: %s\n' "$(iperf_command sta2ap)"
 		;;
@@ -1970,13 +2414,35 @@ main() {
 	say "STA must run: iperf3 -s -p $PORT"
 	say "device under test: $CONFIG"
 
-	disable_245_ssids
-	reload_and_wait
-	verify_clear_arm
-	measure_arm clear
-	restore_loaded_ssids
-	verify_loaded_arm
-	measure_arm loaded
+	interferer_probe &&
+		say "interferer: $INTERFERER_NOTE"
+	if [ "$INTERFERER_STATUS" != ok ]; then
+		say "interferer: $INTERFERER_STATUS: $INTERFERER_NOTE"
+		say "no A/B is measured: without a running out-of-band interferer the"
+		say "loaded arm would differ from the clear arm only in our own 6G"
+		say "traffic, which is not interference"
+		invalid "NO_INTERFERER: $INTERFERER_NOTE"
+		emit "verdict: INVALID (NO_INTERFERER: $INTERFERER_NOTE)"
+		printf 'INVALID\n' >"$OUT/verdict"
+		printf 'NO_INTERFERER|%s\n' "$INTERFERER_NOTE" >>"$OUT/checks.txt"
+		cleanup 1
+	fi
+
+	ROUND=1
+	while [ "$ROUND" -le "$ROUNDS" ]; do
+		say ""
+		say "=== round $ROUND/$ROUNDS (A/B) ==="
+		disable_245_ssids
+		reload_and_wait
+		verify_clear_arm
+		measure_arm clear
+		restore_loaded_ssids
+		verify_loaded_arm
+		interferer_start || true
+		measure_arm loaded
+		interferer_stop_and_verify
+		ROUND=$((ROUND + 1))
+	done
 	print_results
 	cleanup 0
 }
@@ -2014,6 +2480,29 @@ verify_clear_arm() {
 		require_check FAIL "clear arm: these AP BSS are still up below 6 GHz: ${_left% }"
 	else
 		require_check PASS "clear arm: no AP BSS is up on a 5/2.4 GHz channel"
+	fi
+
+	# A real scan on the measured channel: "the air is clear" must be seen,
+	# not inferred from our own counters.
+	scan_clear_air
+
+	# The interferer band must really be quiet in this arm, otherwise the
+	# clear arm is contaminated (an SSID that survived the disable pass, or
+	# a BSS the config never mentioned).
+	if [ -n "$INTERFERER_SPEC" ]; then
+		_int_live=
+		if [ -n "$INTERFERER_SSID" ]; then
+			_int_live=$(awk -F'|' -v want="$INTERFERER_SSID" '
+				$5 == "AP" && $4 == want && ($3 + 0) < 5925 { printf "%s(%s MHz) ", $1, $3 }
+			' "$TMP_LIVE")
+		else
+			live_has_iface "$INTERFERER_IFACE" && _int_live=$INTERFERER_IFACE
+		fi
+		if [ -n "$_int_live" ]; then
+			invalid "INTERFERER_LIVE: the $INTERFERER_BAND interferer BSS is still up in the clear arm: ${_int_live% }"
+		else
+			require_check PASS "clear arm: the $INTERFERER_BAND interferer BSS is off (its AP SSIDs are disabled)"
+		fi
 	fi
 
 	_6g_ssid_live=$(live_6g_ap_by_ssid "$SEL_SSID" || true)
