@@ -428,12 +428,20 @@ def find_kernel_image(kdir: Path) -> Path | None:
 
 def require_symbols(path: Path, label: str, symbols: set[str], report: Report) -> bool:
     data = read_bytes(path, label)
-    names = elf_symbols(data)
-    if names is None:
-        report.fail(f"{label} {path.name} has no ELF symbol table; cannot verify the compiled 974 code")
-        return False
-    missing = sorted(symbols - names)
+
+    # The 974 helpers are `static void ...` in airoha_eth.c with a single caller
+    # each, so at -O2 they are inlined and never reach .symtab.  The kernel is
+    # built with -g, so the names survive in the debug strings; that is the
+    # evidence that the source the object was compiled from had them.  An
+    # object built from a source without the helpers carries neither name.
+    # Whether the code is actually wired is checked on the source side by
+    # SIG_974_CALL (netdev_tx_completed_queue() must appear exactly once).
+    missing = sorted(name for name in symbols if name.encode() not in data)
     if missing:
+        names = elf_symbols(data)
+        if names is None:
+            report.fail(f"{label} {path.name} has no ELF symbol table; cannot verify the compiled 974 code")
+            return False
         report.fail(f"{label} {path.name} is missing symbol(s): {', '.join(missing)}")
         return False
     report.ok(f"{label} {path.name} contains {', '.join(sorted(symbols))}")
@@ -486,17 +494,7 @@ def check_build_stage(kdir: Path, kernel_dir: Path, report: Report) -> bool:
         return False
 
     vmlinux_data = read_bytes(vmlinux, "vmlinux")
-    vmlinux_names = elf_symbols(vmlinux_data)
-    if vmlinux_names is None:
-        report.fail("vmlinux has no ELF symbol table; cannot verify the compiled 974 code")
-        ok = False
-    else:
-        missing = sorted({SIG_974_ADD, SIG_974_FLUSH} - vmlinux_names)
-        if missing:
-            report.fail(f"vmlinux is missing symbol(s): {', '.join(missing)}")
-            ok = False
-        else:
-            report.ok("vmlinux contains the 974 BQL helpers")
+    ok = require_symbols(vmlinux, "vmlinux", {SIG_974_ADD, SIG_974_FLUSH}, report) and ok
 
     if obj.is_file():
         newer_than = obj
@@ -519,11 +517,17 @@ def check_build_stage(kdir: Path, kernel_dir: Path, report: Report) -> bool:
         report.fail(f"no kernel Image found under {kdir}; the kernel build is incomplete")
         return False
 
+    # OpenWrt links the kernel twice per image build: Kernel/CompileImage/Default
+    # writes Image, then Kernel/CompileImage/Initramfs re-links vmlinux for the
+    # initramfs payload.  So in every healthy build the finished Image is older
+    # than the final vmlinux while still describing the same kernel, which is
+    # why the build id comparison below is the real staleness check.  Report the
+    # ordering as a note rather than a failure.
     if not newer_or_equal(image, vmlinux):
-        report.fail(
-            f"{image.name} is older than vmlinux; the image step would embed a stale kernel"
+        report.note(
+            f"{image.name} predates vmlinux, which is expected: the initramfs pass "
+            "re-links vmlinux after the Image is written"
         )
-        ok = False
     else:
         report.ok(f"{image.name} is newer than vmlinux")
 

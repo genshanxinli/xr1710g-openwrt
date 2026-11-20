@@ -85,9 +85,22 @@ HEADER_BQL = """struct airoha_gdm_dev {
 
 STUB_C = r"""
 const char kernel_version[] = "Linux version 7.3 test-build";
-void airoha_qdma_tx_bql_add(void) {}
-void airoha_qdma_tx_bql_flush(void) {}
-int main(void) { return 0; }
+static void airoha_qdma_tx_bql_add(unsigned int *bytes, unsigned int n)
+{
+	*bytes += n;
+}
+static void airoha_qdma_tx_bql_flush(unsigned int *bytes)
+{
+	(void)bytes;
+}
+int airoha_qdma_tx_round(unsigned int n)
+{
+	unsigned int bytes = 0;
+	airoha_qdma_tx_bql_add(&bytes, n);
+	airoha_qdma_tx_bql_flush(&bytes);
+	return (int)bytes;
+}
+int main(void) { return airoha_qdma_tx_round(1); }
 """
 
 STUB_NO_BQL = r"""
@@ -134,7 +147,8 @@ def make_repo(root: Path, patches: bool = True, bad_patches: bool = False) -> Pa
 
 
 def make_build(root: Path, source: str = SOURCE_968_974, header: str = HEADER_BQL,
-               stale: bool = False, bql_symbols: bool = True) -> Path:
+               stale: bool = False, bql_symbols: bool = True,
+               image_before_vmlinux: bool = False) -> Path:
     if CC is None:
         raise RuntimeError("a C compiler is needed for the build fixture")
     build = root / "build"
@@ -145,9 +159,14 @@ def make_build(root: Path, source: str = SOURCE_968_974, header: str = HEADER_BQ
     write(kernel / ".config", "CONFIG_BQL=y\n")
     stub = STUB_C if bql_symbols else STUB_NO_BQL
     write(root / "stub.c", stub)
-    subprocess.run([CC, "-c", str(root / "stub.c"), "-o", str(driver / "airoha_eth.o")],
+    # Compile the way the kernel does: -O2 -g.  The 974 helpers are `static`
+    # with one caller each, so they are inlined and never reach .symtab; only
+    # the debug strings remember their names.  That is exactly the shape the
+    # gate has to accept, so the fixture must produce it.
+    flags = ["-O2", "-g", "-c"]
+    subprocess.run([CC, *flags, str(root / "stub.c"), "-o", str(driver / "airoha_eth.o")],
                    check=True, capture_output=True)
-    subprocess.run([CC, str(root / "stub.c"), "-o", str(kernel / "vmlinux")],
+    subprocess.run([CC, "-O2", "-g", str(root / "stub.c"), "-o", str(kernel / "vmlinux")],
                    check=True, capture_output=True)
     write(build / "Image", b"Linux version 7.3 test-build\n" + b"K" * 64)
     # A healthy build: source oldest, then object, vmlinux, Image.
@@ -158,9 +177,13 @@ def make_build(root: Path, source: str = SOURCE_968_974, header: str = HEADER_BQ
     os.utime(driver / "airoha_eth.o", (base + 10, base + 10))
     if stale:
         os.utime(kernel / "vmlinux", (base + 5, base + 5))
+    elif image_before_vmlinux:
+        os.utime(build / "Image", (base + 15, base + 15))
+        os.utime(kernel / "vmlinux", (base + 20, base + 20))
     else:
         os.utime(kernel / "vmlinux", (base + 20, base + 20))
-    os.utime(build / "Image", (base + 30, base + 30))
+    if not image_before_vmlinux:
+        os.utime(build / "Image", (base + 30, base + 30))
     return build
 
 
@@ -289,6 +312,14 @@ def test_build() -> None:
         rc, out = run_gate("--repo", str(repo), "--build-dir", str(build), "--skip-image")
         check("974 symbols missing from the object fail",
               rc == 1 and "missing symbol" in out, out[-400:])
+
+        # The shape every real OpenWrt build has: Kernel/CompileImage/Default
+        # writes Image first, then Kernel/CompileImage/Initramfs re-links
+        # vmlinux.  Image is therefore older than vmlinux while both describe
+        # the same kernel, and that must not be reported as a stale image.
+        build = make_build(root / "initramfs-relink", image_before_vmlinux=True)
+        rc, out = run_gate("--repo", str(repo), "--build-dir", str(build), "--skip-image")
+        check("Image older than vmlinux is not a failure", rc == 0, out[-400:])
 
 
 def test_image() -> None:
