@@ -77,13 +77,47 @@ Three images are produced:
   system.
 - `...-ubi-chainload-uboot.itb` — a FIT that chain-loads OpenWrt's U-Boot.
 
-The flash layout is `vendor` + `chainloader` + `ubi` + `reserved_bmt`. The
-device reports `compat_version 2.0`; images built from this tree upgrade in
-place. Upgrading from a `1.x` layout soft-bricks the device and needs
-serial/TTL recovery. Cross-flashing a W1700K image is rejected by
+The flash layout is `vendor` + `chainloader` + `ubi` + `reserved_bmt`
+([`docs/ubi-layout.md`](docs/ubi-layout.md) explains why this board cannot use
+the two-partition reference layout). Device and this tree both report
+`compat_version 2.0`; images built from this tree upgrade in place.
+
+Cross-flashing a W1700K image is rejected by
 `sysupgrade`: besides the signing check, the FIT device tree name is compared
 against the running board, because the bootloader would otherwise happily
 boot the other board's device tree.
+
+### Soft-brick gate: a 1.x unit must not be flashed with a 2.0 image
+
+`compat_version 2.0` is baked in at build time
+(`target/linux/airoha/image/an7581.mk:83`) and written onto the device by
+`.../base-files/etc/board.d/05_compat-version:11-14`. `sysupgrade` reads it
+back and compares it with the image before it writes anything
+(`package/base-files/files/lib/upgrade/fwtool.sh:49-50,52-54,75-80`).
+
+- **1.x unit + 2.0 image, plain `sysupgrade`** → the compat check fails, `sysupgrade`
+  aborts, **nothing is written to flash**. That is the gate working.
+- **1.x unit + 2.0 image, `sysupgrade -F`** → **the gate is gone**. A compat
+  mismatch is reported as "invalid but forceable" (`validate_firmware_image:10`
+  `FORCEABLE=1`, `:14-16`), so `-F` writes the 2.0 partition table over the 1.x
+  one and the unit no longer boots; recovery then needs serial/TTL (see below).
+  **Never use `-F` to get past a compat mismatch.**
+- Stock (vendor AXON) units do not run OpenWrt's `sysupgrade` at all — conversion
+  happens through the vendor web UI or U-Boot TFTP, which write `ubi` directly.
+  This warning text is therefore the only gate those units get.
+
+Read-only layout check before flashing (all of these are safe, none writes):
+
+```sh
+ssh root@192.168.1.1 'cat /proc/mtd'        # 4 parts: vendor, chainloader, ubi, reserved_bmt
+ssh root@192.168.1.1 'ubinfo -a | grep -E "Name|bad physical|reserved physical"'
+ssh root@192.168.1.1 'uci -q get system.@system[0].compat_version'   # must print 2.0
+```
+
+A 2.0 unit shows `chainloader` at `0x00600000` (1 MiB), `reserved_bmt` at
+`0x1be00000` (66 MiB) and **both** `ubootenv` and `ubootenv2` volumes in UBI.
+Any of those missing, or the compat value unreadable (treat unreadable as `1.0`),
+means the unit is not on the 2.0 layout — do not flash this tree's images onto it.
 
 Before you flash anything on hardware you would rather not lose, read
 [`docs/wan-recovery-gate.md`](docs/wan-recovery-gate.md): wiring, NAND backup,
@@ -119,6 +153,7 @@ Start here; each file is cited from the issues it settles:
 - [`docs/wan-2.5g-gate.md`](docs/wan-2.5g-gate.md) — 2.5G WAN gate.
 - [`docs/wan-productization.md`](docs/wan-productization.md) — WAN productization defaults and rollback matrix.
 - [`docs/wan-recovery-gate.md`](docs/wan-recovery-gate.md) — flash-recovery gate.
+- [`docs/ubi-layout.md`](docs/ubi-layout.md) — why the layout is 4-partition, and what a 2-partition factory image would require (issue #8).
 - [`docs/wan-wifi-path.md`](docs/wan-wifi-path.md) — Wi-Fi forwarding path (mt7996 to GDM2).
 - [`docs/release-image-features-gate.md`](docs/release-image-features-gate.md) — release image feature gates (BQL, napi_complete_done).
 
