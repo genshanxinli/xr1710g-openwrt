@@ -245,7 +245,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	flow_action_for_each(i, act, &rule->action) {
  		switch (act->id) {
  		case FLOW_ACTION_MANGLE:
-@@ -2191,11 +2327,40 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
+@@ -2191,20 +2327,49 @@ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
  
  			police = act;
  			break;
@@ -283,6 +283,15 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +		data.sixrd.tunnel_mtu = airoha_ppe_6rd_mtu(mtu);
 +	}
 +
+ 	/* A DS-Lite decapsulation flow is plain IPv4-in-IPv6; a PPPoE
+ 	 * session inside the tunnel would need both headers encoded,
+ 	 * which this minimal path does not do.  This has to be decided
+ 	 * before the meter is allocated: below the allocation the only
+ 	 * way out is put_smac, so a plain return there leaks the group.
+ 	 */
+ 	if (offload_type == PPE_PKT_TYPE_IPV4_DSLITE && data.pppoe.num)
+ 		return -EOPNOTSUPP;
+ 
  	if (!is_valid_ether_addr(data.eth.h_source) ||
  	    !is_valid_ether_addr(data.eth.h_dest))
  		return -EINVAL;
