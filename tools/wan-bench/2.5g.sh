@@ -34,9 +34,13 @@ PORT=${PORT:-5201}
 DURATION=${DURATION:-60}
 PARALLEL=${PARALLEL:-4}
 OUT=${OUT:-}
+ROUTER=${ROUTER:-}
 DRY_RUN=0
 SSH_OPTS=${SSH_OPTS:--o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=3}
 SERVER_LOG=${SERVER_LOG:-/tmp/wan-bench-2.5g-server.log}
+# Testability hook only: scripts/tests/wan-2.5g-bench-test.sh points this at a
+# fake tree.  Nothing on a real bench host sets it.
+SYSFS=${SYSFS:-/sys}
 
 # Gate thresholds, Mbit/s.
 PASS_MBPS=2200
@@ -56,6 +60,8 @@ Required:
 Options:
   --peer-ssh USER@HOST  SSH target for the peer (default root@PEER)
   --peer-if NAME        peer 2.5G NIC; its link speed is recorded and gated
+  --router USER@HOST    router under test; its flowtable and nft offload
+                        sysctls are snapshotted (default: not recorded)
   --port N              iperf3 port (default 5201)
   --duration N          seconds per arm (default 60)
   --parallel N          iperf3 streams (default 4)
@@ -86,6 +92,7 @@ while [ "$#" -gt 0 ]; do
 	--peer) need_arg "$1" "${2:-}"; PEER=$2; shift 2 ;;
 	--peer-ssh) need_arg "$1" "${2:-}"; PEER_SSH=$2; shift 2 ;;
 	--peer-if) need_arg "$1" "${2:-}"; PEER_IF=$2; shift 2 ;;
+	--router) need_arg "$1" "${2:-}"; ROUTER=$2; shift 2 ;;
 	--port) need_arg "$1" "${2:-}"; PORT=$2; shift 2 ;;
 	--duration) need_arg "$1" "${2:-}"; DURATION=$2; shift 2 ;;
 	--parallel) need_arg "$1" "${2:-}"; PARALLEL=$2; shift 2 ;;
@@ -110,8 +117,14 @@ if [ "$DRY_RUN" = 1 ]; then
 	say "  local NIC:  $IFACE"
 	say "  peer:       $PEER ($PEER_SSH)"
 	say "  peer NIC:   ${PEER_IF:-not recorded}"
+	say "  router:     ${ROUTER:-not recorded}"
 	say "  result:     $OUT"
 	say "  raw TX/RX:  $RAWTX / $RAWRX"
+	say "  ethtool:    pre/tx/rx snapshots -> $OUTDIR/2.5g-<phase>.<iface>.txt"
+	say "              local: ethtool, -i, -S   peer: ethtool, -i, -S"
+	say "              router: nft list flowtables, nf_flowtable_* sysctls"
+	say "  preconditions: local speed must be 2500 Mb/s, peer speed must be 2500 Mb/s;"
+	say "              either mismatch exits 1 before any iperf3 traffic is sent"
 	say "  listener:   ssh $PEER_SSH 'ss -ltnp | grep :$PORT '"
 	say "  TX command: iperf3 -c $PEER -p $PORT -t $DURATION -P $PARALLEL -J"
 	say "  RX command: iperf3 -c $PEER -p $PORT -t $DURATION -P $PARALLEL -R -J"
@@ -119,18 +132,18 @@ if [ "$DRY_RUN" = 1 ]; then
 	exit 0
 fi
 
-[ -d "/sys/class/net/$IFACE" ] || die "local NIC $IFACE does not exist" 2
+[ -d "$SYSFS/class/net/$IFACE" ] || die "local NIC $IFACE does not exist" 2
 command -v iperf3 >/dev/null 2>&1 || die "iperf3 is not installed locally" 2
 command -v ssh >/dev/null 2>&1 || die "ssh is not installed locally" 2
 command -v python3 >/dev/null 2>&1 || die "python3 is not installed locally" 2
 mkdir -p "$OUTDIR" || die "cannot create $OUTDIR" 2
 
 local_speed() {
-	cat "/sys/class/net/$IFACE/speed" 2>/dev/null || printf 'unknown'
+	cat "$SYSFS/class/net/$IFACE/speed" 2>/dev/null || printf 'unknown'
 }
 
 local_driver() {
-	readlink "/sys/class/net/$IFACE/device/driver" 2>/dev/null | sed 's#.*/##'
+	readlink "$SYSFS/class/net/$IFACE/device/driver" 2>/dev/null | sed 's#.*/##'
 }
 
 cpu_total() {
@@ -194,9 +207,80 @@ record_env() {
 		printf 'peer=%s\n' "$PEER"
 		printf 'peer_if=%s\n' "${PEER_IF:-}"
 		printf 'peer_speed_mbps=%s\n' "$(peer_speed)"
-		printf 'mtu=%s\n' "$(cat "/sys/class/net/$IFACE/mtu" 2>/dev/null || echo unknown)"
+		printf 'mtu=%s\n' "$(cat "$SYSFS/class/net/$IFACE/mtu" 2>/dev/null || echo unknown)"
 		printf 'iperf3=%s\n' "$(iperf3 --version 2>/dev/null | head -1)"
 	} >"$f"
+}
+
+snap_path() {
+	# $1 phase, $2 iface -> the file this run writes for that phase
+	printf '%s/2.5g-%s.%s.txt' "$OUTDIR" "$1" "$2"
+}
+
+snap_nic() {
+	# $1 phase, $2 local|peer, $3 iface name.  Verbatim ethtool output so the
+	# gate can be audited from the run record alone (speed/modes/-S counters).
+	[ -n "${3:-}" ] || return 0
+	f=$(snap_path "$1" "$3")
+	if [ "$2" = local ]; then
+		{
+			printf '### phase=%s side=local dev=%s utc=%s\n' \
+				"$1" "$3" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+			ethtool "$3" 2>&1
+			ethtool -i "$3" 2>&1
+			ethtool -S "$3" 2>&1
+		} >"$f"
+	else
+		# shellcheck disable=SC2029
+		ssh $SSH_OPTS "$PEER_SSH" \
+			"echo '### phase=$1 side=peer dev=$3'; ethtool $3 2>&1; ethtool -i $3 2>&1; ethtool -S $3 2>&1" \
+			>"$f" 2>&1
+	fi
+}
+
+snap_router() {
+	# $1 phase.  Only the router decides whether a forward is offloaded, so the
+	# flowtable and its sysctls belong in the record; absent --router we leave
+	# it unrecorded rather than guess.
+	[ -n "$ROUTER" ] || return 0
+	f="$OUTDIR/2.5g-$1.router.txt"
+	# shellcheck disable=SC2029
+	ssh $SSH_OPTS "$ROUTER" '
+		echo "### nft list flowtables"
+		nft list flowtables 2>&1
+		echo "### nf_flowtable sysctls"
+		for s in /proc/sys/net/netfilter/nf_flowtable_*; do
+			printf "%s=%s\n" "$s" "$(cat "$s" 2>/dev/null)"
+		done
+		echo "### firewall flow_offloading"
+		uci show firewall 2>/dev/null | grep -E "flow_offloading" || echo "(none)"
+	' >"$f" 2>&1
+}
+
+snap_all() {
+	# $1 phase label
+	snap_nic "$1" local "$IFACE"
+	snap_nic "$1" peer "$PEER_IF"
+	snap_router "$1"
+}
+
+snap_field() {
+	# $1 snapshot file, $2 field label -> its value, continuation lines joined.
+	# ethtool wraps long mode lists onto indented lines with no label; keeping
+	# only the first line would drop "2500baseT/Full" from lan2/wan.
+	[ -r "${1:-}" ] || return 0
+	awk -v key="$2" '
+		index($0, key ":") && $0 ~ "^[[:space:]]*" key ":" {
+			sub("^[[:space:]]*" key ":[[:space:]]*", "")
+			out = $0; grab = 1; next
+		}
+		grab && /^[[:space:]]+[^[:space:]]/ && !/^[[:space:]]*[^:]+:/ {
+			sub(/^[[:space:]]+/, "")
+			out = out " " $0; next
+		}
+		{ grab = 0 }
+		END { print (out == "" ? "" : out) }
+	' "$1" 2>/dev/null
 }
 
 TX_S=nan TX_R=nan TX_RETR=nan TX_CPU=nan TX_VALID=0 TX_NOTE=
@@ -205,12 +289,14 @@ RX_S=nan RX_R=nan RX_RETR=nan RX_CPU=nan RX_VALID=0 RX_NOTE=
 say "wan-bench/2.5g: local=$IFACE peer=$PEER port=$PORT ${DURATION}s P$PARALLEL"
 started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-# Preconditions: both link speeds must be 2500 when the peer NIC is named.
+# Preconditions: both link speeds must be 2500 when the peer NIC is named.  The
+# pre snapshot is taken first so a refused run still carries its own evidence.
+snap_all pre
 lspeed=$(local_speed)
-[ "$lspeed" = 2500 ] || die "local link speed is $lspeed Mb/s, expected 2500" 1
+[ "$lspeed" = 2500 ] || die "local link speed is $lspeed Mb/s, expected 2500 (see $(snap_path pre "$IFACE"))" 1
 pspeed=$(peer_speed)
 if [ -n "$PEER_IF" ] && [ "$pspeed" != 2500 ]; then
-	die "peer link speed is $pspeed Mb/s, expected 2500" 1
+	die "peer link speed is $pspeed Mb/s, expected 2500 (see $(snap_path pre "$PEER_IF"))" 1
 fi
 
 # ---- TX arm -------------------------------------------------------------
@@ -224,6 +310,7 @@ if [ -z "$TX_NOTE" ]; then
 	rc=$?
 	cpu1=$(cpu_total)
 	TX_CPU=$((cpu1 - cpu0))
+	# shellcheck disable=SC2046  # deliberate split into the 3 fields
 	set -- $(parse_arm "$RAWTX" tx)
 	TX_S=$1 TX_R=$2 TX_RETR=$3
 	if [ "$rc" -eq 0 ] && [ "$TX_R" != nan ]; then
@@ -232,6 +319,7 @@ if [ -z "$TX_NOTE" ]; then
 		TX_NOTE="iperf3 rc=$rc or unparsable JSON"
 	fi
 fi
+snap_all tx
 
 # ---- RX arm -------------------------------------------------------------
 record_env rx
@@ -244,6 +332,7 @@ if [ -z "$RX_NOTE" ]; then
 	rc=$?
 	cpu1=$(cpu_total)
 	RX_CPU=$((cpu1 - cpu0))
+	# shellcheck disable=SC2046  # deliberate split into the 3 fields
 	set -- $(parse_arm "$RAWRX" rx)
 	RX_S=$1 RX_R=$2 RX_RETR=$3
 	if [ "$rc" -eq 0 ] && [ "$RX_R" != nan ]; then
@@ -252,6 +341,7 @@ if [ -z "$RX_NOTE" ]; then
 		RX_NOTE="iperf3 rc=$rc or unparsable JSON"
 	fi
 fi
+snap_all rx
 
 # ---- gate ---------------------------------------------------------------
 verdict=invalid
@@ -270,8 +360,15 @@ PY
 )
 fi
 
+# Link facts only ethtool can give us (negotiated vs advertised 2500baseT).
+LINK_ADV=$(snap_field "$(snap_path pre "$IFACE")" "Advertised link modes")
+LINK_SUP=$(snap_field "$(snap_path pre "$IFACE")" "Supported link modes")
+LINK_DUP=$(snap_field "$(snap_path pre "$IFACE")" "Duplex")
+
 export OUT IFACE PEER PEER_IF PORT DURATION PARALLEL STARTED="$started"
-export LS_SPEED="$lspeed" PS_SPEED="$pspeed"
+LS_DRIVER=$(local_driver)
+export LS_SPEED="$lspeed" PS_SPEED="$pspeed" LS_DRIVER
+export OUTDIR ROUTER LINK_ADV LINK_SUP LINK_DUP
 export TX_S TX_R TX_RETR TX_CPU TX_VALID TX_NOTE RAWTX
 export RX_S RX_R RX_RETR RX_CPU RX_VALID RX_NOTE RAWRX
 export GATE_MBPS="$gate_mbps" VERDICT="$verdict" PASS_MBPS FLOOR_MBPS
@@ -282,6 +379,19 @@ import json, os, sys
 def num(v):
     return None if v == "nan" else float(v)
 
+def snap_file(env, phase, who):
+    """Path of a snapshot taken this run, or None when it was not taken."""
+    if who == "router":
+        iface = "router" if env.get("ROUTER") else None
+    elif who == "peer":
+        iface = env.get("PEER_IF") or None
+    else:
+        iface = env.get("IFACE") or None
+    if not iface:
+        return None
+    path = os.path.join(env.get("OUTDIR", "."), "2.5g-%s.%s.txt" % (phase, iface))
+    return path if os.path.exists(path) else None
+
 def integer(v):
     return None if v == "nan" else int(v)
 
@@ -291,8 +401,14 @@ out = {
     "iface": {
         "name": os.environ["IFACE"],
         "speed_mbps": num(os.environ.get("LS_SPEED", "nan")),
-        "driver": os.popen("readlink /sys/class/net/%s/device/driver 2>/dev/null" %
-                           os.environ["IFACE"]).read().strip().split("/")[-1] or None,
+        "driver": os.environ.get("LS_DRIVER") or None,
+        "duplex": os.environ.get("LINK_DUP") or None,
+        "supported_link_modes": os.environ.get("LINK_SUP") or None,
+        "advertised_link_modes": os.environ.get("LINK_ADV") or None,
+    },
+    "router": {
+        "host": os.environ.get("ROUTER") or None,
+        "snapshot": snap_file(os.environ, "pre", "router"),
     },
     "peer": {
         "host": os.environ["PEER"],
@@ -327,6 +443,11 @@ out = {
             "note": os.environ["RX_NOTE"],
         },
     ],
+    "snapshots": {
+        phase: {who: snap_file(os.environ, phase, who)
+                for who in ("local", "peer", "router")}
+        for phase in ("pre", "tx", "rx")
+    },
     "gate": {
         "basis": "min(receiver_mbps of both valid arms)",
         "min_receiver_mbps": num(os.environ["GATE_MBPS"]),
