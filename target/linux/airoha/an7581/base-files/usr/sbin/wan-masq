@@ -1,0 +1,213 @@
+#!/bin/sh
+#
+# wan-masq - explicit masquerade switch for the WAN firewall zone (issue #79).
+#
+# Nothing runs this on its own.  No uci-defaults, no hotplug, no init script:
+# a human types "wan-masq on" or "wan-masq off", and until they do, every
+# default in /etc/config/firewall stays exactly as shipped.  Masquerading off
+# the WAN is a firewall semantics change, so it needs a human hand on it.
+#
+# Why there is deliberately no hotplug half
+# -----------------------------------------
+# "Flip masq when the WAN proto becomes pppoe" was considered and dropped.
+# fw4 rebuilds every zone from /etc/config/firewall on each reload
+# (etc/hotplug.d/iface/51-bridge-hw-offload:16-19 and 54-pppoe-flowtable:43-47
+# both document this), so a hotplug script that adds "option masq 1" to the
+# live ruleset is undone by the next reload, and one that writes the config on
+# every ifup silently rewrites the operator's firewall.  Note the asymmetry
+# with 54-pppoe-flowtable: adding a device to an existing flowtable is
+# idempotent inside the kernel (nft_flowtable_update(), net/netfilter/
+# nf_tables_api.c:9122-9131 takes the update branch when the named flowtable
+# already exists), a zone is not - it is rebuilt, not patched.  So the state
+# lives in the config, where it survives a reload, and only a person moves it.
+#
+# Consequently there is no ifdown half either: nothing here is event driven,
+# so there is nothing to undo.  "wan-masq off" is that undo, and it is one
+# command, which is less code and fewer surprises than a hotplug that has to
+# decide whether the operator meant it.
+#
+# What "off" means: the option is deleted, not set to 0.  fw4 parses masq as a
+# bool (/usr/share/ucode/fw4.uc:2047 "masq: [ \"bool\" ]") and only emits
+# masquerade when it is true (/usr/share/firewall4/templates/ruleset.uc:330
+# "{% if (zone.masq ...) %}"), so an absent option and an explicit 0 behave
+# identically at runtime - but absent is what the stock config looks like for
+# a zone nobody masquerades, so that is what off restores.
+#
+# Guardrail: an explicit "masq 0" in the zone is a decision someone made.
+# "on" refuses to overwrite it and asks for --force, so the only way to lose
+# that setting is to say so out loud.
+#
+# Scope: this script touches exactly one uci key,
+# firewall.@zone[N].masq where @zone[N] is the zone named "wan".  Not other
+# zones, not the network config, not the flowtable.  Every write is preceded
+# by a one-time backup of /etc/config/firewall to
+# /etc/config/firewall.bak-wan-masq (created only if it does not exist yet, so
+# it always holds the pre-first-touch config and restoring it undoes the whole
+# history of this helper).
+#
+# The write and the optional reload run under the flock -w 10 idiom used by
+# 51-bridge-hw-offload:60-68 and 52-wan-lro:70-81: two concurrent wan-masq
+# runs queue instead of interleaving, and the bounded wait cannot hang a shell.
+# The lock is this script's own, so it does not serialise against fw4 itself;
+# /etc/init.d/firewall reload is procd's job and procd queues the call.
+#
+# Exit status: 0 success or already in the requested state, 1 the zone or the
+# config is unusable, 2 usage error, 3 WAN proto is not pppoe, 4 explicit
+# masq 0 without --force, 5 the write failed, 6 fw4 reload failed (the uci
+# change is committed but not live), 7 the lock could not be taken.
+
+CONF="${WM_FW_CONF:-/etc/config/firewall}"
+BAK="$CONF.bak-wan-masq"
+LOCK="${WM_LOCK:-/var/lock/wan-masq.lock}"
+FW_INIT="${WM_FW_INIT:-/etc/init.d/firewall}"
+ZONE=wan
+NETIF=wan
+
+usage() {
+	cat >&2 <<'EOF'
+usage: wan-masq status
+       wan-masq on  [--reload] [--force]
+       wan-masq off [--reload] [--force]
+
+  status   print the zone and its current masq value, plus the live WAN proto.
+           Read-only.
+  on       set masq 1 on the "wan" zone.  Refused unless the WAN proto is
+           pppoe, and refused over an explicit masq 0 unless --force.
+  off      delete the masq option from the "wan" zone.
+  --reload reload the firewall afterwards (on/off only).  A failed reload is
+           reported and exits 6; the uci change is already committed.
+EOF
+	exit 2
+}
+
+# Index of the @zone[] section named wan.  Sections are anonymous, so the only
+# way in is to walk them; uci get on a section returns its type, which is how
+# the walk knows it has run off the end.
+zone_index() {
+	i=0
+	while uci -q get "firewall.@zone[$i]" >/dev/null 2>&1; do
+		if [ "$(uci -q get "firewall.@zone[$i].name")" = "$ZONE" ]; then
+			echo "$i"
+			return 0
+		fi
+		i=$((i + 1))
+	done
+	return 1
+}
+
+# Live proto from netifd, falling back to the configured one when the
+# interface has no ubus status (52-wan-lro:103-104 uses the same read).
+wan_proto() {
+	p=$(ubus call "network.interface.$NETIF" status 2>/dev/null |
+		jsonfilter -e '@.proto' 2>/dev/null)
+	[ -n "$p" ] || p=$(uci -q get "network.$NETIF.proto" 2>/dev/null)
+	echo "$p"
+}
+
+do_status() {
+	z=$(zone_index) || {
+		echo "no zone named '$ZONE' in $CONF" >&2
+		exit 1
+	}
+	[ -r "$CONF" ] || {
+		echo "cannot read $CONF" >&2
+		exit 1
+	}
+	m=$(uci -q get "firewall.@zone[$z].masq")
+	printf 'zone:  firewall.@zone[%s] (%s)\n' "$z" "$ZONE"
+	printf 'proto: %s\n' "$(wan_proto)"
+	printf 'masq:  %s\n' "${m:-unset}"
+	if [ -e "$BAK" ]; then
+		printf 'backup: %s\n' "$BAK"
+	fi
+	exit 0
+}
+
+ACTION=
+RELOAD=0
+FORCE=0
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+	status | on | off)
+		[ -n "$ACTION" ] && usage
+		ACTION=$1
+		;;
+	--reload) RELOAD=1 ;;
+	--force) FORCE=1 ;;
+	-h | --help) usage ;;
+	*) usage ;;
+	esac
+	shift
+done
+
+[ -n "$ACTION" ] || usage
+[ "$ACTION" = status ] && do_status
+
+PROTO=$(wan_proto)
+if [ "$PROTO" != pppoe ] && [ "$FORCE" -ne 1 ]; then
+	echo "refusing: network.$NETIF proto is '${PROTO:-unknown}', not pppoe" >&2
+	echo "re-run with --force if you really mean to change WAN masquerade" >&2
+	exit 3
+fi
+
+z=$(zone_index) || {
+	echo "no zone named '$ZONE' in $CONF" >&2
+	exit 1
+}
+
+(
+	mkdir -p "$(dirname "$LOCK")" 2>/dev/null
+	exec 9>"$LOCK" || {
+		echo "cannot open $LOCK" >&2
+		exit 7
+	}
+	flock -w 10 9 || {
+		echo "another wan-masq is running, giving up" >&2
+		exit 7
+	}
+
+	# Re-read under the lock: the value that decided anything before the
+	# lock was taken may already be stale.
+	cur=$(uci -q get "firewall.@zone[$z].masq")
+
+	if [ "$ACTION" = on ]; then
+		[ "$cur" = 1 ] && {
+			echo "masq already 1 on zone $ZONE, nothing to do"
+			exit 0
+		}
+		if [ "$cur" = 0 ] && [ "$FORCE" -ne 1 ]; then
+			echo "zone $ZONE has an explicit masq 0; --force to override" >&2
+			exit 4
+		fi
+		[ -e "$BAK" ] || cp "$CONF" "$BAK" || {
+			echo "cannot back up $CONF to $BAK" >&2
+			exit 5
+		}
+		uci -q set "firewall.@zone[$z].masq=1" || exit 5
+	else
+		# Absent and 0 are both "off" at runtime, so deleting either changes
+		# nothing; skip the write rather than dirty the config.
+		if [ -z "$cur" ] || [ "$cur" = 0 ]; then
+			echo "masq already off on zone $ZONE, nothing to do"
+			exit 0
+		fi
+		[ -e "$BAK" ] || cp "$CONF" "$BAK" || {
+			echo "cannot back up $CONF to $BAK" >&2
+			exit 5
+		}
+		uci -q delete "firewall.@zone[$z].masq" || exit 5
+	fi
+
+	uci -q commit firewall || exit 5
+	echo "masq ${cur:-unset} -> $([ "$ACTION" = on ] && echo 1 || echo deleted) on zone $ZONE"
+
+	[ "$RELOAD" -eq 1 ] || exit 0
+	if "$FW_INIT" reload >/dev/null 2>&1; then
+		echo "firewall reloaded"
+	else
+		echo "firewall reload failed: the uci change is committed but not live" >&2
+		exit 6
+	fi
+	exit 0
+)
