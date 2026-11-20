@@ -72,9 +72,11 @@
 #   The source is executed by "sh -c" as the invoking user.  It is a lab
 #   command, not input to be taken from an untrusted party.  Keep the source
 #   in the foreground and let it run for at least SOURCE_SECS: a command that
-#   daemonizes and returns is treated as a dead source.  The harness kills the
-#   local pid after the window, but cannot reap grandchildren; a B-arm source
-#   must also terminate itself within SOURCE_SECS (iperf3 -t does).
+#   daemonizes and returns is treated as a dead source.  After the window the
+#   harness kills the source pid and every descendant it can see in /proc; a
+#   remote B-arm process behind ssh can outlive the ssh client on the feeder,
+#   so a B-arm source must still terminate itself within SOURCE_SECS (iperf3
+#   -t does).
 #
 # A and B arms
 #   --arm a     local source on the AP (default).
@@ -1192,13 +1194,55 @@ start_sources() {
 	SRC_EXPECTED=$((ACTIVE_COUNT * PROCS))
 }
 
+# Descendant pids of $1 from one /proc scan.  A source is "sh -c <cmd>", so
+# the process that actually sends is a grandchild or deeper (iperf3 behind
+# ssh, ringblast): killing only the recorded pid left them running, and the
+# next arm then measured the previous arm's traffic.
+tree_pids() {
+	_root=$1
+	# One awk over every /proc/<pid>/stat: the first field after the
+	# "pid (comm) " prefix is the state, the second is the ppid.
+	_map=$(awk '
+		FNR == 1 {
+			p = FILENAME
+			sub(/^.*\/proc\//, "", p)
+			sub(/\/stat$/, "", p)
+			s = $0
+			sub(/.*\) /, "", s)
+			split(s, a, " ")
+			print p, a[2]
+		}' /proc/[0-9]*/stat 2>/dev/null)
+	_front=$_root
+	_out=
+	while [ -n "$_front" ]; do
+		_next=
+		for _f in $_front; do
+			_next="$_next $(printf '%s\n' "$_map" | awk -v p="$_f" '$2 == p { printf "%s ", $1 }')"
+		done
+		_front=${_next# }
+		_out="$_out $_front"
+	done
+	printf '%s' "${_out# }"
+	unset _map
+}
+
 kill_sources() {
 	[ -n "${SRC_PIDS:-}" ] || return 0
+	_todo=
 	for _p in $SRC_PIDS; do
+		_todo="$_todo $_p $(tree_pids "$_p")"
+	done
+	for _p in $_todo; do
 		kill "$_p" 2>/dev/null
 	done
 	for _p in $SRC_PIDS; do
 		wait "$_p" 2>/dev/null
+	done
+	# Anything that ignored TERM, children included, goes now.  The pid list
+	# was taken above; Linux hands out pids in ascending order and only wraps
+	# at pid_max, so none of these can have been recycled in between.
+	for _p in $_todo; do
+		kill -9 "$_p" 2>/dev/null
 	done
 	SRC_PIDS=
 }
@@ -1312,6 +1356,12 @@ compute_client_row() {
 			width = (aw != "") ? aw : bw
 			sig = (asig != "") ? asig : bsig
 			if (nss == "") status = "invalid"
+			# A client that moved no byte in the window is not a data
+			# point: it printed "0.000 ok" and the aggregate counted an
+			# idle client as a success.  Any traffic at all is accepted;
+			# the arm-level gate is the signed target, not a per-client
+			# floor, so nothing here is a throughput threshold.
+			if (status == "ok" && tx == 0 && rx == 0) status = "idle"
 			if (width == "") width = cw
 			if (ch == "") ch = "?"
 			if (nss == "") nss = "?"
@@ -1558,8 +1608,11 @@ run_arm() {
 	compute_results
 	if ! awk -F'\t' '$15 != "ok" { exit 1 }' "$ARM_DIR/result.tsv"; then
 		ARM_STATUS=abort
-		ARM_REASON="a client row failed validation (missing NSS or byte counter)"
+		ARM_REASON="a client row failed validation (missing NSS/counter, or no traffic)"
 		say "ARM $ARM_LABEL ABORTED: $ARM_REASON"
+		# Print the offending row: the operator needs to see which client
+		# was idle, not just that one was.
+		print_arm_table
 		printf '%s\tABORTED\t-\t-\t-\t-\t-\t-\t-\t%s\t-\t-\t-\t-\taborted: %s\n' \
 			"$ARM" "$WINDOW_SECS" "$ARM_REASON" >>"$ARM_DIR/result.tsv"
 		cat "$ARM_DIR/result.tsv" >>"$OUT/result.tsv"

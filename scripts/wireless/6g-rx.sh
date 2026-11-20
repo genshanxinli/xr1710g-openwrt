@@ -853,7 +853,7 @@ dry_run_plan() {
 	printf '  ethtool: rx_ampdu_bytes_cnt, rx_ampdu_cnt, rx_mpdu_cnt, rx_ba_cnt\n'
 	printf '  interrupts: PCIe0 group %s, hif2 group %s\n' "$PCIE_PATTERN" "$HIF_PATTERN"
 	printf '  token_info: token_count, wed_token_count, rx_token_size, npu_rx0/npu_rx1 queued\n'
-	printf '  band_bytes: Phy band %s rx_ampdu_bytes\n' "$SIXG_BAND"
+	printf '  band_bytes: Phy band %s rx_ampdu_bytes (only if this kernel exposes band_bytes)\n' "$SIXG_BAND"
 	printf '  netdev: rx_bytes\n'
 
 	printf '\nverdict: subtract the idle baseline from each IRQ group; the larger\n'
@@ -2025,9 +2025,15 @@ print_report() {
 	printf '  rx_ba_cnt              before %-12s after %-12s delta %s\n' \
 		"$(val_or_na "$BA_CNT_BEFORE")" "$(val_or_na "$BA_CNT_AFTER")" \
 		"$(val_or_na "$BA_CNT_DELTA")"
-	printf '  mt76 band_bytes Phy band %s rx_ampdu_bytes delta %s (6 GHz MIB, %s)\n' \
-		"$SIXG_BAND" "$(val_or_na "$BAND_AMPDU_DELTA")" \
-		"$(val_or_na "$BAND_BYTES_PATH")"
+	# band_bytes is not in this kernel's mt76 debugfs, so the old line always
+	# printed "delta n/a (Phy band 2 ...)" and looked like a failed read.  Say
+	# what it is: the counter does not exist here.
+	if [ -n "$BAND_BYTES_PATH" ]; then
+		printf '  mt76 band_bytes Phy band %s rx_ampdu_bytes delta %s (%s)\n' \
+			"$SIXG_BAND" "$(val_or_na "$BAND_AMPDU_DELTA")" "$BAND_BYTES_PATH"
+	else
+		printf '  mt76 band_bytes: not present in this kernel (no per-band 6G A-MPDU MIB; use the ethtool and station counters above)\n'
+	fi
 
 	printf '\niperf3 receiver:\n'
 	if [ -n "$IPERF_RX_BPS" ]; then
