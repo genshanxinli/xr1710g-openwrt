@@ -1,0 +1,89 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: add the PPE1 register window dump
+
+There is no view of the PPE control registers in this kernel's ppe
+directory.  Add ppe/ppe1_regs, a read-only dump of the 64 words at FE
+0x0e00..0x0efc, which is PPE1_BASE + 0x200 - the first 256 bytes of PPE1's
+register block.
+
+The rows are the block's registers in order: glo_cfg at +0x00,
+ppe_flow_cfg at +0x04, ip_proto_chk at +0x08, tb_cfg at +0x1c, tb_base at
++0x20, bind_rate at +0x28, bind_limit0/1 at +0x2c/+0x30, unbind_age at
++0x38, bnd_age0/1 at +0x3c/+0x40, hash_seed at +0x44, the two default cports
+at +0x48/+0x4c and tb_hash_cfg at +0x50.  The words between them belong to
+the same block and are printed as they read, because the driver's register
+map does not name them.
+
+This is not an L2B table.  There is no separate L2B table at these
+addresses, so the file is named for the block it dumps and every row is
+printed raw rather than labelled with a field name nothing can verify.
+
+The file is 0444 with no write callback: no register is written on the read
+path.  The NPU can write these registers, so a dump is a snapshot and not a
+coherent view.  Do not confuse the window with the NPU's own
+0x1e900000..0x1ebfffff register file, which must not be read from the A53: a
+read there hangs the SoC.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+--- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
+@@ -185,6 +185,49 @@
+ }
+ DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_tpid);
+ 
++/* The first 64 words of PPE1's register block.  FE 0x0e00 is
++ * PPE1_BASE + 0x200, so this window is the same one tb_regs reads a register
++ * at a time: glo_cfg at +0x00, ppe_flow_cfg at +0x04, ip_proto_chk at +0x08,
++ * tb_cfg at +0x1c, tb_base at +0x20, bind_rate at +0x28, bind_limit0/1 at
++ * +0x2c/+0x30, unbind_age at +0x38, bnd_age0/1 at +0x3c/+0x40, hash_seed at
++ * +0x44, the two default cports at +0x48/+0x4c and tb_hash_cfg at +0x50.  The
++ * words between them belong to the same block but have no name in the
++ * driver's register map, so they are printed as they read.
++ *
++ * This used to be called an L2B table and decoded as an ethertype mask plus
++ * an ethertype table.  There is no separate L2B table at these addresses: the
++ * window is a slice of the PPE1 register block, and the field names the old
++ * dump invented for +0x08c and +0x0d0 are not documented anywhere this driver
++ * can check.  The register values are the data; the labels were a guess and
++ * are gone.
++ *
++ * The NPU can write these registers, so a dump is a snapshot and not a
++ * coherent view of anything.  Do not confuse the window with the NPU's own
++ * 0x1e900000..0x1ebfffff register file, which must not be read from the
++ * A53: a read there hangs the SoC.
++ */
++#define AIROHA_PPE1_REGS_BASE		(PPE1_BASE + 0x200)
++#define AIROHA_PPE1_REGS_WORDS		64
++
++static int airoha_ppe_debugfs_ppe1_regs_show(struct seq_file *m,
++					     void *private)
++{
++	struct airoha_ppe *ppe = m->private;
++	struct airoha_eth *eth = ppe->eth;
++	int i;
++
++	for (i = 0; i < AIROHA_PPE1_REGS_WORDS; i++) {
++		u32 off = AIROHA_PPE1_REGS_BASE + i * 4;
++
++		/* idx, register offset, raw value. */
++		seq_printf(m, "%02d 0x%04x %08x\n", i, off,
++			   airoha_fe_rr(eth, off));
++	}
++
++	return 0;
++}
++DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_ppe1_regs);
++
+ int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
+ {
+ 	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
+@@ -194,6 +237,8 @@
+ 			    &airoha_ppe_debugfs_foe_bind_fops);
+ 	debugfs_create_file("tpid", 0444, ppe->debugfs_dir, ppe,
+ 			    &airoha_ppe_debugfs_tpid_fops);
++	debugfs_create_file("ppe1_regs", 0444, ppe->debugfs_dir, ppe,
++			    &airoha_ppe_debugfs_ppe1_regs_fops);
+ 
+ 	return 0;
+ }
