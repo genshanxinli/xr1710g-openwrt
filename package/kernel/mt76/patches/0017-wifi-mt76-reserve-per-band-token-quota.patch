@@ -19,46 +19,63 @@ leave two free thresholds in the pool; a decrease or clearing is always
 accepted, so a reservation can be backed out after the pool shrank.
 
 The blocked state is tracked per band instead of being set and cleared
-for all bands together: the TX scheduler sees a per-band blocked flag, so
-the band that reached its ceiling waits for completions while a band that
-still has pool entries keeps scheduling. A reservation is released as
-soon as its band goes idle, so a single active band still uses the whole
-pool. The driver's unblock request clears the per-band flags and always
-reschedules the TX worker in quota mode, because the release path may
-already have cleared the flag that made progress; a release without a
-wake pointer, such as a failed TX preparation returning its token,
-refreshes and reschedules on its own.
+for all bands together, so the band that reached its ceiling waits for
+completions while a band that still has pool entries keeps scheduling. A
+reservation is released as soon as its band goes idle, so a single active
+band still uses the whole pool. The driver's unblock request clears the
+per-band flags and always reschedules the TX worker in quota mode, because
+the release path may already have cleared the flag that made progress; a
+release without a wake pointer, such as a failed TX preparation returning
+its token, refreshes and reschedules on its own.
+
+The per-band state is a separate flag and not the shared q->blocked:
+mt7996_register_phy() aliases the 6 GHz queues to the band1 q_tx[0] when
+the NPU is active (mt7996/init.c:761-769), so band1 and band2 feed one DMA
+ring and a single q->blocked could not express "band1 runs while band2 is
+blocked" - the two bands used to clear each other's bit. mt76_txq_stopped()
+therefore takes the phy and, while a quota is configured, reads
+token_band_stopped[phy->band_idx] instead. The ring itself stays shared,
+so a full ring still stops both bands, which no software split can avoid;
+the debugfs file says so rather than implying a per-band queue.
 
 With no reservation configured the original __mt76_set_tx_blocked() body
 runs verbatim, so the default keeps the global threshold and the old
-set/clear behavior; the per-band blocked counter is only maintained while
-the quota is on.
+set/clear behavior; the per-band state and blocked counter are only
+maintained while the quota is on.
 
 Expose a 0600 debugfs file "token_quota" next to "token_info" with the
-per-band used/reserved/blocked counters:
+per-band used/reserved/blocked counters and the current per-band block
+state:
 
-  band |   used | reserved | blocked
-     0 |     12 |        0 |       0
-     1 |      8 |      512 |       3
-     2 |   8000 |        0 |     127
+  band |   used | reserved | blocked | state
+     0 |     12 |        0 |       0 | run
+     1 |      8 |      512 |       3 | stop
+     2 |   8000 |        0 |     127 | run
 
   pool: 8020 of 16384 in flight, quota on
+  txq: band1 and band2 share one TX ring, so a full ring stops both;
+       only the token block is tracked (and cleared) per band
+
+The "txq:" lines are computed from the live q_tx[0] pointers, so they
+appear exactly when the NPU aliasing is in effect.
 
 Writing "<band> <tokens>" sets one reservation, e.g. "echo '1 512' >
 token_quota"; writing 0 to every band returns to the default. The
 counters and the reset cleanup are maintained under token_lock, and no
 AQL, firmware or pool size is changed.
 
-The patch applies after the existing 0001..0015 series and builds
-mt76.ko, mt76-connac-lib.ko, mt7996e.ko (NPU config) and mt7925-common.ko
-against the target 7.3 kernel tree. The 5 GHz blocked-counter A/B on
-hardware is left for a follow-up, as the issue says.
+The patch applies at -F0 after 0001..0017-notify-the-NPU-when-a-station-
+is-removed and builds mt76.ko, mt76-connac-lib.ko, mt7996e.ko (NPU
+config) and mt7925-common.ko against the target 7.3 kernel tree. The
+5 GHz blocked-counter A/B on hardware is left for a follow-up, as the
+issue says. The 5 GHz/6 GHz ring sharing is documented, not removed:
+splitting the ring needs a firmware and ring-layout change, not a quota.
 
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/mt76.h
 +++ b/mt76.h
-@@ -991,6 +991,20 @@
+@@ -1008,6 +1008,22 @@
  	u16 token_start;
  	u16 token_size;
  
@@ -66,12 +83,14 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	 * Per-band token quota. @token_reserved holds the number of pool
 +	 * entries that a band may reclaim from the other bands while it is
 +	 * active; everything is shared when it is zero. @token_band_used
-+	 * tracks in-flight tokens per band, @token_band_blocked counts the
-+	 * transitions into the blocked state and @token_band_active keeps
-+	 * the last time a band scheduled or queued a frame.
++	 * tracks in-flight tokens per band, @token_band_stopped is the block
++	 * state the TX scheduler consults for a band, @token_band_blocked
++	 * counts the transitions into the blocked state and @token_band_active
++	 * keeps the last time a band scheduled or queued a frame.
 +	 */
 +	u16 token_reserved[__MT_MAX_BAND];
 +	u16 token_band_used[__MT_MAX_BAND];
++	bool token_band_stopped[__MT_MAX_BAND];
 +	u32 token_band_blocked[__MT_MAX_BAND];
 +	unsigned long token_band_active[__MT_MAX_BAND];
 +	bool token_quota;
@@ -79,7 +98,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	spinlock_t rx_token_lock;
  	struct idr rx_token;
  	u16 rx_token_size;
-@@ -2076,6 +2090,8 @@
+@@ -2111,6 +2127,8 @@
  mt76_token_release(struct mt76_dev *dev, int token, bool *wake);
  int mt76_token_consume(struct mt76_dev *dev, struct mt76_txwi_cache **ptxwi);
  void __mt76_set_tx_blocked(struct mt76_dev *dev, bool blocked);
@@ -90,7 +109,41 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  			  struct mt76_txwi_cache *r, dma_addr_t phys);
 --- a/tx.c
 +++ b/tx.c
-@@ -595,6 +595,10 @@
+@@ -490,9 +490,22 @@
+ EXPORT_SYMBOL_GPL(mt76_release_buffered_frames);
+ 
+ static bool
+-mt76_txq_stopped(struct mt76_queue *q)
++mt76_txq_stopped(struct mt76_phy *phy, struct mt76_queue *q)
+ {
+-	return q->stopped || q->blocked ||
++	struct mt76_dev *dev = phy->dev;
++	bool blocked = q->blocked;
++
++	/*
++	 * With a token quota the block belongs to the band, not to the queue:
++	 * mt7996 aliases the 6 GHz queues to the 5 GHz q_tx[0] when the NPU is
++	 * active, so one q->blocked would be shared by two bands and a burst
++	 * on one of them would stop both. The ring itself stays shared, so
++	 * ring-full backpressure is still common to the two bands.
++	 */
++	if (READ_ONCE(dev->token_quota))
++		blocked = READ_ONCE(dev->token_band_stopped[phy->band_idx]);
++
++	return q->stopped || blocked ||
+ 	       q->queued + MT_TXQ_FREE_THR >= q->ndesc;
+ }
+ 
+@@ -551,7 +564,7 @@
+ 		if (test_bit(MT76_RESET, &phy->state) || phy->offchannel)
+ 			break;
+ 
+-		if (stop || mt76_txq_stopped(q))
++		if (stop || mt76_txq_stopped(phy, q))
+ 			break;
+ 
+ 		skb = mt76_txq_dequeue(phy, mtxq);
+@@ -613,13 +626,17 @@
  		if (test_bit(MT76_RESET, &phy->state) || phy->offchannel)
  			continue;
  
@@ -101,7 +154,42 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  		q = phy->q_tx[qid];
  
  		if (test_bit(MT_WCID_FLAG_PS, &wcid->flags)) {
-@@ -865,6 +869,9 @@
+ 			if (!(dev->drv->drv_flags & MT_DRV_HW_PS_BUFFERING))
+ 				continue;
+ 
+-			if (!mt76_txq_stopped(q))
++			if (!mt76_txq_stopped(phy, q))
+ 				n_frames = mt76_txq_send_burst(phy, q, mtxq, wcid);
+ 
+ 			if (unlikely(n_frames < 0))
+@@ -635,7 +652,7 @@
+ 			 * unscheduled instead and let mt76_tx_complete_skb() re-arm
+ 			 * it once a buffered frame completes.
+ 			 */
+-			if (n_frames > 0 || mt76_txq_stopped(q))
++			if (n_frames > 0 || mt76_txq_stopped(phy, q))
+ 				ieee80211_return_txq(phy->hw, txq, false);
+ 
+ 			ret += n_frames;
+@@ -661,7 +678,7 @@
+ 			ieee80211_send_bar(vif, sta->addr, tid, agg_ssn);
+ 		}
+ 
+-		if (!mt76_txq_stopped(q))
++		if (!mt76_txq_stopped(phy, q))
+ 			n_frames = mt76_txq_send_burst(phy, q, mtxq, wcid);
+ 
+ 		ieee80211_return_txq(phy->hw, txq, false);
+@@ -722,7 +739,7 @@
+ 			qid = MT_TXQ_PSD;
+ 
+ 		q = phy->q_tx[qid];
+-		if (mt76_txq_stopped(q) || test_bit(MT76_RESET, &phy->state)) {
++		if (mt76_txq_stopped(phy, q) || test_bit(MT76_RESET, &phy->state)) {
+ 			ret = -1;
+ 			break;
+ 		}
+@@ -883,6 +900,9 @@
  	struct mt76_phy *phy = hw->priv;
  	struct mt76_dev *dev = phy->dev;
  
@@ -111,30 +199,12 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	mt76_worker_schedule(&dev->tx_worker);
  }
  EXPORT_SYMBOL_GPL(mt76_wake_tx_queue);
-@@ -923,35 +930,257 @@
+@@ -941,35 +961,242 @@
  }
  EXPORT_SYMBOL_GPL(mt76_queue_tx_complete);
  
 -void __mt76_set_tx_blocked(struct mt76_dev *dev, bool blocked)
 +#define MT76_TOKEN_QUOTA_IDLE_MS	500
-+
-+static struct mt76_queue *mt76_token_band_queue(struct mt76_dev *dev, int band)
- {
--	struct mt76_phy *phy = &dev->phy;
--	struct mt76_queue *q = phy->q_tx[0];
-+	struct mt76_phy *phy;
- 
--	if (blocked == q->blocked)
--		return;
-+	if (band < 0 || band >= __MT_MAX_BAND)
-+		return NULL;
-+
-+	phy = dev->phys[band];
-+	if (!phy)
-+		return NULL;
-+
-+	return phy->q_tx[0];
-+}
 +
 +/*
 + * A band competes for the shared token pool while it has tokens in flight, or
@@ -142,16 +212,25 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 + * that is alone use the whole pool shortly after the other bands go quiet.
 + */
 +static bool mt76_token_band_active(struct mt76_dev *dev, int band)
-+{
+ {
+-	struct mt76_phy *phy = &dev->phy;
+-	struct mt76_queue *q = phy->q_tx[0];
 +	unsigned long active = READ_ONCE(dev->token_band_active[band]);
-+
+ 
+-	if (blocked == q->blocked)
+-		return;
 +	if (READ_ONCE(dev->token_band_used[band]))
 +		return true;
-+
+ 
+-	q->blocked = blocked;
 +	return time_before(jiffies, active +
 +			   msecs_to_jiffies(MT76_TOKEN_QUOTA_IDLE_MS));
 +}
-+
+ 
+-	phy = dev->phys[MT_BAND1];
+-	if (phy) {
+-		q = phy->q_tx[0];
+-		q->blocked = blocked;
 +/*
 + * Returns the number of pool entries a band may occupy. The reservations of
 + * the other active bands are subtracted from the shared pool first, so they
@@ -185,7 +264,9 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +			break;
 +		}
 +		limit -= reserved;
-+	}
+ 	}
+-	phy = dev->phys[MT_BAND2];
+-	if (phy) {
 +
 +	/*
 +	 * A limit within the free headroom cannot be enforced: a band blocked
@@ -217,17 +298,16 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 + */
 +static bool mt76_token_band_update(struct mt76_dev *dev, int band)
 +{
-+	struct mt76_queue *q = mt76_token_band_queue(dev, band);
 +	bool blocked;
 +
-+	if (!q)
++	if (band < 0 || band >= __MT_MAX_BAND || !dev->phys[band])
 +		return false;
 +
 +	blocked = mt76_token_band_blocked(dev, band);
-+	if (q->blocked == blocked)
++	if (READ_ONCE(dev->token_band_stopped[band]) == blocked)
 +		return false;
- 
- 	q->blocked = blocked;
++
++	WRITE_ONCE(dev->token_band_stopped[band], blocked);
 +	if (blocked) {
 +		dev->token_band_blocked[band]++;
 +		return false;
@@ -294,9 +374,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +
 +	if (wake)
 +		mt76_worker_schedule(&dev->tx_worker);
- 
--	phy = dev->phys[MT_BAND1];
--	if (phy) {
++
 +	return 0;
 +
 +out:
@@ -341,26 +419,22 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +
 +		return;
  	}
--	phy = dev->phys[MT_BAND2];
--	if (phy) {
--		q = phy->q_tx[0];
--		q->blocked = blocked;
-+
+ 
+-	if (!blocked)
+-		mt76_worker_schedule(&dev->tx_worker);
 +	if (blocked) {
 +		for (i = 0; i < __MT_MAX_BAND; i++) {
-+			q = mt76_token_band_queue(dev, i);
-+			if (!q || q->blocked)
++			if (!dev->phys[i] ||
++			    READ_ONCE(dev->token_band_stopped[i]))
 +				continue;
 +
-+			q->blocked = true;
++			WRITE_ONCE(dev->token_band_stopped[i], true);
 +			dev->token_band_blocked[i]++;
 +		}
 +
 +		return;
- 	}
- 
--	if (!blocked)
--		mt76_worker_schedule(&dev->tx_worker);
++	}
++
 +	/*
 +	 * mt76_token_release() may already have cleared the blocked flag of
 +	 * the band that made progress, so the refresh below can find nothing
@@ -382,7 +456,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
  	spin_lock_bh(&dev->token_lock);
  
-@@ -960,6 +1189,7 @@
+@@ -978,6 +1205,7 @@
  			  GFP_ATOMIC);
  	if (token >= dev->token_start) {
  		dev->token_count++;
@@ -390,7 +464,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
  		if ((*ptxwi)->qid == MT_TXQ_PSD) {
  			struct mt76_phy *mphy = mt76_dev_phy(dev, (*ptxwi)->phy_idx);
-@@ -973,7 +1203,9 @@
+@@ -991,7 +1219,9 @@
  		dev->wed_token_count++;
  #endif
  
@@ -401,7 +475,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  		__mt76_set_tx_blocked(dev, true);
  
  	spin_unlock_bh(&dev->token_lock);
-@@ -1004,12 +1236,20 @@
+@@ -1022,12 +1252,20 @@
  mt76_token_release(struct mt76_dev *dev, int token, bool *wake)
  {
  	struct mt76_txwi_cache *txwi;
@@ -422,7 +496,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
  		if (txwi->qid == MT_TXQ_PSD) {
  			struct mt76_phy *mphy = mt76_dev_phy(dev, txwi->phy_idx);
-@@ -1025,12 +1265,26 @@
+@@ -1043,12 +1281,26 @@
  #endif
  	}
  
@@ -453,22 +527,26 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  EXPORT_SYMBOL_GPL(mt76_token_release);
 --- a/mt76_connac_mac.c
 +++ b/mt76_connac_mac.c
-@@ -1224,6 +1224,8 @@
+@@ -1224,6 +1224,9 @@
  		mt76_connac2_txwi_free(dev, txwi, NULL, NULL);
  		dev->token_count--;
  	}
 +	memset(dev->token_band_used, 0, sizeof(dev->token_band_used));
++	memset(dev->token_band_stopped, 0, sizeof(dev->token_band_stopped));
 +	memset(dev->token_band_active, 0, sizeof(dev->token_band_active));
  	spin_unlock_bh(&dev->token_lock);
  	idr_destroy(&dev->token);
  
 --- a/mt7925/pci_mac.c
 +++ b/mt7925/pci_mac.c
-@@ -64,6 +64,9 @@
+@@ -64,6 +64,12 @@
  		mt7925_txwi_free(dev, txwi, NULL, NULL, NULL);
  		dev->mt76.token_count--;
  	}
-+	memset(dev->mt76.token_band_used, 0, sizeof(dev->mt76.token_band_used));
++	memset(dev->mt76.token_band_used, 0,
++	       sizeof(dev->mt76.token_band_used));
++	memset(dev->mt76.token_band_stopped, 0,
++	       sizeof(dev->mt76.token_band_stopped));
 +	memset(dev->mt76.token_band_active, 0,
 +	       sizeof(dev->mt76.token_band_active));
  	spin_unlock_bh(&dev->mt76.token_lock);
@@ -476,11 +554,14 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  }
 --- a/mt7996/mac.c
 +++ b/mt7996/mac.c
-@@ -2140,6 +2140,9 @@
+@@ -2145,6 +2145,12 @@
  		mt7996_txwi_free(dev, txwi, NULL, NULL, NULL);
  		dev->mt76.token_count--;
  	}
-+	memset(dev->mt76.token_band_used, 0, sizeof(dev->mt76.token_band_used));
++	memset(dev->mt76.token_band_used, 0,
++	       sizeof(dev->mt76.token_band_used));
++	memset(dev->mt76.token_band_stopped, 0,
++	       sizeof(dev->mt76.token_band_stopped));
 +	memset(dev->mt76.token_band_active, 0,
 +	       sizeof(dev->mt76.token_band_active));
  	spin_unlock_bh(&dev->mt76.token_lock);
@@ -488,7 +569,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
 --- a/mt7996/debugfs.c
 +++ b/mt7996/debugfs.c
-@@ -1483,6 +1483,78 @@
+@@ -1483,6 +1483,93 @@
  }
  DEFINE_SHOW_ATTRIBUTE(mt7996_msix);
  
@@ -499,8 +580,9 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	struct mt7996_dev *dev = file->private_data;
 +	struct mt76_dev *mdev = &dev->mt76;
 +	u16 used[__MT_MAX_BAND], reserved[__MT_MAX_BAND];
++	bool stopped[__MT_MAX_BAND];
 +	u32 blocked[__MT_MAX_BAND];
-+	bool quota;
++	bool quota, shared;
 +	u16 tokens, size;
 +	char buf[512];
 +	int i, len = 0;
@@ -509,6 +591,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	for (i = 0; i < __MT_MAX_BAND; i++) {
 +		used[i] = mdev->token_band_used[i];
 +		reserved[i] = mdev->token_reserved[i];
++		stopped[i] = mdev->token_band_stopped[i];
 +		blocked[i] = mdev->token_band_blocked[i];
 +	}
 +	tokens = mdev->token_count;
@@ -516,15 +599,28 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	quota = mdev->token_quota;
 +	spin_unlock_bh(&mdev->token_lock);
 +
++	/*
++	 * With the NPU active, mt7996_register_phy() aliases the band2 queues
++	 * to the band1 q_tx[0], so the two bands feed one DMA ring. The quota
++	 * still blocks them separately, but a ring that fills up stops both.
++	 */
++	shared = mdev->phys[MT_BAND1] && mdev->phys[MT_BAND2] &&
++		 mdev->phys[MT_BAND1]->q_tx[0] == mdev->phys[MT_BAND2]->q_tx[0];
++
 +	len += scnprintf(buf + len, sizeof(buf) - len,
-+			 " band |   used | reserved | blocked\n");
++			 " band |   used | reserved | blocked | state\n");
 +	for (i = 0; i < __MT_MAX_BAND; i++)
 +		len += scnprintf(buf + len, sizeof(buf) - len,
-+				 " %4d | %6u | %8u | %7u\n",
-+				 i, used[i], reserved[i], blocked[i]);
++				 " %4d | %6u | %8u | %7u | %s\n",
++				 i, used[i], reserved[i], blocked[i],
++				 stopped[i] ? "stop" : "run");
 +	len += scnprintf(buf + len, sizeof(buf) - len,
 +			 "\n pool: %u of %u in flight, quota %s\n",
 +			 tokens, size, quota ? "on" : "off");
++	if (shared)
++		len += scnprintf(buf + len, sizeof(buf) - len,
++				 " txq: band1 and band2 share one TX ring, so a full ring stops both;\n"
++				 "      only the token block is tracked (and cleared) per band\n");
 +
 +	return simple_read_from_buffer(user_buf, count, ppos, buf, len);
 +}
@@ -567,7 +663,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  int mt7996_init_debugfs(struct mt7996_dev *dev)
  {
  	struct dentry *dir;
-@@ -1524,6 +1596,8 @@
+@@ -1524,6 +1611,8 @@
  				    mt7996_token_info_read);
  	debugfs_create_devm_seqfile(dev->mt76.dev, "npu_rro", dir,
  				    mt7996_npu_rro_read);
