@@ -80,10 +80,11 @@ PPE 是否作用于 USB netdev —— 结论是**不作用于 bench host 上的�
 路由器上生效**：
 
 - 路由器侧的网卡（`lan2`/`wan`）是 `airoha_eth` 的 GDM 口，由设备树的 `reg` 决定端口号：
-  `airoha_eth.c:4485-4486` 取 `reg` 得 `id`，`airoha_eth.c:4490` 拒绝越界 id，
+  `airoha_alloc_gdm_port()`（`airoha_eth.c:4477`）里 `airoha_eth.c:4491` 取 `reg` 得 `id`、
+  `airoha_eth.c:4492` 算出 `p = id - 1`，`airoha_eth.c:4494` 拒绝越界 id，
   `airoha_eth.c:4510` 才把 `port` 挂进 `eth->ports[p]`。
-- 收包方向按 descriptor 里的 SPORT 反查端口：`airoha_qdma_get_gdm_dev`
-  （`airoha_eth.c:1017-1034`）查不到就直接返回 `-ENODEV`。
+- 收包方向按 descriptor 里的 SPORT 反查端口：`airoha_qdma_get_gdm_dev()`
+  （`airoha_eth.c:1015-1031`）查不到 port 就直接 `return ERR_PTR(-ENODEV)`。
 - 所以"哪些 netdev 有 QDMA 环"完全由设备树 + GDM 索引决定；USB NIC 在 bench host 上，
   对路由器不可见，PPE 只看到 `wan` ↔ `lan2` 这一对 GDM 口，offload 该生效就生效。
 
