@@ -9,6 +9,7 @@ continuation lines.  field_value() must join them; returning after the
 first matching line truncates the report to ``10baseT/*``.
 """
 
+import re
 import subprocess
 import unittest
 from pathlib import Path
@@ -81,6 +82,19 @@ class FieldValueTest(unittest.TestCase):
 
     def test_absent_key_yields_empty(self):
         self.assertEqual(self.field_value("FEC modes"), "")
+
+    def test_busybox_awk_rejects_bare_slash_in_bracket(self):
+        # BusyBox awk 1.38.0 (the device awk) ends a bracket expression at a
+        # bare "/" and dies with
+        #   awk: bad regex '^[A-Za-z][A-Za-z0-9 ()': Missing ']'
+        # which fails the whole program and empties every field, including
+        # the single-line ones.  gawk accepts the bare form, so running the
+        # function on the host does not catch it; this is the textual guard.
+        # ponytail: no behavioural busybox run here, the device repro in PR
+        # is the behavioural check.
+        self.assertIsNone(
+            re.search(r"\[[^\]]*(?<!\\)/[^\]]*\]", self.function),
+            "unescaped '/' inside a bracket expression breaks BusyBox awk")
 
     def test_next_key_does_not_leak(self):
         # "Advertised pause frame use" follows the mode list; the mode

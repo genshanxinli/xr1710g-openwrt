@@ -13,6 +13,12 @@
 # run unless /etc/xr1710g-10g-lab.enable exists, so it is inert on a normal
 # deployment.
 #
+# Nothing in the image creates that marker, so the diagnostic can never run
+# by itself: opt in with `xr1710g-lan10g-diag --enable`, which creates the
+# marker and exits, and opt out with `rm /etc/xr1710g-10g-lab.enable`.  A
+# uci-default is deliberately not used for this: it would arm the diagnostic
+# on every device at first boot, which is the opposite of inert.
+#
 # The lab names the two USXGMII ports lan10g and wan10g.  On this board the
 # same ports are the netdevs lan2 (GDM4/phy5) and wan (GDM2/phy8); a lab tree
 # may instead have netdevs or UCI interfaces carrying the lab names.  Each
@@ -32,8 +38,9 @@ PRIMARY_LOG=/var/log/lan10g-diag.log
 FALLBACK_LOG=/tmp/lan10g-diag.log
 LOG_PATH=
 
-# Helpers.  Only log_init runs before the marker check, and it just opens the
-# report file; every probe below is read-only.
+# Helpers.  Before the marker check only log_init runs, and it just opens the
+# report file; every probe below is read-only.  The --enable branch is the
+# sole writer and it only creates the marker.
 
 log_init() {
 	LOG_PATH=$PRIMARY_LOG
@@ -134,7 +141,7 @@ field_value() {
 				}
 				next
 			}
-			if (line == "" || line ~ /^[A-Za-z][A-Za-z0-9 ()/._-]*:/) {
+			if (line == "" || line ~ /^[[:alpha:]][[:alnum:] ()\/._-]*:/) {
 				print value
 				done = 1
 				next
@@ -306,10 +313,21 @@ scan_port() {
 }
 
 main() {
+	case ${1:-} in
+	--enable)
+		if : > "$MARKER"; then
+			printf '%s\n' "enabled: created $MARKER, rerun for the diagnostic"
+			return 0
+		fi
+		printf '%s\n' "cannot create $MARKER" >&2
+		return 1
+		;;
+	esac
+
 	log_init
 
 	if [ ! -e "$MARKER" ]; then
-		log "not enabled: $MARKER absent, diagnostic skipped"
+		log "not enabled: $MARKER absent, diagnostic skipped (opt in with: xr1710g-lan10g-diag --enable)"
 		exit 0
 	fi
 
