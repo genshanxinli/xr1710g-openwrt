@@ -80,7 +80,7 @@ Result: VULNERABLE-RANGE
 | 资料名 | 类型 | URL 或本地路径 | 日期 | 大小 / sha256 或 pin | 状态 | 备注 |
 |---|---|---|---|---|---|---|
 | mt76（含 NPU 补丁与 firmware） | 源码包 | https://github.com/OpenWRT-fanboy/mt76-firmware | 2026-10-08 | `639e128702780b398c1c36782b77899ce6bcb1fa`；mirror `9dfa305e700a7b4d83619a16517e36151a5d06e4b5a1a6d48e97ef3b48b0761e` | 已入库 | **代码** `package/kernel/mt76/Makefile:9-13`；非 MediaTek 官方发布 |
-| mt76 debugfs `token_info` / `npu_rro` 来源 | patch | `package/kernel/mt76/patches/0016-*npu-rro-debugfs*`（按文件名匹配） | — | — | 已入库 | **实测**两文件挂在 per-phy 目录 `/sys/kernel/debug/ieee80211/phy0/mt76/` 下，不在 debugfs 根 |
+| mt76 debugfs `token_info` / `npu_rro` 来源 | patch | `package/kernel/mt76/patches/0001-wifi-mt76-mt7996-add-token-and-NPU-debugfs-counters.patch`（token）、`0016-wifi-mt76-mt7996-add-npu-rro-debugfs.patch`（rro）、`0017-wifi-mt76-reserve-per-band-token-quota.patch` | — | — | 已入库 | **代码**（`grep -rl token_info` 命中这三个）；**实测**两文件挂在 per-phy 目录 `/sys/kernel/debug/ieee80211/phy0/mt76/` 下，不在 debugfs 根 |
 | backports（mac80211） | SDK | https://github.com/openwrt/backports/releases/download/backports-v7.2 | 7.2 | `6ec76a4cb0988b5382b2fc5053610a56ada90b8ef6a5a4f2807cd433badb9454` | 已入库 | **代码** `package/kernel/mac80211/Makefile:13-21` |
 | bridger | 包 | https://github.com/nbd168/bridger | 2026-03-23 | `de7e00a5a673fdda38d3326b624c45facc6245d2`；mirror `480047262ad886699f8abd8b25a8c292b190648d0098d207c2d1e260d0e97ab2` | 已入库 | **代码** `package/network/services/bridger/Makefile:10-15`。**更正**：旧台账写的 pin `befa61b1…` 在本树查不到（见 §6） |
 | firewall4 bridge-flowtable 补丁 | patch | `package/network/config/firewall4/patches/001-add-bridge-flowtable-support.patch` | — | — | 已入库 | 本树原创；**实测**设备上跑的是打过该补丁的 fw4，`/usr/share/firewall4/templates/ruleset.uc:486-507` 有 bridge 表 |
