@@ -1,0 +1,27 @@
+{
+  "schema": "bench-10g-unidirectional/v1",
+  "timestamp": "2026-11-20T05:17:20Z",
+  "git_describe": "unknown",
+  "kernel_release": "7.3",
+  "hostname": "OpenWrt",
+  "iperf3_version": "iperf 3.22 (cJSON 1.7.15)",
+  "iface": "br-lan",
+  "target": "",
+  "role": "server",
+  "port": 5301,
+  "baseline": true,
+  "label": "lan4-1g-2026-11-20",
+  "env_note": "peer=WSL2 host behind NAT shim, MTU 1280; device=XR1710G lan4 1000Mb/s; iperf3 from /tmp",
+  "mtu": 1500,
+  "duration_s": 5,
+  "parallel": 4,
+  "dump_foe": false,
+  "environment": {"link_speed_mbps":1000,"duplex":"unknown","driver":"bridge","flowtable_hw_offload":true,"captures":"snapshots/env"},
+  "raw_log": "raw.log",
+  "directions": {
+    "tx": {"direction":"tx","ok":true,"exit_status":0,"iperf3":{"command":"iperf3 -s -1 -J -p 5301","bits_per_second":704079627.195297,"gbps":0.704,"bytes":440270848,"seconds":5.002512,"retransmits":87,"peer_bits_per_second":0,"peer_gbps":0.000,"throughput_source":"iperf3.sum_sent.bits_per_second"},"pps":2854.4,"pps_source":"iface:tx_packets","iface_counters":{"elapsed_s":7.080,"tx_packets_delta":20209,"rx_packets_delta":48520,"tx_bytes_delta":440105900,"rx_bytes_delta":1952071,"tx_errors_delta":0,"rx_errors_delta":0},"cpu_idle":{"idle_ticks_delta":2798,"iowait_ticks_delta":0,"total_ticks_delta":3092,"idle_pct":90.49,"per_cpu":[{"cpu":"cpu0","idle_ticks_delta":751,"iowait_ticks_delta":0,"total_ticks_delta":790,"idle_pct":95.06},{"cpu":"cpu1","idle_ticks_delta":570,"iowait_ticks_delta":0,"total_ticks_delta":757,"idle_pct":75.30},{"cpu":"cpu2","idle_ticks_delta":747,"iowait_ticks_delta":0,"total_ticks_delta":778,"idle_pct":96.02},{"cpu":"cpu3","idle_ticks_delta":731,"iowait_ticks_delta":0,"total_ticks_delta":769,"idle_pct":95.06}]},"irq":{"total_delta":95175,"per_irq":[{"irq":11,"desc":"GICv3 30 Level arch_timer","delta":4395},{"irq":23,"desc":"GICv3 69 Level airoha_eth.0","delta":89417},{"irq":40,"desc":"GICv3 150 Level mt76-npu.0","delta":177},{"irq":41,"desc":"GICv3 151 Level mt76-npu.1","delta":46},{"irq":55,"desc":"MTK3-PCI-MSI-0000:01:00.0 6 Edge mt7996e","delta":1063},{"irq":57,"desc":"MTK3-PCI-MSI-0002:01:00.0 0 Edge mt7996e-hif","delta":77}]},"ppe":{"available":true,"usage_path":"/sys/kernel/debug/ppe/usage","before":{"entries":32768,"sram":16384,"dram":16384,"bound":0,"bound_pct":0,"unbound":0,"l2b_bound":0,"l2_flows_sw":0},"after":{"entries":32768,"sram":16384,"dram":16384,"bound":0,"bound_pct":0,"unbound":0,"l2b_bound":0,"l2_flows_sw":0},"bound_delta":0,"l2b_bound_delta":0,"l2_flows_sw_delta":0},"snapshots":{"before":"snapshots/tx-before","after":"snapshots/tx-after","iperf3":"iperf3-tx.json"},"error":null}
+,
+    "rx": {"direction":"rx","ok":true,"exit_status":0,"iperf3":{"command":"iperf3 -s -1 -J -p 5301","bits_per_second":886626158.39037251,"gbps":0.887,"bytes":564658176,"seconds":5.094893,"retransmits":null,"peer_bits_per_second":0,"peer_gbps":0.000,"throughput_source":"iperf3.sum_received.bits_per_second"},"pps":26372.3,"pps_source":"iface:rx_packets","iface_counters":{"elapsed_s":7.330,"tx_packets_delta":95903,"rx_packets_delta":193309,"tx_bytes_delta":5240098,"rx_bytes_delta":582765345,"tx_errors_delta":0,"rx_errors_delta":0},"cpu_idle":{"idle_ticks_delta":1873,"iowait_ticks_delta":0,"total_ticks_delta":3017,"idle_pct":62.08,"per_cpu":[{"cpu":"cpu0","idle_ticks_delta":559,"iowait_ticks_delta":0,"total_ticks_delta":774,"idle_pct":72.22},{"cpu":"cpu1","idle_ticks_delta":361,"iowait_ticks_delta":0,"total_ticks_delta":738,"idle_pct":48.92},{"cpu":"cpu2","idle_ticks_delta":464,"iowait_ticks_delta":0,"total_ticks_delta":753,"idle_pct":61.62},{"cpu":"cpu3","idle_ticks_delta":489,"iowait_ticks_delta":0,"total_ticks_delta":750,"idle_pct":65.20}]},"irq":{"total_delta":461012,"per_irq":[{"irq":11,"desc":"GICv3 30 Level arch_timer","delta":6053},{"irq":23,"desc":"GICv3 69 Level airoha_eth.0","delta":453599},{"irq":40,"desc":"GICv3 150 Level mt76-npu.0","delta":142},{"irq":41,"desc":"GICv3 151 Level mt76-npu.1","delta":53},{"irq":55,"desc":"MTK3-PCI-MSI-0000:01:00.0 6 Edge mt7996e","delta":1094},{"irq":57,"desc":"MTK3-PCI-MSI-0002:01:00.0 0 Edge mt7996e-hif","delta":71}]},"ppe":{"available":true,"usage_path":"/sys/kernel/debug/ppe/usage","before":{"entries":32768,"sram":16384,"dram":16384,"bound":0,"bound_pct":0,"unbound":0,"l2b_bound":0,"l2_flows_sw":0},"after":{"entries":32768,"sram":16384,"dram":16384,"bound":0,"bound_pct":0,"unbound":0,"l2b_bound":0,"l2_flows_sw":0},"bound_delta":0,"l2b_bound_delta":0,"l2_flows_sw_delta":0},"snapshots":{"before":"snapshots/rx-before","after":"snapshots/rx-after","iperf3":"iperf3-rx.json"},"error":null}
+
+  }
+}

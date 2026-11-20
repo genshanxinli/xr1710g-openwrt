@@ -1,0 +1,5 @@
+speed 1000
+duplex unknown
+carrier 1
+operstate up
+mtu 1500
