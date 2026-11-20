@@ -162,6 +162,8 @@ reg_global=$(printf '%s\n' "$reg_raw" | awk '
 norm_country() {
 	case "${1:-}" in
 	[A-Za-z][A-Za-z])
+		# BusyBox tr has no [:lower:]/[:upper:] classes; keep the range.
+		# shellcheck disable=SC2018,SC2019
 		printf '%s' "$1" | tr 'a-z' 'A-Z'
 		;;
 	esac
@@ -219,16 +221,36 @@ parse_iw_dev() {
 
 iface_lines=$(printf '%s\n' "$iw_dev" | parse_iw_dev)
 
+# Escape one JSON string body.  This walks the string byte by byte instead of
+# using gsub() on purpose.  BusyBox v1.38.0 awk processes backslash escapes in
+# a gsub() *replacement*, while gawk/mawk copy them through: measured on the
+# device, `gsub(/\t/, "\\t")` emits a bare `t` (the reg.raw tabs turned into
+# "t(902 - ..."), so the same replacement cannot be correct on both.  String
+# literals are parsed identically everywhere, so building the output with
+# literal concatenation needs no per-awk branch.  Input is ASCII (iw/uci).
 json_escape() {
 	awk 'BEGIN { ORS = "" }
+	function escape(s,   out, i, c) {
+		out = ""
+		for (i = 1; i <= length(s); i++) {
+			c = substr(s, i, 1)
+			if (c == "\\")
+				out = out "\\\\"
+			else if (c == "\"")
+				out = out "\\\""
+			else if (c == "\t")
+				out = out "\\t"
+			else if (c == "\r")
+				out = out "\\r"
+			else
+				out = out c
+		}
+		return out
+	}
 	{
-		gsub(/\\/, "\\\\")
-		gsub(/"/, "\\\"")
-		gsub(/\t/, "\\t")
-		gsub(/\r/, "\\r")
 		if (NR > 1)
 			printf "\\n"
-		printf "%s", $0
+		printf "%s", escape($0)
 	}'
 }
 
