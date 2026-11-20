@@ -37,7 +37,26 @@
 # pull the port out of the bridge" is not the fix either.  WAN (GDM2) is not a
 # bridge member and sits on its own QDMA, which is the only combination that
 # works - hence this script touches WAN and nothing else.
-[ "$ACTION" = ifup ] || [ "$ACTION" = ifdown ] || exit 0
+#
+# ifupdate counts as well, and it is not a cosmetic addition.  netifd emits
+# IFEV_UPDATE whenever the L3 configuration of an already-up interface is
+# re-applied, and fw4's own 20-firewall hotplug turns that event into a
+# "fw4 -q reload".  If this script ignores IFEV_UPDATE, the reload rebuilds the
+# flowtable from the current interface generation while the LRO state is left
+# describing the previous one - the two halves of the WAN fast path end up
+# disagreeing, and nothing repairs it until the next physical link event.
+#
+# The replay is idempotent: an interface that already reports LRO on is left
+# alone instead of being poked a second time.  netifd can report the same
+# update more than once, and each replay would otherwise reissue the ioctl on
+# a live link for no effect.
+#
+# ifup, ifupdate and ifdown of one interface can overlap - netifd does not wait
+# for a hotplug handler before starting the next event - so the body runs under
+# the same flock -w 10 idiom as 51-bridge-hw-offload: one writer at a time, the
+# later event queues behind the earlier one instead of interleaving with it,
+# and the wait is bounded so a stuck caller cannot hold the hotplug path open.
+[ "$ACTION" = ifup ] || [ "$ACTION" = ifupdate ] || [ "$ACTION" = ifdown ] || exit 0
 [ "$INTERFACE" = wan ] || exit 0
 
 # ethtool-full is only pulled in by some devices; without it the -k query
@@ -48,39 +67,66 @@ command -v ethtool >/dev/null || {
 	exit 0
 }
 
-# LRO lives on the physical netdev, not on the stacked one.  When the WAN is
-# PPPoE, netifd reports $DEVICE=pppoe-wan and l3_device is pppoe-wan too; a
-# virtual device has no LRO knob ("large-receive-offload: off [fixed]"), so
-# ethtool fails and nothing is applied.  Ask netifd for the underlying device
-# instead of trusting $DEVICE: status reports @.device as main_dev (the
-# physical port) and only @.l3_device as the PPP interface.
-#
-# The fallback is not DHCP-only.  netifd sets DEVICE only for ifup and
-# ifupdate (interface-event.c: device = current->l3_dev.dev->ifname under
-# `current_ev == IFEV_UP || current_ev == IFEV_UPDATE`), so on ifdown it is
-# unset for every proto - and by then interface.c has already released
-# main_dev, so @.device is gone from the status reply too.  Without the
-# fallback the LRO state would outlive the interface.
-DEV="$(ubus call network.interface.wan status 2>/dev/null | jsonfilter -e '@.device' 2>/dev/null)"
-[ -n "$DEV" ] || DEV="${DEVICE:-wan}"
+(
+	LOCK_DIR="${WAN_LRO_LOCK_DIR:-/var/lock}"
+	mkdir -p "$LOCK_DIR" 2>/dev/null
+	exec 9>"$LOCK_DIR/wan-lro.lock"
+	# -w, not -n: the lock serialises the toggle, it does not mean "drop the
+	# second caller".  An ifdown arriving while an ifup still runs must queue
+	# behind it, otherwise the two ethtool calls interleave and the winner is
+	# decided by timing rather than by event order.
+	flock -w 10 9 || {
+		logger -t wan-lro "another LRO change is in progress, giving up"
+		exit 0
+	}
 
-# A stacked device would silently accept the ioctl and change nothing, so
-# refuse anything whose LRO is fixed rather than pretending it worked.
-case "$(ethtool -k "$DEV" 2>/dev/null)" in
+	# LRO lives on the physical netdev, not on the stacked one.  When the WAN
+	# is PPPoE, netifd reports $DEVICE=pppoe-wan and l3_device is pppoe-wan
+	# too; a virtual device has no LRO knob ("large-receive-offload: off
+	# [fixed]"), so ethtool fails and nothing is applied.  Ask netifd for the
+	# underlying device instead of trusting $DEVICE: status reports @.device
+	# as main_dev (the physical port) and only @.l3_device as the PPP
+	# interface.
+	#
+	# The fallback is not DHCP-only.  netifd sets DEVICE only for ifup and
+	# ifupdate (interface-event.c: device = current->l3_dev.dev->ifname under
+	# `current_ev == IFEV_UP || current_ev == IFEV_UPDATE`), so on ifdown it
+	# is unset for every proto - and by then interface.c has already released
+	# main_dev, so @.device is gone from the status reply too.  Without the
+	# fallback the LRO state would outlive the interface.
+	#
+	# Neither the reply nor the feature dump has to be complete.  On ifupdate
+	# the port can be without carrier: -k then prints nothing (no match against
+	# the "fixed off" pattern below, which is correct - it is not fixed) and
+	# -K still addresses the netdev by name, so the toggle happens whether or
+	# not the link is up.  An empty reply falls through to the fallback.
+	DEV="$(ubus call network.interface.wan status 2>/dev/null | jsonfilter -e '@.device' 2>/dev/null)"
+	[ -n "$DEV" ] || DEV="${DEVICE:-wan}"
+
+	# A stacked device would silently accept the ioctl and change nothing, so
+	# refuse anything whose LRO is fixed rather than pretending it worked.
+	STATE="$(ethtool -k "$DEV" 2>/dev/null)"
+	case "$STATE" in
 	*"large-receive-offload: off [fixed]"*)
 		logger -t wan-lro "refusing to touch $DEV: LRO is fixed off"
 		exit 0
 		;;
-esac
+	esac
 
-case "$ACTION" in
-	ifup)
+	case "$ACTION" in
+	ifup|ifupdate)
+		case "$STATE" in
+		*"large-receive-offload: on"*)
+			exit 0
+			;;
+		esac
 		ethtool -K "$DEV" rx-lro on >/dev/null 2>&1 &&
 			logger -t wan-lro "LRO enabled on $DEV"
 		;;
 	ifdown)
 		ethtool -K "$DEV" rx-lro off >/dev/null 2>&1
 		;;
-esac
+	esac
+)
 
 exit 0

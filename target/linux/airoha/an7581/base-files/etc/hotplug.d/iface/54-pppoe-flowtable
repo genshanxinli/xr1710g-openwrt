@@ -1,0 +1,135 @@
+#!/bin/sh
+#
+# Keep the PPPoE netdev in fw4's inet flowtable.
+#
+# fw4 builds the inet flowtable's device list at reload time from
+# zone.related_physdevs, which netifd reports as the interface's *main* device:
+# for a PPPoE WAN that is the Ethernet port (wan), never the PPP netdev
+# (pppoe-wan / ppp0).  A decapsulated PPP packet is delivered with the PPP
+# netdev as skb->dev and as the route tuple's indev, so a flowtable that only
+# hooks the Ethernet port never sees it: the flow stays in the software path
+# and no PPE entry is bound.  Issue #28.
+#
+# Why not fix it in fw4 itself: fw4's resolve_offload_devices() collects exact
+# physical names and has no wildcard, so nothing in /etc/config/firewall can
+# express "ppp*".  Teaching the fw4 template a prefix would also make every
+# board on every target in the tree inherit a device pattern from a core
+# package, which is exactly what
+# etc/uci-defaults/50_firewall-offload:3-11 argues against.  So this stays a
+# board-level hotplug, and it edits the flowtable fw4 already built instead of
+# building a second one.
+#
+# The table and flowtable names are fw4's, not guesses: ruleset.uc writes
+# "table inet fw4" / "flowtable ft", and check_flowtable() looks for exactly
+# that pair.  Reading them back is still done through nft rather than assumed,
+# so a rename in fw4 shows up here as "nothing to do" instead of a write
+# against a table that is not there.
+#
+# Why "nft add" and not "delete + rebuild": a flowtable's device list has no
+# element-add or element-remove verb ("nft add element" exists for sets only).
+# What the kernel does support is an update of the flowtable hook: when the
+# named flowtable already exists, nft sends NFT_MSG_NEWFLOWTABLE without
+# NLM_F_EXCL and nf_tables_newflowtable() takes the nft_flowtable_update()
+# branch (net/netfilter/nf_tables_api.c), which registers only the hook devices
+# that are not already in the list.  Re-adding a device that is already there
+# is therefore a no-op inside the kernel, and this script needs no state file
+# to stay idempotent.
+#
+# That update branch refuses to change the offload flag in either direction
+# (-EOPNOTSUPP on a mismatch), so the flag has to be repeated verbatim when the
+# live flowtable has it, and left out when it does not.  Hence the read above
+# instead of a fixed rule text.
+#
+# Ordering is load-bearing.  fw4 ships /etc/hotplug.d/iface/20-firewall, which
+# runs "fw4 -q reload" on ifup/ifupdate of a zone interface and rebuilds the
+# device list from scratch - dropping our entry.  This script is 54, so it runs
+# after that reload on the same netifd event and puts the entry back.  It never
+# triggers a reload itself, so the two cannot ping-pong.
+#
+# ifdown is deliberately a no-op.  The PPP netdev going away already drops the
+# ingress hook through the NETDEV_UNREGISTER path in nft_flowtable_event(),
+# what is left is an inert name in the list, and fw4's next reload rebuilds the
+# list from live netifd state anyway - so there is nothing here worth an extra
+# "fw4 reload" that would drop every flow on the link.
+#
+# The body runs under the same flock -w 10 idiom as
+# 51-bridge-hw-offload: ifup and ifupdate of the same interface can overlap, and
+# two concurrent flowtable updates would fight over the same transaction.  The
+# wait is bounded so a stuck caller cannot hold the hotplug path open.
+
+[ "$ACTION" = ifup ] || [ "$ACTION" = ifupdate ] || exit 0
+[ "$INTERFACE" = "${PF_IFACE:-wan}" ] || exit 0
+
+command -v nft >/dev/null || {
+	logger -t pppoe-flowtable "nft not installed, cannot touch the flowtable"
+	exit 0
+}
+command -v jsonfilter >/dev/null || {
+	logger -t pppoe-flowtable "jsonfilter not installed, cannot read the netifd status"
+	exit 0
+}
+
+SYS_NET="${PF_SYS_NET:-/sys/class/net}"
+
+# Only a PPPoE WAN has a PPP netdev to add.  A DHCP or static WAN is a plain
+# Ethernet port that fw4 already lists, and poking the flowtable for it would
+# be change for no reason.
+PROTO="$(ubus call "network.interface.$INTERFACE" status 2>/dev/null | jsonfilter -e '@.proto' 2>/dev/null)"
+[ "$PROTO" = pppoe ] || exit 0
+
+# The netdev name is netifd's l3_device.  On ifup/ifupdate it is there by
+# definition; if the reply is thin, use the same fallback
+# usr/sbin/wan-path:125-131 uses (pppoe-<iface> first, then any ppp[0-9]*).
+DEV="$(ubus call "network.interface.$INTERFACE" status 2>/dev/null | jsonfilter -e '@.l3_device' 2>/dev/null)"
+if [ -z "$DEV" ]; then
+	if [ -d "$SYS_NET/pppoe-$INTERFACE" ]; then
+		DEV="pppoe-$INTERFACE"
+	else
+		for d in "$SYS_NET"/pppoe-* "$SYS_NET"/ppp[0-9]*; do
+			[ -d "$d" ] || continue
+			DEV="${d##*/}"
+			break
+		done
+	fi
+fi
+[ -n "$DEV" ] || {
+	logger -t pppoe-flowtable "no PPP netdev found, leaving the flowtable alone"
+	exit 0
+}
+[ -d "$SYS_NET/$DEV" ] || {
+	logger -t pppoe-flowtable "$DEV does not exist, leaving the flowtable alone"
+	exit 0
+}
+
+(
+	LOCK_DIR="${PF_LOCK_DIR:-/var/lock}"
+	mkdir -p "$LOCK_DIR" 2>/dev/null
+	exec 9>"$LOCK_DIR/pppoe-flowtable.lock"
+	flock -w 10 9 || {
+		logger -t pppoe-flowtable "another flowtable change is in progress, giving up"
+		exit 0
+	}
+
+	LIST="$(nft list flowtable inet fw4 ft 2>/dev/null)" || {
+		logger -t pppoe-flowtable "fw4 has no inet flowtable ft, nothing to add"
+		exit 0
+	}
+
+	printf '%s\n' "$LIST" | grep -qF "\"$DEV\"" && exit 0
+
+	FLAGS=""
+	case "$LIST" in
+	*"flags offload"*) FLAGS="flags offload;" ;;
+	esac
+
+	# Priority 0 is what ruleset.uc writes for this flowtable; an update that
+	# disagreed with it would be rejected with -EOPNOTSUPP.
+	if nft add flowtable inet fw4 ft \
+		"{ hook ingress priority 0; devices = { \"$DEV\" }; $FLAGS }" >/dev/null 2>&1; then
+		logger -t pppoe-flowtable "added $DEV to flowtable ft"
+	else
+		logger -t pppoe-flowtable "could not add $DEV to flowtable ft"
+	fi
+)
+
+exit 0
