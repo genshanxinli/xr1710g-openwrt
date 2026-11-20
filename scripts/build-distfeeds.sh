@@ -19,6 +19,16 @@
 
 set -eu
 
+# -h/--help must not fall through to OUTDIR: `rm -rf --help` treats it as an
+# option, prints rm's usage and aborts with exit 1 instead of showing the
+# usage text above.
+case ${1:-} in
+-h | --help)
+	sed -n '4,/^$/p' "$0" | sed -e 's/^#\s*//'
+	exit 0
+	;;
+esac
+
 topdir=${TOPDIR:-$(cd "$(dirname "$0")/.." && pwd)}
 out=${1:-$topdir/distfeeds}
 bin=$topdir/bin
