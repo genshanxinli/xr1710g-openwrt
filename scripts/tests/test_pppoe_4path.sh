@@ -17,12 +17,19 @@
 #   (b) the four arms are emitted in order with the right labels
 #   (c) cleanup kills the iperf3 servers it started (EXIT, INT, TERM)
 #   (d) --dry-run exits 0 and needs no ssh/iperf3
+# `sh scripts/tests/test_pppoe_4path.sh` must not quietly change the semantics:
+# job control (`set -m`) is what gives the harness a real SIGINT disposition,
+# and /bin/sh cannot do that without a tty.  Re-exec instead of guessing.
+case ${BASH_VERSION:-} in
+'') exec bash "$0" "$@" ;;
+esac
 set -u
 LC_ALL=C
 export LC_ALL
+MAIN_PID=$$
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-SCRIPT=$HERE/../pppoe-4path.sh
+SCRIPT=${PPPOE4PATH_SCRIPT:-$HERE/../pppoe-4path.sh}
 [ -x "$SCRIPT" ] || { printf 'not executable: %s\n' "$SCRIPT" >&2; exit 1; }
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/pppoe-4path-test.XXXXXX") || exit 1
@@ -45,7 +52,10 @@ kill_survivors() {
 	done
 	[ -f "$TMP/run.pid" ] && kill "$(cat "$TMP/run.pid")" 2>/dev/null
 }
-trap 'kill_survivors; [ "${KEEP_TMP:-}" = 1 ] || rm -rf "$TMP"' EXIT
+# bash runs an EXIT trap in every $(...) subshell and every background job, so
+# an unguarded trap would delete this scratch dir and kill these servers halfway
+# through the run.  BASHPID differs in a subshell; $$ does not.
+trap 'if [ "${BASHPID:-}" = "$MAIN_PID" ]; then kill_survivors; [ "${KEEP_TMP:-}" = 1 ] || rm -rf "$TMP"; fi' EXIT
 
 mkdir -p "$BIN" "$STATE"
 : >"$STATE/ssh.log"
@@ -299,31 +309,59 @@ grep -q 'cleanup: stopping the processes this run started' "$TMP/full.out" &&
 	ok "cleanup ran on normal exit" || no "cleanup ran on normal exit"
 
 # ------------------------------------------ (c) SIGINT / SIGTERM cleanup
-# A background child of a non-interactive /bin/sh inherits SIGINT as SIG_IGN,
-# so it could not trap it (POSIX: an ignored signal cannot be trapped).  Real
-# Ctrl-C hits a foreground child with the default disposition, so turn job
-# control on: the background job becomes a process-group leader with SIG_DFL.
+#
+# The signal must arrive the way Ctrl-C arrives.  A background child of a
+# non-interactive shell inherits SIGINT as SIG_IGN, and a POSIX shell can never
+# trap a signal that was ignored on entry, so "interrupt" tests written that way
+# are decorative: the harness simply runs to completion and exits 0.  Job
+# control (`set -m`) gives the job its own process group and the default
+# disposition.  The signal is sent once an arm is demonstrably in flight, not
+# after a guessed sleep, and the target is checked to be the harness itself.
 set -m
 for sig in INT TERM; do
 	: >"$STATE/dev-procs"
 	: >"$STATE/host-procs"
-	START_DELAY=1 start ppp "$TMP/sig-$sig.out" --duration 1 --out "$TMP/sig-$sig.tsv"
+	rm -f "$TMP/sig-$sig.tsv" "$TMP/sig-$sig.out"
+	START_DELAY=1 start ppp "$TMP/sig-$sig.out" --duration 5 --out "$TMP/sig-$sig.tsv"
 	pid=$RUN_PID
-	sleep 1.5
+	i=0
+	while [ ! -s "$STATE/dev-procs" ] && [ "$i" -lt 400 ]; do
+		sleep 0.05
+		i=$((i + 1))
+	done
+	target_cmd=$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null)
+	printf '# SIG%s target pid=%s cmd=%s\n' "$sig" "$pid" "$target_cmd"
+	pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')
+	if [ -n "$pgid" ]; then
+		printf '# SIG%s process tree at signal time:\n' "$sig"
+		ps -o pid=,ppid=,pgid=,args= 2>/dev/null | awk -v g="$pgid" '
+			NR == 1 { next }
+			$3 == g { print "#   " $0 }'
+	fi
+	case $target_cmd in
+	*pppoe-4path.sh*) ok "SIG$sig target is the harness itself, not a wrapper" ;;
+	*) no "SIG$sig target is the harness itself, not a wrapper (cmd=$target_cmd)" ;;
+	esac
 	kill -"$sig" "$pid" 2>/dev/null
-	wait "$pid"
+	wait "$pid" 2>/dev/null
 	rc=$?
 	case $sig in
 	INT) want=130 ;;
 	TERM) want=143 ;;
 	esac
 	[ "$rc" = "$want" ] && ok "SIG$sig exits $want" || no "SIG$sig exits $want (rc=$rc)"
-	servers_dead && ok "SIG$sig cleanup killed the iperf3 servers" || no "SIG$sig cleanup killed the iperf3 servers"
+	# Proves the interrupt was real: a harness that ignored it would finish the
+	# four arms and exit 0.
+	n=$(arm_rows "$TMP/sig-$sig.tsv" 2>/dev/null)
+	n=${n:-0}
+	[ "$n" -lt 4 ] && ok "SIG$sig interrupted the arm loop before four arms (rows=$n)" ||
+		no "SIG$sig interrupted the arm loop before four arms (rows=$n)"
+	grep -q 'temporarily accepting ppp0' "$TMP/sig-$sig.out" &&
+		ok "SIG$sig arrived after the arm phase started" || no "SIG$sig arrived after the arm phase started"
 	grep -q 'cleanup: stopping the processes this run started' "$TMP/sig-$sig.out" &&
 		ok "SIG$sig ran the cleanup trap" || no "SIG$sig ran the cleanup trap"
-	n=$(arm_rows "$TMP/sig-$sig.tsv")
-	[ "$n" -lt 4 ] && ok "SIG$sig interrupted before all four arms (rows=$n)" ||
-		no "SIG$sig interrupted before all four arms (rows=$n)"
+	servers_dead && ok "SIG$sig cleanup killed the device iperf3 servers" ||
+		no "SIG$sig cleanup killed the device iperf3 servers"
 	alive=0
 	while read -r p; do [ -n "$p" ] && kill -0 "$p" 2>/dev/null && alive=$((alive + 1)); done <"$STATE/host-procs"
 	[ "$alive" = 0 ] && ok "SIG$sig cleanup killed the host pppoe-server" || no "SIG$sig cleanup killed the host pppoe-server"
