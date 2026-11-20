@@ -1,0 +1,82 @@
+#!/bin/sh
+#
+# Raise the TX queue length on br-lan and the wlan vifs (issue #5).
+#
+# The reference board this tree is ported from sets tx_queue_len on the
+# bridge and on every AP vif; nothing in this tree did, and the board was
+# measured at the kernel default of 1000 on all of them:
+#
+#   ip -o link | br-lan, phy0.0/1/2-ap0 ... qlen 1000
+#
+# What this value is and is not:
+#
+#   tx_queue_len is the *packet limit a qdisc reads from the netdev*
+#   (sch_fifo.c:107 takes it as the pfifo limit, sch_htb.c and sch_qfq.c as
+#   their default depth).  All four devices here currently run `qdisc
+#   noqueue`, and __dev_queue_xmit() skips the qdisc entirely for a noqueue
+#   device, so with the stock qdisc this script changes a number nobody
+#   dequeues from.  It is set anyway because it is the value every qdisc an
+#   operator attaches later (SQM, qosify, htb, a manual pfifo) inherits, and
+#   the 1000 default is what the vendor board replaced.  Do not expect a
+#   throughput change from it on a stock image: verify with
+#   `ip link show br-lan` (qlen) and `tc qdisc show dev br-lan` (noqueue).
+#
+# 5000 packets, not 1000: a stock fq_codel child already holds up to 1024
+# packets per flow (sch_fq_codel.c:516 sets sch->limit = 10*1024, further
+# capped by memory_limit = 4 MB from 660-fq_codel_defaults.patch), so a
+# qdisc limit below that would be the binding constraint the moment anyone
+# attaches one.  5000 * SKB_TRUESIZE(1500 B frame) ~ 11 MB of skbs, charged
+# only if the queue actually fills, and never charged at all while the
+# device runs noqueue.
+#
+# br-lan is a bridge and the vifs are mac80211 interfaces: both set
+# IFF_NO_QUEUE (br_device.c:491, mac80211 iface.c:1661), which is why the
+# number is inert today.  Neither is a place where a deeper queue buys
+# latency -- that is why this file is deliberately silent about the value
+# being a performance win.
+#
+# Hotplug rather than uci-defaults: /etc/uci-defaults runs from
+# /etc/init.d/boot (START=10) before network (START=20) exists, so neither
+# br-lan nor a vif is there yet.  /etc/hotplug.d/net fires an add event for
+# every netdevice, including the bridge netifd creates and the vifs `wifi`
+# creates afterwards -- the same hook 50-bridge-hw-offload relies on.
+#
+# busybox `ip` on this image does support it:
+#   Usage: ip ... link set IFACE ... [mtu NUM] ... [qlen NUM] ...
+# (BusyBox v1.38.0, verified on hardware 2026-11-20.)  /sys/class/net/<dev>/
+# tx_queue_len is the fallback if `ip` is ever absent, and it goes through
+# the same dev_change_tx_queue_len() (net-sysfs.c:511).
+#
+# Idempotent: the current value is read first and nothing is written when it
+# already matches, because changing it deactivates and re-activates the
+# device (dev_qdisc_change_tx_queue_len -> dev_deactivate/dev_activate,
+# sch_generic.c:1468) and that is not worth a gratuitous hiccup.
+
+TX_QUEUE_LEN=${TX_QUEUE_LEN:-5000}
+SYS_NET="${WLAN_QLEN_SYS_NET:-/sys/class/net}"
+
+case "$ACTION" in
+add|change) ;;
+*) exit 0 ;;
+esac
+[ -n "$DEVICENAME" ] || exit 0
+[ -d "$SYS_NET/$DEVICENAME" ] || exit 0
+
+# br-lan, or any wireless netdev: a mac80211 vif always has this symlink,
+# whatever naming scheme netifd picked for it.
+if [ "$DEVICENAME" = "br-lan" ] ||
+	[ -e "$SYS_NET/$DEVICENAME/phy80211" ]; then
+	:
+else
+	exit 0
+fi
+
+cur=$(cat "$SYS_NET/$DEVICENAME/tx_queue_len" 2>/dev/null)
+[ "$cur" = "$TX_QUEUE_LEN" ] && exit 0
+
+if ! ip link set dev "$DEVICENAME" qlen "$TX_QUEUE_LEN" 2>/dev/null; then
+	echo "$TX_QUEUE_LEN" > "$SYS_NET/$DEVICENAME/tx_queue_len" 2>/dev/null ||
+		logger -t wlan-txqueuelen "cannot set qlen on $DEVICENAME"
+fi
+
+exit 0
