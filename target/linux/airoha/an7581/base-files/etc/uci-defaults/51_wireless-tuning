@@ -56,22 +56,63 @@ gemtek,xr1710g-ubi)
 	# the channel is final.
 	#
 	# wireless.radio1.xr1710g_5g160=1 opts in to the 36-64 profile the
-	# survey left unused: the channel is not touched (36 is the stock
-	# default) and EHT160 is restored on 36-64. Any other channel is left
-	# alone, so auto and the channels outside 36-64 keep whatever 58 and
-	# the operator decide. The marker is only read, never written: unset
-	# and 0 both keep the 149/EHT80 default above.
+	# survey left unused: the channel is pinned to that block and EHT160
+	# is restored on it. A channel outside 36-64 is left alone, so those
+	# keep whatever the operator (and 58) decide. The marker is only read,
+	# never written: unset and 0 both keep the 149/EHT80 default above.
 	if [ "$(uci -q get wireless.radio1.xr1710g_5g160)" = "1" ]; then
 		channel=$(uci -q get wireless.radio1.channel)
+
+		# The marker asks for the 36-64 profile, so an unset channel and
+		# `auto` cannot be left to ACS: ACS scores 149 as the quietest
+		# channel here, and 160 MHz cannot come up on UNII-3, so the
+		# opt-in would silently degrade into a width hostapd refuses.
+		# Write the 36 anchor of the 160 MHz block and decide the width
+		# from it.
+		case "$channel" in
+		''|auto)
+			uci -q set wireless.radio1.channel=36
+			changed=1
+			channel=36
+			;;
+		esac
+
 		case "$channel" in
 		36|40|44|48|52|56|60|64)
 			# Restore EHT160 even if an earlier boot narrowed it to
 			# EHT80 while the band sat on 149: the marker asks for the
 			# 160 MHz profile, so it wins on UNII-1/UNII-2A.
+			#
+			# HE160 and VHT160 already ask for 160 MHz and were picked
+			# by the operator (or restored from an older config), so
+			# they are not narrowing leftovers: rewriting them to EHT160
+			# would silently discard that choice.
 			htmode=$(uci -q get wireless.radio1.htmode)
-			if [ "$htmode" != "EHT160" ]; then
+			case "$htmode" in
+			EHT160|HE160|VHT160) ;;
+			*)
 				uci -q set wireless.radio1.htmode=EHT160
 				changed=1
+				;;
+			esac
+
+			# The 36-64 block is one 160 MHz segment and it covers the DFS
+			# channels 52-64, so hostapd has to run a 60 s CAC before the
+			# BSS can start and has to keep radar detection on. `noscan`
+			# does not skip that: it only skips the scan *before* CAC, and
+			# setting it here would hide a DFS channel from the survey
+			# tooling. Radar detection is `ieee80211h=1`, which
+			# hostapd.sh:186 emits only while doth is on (default 1), so a
+			# config that turned it off has to be told what it gave up.
+			case "$channel" in
+			52|56|60|64)
+				logger -t wireless-tuning \
+					"5g160: primary channel $channel is DFS, expect a 60 s CAC and radar-triggered restarts"
+				;;
+			esac
+			if [ "$(uci -q get wireless.radio1.doth)" = "0" ]; then
+				logger -t wireless-tuning \
+					"5g160: doth=0 turns radar detection off, 160 MHz on 36-64 is not usable without it"
 			fi
 			;;
 		esac
@@ -110,12 +151,22 @@ gemtek,xr1710g-ubi)
 
 		# A missing section is normal before `wifi config` has run on a
 		# board whose radios are still disabled, but it also means the
-		# four settings below are silently skipped, so say which one.
+		# five settings below are silently skipped, so say which one.
 		uci -q get "wireless.$iface" >/dev/null || {
 			logger -t wireless-tuning "no $iface, skipping 11k/v defaults"
 			continue
 		}
 		uci_set_from "$iface" disassoc_low_ack "" 0
+
+		# U-APSD is advertised by default -- hostapd.sh:594 sets uapsd 1
+		# and nothing here turned it off, so all three generated hostapd
+		# confs carry uapsd_advertisement_enabled=1 (measured 2026-11-20
+		# on /var/run/hostapd-phy0.{0,1,2}.conf). The reference board this
+		# tree is ported from turns it off on its AP ifaces, which is what
+		# issue #5 ports; it is a UCI default so it also survives a config
+		# restore, which a changed hostapd default in the package would
+		# not. No before/after throughput measurement was made for it.
+		uci_set_from "$iface" uapsd "" 0
 		uci_set_from "$iface" max_inactivity "" 86400
 		uci_set_from "$iface" ieee80211k "" 1
 		uci_set_from "$iface" bss_transition "" 1

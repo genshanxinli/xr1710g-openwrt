@@ -110,3 +110,35 @@ Per arm, the artifact directory holds:
 - `summary.txt`, `cmdline` - the arm result and invocation
 
 Nothing in this directory modifies UCI, kernel modules, sysctl or firmware.
+
+## 6 GHz BE TXOP (issue #18)
+
+Issue #18 is "6 GHz hostapd emits no `tx_queue_data2_burst`, so the 6 GHz BE
+TXOP is 0".  The default change is in the tree
+(`package/network/config/wifi-scripts/files/lib/netifd/mac80211.sh`: `band =
+6g` sets `tx_burst` to 2.0 ms unless the operator asked for another value)
+and is therefore already in HEAD.  What that issue still lacks is the
+on-hardware before/after, and `edca-6g-ab.sh` in this directory is the
+harness for it -- it was written for this exact question and needs no
+change to run:
+
+```
+sh scripts/wireless/edca-6g-ab.sh --dry-run          # plan only, no device
+sh scripts/wireless/edca-6g-ab.sh --target STA_IP \
+    --duration 20 --parallel 4                        # 0 / 63 / 171 units
+```
+
+The three arms are 0, 2.016 ms and 5.472 ms of BE TXOP, applied through
+`wireless.<radio>.tx_burst` (the in-tree #18 path) or through the mt76
+`edca_apply` debugfs file (the same value without a `wifi reload`), and each
+arm records the effective `tx_queue_data2_burst` read back from the generated
+hostapd conf next to the iperf3 result.  The precondition the harness
+enforces -- one already-associated 6 GHz non-MLO station, `iperf3 -s` on it --
+is the whole setup cost; `6g-only.sh` is what creates that BSS if there is
+none.
+
+Reading the result: arm 0 against arm 63 is the #18 question.  Report both
+the iperf3 sum and the hostapd value actually in force for that arm, because
+an arm where the read-back shows 0 is a failed arm, not a measurement of
+0 TXOP.  Nothing here has been run on this board yet -- the issue stays open
+until someone with a 6 GHz STA does.
