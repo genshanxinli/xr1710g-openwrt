@@ -54,6 +54,10 @@
 #
 # If no 6G STA is associated the harness prints exactly "SKIP: no 6G STA" and
 # exits 0 before creating a result directory or writing any configuration.
+# A missing iperf3 is treated the same way ("SKIP: iperf3 not found on the
+# AP"), because nothing has been measured and nothing was written; a missing
+# measurement tool is not a harness failure.  Both skips record the reason in
+# result.json when --result-dir named a directory.
 #
 # No module load/unload, no firmware change, no reboot.  The script only
 # changes the single 6 GHz radio's tx_burst UCI option or the edca_apply
@@ -67,7 +71,8 @@
 # root: wifi reload and debugfs access are not available otherwise.
 #
 # shellcheck shell=dash
-#
+# shellcheck disable=SC3043  # POSIX sh still has no `local`; dash/ash do, and
+#                            # the harness relies on it for scoped temporaries.
 # Test hooks: the EDCA6G_* variables at the top of the environment section
 # override the command and path names.  They exist so the harness can be run
 # end to end against a mock root without touching a real radio; the defaults
@@ -81,8 +86,11 @@ PROG=${0##*/}
 
 # Fixed protocol constants.  These are the arms issue #43 asks for; do not
 # make them runtime-configurable, or two runs stop being comparable.
+# EDCA6G_ARMS is a test hook, not a flag: the offline self-check uses it to
+# run a two-arm A/B sequence against mock commands.  Whatever it holds is
+# written to result.json, so such a run is self-describing.
 TU_US=32
-ARMS='0 63 171'
+ARMS=${EDCA6G_ARMS:-'0 63 171'}
 
 # Environment defaults.  Every one can also be set with a flag; the flags
 # override the environment (see usage).
@@ -94,6 +102,8 @@ STA_MODEL=${STA_MODEL:-unknown}
 DURATION=${DURATION:-20}
 PARALLEL=${PARALLEL:-4}
 SETTLE=${SETTLE:-2}
+ROUNDS=${ROUNDS:-1}
+COOLDOWN=${COOLDOWN:-2}
 ASSOC_TIMEOUT=${ASSOC_TIMEOUT:-45}
 RESULT_DIR=${RESULT_DIR:-}
 MECHANISM=${MECHANISM:-auto}
@@ -136,6 +146,13 @@ Optional inputs (environment variable or flag):
   --duration SEC         iperf3 seconds per arm (default 20)
   --parallel N           iperf3 streams per arm (default 4)
   --settle SEC           wait after the arm is applied (default 2)
+  --rounds N             run the whole arm sequence N times (default 1).
+                         Every round uses the same arm order, so the
+                         round-to-round spread is drift, not an ordering
+                         effect.  Per-round values plus the median, min,
+                         max and range per arm are printed and recorded.
+  --cooldown SEC         sleep between rounds (default 2, the --settle
+                         default); the first round has no cool-down
   --assoc-timeout SEC    wait for the STA to re-associate after wifi reload
                          (default 45)
   --result-dir DIR       output directory (default ./edca-6g-ab-<epoch>;
@@ -184,14 +201,25 @@ Recorded per arm (before and after snapshots, plus result.json):
   the UCI tx_burst, mt76 token_info and tx_stats (when present), and the
   iperf3 JSON.
 
+Repeats (drift control):
+  --rounds N runs the whole arm sequence N times.  The arms stay 0/63/171
+  and the order is the same in every round (A/B/C, A/B/C, ...), so round r
+  measures the same sequence as round 1 and the round-to-round spread is
+  drift plus noise, not an ordering effect.  --cooldown SEC sleeps between
+  rounds (default 2 s, the same value as --settle).  stdout prints the
+  throughput of every round and, per arm, the median, minimum, maximum and
+  range across rounds; result.json carries "rounds", "cooldown_s", a
+  timeline with per-round start/end stamps, and the same aggregate.
+
 Output directory:
   raw.log              chronological command log
   backup/wireless      the /etc/config/wireless copy made before any write
-  arms/<tu>/before|after/*.txt   raw snapshots
-  arms/<tu>/iperf3.json          iperf3 -J output
-  arms.jsonl           one JSON object per arm
-  result.json          schema edca-6g-ab/v1, arms and restore status
-  summary.tsv          the three-arm table, tab separated
+  arms/r<N>/<tu>/before|after/*.txt   raw snapshots
+  arms/r<N>/<tu>/iperf3.json          iperf3 -J output
+  arms.jsonl           one JSON object per arm measurement
+  rounds.jsonl         one object per round (start, end, arms, cooldown)
+  result.json          schema edca-6g-ab/v1, arms, aggregate, restore status
+  summary.tsv          the per-measurement table (round, arm ...), tab separated
 
 Restore:
   The original EDCA state is restored in a trap on EXIT, INT, TERM and HUP:
@@ -217,6 +245,42 @@ die() {
 	printf '%s: error: %s\n' "$PROG" "$*" >&2
 	log_line "ERROR: $*"
 	exit 1
+}
+
+# write_skip_result REASON: the preflight skip record.  Written only when
+# --result-dir named a directory: a skip must not create an output tree on
+# its own, and the caller's explicit directory is where a wrapper looks for
+# it.  Nothing here is a configuration write.
+write_skip_result() {
+	local _dir _reason
+	_dir=$1
+	_reason=$2
+	mkdir -p "$_dir" || return 0
+	{
+		printf '{\n'
+		printf '  "schema": "edca-6g-ab/v1",\n'
+		printf '  "timestamp": %s,\n' "$(json_str "$(now_ts)")"
+		printf '  "status": "skip",\n'
+		printf '  "skip_reason": %s,\n' "$(json_str "$_reason")"
+		printf '  "rounds": %s,\n' "$(json_num "$ROUNDS")"
+		printf '  "cooldown_s": %s,\n' "$(json_num "$COOLDOWN")"
+		printf '  "arms": [],\n'
+		printf '  "restore": null,\n'
+		printf '  "ok": true\n'
+		printf '}\n'
+	} >"$_dir/result.json.tmp" 2>/dev/null &&
+		mv "$_dir/result.json.tmp" "$_dir/result.json" 2>/dev/null
+	return 0
+}
+
+# skip_run REASON: a clean hardware/tool skip.  Prints one SKIP line, records
+# the reason next to the results when a directory was named, and exits 0.
+# Nothing has been written to the device at this point.
+skip_run() {
+	say "SKIP: $1"
+	log_line "SKIP: $1"
+	[ -n "${RESULT_DIR:-}" ] && write_skip_result "$RESULT_DIR" "$1"
+	exit 0
 }
 
 # The hostapd mechanism commits tx_burst and bounces every radio with "wifi
@@ -890,16 +954,21 @@ _refresh_hostapd_conf() {
 	[ -n "${HOSTAPD_CONF:-}" ] || die "cannot find the generated hostapd configuration for $IFACE/$PHY_NAME"
 }
 
-# run_arm TU: measure one arm and append its JSON object.
+# run_arm TU ROUND: measure one arm and append its JSON object.
 run_arm() {
-	local _tu _dir _before _after _tx_before _dump_before _sta_before _sta_tx_before _sta_retries_before _t0 _t1 _wall _rc _tx_after _dump _sta_after _sta_tx_after _sta_retries_after _valid _reason _sta_present _bps _bps_sent _retr _isecs _tx_delta _tx_rate _sta_tx_delta _sta_retries_delta _width _nss _signal _freq _edca_tu _raw _burst _applied _applied_source _gbps
+	local _tu _round _dir _before _after _tx_before _dump_before _sta_before _sta_tx_before _sta_retries_before _t0 _t1 _wall _rc _tx_after _dump _sta_after _sta_tx_after _sta_retries_after _valid _reason _sta_present _bps _bps_sent _retr _isecs _tx_delta _tx_rate _sta_tx_delta _sta_retries_delta _width _nss _signal _freq _edca_tu _raw _burst _applied _applied_source _gbps
 	_tu=$1
-	_dir=$RESULT_DIR/arms/$_tu
+	_round=${2:-1}
+	_dir=$RESULT_DIR/arms/r$_round/$_tu
 	_before=$_dir/before
 	_after=$_dir/after
 
 	say ''
-	say "=== arm $_tu TU ($((_tu * TU_US)) us BE TXOP) ==="
+	if [ "$ROUNDS" -gt 1 ]; then
+		say "=== round $_round/$ROUNDS, arm $_tu TU ($((_tu * TU_US)) us BE TXOP) ==="
+	else
+		say "=== arm $_tu TU ($((_tu * TU_US)) us BE TXOP) ==="
+	fi
 	apply_arm "$_tu"
 
 	# The STA must be present before we spend the measurement window.
@@ -1033,14 +1102,14 @@ run_arm() {
 	_gbps=
 	[ -n "$_bps" ] && _gbps=$(awk -v b="$_bps" 'BEGIN { printf "%.3f", b / 1e9 }')
 
-	printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-		"$_tu" "${_applied:-}" "${_applied_source:-unknown}" "${_burst:-}" \
+	printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+		"$_round" "$_tu" "${_applied:-}" "${_applied_source:-unknown}" "${_burst:-}" \
 		"${_tx_delta:-}" "${_gbps:-}" "$_wall" "${_retr:-}" \
 		"${_width:-}" "${_nss:-}" "${_signal:-}" \
 		"$_valid" "${_reason:-}" >>"$RESULT_DIR/summary.tsv"
 
-	printf '  requested %s TU, applied %s (%s), hostapd burst %s\n' \
-		"$_tu" "${_applied:-?}" "${_applied_source:-?}" "${_burst:-absent}"
+	printf '  round %s, arm %s TU, applied %s (%s), hostapd burst %s\n' \
+		"$_round" "$_tu" "${_applied:-?}" "${_applied_source:-?}" "${_burst:-absent}"
 	printf '  iperf3: %s Gbit/s rx, %s Gbit/s sent, retransmits %s, %s s\n' \
 		"${_gbps:-?}" "$(awk -v b="${_bps_sent:-0}" 'BEGIN { printf "%.3f", b / 1e9 }')" \
 		"${_retr:-?}" "${_isecs:-$_wall}"
@@ -1055,7 +1124,7 @@ run_arm() {
 		"${_applied_source:-}" "$_burst" "$_bps" "$_bps_sent" "$_retr" \
 		"${_isecs:-}" "$_gbps" "$_tx_delta" "$_tx_rate" "$_sta_tx_delta" \
 		"$_sta_retries_delta" "$_width" "$_nss" "$_signal" "$_freq" \
-		"$_sta_present" "$_wall" "$_rc" "${_edca_tu:-}"
+		"$_sta_present" "$_wall" "$_rc" "${_edca_tu:-}" "$_round"
 
 	[ "$_valid" = true ] || {
 		say ''
@@ -1083,7 +1152,7 @@ iperf3_field() { # file object field
 }
 
 append_arm_json() {
-	local _tu _dir _valid _reason _applied _source _burst _bps _bps_sent _retr _isecs _gbps _tx_delta _tx_rate _sta_tx_delta _sta_retries _width _nss _signal _freq _present _wall _rc _edca_tu _rel _present_json _valid_json
+	local _tu _dir _valid _reason _applied _source _burst _bps _bps_sent _retr _isecs _gbps _tx_delta _tx_rate _sta_tx_delta _sta_retries _width _nss _signal _freq _present _wall _rc _edca_tu _round _rel _present_json _valid_json
 	_tu=$1
 	_dir=$2
 	_valid=$3
@@ -1108,6 +1177,7 @@ append_arm_json() {
 	_wall=${22}
 	_rc=${23}
 	_edca_tu=${24:-}
+	_round=${25:-1}
 
 	_rel=${_dir#"$RESULT_DIR"/}
 	[ "$_present" = true ] && _present_json=true || _present_json=false
@@ -1115,6 +1185,7 @@ append_arm_json() {
 
 	{
 		printf '{"arm": %s' "$_tu"
+		printf ', "round": %s' "$(json_num "$_round")"
 		printf ', "requested_tu": %s' "$_tu"
 		printf ', "applied_tu": %s' "$(json_num "$_applied")"
 		printf ', "applied_source": %s' "$(json_str "${_source:-unknown}")"
@@ -1150,12 +1221,66 @@ append_arm_json() {
 	} >>"$RESULT_DIR/arms.jsonl"
 }
 
+# aggregate_arms: per arm, the median, minimum, maximum and range of the
+# Gbit/s values measured across the rounds, as tab separated
+# "arm median min max range n".  Arms are in first-seen order.  Values are
+# already rounded to three decimals by the per-arm record, so they are
+# reused as-is: the aggregate never invents precision.  An arm with no
+# numeric measurement prints nothing.
+aggregate_arms() {
+	[ -f "$RESULT_DIR/arms.jsonl" ] || return 0
+	awk '
+		{
+			if (!match($0, /"arm": [0-9]+/))
+				next
+			arm = substr($0, RSTART + 7, RLENGTH - 7) + 0
+			if (!match($0, /"gbps": [-0-9.eE+]+/))
+				next
+			v = substr($0, RSTART + 8, RLENGTH - 8) + 0
+			if (n[arm] == 0)
+				order[++seen] = arm
+			val[arm, ++n[arm]] = v
+		}
+		END {
+			for (k = 1; k <= seen; k++) {
+				arm = order[k]
+				m = n[arm]
+				for (i = 1; i <= m; i++)
+					srt[i] = val[arm, i]
+				for (i = 2; i <= m; i++) {
+					t = srt[i]
+					for (j = i - 1; j >= 1 && srt[j] > t; j--)
+						srt[j + 1] = srt[j]
+					srt[j + 1] = t
+				}
+				if (m % 2)
+					med = srt[(m + 1) / 2]
+				else
+					med = (srt[m / 2] + srt[m / 2 + 1]) / 2
+				printf "%d\t%.3f\t%.3f\t%.3f\t%.3f\t%d\n",
+					arm, med, srt[1], srt[m], srt[m] - srt[1], m
+			}
+		}
+	' "$RESULT_DIR/arms.jsonl"
+}
+
+# aggregate_arms_json: the same numbers as ready-made JSON objects, one per
+# line, for result.json.
+aggregate_arms_json() {
+	aggregate_arms | while IFS='	' read -r _a _med _min _max _rng _n; do
+		[ -n "$_a" ] || continue
+		printf '{"arm": %s, "n": %s, "gbps_median": %s, "gbps_min": %s, "gbps_max": %s, "gbps_range": %s}' \
+			"$_a" "$_n" "$_med" "$_min" "$_max" "$_rng"
+		printf '\n'
+	done
+}
+
 # ---------------------------------------------------------------------------
 # result files
 
 # shellcheck disable=SC2329  # called from the exit trap
 write_result() { # rc
-	local _rc _ts _ok _line _first _edca_restored_json
+	local _rc _ts _ok _line _first _agg _edca_restored_json
 	_rc=$1
 	_ts=$(now_ts)
 	_ok=false
@@ -1191,6 +1316,34 @@ write_result() { # rc
 				printf '%s' "$_line"
 			done <"$RESULT_DIR/arms.jsonl"
 		fi
+		printf '\n  ],\n'
+		printf '  "rounds": %s,\n' "$(json_num "$ROUNDS")"
+		printf '  "cooldown_s": %s,\n' "$(json_num "$COOLDOWN")"
+		printf '  "rounds_timeline": [\n'
+		_first=1
+		if [ -f "$RESULT_DIR/rounds.jsonl" ]; then
+			while IFS= read -r _line; do
+				[ -n "$_line" ] || continue
+				if [ "$_first" = 1 ]; then
+					_first=0
+				else
+					printf ',\n'
+				fi
+				printf '%s' "$_line"
+			done <"$RESULT_DIR/rounds.jsonl"
+		fi
+		printf '\n  ],\n'
+		printf '  "aggregate": [\n'
+		_first=1
+		aggregate_arms_json | while IFS= read -r _agg; do
+			[ -n "$_agg" ] || continue
+			if [ "$_first" = 1 ]; then
+				_first=0
+			else
+				printf ',\n'
+			fi
+			printf '%s' "$_agg"
+		done
 		printf '\n  ],\n'
 		printf '  "restore": {"ok": %s' "$([ "$RESTORE_OK" = 1 ] && echo true || echo false)"
 		printf ', "wireless_md5_before": %s' "$(json_str "$WIRELESS_MD5_BEFORE")"
@@ -1242,12 +1395,21 @@ on_exit() {
 		if [ -f "$RESULT_DIR/summary.tsv" ]; then
 			say ''
 			say 'Arm summary:'
-			printf '  %-5s %-8s %-16s %-7s %-10s %-7s %-6s %-6s %-5s %-5s %s\n' \
-				arm applied source burst tx_bytes gbps retr width nss valid reason
+			printf '  %-5s %-5s %-8s %-16s %-7s %-10s %-7s %-6s %-6s %-5s %-5s %s\n' \
+				round arm applied source burst tx_bytes gbps retr width nss valid reason
 			awk -F '\t' '
-				NR > 1 { printf "  %-5s %-8s %-16s %-7s %-10s %-7s %-6s %-6s %-5s %-5s %s\n",
-					$1, $2, $3, $4, $5, $6, $8, $9, $10, $12, $13 }' \
+				NR > 1 { printf "  %-5s %-5s %-8s %-16s %-7s %-10s %-7s %-6s %-6s %-5s %-5s %s\n",
+					$1, $2, $3, $4, $5, $6, $7, $9, $10, $11, $13, $14 }' \
 				"$RESULT_DIR/summary.tsv"
+			if [ "$ROUNDS" -gt 1 ]; then
+				say ''
+				say "Per-arm aggregate over $ROUNDS rounds:"
+				printf '  %-5s %-3s %-8s %-8s %-8s %s\n' \
+					arm n median min max range
+				aggregate_arms | awk -F '\t' '
+					{ printf "  %-5s %-3s %-8s %-8s %-8s %s\n",
+						$1, $6, $2, $3, $4, $5 }'
+			fi
 		fi
 		write_result "$_rc" 2>/dev/null || true
 		say "Result: $RESULT_DIR/result.json"
@@ -1274,6 +1436,7 @@ Inputs:
   STA MAC        ${STATION:-<auto-detect one 6G STA>}
   UCI radio      ${RADIO:-<auto-detect from the AP phy>}
   STA model      $STA_MODEL
+  rounds         $ROUNDS (cooldown ${COOLDOWN}s between rounds)
   result dir     ${RESULT_DIR:-./edca-6g-ab-<epoch>}
   mechanism      $MECHANISM
   edca_apply     ${EDCA_APPLY:-<auto-detect /sys/kernel/debug/ieee80211/phy*/mt76/edca_apply>}
@@ -1292,11 +1455,19 @@ Per-arm evidence:
   edca_apply, hostapd tx_queue_data* lines, uci tx_burst, token_info,
   tx_stats, iperf3 JSON.
 
+Repeats:
+  the arm sequence is replayed $ROUNDS time(s) in the same order, $COOLDOWN s
+  apart; every round is recorded with its start and end stamp, and the
+  median/min/max/range per arm is reported across rounds.
+
 Restore:
   the original /etc/config/wireless (md5 checked, wifi reload) and the
   original edca_apply content, from an EXIT/INT/TERM/HUP trap.
 
-No-STA behaviour: "SKIP: no 6G STA", exit 0, no writes.
+No-STA behaviour: "SKIP: no 6G STA", exit 0, no writes.  A missing iperf3
+is the same clean skip once a STA exists: "SKIP: iperf3 not found on the
+AP", exit 0.  Both write the reason to result.json when --result-dir was
+given.
 Exit status: 0 success/skip, 1 runtime failure, 2 bad usage.
 EOF
 }
@@ -1386,6 +1557,24 @@ while [ "$#" -gt 0 ]; do
 		SETTLE=${1#*=}
 		shift
 		;;
+	--rounds)
+		[ "$#" -ge 2 ] || usage_error '--rounds requires a value'
+		ROUNDS=$2
+		shift 2
+		;;
+	--rounds=*)
+		ROUNDS=${1#*=}
+		shift
+		;;
+	--cooldown)
+		[ "$#" -ge 2 ] || usage_error '--cooldown requires a value'
+		COOLDOWN=$2
+		shift 2
+		;;
+	--cooldown=*)
+		COOLDOWN=${1#*=}
+		shift
+		;;
 	--assoc-timeout)
 		[ "$#" -ge 2 ] || usage_error '--assoc-timeout requires a value'
 		ASSOC_TIMEOUT=$2
@@ -1441,6 +1630,8 @@ done
 require_uint DURATION "$DURATION" 1
 require_uint PARALLEL "$PARALLEL" 1
 require_uint SETTLE "$SETTLE" 0
+require_uint ROUNDS "$ROUNDS" 1
+require_uint COOLDOWN "$COOLDOWN" 0
 require_uint ASSOC_TIMEOUT "$ASSOC_TIMEOUT" 1
 case $MECHANISM in
 auto | hostapd | debugfs) ;;
@@ -1459,22 +1650,27 @@ fi
 
 # ---------------------------------------------------------------------------
 # preflight: reads only, no configuration write until a STA is confirmed.
+#
+# Order matters: the hardware gate comes first.  A harness with no 6G STA is a
+# clean skip, so a missing iperf3 (or any other measurement tool) may not turn
+# that skip into a failure before the STA has even been looked for.
 
 command -v "$EDCA6G_IW" >/dev/null 2>&1 ||
 	die "'$EDCA6G_IW' not found; install iw"
-command -v "$EDCA6G_IPERF3" >/dev/null 2>&1 ||
-	die "'$EDCA6G_IPERF3' not found; install iperf3 on the AP"
 
-discover_6g_sta || {
-	say 'SKIP: no 6G STA'
-	exit 0
-}
+discover_6g_sta || skip_run 'no 6G STA'
 IFACE=$DISCOVERED_IFACE
 STATION=$DISCOVERED_STA
 validate_6g_only_iface "$IFACE" "$STATION"
 
 [ -n "$TARGET" ] || usage_error '--target is required for a real run (the STA must run iperf3 -s)'
 [ -n "$IFACE" ] || usage_error 'no 6G AP interface found'
+
+# The measurement tool is checked only now that a STA exists: without a STA
+# there is nothing to measure, so its absence is a skip (exit 0), not a
+# runtime failure (exit 1).
+command -v "$EDCA6G_IPERF3" >/dev/null 2>&1 ||
+	skip_run "iperf3 not found on the AP ('$EDCA6G_IPERF3')"
 
 PHY_NAME=$(iface_phy_name "$IFACE") ||
 	die "cannot determine the phy of $IFACE"
@@ -1600,7 +1796,8 @@ nw_guard_take ||
 	die "cannot take the netwatchdog hold; refusing to change EDCA.  Install netwatchdog, or set NWD_ALLOW_NO_SERVICE=1 for a run that expects no protection."
 
 say "6G EDCA A/B: AP $IFACE (phy $PHY_NAME), STA $STATION, target ${TARGET:-?}"
-say "Mechanism: $MECHANISM${RADIO_SECTION:+ (radio $RADIO_SECTION)}; arms 0/63/171 TU"
+say "Mechanism: $MECHANISM${RADIO_SECTION:+ (radio $RADIO_SECTION)}; arms $ARMS TU"
+say "Rounds: $ROUNDS (cooldown ${COOLDOWN}s between rounds)"
 say "Result directory: $RESULT_DIR"
 log_line "start: iface=$IFACE sta=$STATION target=$TARGET mechanism=$MECHANISM"
 log_line "phy=$PHY_NAME radio=${RADIO_SECTION:-} edca_apply=${EDCA_APPLY:-none} hostapd=${HOSTAPD_CONF:-none}"
@@ -1610,14 +1807,41 @@ if [ "$(id -u 2>/dev/null || echo unknown)" != 0 ]; then
 	note 'warning: not running as root; wifi reload or debugfs writes may fail'
 fi
 
-printf 'arm\tapplied\tsource\thostapd_burst\tap_tx_bytes\tgbps\twall_s\tretries\twidth_mhz\tnss\tsignal_dbm\tvalid\treason\n' \
+printf 'round\tarm\tapplied\tsource\thostapd_burst\tap_tx_bytes\tgbps\twall_s\tretries\twidth_mhz\tnss\tsignal_dbm\tvalid\treason\n' \
 	>"$RESULT_DIR/summary.tsv"
 
 # Baseline evidence, before the first EDCA change.
 snapshot "$RESULT_DIR/baseline"
 
-for _arm in $ARMS; do
-	run_arm "$_arm"
+# The arm sequence is repeated unchanged in every round, so round r is a
+# replicate of round 1.  A cool-down separates the rounds; there is none
+# before the first one.
+_round=1
+while [ "$_round" -le "$ROUNDS" ]; do
+	_round_start=$(now_ts)
+	if [ "$ROUNDS" -gt 1 ]; then
+		say ''
+		say "=== round $_round/$ROUNDS (arms $ARMS) ==="
+	fi
+	_round_arms=
+	for _arm in $ARMS; do
+		run_arm "$_arm" "$_round"
+		_round_arms="${_round_arms:+$_round_arms, }$_arm"
+	done
+	_round_end=$(now_ts)
+	{
+		printf '{"round": %s, "started": %s, "ended": %s' \
+			"$_round" "$(json_str "$_round_start")" "$(json_str "$_round_end")"
+		printf ', "arms": [%s], "cooldown_s": %s' "$_round_arms" \
+			"$(json_num "$COOLDOWN")"
+		printf '}\n'
+	} >>"$RESULT_DIR/rounds.jsonl"
+	log_line "round $_round/$ROUNDS: $_round_start .. $_round_end"
+	if [ "$_round" -lt "$ROUNDS" ]; then
+		say "Cool-down ${COOLDOWN}s before round $((_round + 1))"
+		sleep "$COOLDOWN"
+	fi
+	_round=$((_round + 1))
 done
 
 # Normal end: restore explicitly so the summary can report it.
