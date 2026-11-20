@@ -3,30 +3,38 @@ Date: Sat, 15 Nov 2026 08:00:00 +0800
 Subject: [PATCH] wifi: mt76: mt7996: tell the NPU when a station is removed
 
 The Airoha NPU offload path keeps per-WCID state for stations it has
-seen. When a station is removed, mt7996 frees the WCID in the WTBL but
-never tells the NPU, so the stale state stays behind and a later station
-that reuses the same WCID index can inherit the old forwarding state.
-On the AN7581 this shows up as a station that reconnects with the same
-MAC address downloading at a crawl until it is forgotten and re-added
-with a new private MAC address.
+seen. When a station link is torn down, mt7996 releases the WTBL entry,
+the BA sessions and the keys of that link but never tells the NPU, so the
+stale state stays behind. A later station that reuses the same WCID index
+can inherit the old forwarding state. On the AN7581 this shows up as a
+station that reconnects with the same MAC address downloading at a crawl
+until it is forgotten and re-added with a new private MAC address.
 
 Send WLAN_FUNC_SET_WAIT_DEL_STA through the existing NPU mailbox from
-mt7996_mac_sta_remove(), before each link is torn down, passing the band
-and the WCID index being retired. Only notify the NPU when the NPU is
-present; a mailbox error is logged once at debug level and never fails
-the station removal. Link teardown during roaming, MLO link changes and
-full-chip reset is deliberately left alone.
+mt7996_mac_sta_remove_link(), before the link state is destroyed, passing
+the band and the WCID index being retired. Hooking the per-link helper
+instead of mt7996_mac_sta_remove() covers every teardown path: full
+station removal, link removal from mt7996_mac_sta_change_links() and the
+mt7996_mac_sta_add_links() unwind. The latter two pass flush == false and
+keep the WCID allocated, so the index outlives the hardware state that
+the NPU still refers to - that is the stale-WCID window this closes.
+
+Skip the notification while MT76_MCU_RESET is set: a firmware or chip
+reset has already stopped the NPU and quiesced the mailbox, and per-WCID
+state does not survive it. A mailbox error is logged once at debug level
+and never fails the station removal.
 
 While here, print the effective Airoha PPE L2 dual-ingress window in the
 existing hw-queues debugfs file so the dual-window A/B test can see the
 value in use from the same place as the station queues.
 
 Signed-off-by: genshanxinli <genshanxinli@users.noreply.github.com>
+---
 diff --git a/mt7996/debugfs.c b/mt7996/debugfs.c
-index 3780760..6fd5ca3 100644
+index ae9a1a7..ad10c91 100644
 --- a/mt7996/debugfs.c
 +++ b/mt7996/debugfs.c
-@@ -827,11 +827,28 @@ mt7996_sta_hw_queue_read(void *data, struct ieee80211_sta *sta)
+@@ -830,11 +830,28 @@ mt7996_sta_hw_queue_read(void *data, struct ieee80211_sta *sta)
  	rcu_read_unlock();
  }
  
@@ -56,39 +64,40 @@ index 3780760..6fd5ca3 100644
  	mt7996_freepg_show(s, mt76_rr(dev, MT_PLE_FREEPG_CNT),
  			   mt76_rr(dev, MT_PLE_FREEPG_HEAD_TAIL));
 diff --git a/mt7996/main.c b/mt7996/main.c
-index 741cb6b..04b8bb9 100644
+index 3cac0f5..db120af 100644
 --- a/mt7996/main.c
 +++ b/mt7996/main.c
-@@ -1898,8 +1898,15 @@ mt7996_mac_sta_remove(struct mt7996_dev *dev, struct ieee80211_vif *vif,
- 	int i;
+@@ -1369,6 +1369,17 @@ void mt7996_mac_sta_remove_link(struct mt7996_dev *dev,
+ 	if (!msta_link)
+ 		return;
  
- 	mutex_lock(&dev->mt76.mutex);
--	for (i = 0; i < ARRAY_SIZE(msta->link); i++)
-+	for (i = 0; i < ARRAY_SIZE(msta->link); i++) {
-+		struct mt7996_sta_link *msta_link;
++	/*
++	 * The WTBL entry and the BA/key state of this link are torn down below
++	 * whether or not the WCID index itself is released (flush == false),
++	 * so the NPU's per-WCID state is stale either way. Tell it while the
++	 * hardware state still exists. Doing this here instead of in
++	 * mt7996_mac_sta_remove() also covers link teardown from
++	 * mt7996_mac_sta_change_links() and the mt7996_mac_sta_add_links()
++	 * unwind, both of which keep the WCID allocated.
++	 */
++	mt7996_npu_del_sta(dev, msta_link->wcid.phy_idx, msta_link->wcid.idx);
 +
-+		msta_link = mt76_dereference(msta->link[i], &dev->mt76);
-+		if (msta_link)
-+			mt7996_npu_del_sta(dev, msta_link->wcid.phy_idx,
-+					   msta_link->wcid.idx);
- 		mt7996_mac_sta_remove_link(dev, sta, i, true);
-+	}
- 	mutex_unlock(&dev->mt76.mutex);
- }
- 
+ 	spin_lock_bh(&dev->mt76.sta_poll_lock);
+ 	if (!list_empty(&msta_link->wcid.poll_list))
+ 		list_del_init(&msta_link->wcid.poll_list);
 diff --git a/mt7996/mt7996.h b/mt7996/mt7996.h
-index 69dff43..f16d0df 100644
+index 7a5b8ce..3e6ddfb 100644
 --- a/mt7996/mt7996.h
 +++ b/mt7996/mt7996.h
-@@ -562,6 +562,7 @@ struct mt7996_dev {
+@@ -571,6 +571,7 @@ struct mt7996_dev {
  	} wed_rro;
  
  	dma_addr_t npu_txd_addr[2 * MT7996_NPU_TXD_SIZE];
 +	bool npu_del_sta_error;
  
- 	bool ibf;
- 	u8 fw_debug_wm;
-@@ -1056,6 +1057,7 @@ int __mt7996_npu_hw_init(struct mt7996_dev *dev);
+ 	struct {
+ 		bool requested;
+@@ -1076,6 +1077,7 @@ int __mt7996_npu_hw_init(struct mt7996_dev *dev);
  int mt7996_npu_hw_init(struct mt7996_dev *dev);
  int mt7996_npu_hw_stop(struct mt7996_dev *dev);
  int mt7996_npu_rx_queues_init(struct mt7996_dev *dev);
@@ -96,7 +105,7 @@ index 69dff43..f16d0df 100644
  #else
  static inline int __mt7996_npu_hw_init(struct mt7996_dev *dev)
  {
-@@ -1076,6 +1078,11 @@ static inline int mt7996_npu_rx_queues_init(struct mt7996_dev *dev)
+@@ -1096,6 +1098,11 @@ static inline int mt7996_npu_rx_queues_init(struct mt7996_dev *dev)
  {
  	return 0;
  }
@@ -109,10 +118,10 @@ index 69dff43..f16d0df 100644
  
  #endif
 diff --git a/mt7996/npu.c b/mt7996/npu.c
-index 3fb9f39..86d2a48 100644
+index 242c82e..7a27256 100644
 --- a/mt7996/npu.c
 +++ b/mt7996/npu.c
-@@ -239,6 +239,37 @@ static int mt7996_npu_offload_init(struct mt7996_dev *dev,
+@@ -244,6 +244,46 @@ static int mt7996_npu_offload_init(struct mt7996_dev *dev,
  	return 0;
  }
  
@@ -129,6 +138,15 @@ index 3fb9f39..86d2a48 100644
 +	 * NPU firmware must not fail station removal.
 +	 */
 +	if (!mt76_npu_device_active(mdev))
++		return;
++
++	/*
++	 * A chip or firmware reset has already stopped the NPU and left the
++	 * mailbox unresponsive, so a link teardown that runs inside the reset
++	 * path has nothing to report and must not wait for one. Per-WCID state
++	 * does not survive the reset anyway.
++	 */
++	if (test_bit(MT76_MCU_RESET, &dev->mphy.state))
 +		return;
 +
 +	rcu_read_lock();
