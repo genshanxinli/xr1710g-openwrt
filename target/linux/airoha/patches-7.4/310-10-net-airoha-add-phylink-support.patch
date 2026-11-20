@@ -54,7 +54,32 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  }
  
  static void airoha_update_netdev_features(struct airoha_gdm_dev *dev)
-@@ -3055,6 +3056,24 @@
+@@ -2367,6 +2368,14 @@
+ 
+ 	qdma = airoha_qdma_deref(dev);
+ 
++	err = phylink_of_phy_connect(dev->phylink, netdev->dev.of_node, 0);
++	if (err) {
++		netdev_err(netdev, "could not attach PHY: %d\n", err);
++		return err;
++	}
++
++	phylink_start(dev->phylink);
++
+ 	netif_tx_start_all_queues(netdev);
+ 	err = airoha_set_vip_for_gdm_port(dev, true);
+ 	if (err)
+@@ -2413,6 +2422,9 @@
+ 	if (netdev->features & NETIF_F_LRO)
+ 		airoha_dev_lro_disable(dev);
+ 
++	phylink_stop(dev->phylink);
++	phylink_disconnect_phy(dev->phylink);
++
+ 	return 0;
+ }
+ 
+@@ -3055,6 +3067,24 @@
  	} while (u64_stats_fetch_retry(&dev->stats.syncp, start));
  }
  
@@ -79,23 +104,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  static int airoha_qdma_set_chan_tx_sched(struct net_device *netdev,
  					 int channel, enum tx_sched_mode mode,
  					 const u16 *weights, u8 n_weights)
-@@ -3521,6 +3540,15 @@
- 	}
- 
- 	err = airoha_tc_htb_modify_queue(netdev, opt);
-+	err = phylink_of_phy_connect(dev->phylink, netdev->dev.of_node, 0);
-+	if (err) {
-+		netdev_err(netdev, "could not attach PHY: %d\n", err);
-+		return err;
-+	}
-+
-+	phylink_start(dev->phylink);
-+	netif_tx_start_all_queues(netdev);
-+	err = airoha_set_vip_for_gdm_port(dev, true);
- 	if (err)
- 		goto error;
- 
-@@ -3961,6 +3989,7 @@
+@@ -3961,6 +3991,7 @@
  	.get_eth_mac_stats      = airoha_ethtool_get_mac_stats,
  	.get_rmon_stats		= airoha_ethtool_get_rmon_stats,
  	.get_link_ksettings	= airoha_ethtool_get_link_ksettings,
@@ -103,7 +112,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  	.get_link		= ethtool_op_get_link,
  };
  
-@@ -4016,6 +4045,155 @@
+@@ -4016,6 +4047,155 @@
  	return false;
  }
  
@@ -259,7 +268,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  static int airoha_alloc_gdm_device(struct airoha_eth *eth,
  				   struct airoha_gdm_port *port,
  				   int nbq, struct device_node *np)
-@@ -4079,7 +4257,7 @@
+@@ -4079,7 +4259,7 @@
  	dev->nbq = nbq;
  	port->devs[index] = dev;
  
@@ -268,7 +277,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  }
  
  static int airoha_alloc_gdm_port(struct airoha_eth *eth,
-@@ -4114,7 +4292,7 @@
+@@ -4114,7 +4294,7 @@
  		return -ENOMEM;
  
  	port->id = id;
@@ -277,7 +286,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  	eth->ports[p] = port;
  
  	err = airoha_metadata_dst_alloc(port);
-@@ -4310,6 +4488,8 @@
+@@ -4310,6 +4490,8 @@
  			netdev = netdev_from_priv(dev);
  			if (netdev->reg_state == NETREG_REGISTERED)
  				unregister_netdev(netdev);
@@ -286,7 +295,7 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  			of_node_put(netdev->dev.of_node);
  		}
  		airoha_metadata_dst_free(port);
-@@ -4348,6 +4528,7 @@
+@@ -4348,6 +4530,7 @@
  
  			netdev = netdev_from_priv(dev);
  			unregister_netdev(netdev);
