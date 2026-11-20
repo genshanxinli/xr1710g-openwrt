@@ -1,0 +1,21 @@
+--- a/drivers/clk/clk-en7523.c
++++ b/drivers/clk/clk-en7523.c
+@@ -1231,12 +1231,17 @@ static int en7581_clk_hw_init(struct pla
+ 			      struct clk_hw_onecell_data *clk_data)
+ {
+ 	struct en_clk_priv *priv = platform_get_drvdata(pdev);
++	struct device *dev = &pdev->dev;
+ 	struct regmap *map;
+ 	void __iomem *base;
+ 	u32 val;
+ 	int ret;
+ 
+-	map = syscon_regmap_lookup_by_compatible("airoha,en7581-chip-scu");
++	if (of_property_present(dev->of_node, "airoha,chip-scu"))
++		map = syscon_regmap_lookup_by_phandle(dev->of_node,
++						      "airoha,chip-scu");
++	else
++		map = syscon_regmap_lookup_by_compatible("airoha,en7581-chip-scu");
+ 	if (IS_ERR(map))
+ 		return PTR_ERR(map);
+ 

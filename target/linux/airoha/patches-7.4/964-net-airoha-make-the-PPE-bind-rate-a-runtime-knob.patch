@@ -1,0 +1,202 @@
+From: OpenWrt <openwrt@example.org>
+Date: Sat, 24 Oct 2026 09:00:00 +0800
+Subject: [PATCH] net: airoha: make the PPE bind rate a runtime knob
+
+The PPE promotes an UNBIND entry to BIND once it sustains
+REG_PPE_BIND_RATE packets per second.  The driver hardcodes 30, which is
+what MediaTek's SDK and upstream mtk_ppe use, and there was no way to
+measure what a different value does: the register is not reachable from
+userspace (no /dev/mem, no devmem, no debugfs register window) and the
+driver is built in, so a new threshold meant a new kernel.
+
+Split the two halves of the register into ppe->bind_rate_l3 and
+ppe->bind_rate_l2b, route the write through airoha_ppe_apply_bind_rate(),
+and expose it as /sys/kernel/debug/ppe/bind_rate ("l3 [l2b]").
+
+Having measured, lower the default from 30 to 10.  Sampling while the
+flows are still alive, at 30 a 15-, 20- or 30-packet flow binds 0 of 15
+and at 10 all 15 do; from 60 packets up both rates bind everything.
+Those short flows are most of what a home network forwards -- DNS,
+mDNS, DHCP renewals, TCP handshakes -- so at 30 none of them reach the
+hardware.  Going lower is not free: at 5, 400 six-packet micro-flows
+bind 400 of 400 and fill the table with entries that will never see a
+second packet; at 10 they bind 1 of 400.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+--- a/drivers/net/ethernet/airoha/airoha_eth.h
++++ b/drivers/net/ethernet/airoha/airoha_eth.h
+@@ -709,6 +709,22 @@ struct airoha_ppe {
+ 	 */
+ 	enum airoha_ppe_entry_alias entry_alias;
+ 
++	/* Packets per second an entry must sustain before the PPE promotes
++	 * it from UNBIND to BIND.  L3 and L2B are separate fields of the
++	 * same register; they are separated here so the threshold can be
++	 * tuned per class without rebuilding.
++	 */
++	u32 bind_rate_l3;
++	u32 bind_rate_l2b;
++
++	/* Packets per second an entry must sustain before the PPE promotes
++	 * it from UNBIND to BIND.  L3 and L2B are separate fields of the
++	 * same register; they are separated here so the threshold can be
++	 * tuned per class without rebuilding.
++	 */
++	u32 bind_rate_l3;
++	u32 bind_rate_l2b;
++
+ 	struct dentry *debugfs_dir;
+ };
+ 
+@@ -858,6 +874,7 @@ void airoha_ppe_foe_entry_get_stats(stru
+ 
+ #ifdef CONFIG_DEBUG_FS
+ int airoha_ppe_debugfs_init(struct airoha_ppe *ppe);
++void airoha_ppe_apply_bind_rate(struct airoha_ppe *ppe);
+ #else
+ static inline int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
+ {
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -202,6 +202,36 @@ void airoha_ppe_set_xmit_frame_size(stru
+ 		      __field_prep(FP_EGRESS_MTU_MASK(index), len));
+ }
+ 
++/* Promoted from UNBIND to BIND once an entry sustains this many packets per
++ * second.  L3 and L2B are separate fields of the same register.
++ *
++ * MediaTek's SDK and upstream mtk_ppe use 30.  Measured on an AN7581 with
++ * this driver, 30 never promotes the flows a home network actually has: a
++ * 15-packet burst is a DNS lookup, an mDNS announce, a DHCP renewal or a
++ * three-way handshake, and it binds 0 of 15 flows at 30 while 10 binds all
++ * 15.  The same holds up to 30 packets; from 60 up both bind everything.
++ * The cost of going lower is real and shows up at 5: 400 six-packet
++ * micro-flows bind 400 of 400 there, filling the table with entries that
++ * will never see a second packet, while at 10 they bind 1 of 400.  Ten is
++ * the lowest value that buys the short flows without paying that.
++ */
++#define AIROHA_PPE_DEFAULT_BIND_RATE	10
++
++void airoha_ppe_apply_bind_rate(struct airoha_ppe *ppe)
++{
++	struct airoha_eth *eth = ppe->eth;
++	int i;
++
++	for (i = 0; i < eth->soc->num_ppe; i++)
++		airoha_fe_rmw(eth, REG_PPE_BIND_RATE(i),
++			      PPE_BIND_RATE_L2B_BIND_MASK |
++			      PPE_BIND_RATE_BIND_MASK,
++			      FIELD_PREP(PPE_BIND_RATE_L2B_BIND_MASK,
++					 ppe->bind_rate_l2b) |
++			      FIELD_PREP(PPE_BIND_RATE_BIND_MASK,
++					 ppe->bind_rate_l3));
++}
++
+ static void airoha_ppe_hw_init(struct airoha_ppe *ppe)
+ {
+ 	u32 sram_ppe_num_data_entries = airoha_ppe_get_sram_num_entries(ppe);
+@@ -284,11 +314,7 @@ static void airoha_ppe_hw_init(struct ai
+ 				 "PPE%u: DRAM table did not come up, %u entries unreachable\n",
+ 				 i + 1, PPE_DRAM_NUM_ENTRIES);
+ 
+-		airoha_fe_rmw(eth, REG_PPE_BIND_RATE(i),
+-			      PPE_BIND_RATE_L2B_BIND_MASK |
+-			      PPE_BIND_RATE_BIND_MASK,
+-			      FIELD_PREP(PPE_BIND_RATE_L2B_BIND_MASK, 0x1e) |
+-			      FIELD_PREP(PPE_BIND_RATE_BIND_MASK, 0x1e));
++		airoha_ppe_apply_bind_rate(ppe);
+ 
+ 		airoha_fe_wr(eth, REG_PPE_HASH_SEED(i), PPE_HASH_SEED);
+ 		airoha_fe_clear(eth, REG_PPE_PPE_FLOW_CFG(i),
+@@ -2141,6 +2167,8 @@ int airoha_ppe_init(struct airoha_eth *e
+ 
+ 	err = airoha_ppe_foe_flow_commit_entry(eth->ppe, e);
+ 	eth->ppe = ppe;
++	ppe->bind_rate_l3 = AIROHA_PPE_DEFAULT_BIND_RATE;
++	ppe->bind_rate_l2b = AIROHA_PPE_DEFAULT_BIND_RATE;
+ 
+ 	ppe_num_entries = airoha_ppe_get_total_num_entries(ppe);
+ 	foe_size = ppe_num_entries * sizeof(struct airoha_foe_entry);
+--- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include "airoha_eth.h"
++#include "airoha_regs.h"
+ 
+ static void airoha_debugfs_ppe_print_tuple(struct seq_file *m,
+ 					   void *src_addr, void *dest_addr,
+@@ -265,6 +266,62 @@ static int airoha_ppe_debugfs_foe_alias_
+ }
+ DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_foe_alias);
+ 
++static int airoha_ppe_debugfs_bind_rate_show(struct seq_file *m, void *private)
++{
++	struct airoha_ppe *ppe = m->private;
++
++	seq_printf(m, "l3 %u l2b %u\n",
++		   ppe->bind_rate_l3, ppe->bind_rate_l2b);
++
++	return 0;
++}
++
++static ssize_t airoha_ppe_debugfs_bind_rate_write(struct file *file,
++						  const char __user *ubuf,
++						  size_t count, loff_t *ppos)
++{
++	struct seq_file *m = file->private_data;
++	struct airoha_ppe *ppe = m->private;
++	u32 l3, l2b = U32_MAX;
++	char buf[64];
++
++	if (count >= sizeof(buf))
++		return -EINVAL;
++	if (copy_from_user(buf, ubuf, count))
++		return -EFAULT;
++	buf[count] = '\0';
++
++	/* "l3" alone keeps L2B where it is, "l3 l2b" sets both. */
++	if (sscanf(buf, "%u %u", &l3, &l2b) < 1)
++		return -EINVAL;
++	if (l3 > FIELD_MAX(PPE_BIND_RATE_BIND_MASK))
++		return -ERANGE;
++	if (l2b != U32_MAX && l2b > FIELD_MAX(PPE_BIND_RATE_L2B_BIND_MASK))
++		return -ERANGE;
++
++	ppe->bind_rate_l3 = l3;
++	if (l2b != U32_MAX)
++		ppe->bind_rate_l2b = l2b;
++	airoha_ppe_apply_bind_rate(ppe);
++
++	return count;
++}
++
++static int airoha_ppe_debugfs_bind_rate_open(struct inode *inode,
++					     struct file *file)
++{
++	return single_open(file, airoha_ppe_debugfs_bind_rate_show,
++			   inode->i_private);
++}
++
++static const struct file_operations airoha_ppe_debugfs_bind_rate_fops = {
++	.open		= airoha_ppe_debugfs_bind_rate_open,
++	.read		= seq_read,
++	.write		= airoha_ppe_debugfs_bind_rate_write,
++	.llseek		= seq_lseek,
++	.release	= single_release,
++};
++
+ int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
+ {
+ 	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
+@@ -276,6 +333,8 @@ int airoha_ppe_debugfs_init(struct airoh
+ 			    &airoha_ppe_debugfs_foe_usage_fops);
+ 	debugfs_create_file("entry_alias", 0444, ppe->debugfs_dir, ppe,
+ 			    &airoha_ppe_debugfs_foe_alias_fops);
++	debugfs_create_file("bind_rate", 0644, ppe->debugfs_dir, ppe,
++			    &airoha_ppe_debugfs_bind_rate_fops);
+ 
+ 	return 0;
+ }
