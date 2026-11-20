@@ -48,8 +48,8 @@
 # The write and the optional reload run under the locked section used by
 # 51-bridge-hw-offload and 52-wan-lro: two concurrent wan-masq runs queue
 # instead of interleaving, and the bounded retry cannot hang a shell.  The
-# bound is a retry loop on "flock -n", not "flock -w 10", because busybox's
-# flock is the only flock a stock image has and it has no -w.
+# bound is a retry loop on "flock -n", not a timed wait, because busybox's
+# flock is the only flock a stock image has and it takes no wait option.
 # The lock is this script's own, so it does not serialise against fw4 itself;
 # /etc/init.d/firewall reload is procd's job and procd queues the call.
 #
@@ -164,9 +164,9 @@ z=$(zone_index) || {
 		echo "cannot open $LOCK" >&2
 		exit 7
 	}
-	# Ten one-second attempts on "flock -n", not "flock -w 10": busybox's
-	# flock (/usr/bin/flock -> ../../bin/busybox) takes [-sxun] FD and nothing
-	# else, so -w is an unknown option and this guard fired on every run with
+	# Ten one-second attempts on "flock -n", not a timed wait: busybox's flock
+	# (/usr/bin/flock -> ../../bin/busybox) takes [-sxun] FD and nothing else,
+	# so "-w 10 9" was an unknown option and this guard fired on every run with
 	# the lock uncontended.  Same 10 s ceiling, works on busybox and util-linux.
 	waits=0
 	while ! flock -n 9; do
