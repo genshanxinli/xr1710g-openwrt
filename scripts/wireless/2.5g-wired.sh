@@ -30,8 +30,8 @@
 # advertises 2500baseT, preferring lan2 then wan.  Pass --dev-lan10g-if /
 # --dev-wan10g-if to override.
 #
-# A host NIC that is absent or not at 2500 Mb/s, or a detected device port
-# whose link is not at 2500 Mb/s, is a clean skip:
+# A host NIC that is absent or below 2500 Mb/s, or a detected device port
+# whose link is below 2500 Mb/s, is a clean skip (a faster link is accepted):
 #
 #   SKIP: no 2.5G link
 #
@@ -204,8 +204,10 @@ Output and safety:
                              hardware.
   -h, --help                 this text
 
-A real run requires 2500 Mb/s on the device port and on the host NIC
-cabled to it.  Otherwise it exits 0 with exactly:
+A real run requires at least 2500 Mb/s on the device port and on the host
+NIC cabled to it: 2500 is the floor, not the exact rate.  A 10G host NIC
+negotiating 2500 against the device is fine, and so is a faster link; the
+host must never be the bottleneck.  Otherwise it exits 0 with exactly:
 
   SKIP: no 2.5G link
 
@@ -296,7 +298,7 @@ skip_no_link() {
 	# record is what puts this gap in hw-gap-report.sh (issue #70).
 	_rec=$(no_client_record "${OUT_DIR_OPT:-}" 70 2.5g-peer "$NC_2G5_RUN" \
 		"${1:-no 2.5G link}" \
-		"both ends report 2500baseT/Full (ethtool) and speed=2500 (/sys/class/net/*/speed)" \
+		"both ends report >= 2500 Mb/s (ethtool) and are link-up (/sys/class/net/*/carrier)" \
 		"iperf3 TCP both directions >= 2.2 Gbit/s at --parallel 4 --duration 10" \
 		"UDP arm loses < 0.1% at the offered 2500 Mbit/s" \
 		"ppe/usage bound entries grow across the arm (the 2.5G path is offloaded)" 2>/dev/null)
@@ -362,6 +364,23 @@ link_speed() {
 			}
 		}
 	'
+}
+
+# The gate is "at least 2.5G", not "exactly 2.5G".  A 10G bench-host NIC on a
+# 2.5G line is not a slow link: the host cannot become the bottleneck, and on
+# this board lan2 is the only port that can skip_sw offload, so rejecting a
+# 10G host NIC excludes the only clean bench this hardware has.  A speed above
+# 2500 is accepted and noted, so the artifact still records what it negotiated.
+require_2g5_speed() {
+	# require_2g5_speed SIDE IFACE SPEED
+	local side=$1 iface=$2 speed=${3-}
+
+	case $speed in
+	''|*[!0-9]*) return 1 ;;
+	esac
+	[ "$speed" -ge 2500 ] || return 1
+	[ "$speed" -eq 2500 ] ||
+		note "$side $iface link is $speed Mb/s (>= 2500, accepted)"
 }
 
 iface_driver() {
@@ -549,7 +568,7 @@ host_2_5g_candidates() {
 		[ -n "$mgmt" ] && [ "$c" = "$mgmt" ] && continue
 		[ -n "$default" ] && [ "$c" = "$default" ] && continue
 		[ -n "$exclude" ] && [ "$c" = "$exclude" ] && continue
-		[ "$(link_speed "$c")" = "2500" ] || continue
+		require_2g5_speed candidate "$c" "$(link_speed "$c")" >/dev/null 2>&1 || continue
 		printf '%s\n' "$c"
 	done
 }
@@ -600,9 +619,8 @@ validate_host_if() {
 		die "host NIC $iface is enslaved to a bridge; use a dedicated NIC"
 	fi
 	speed=$(link_speed "$iface")
-	if [ "$speed" != "2500" ]; then
-		skip_no_link "host $iface link is '${speed:-unknown}' Mb/s, need 2500"
-	fi
+	require_2g5_speed host "$iface" "$speed" ||
+		skip_no_link "host $iface link is '${speed:-unknown}' Mb/s, need >= 2500"
 	store_host_if "$label" "$iface" "$speed" "$(iface_driver "$iface")"
 }
 
@@ -815,8 +833,8 @@ check_device() {
 		fi
 		speed=$(dev_speed "$dev_if") ||
 			die "cannot run ethtool on $DEVICE:$dev_if"
-		[ "$speed" = "2500" ] ||
-			skip_no_link "device $dev_if link is '${speed:-unknown}' Mb/s, need 2500"
+		require_2g5_speed device "$dev_if" "$speed" ||
+			skip_no_link "device $dev_if link is '${speed:-unknown}' Mb/s, need >= 2500"
 		duplex=$(dev_duplex "$dev_if")
 		store_dev_link "$label" "$speed" "$duplex" \
 			"$(dev_driver "$dev_if")"
@@ -1464,11 +1482,11 @@ dry_run() {
 	HOST_DEFAULT_IF=$(default_route_dev)
 
 	printf 'DRY-RUN: 2.5G bidirectional wired test plan\n'
-	printf 'device: %s (SSH checked at run time; the port must be 2500Mb/s)\n' \
+	printf 'device: %s (SSH checked at run time; the port must be >= 2500Mb/s)\n' \
 		"$DEVICE"
 	printf 'safety: no SSH, no traffic, no address/route change, no directory created\n'
 	printf 'topology: host 2.5G NIC <-> LAN 2.5G port; host 2.5G NIC <-> WAN 2.5G port; SSH on lan3/management; no port<->port cable\n'
-	printf 'skip: a real run prints exactly "SKIP: no 2.5G link" and exits 0 unless both ends are 2500Mb/s\n'
+	printf 'skip: a real run prints exactly "SKIP: no 2.5G link" and exits 0 unless both ends are >= 2500Mb/s\n'
 	printf 'blocked: BLOCKED: no device port advertises 2500baseT, or BLOCKED: <port> is in br-lan\n'
 	printf 'blocked: both mean nothing was measured and nothing failed; each exits 0\n'
 	printf 'unreachable: BLOCKED: cannot reach <host> (<ssh error>) exits 2; port detection had no evidence\n'
@@ -1510,7 +1528,7 @@ dry_run() {
 	done
 
 	printf 'commands (per selected port, run time):\n'
-	printf '  ssh ... "ethtool DEV_IF"          # require Speed: 2500Mb/s\n'
+	printf '  ssh ... "ethtool DEV_IF"          # require Speed: >= 2500Mb/s\n'
 	printf '  ip addr add HOST_IP/32 dev HOST_IF\n'
 	printf '  ip route add DEV_IP/32 dev HOST_IF\n'
 	printf '  ssh ... "ip addr add DEV_IP/32 dev DEV_IF"\n'
@@ -1754,5 +1772,9 @@ main() {
 	printf 'status: failed\n'
 	exit 1
 }
+
+# Sourced by scripts/tests/test_2g5_speed_gate.py to exercise the speed gate
+# (require_2g5_speed) without a NIC, a device or traffic.
+[ "${G25_WIRED_LIB_ONLY:-0}" = 1 ] && return 0
 
 main "$@"
