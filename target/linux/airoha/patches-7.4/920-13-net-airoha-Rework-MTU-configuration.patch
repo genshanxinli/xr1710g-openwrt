@@ -1,16 +1,81 @@
+From 99e204d255c9b47a188dd79762b9406d9c5fed9b Mon Sep 17 00:00:00 2001
+Message-ID: <99e204d255c9b47a188dd79762b9406d9c5fed9b.1779348625.git.lorenzo@kernel.org>
+In-Reply-To: <e15783f7c987e199ecf80b3d858ed5a86d33c508.1779348625.git.lorenzo@kernel.org>
+References: <e15783f7c987e199ecf80b3d858ed5a86d33c508.1779348625.git.lorenzo@kernel.org>
+From: Lorenzo Bianconi <lorenzo@kernel.org>
+Date: Wed, 20 May 2026 17:16:39 +0200
+Subject: [PATCH 13/13] net: airoha: Rework MTU configuration
+
+Signed-off-by: Lorenzo Bianconi <lorenzo@kernel.org>
+---
+ drivers/net/ethernet/airoha/airoha_eth.c |   19 ++++++++++++++---
+ drivers/net/ethernet/airoha/airoha_eth.h |    1 +
+ drivers/net/ethernet/airoha/airoha_ppe.c |   34 ++++++++++++++++++++++++++++++
+ 3 files changed, 51 insertions(+), 3 deletions(-)
+
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -3781,9 +3781,9 @@ static void airoha_disable_qos_for_gdm34
+@@ -2377,6 +2377,17 @@
+ 					 VLAN_ETH_HLEN + netdev->mtu));
+ }
+ 
++static void airoha_dev_set_mtu(struct net_device *netdev)
++{
++	struct airoha_gdm_dev *dev = netdev_priv(netdev);
++
++	airoha_ppe_set_mtu(dev);
++	if (!airoha_is_lan_gdm_dev(dev))
++		airoha_fe_rmw(dev->eth, REG_WAN_MTU0,
++			      WAN_MTU0_MASK,
++			      FIELD_PREP(WAN_MTU0_MASK, netdev->mtu));
++}
++
+ static int airoha_dev_open(struct net_device *netdev)
+ {
+ 	struct airoha_gdm_dev *dev = netdev_priv(netdev);
+@@ -2408,7 +2419,7 @@
+ 		airoha_fe_clear(qdma->eth, REG_GDM_INGRESS_CFG(port->id),
+ 				GDM_STAG_EN_MASK);
+ 
+-	airoha_dev_set_xmit_frame_size(netdev);
++	airoha_dev_set_mtu(netdev);
+ 	port->users++;
+ 
+ 	if (!airoha_is_lan_gdm_dev(dev) &&
+@@ -2432,7 +2443,7 @@
+ 	airoha_set_vip_for_gdm_port(dev, false);
+ 
+ 	if (--port->users)
+-		airoha_ppe_set_xmit_frame_size(dev);
++		airoha_ppe_set_mtu(dev);
+ 	else
+ 		airoha_set_gdm_port_fwd_cfg(dev->eth,
+ 					    REG_GDM_FWD_CFG(port->id),
+@@ -2702,7 +2713,7 @@
+ 
+ 	WRITE_ONCE(netdev->mtu, mtu);
+ 	if (port->users)
+-		airoha_dev_set_xmit_frame_size(netdev);
++		airoha_dev_set_mtu(netdev);
+ 
+ 	return 0;
+ }
+@@ -3820,6 +3831,7 @@
  
  	clear_bit(AIROHA_DEV_F_WAN, &dev->flags);
  	airoha_dev_set_qdma(dev);
-+	airoha_dev_set_xmit_frame_size(netdev);
++	airoha_dev_set_mtu(netdev);
  
  	airoha_set_macaddr(dev, netdev->dev_addr);
--	airoha_ppe_set_xmit_frame_size(dev);
+ 	airoha_ppe_set_xmit_frame_size(dev);
+@@ -3885,6 +3897,7 @@
+ 		goto error_disable_loopback;
  
- 	if (netif_running(netdev))
- 		airoha_set_gdm_port_fwd_cfg(dev->eth,
+ 	airoha_dev_set_xmit_frame_size(netdev);
++	airoha_dev_set_mtu(netdev);
+ 	if (netif_running(netdev)) {
+ 		u32 pse_port;
+ 
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
 @@ -822,6 +822,7 @@
@@ -71,16 +136,3 @@
  			airoha_ppe_set_xmit_frame_size(dev);
  		}
  	}
---- a/drivers/net/ethernet/airoha/airoha_regs.h
-+++ b/drivers/net/ethernet/airoha/airoha_regs.h
-@@ -407,6 +407,10 @@
- #define REG_SRC_PORT_FC_MAP6		0x2298
- #define FC_ID_OF_SRC_PORT_MASK(_n)	GENMASK(4 + ((_n) << 3), ((_n) << 3))
- #define FC_MAP6_DEF_VALUE		0x1b1a1918
-+
-+#define REG_WAN_MTU0			0x2300
-+#define WAN_MTU1_MASK			GENMASK(29, 16)
-+#define WAN_MTU0_MASK			GENMASK(13, 0)
- 
- #define REG_WAN_MTU0			0x2300
- #define WAN_MTU1_MASK			GENMASK(29, 16)
