@@ -72,11 +72,21 @@
 #   The source is executed by "sh -c" as the invoking user.  It is a lab
 #   command, not input to be taken from an untrusted party.  Keep the source
 #   in the foreground and let it run for at least SOURCE_SECS: a command that
-#   daemonizes and returns is treated as a dead source.  After the window the
-#   harness kills the source pid and every descendant it can see in /proc; a
-#   remote B-arm process behind ssh can outlive the ssh client on the feeder,
-#   so a B-arm source must still terminate itself within SOURCE_SECS (iperf3
-#   -t does).
+#   daemonizes and returns is treated as a dead source.  Each source is started
+#   in its own session and process group (setsid), so a grandchild that was
+#   already reparented is still reachable.  After the window the harness sends
+#   TERM to the whole group, waits for every process in it to disappear, and
+#   sends KILL if it does not; a group that survives KILL is reported invalid,
+#   never ignored.  A remote B-arm process behind ssh can outlive the ssh
+#   client on the feeder, so a B-arm source must still terminate itself within
+#   SOURCE_SECS (iperf3 -t does).
+#
+# Per-client floor
+#   An associated client that sends (almost) nothing is not a data point.  A
+#   row whose rate (the larger of tx and rx) stays below --min-mbit (default
+#   1.0 Mbit/s) is reported "idle" instead of "ok", and an arm with any non-ok
+#   client row is not valid: the aggregate row cannot be "ok".  The threshold
+#   is recorded in result.tsv and result.json.
 #
 # A and B arms
 #   --arm a     local source on the AP (default).
@@ -124,6 +134,7 @@
 # Output
 #   $OUT/meta.txt                 run identity and requested clients
 #   $OUT/result.tsv               per-client and aggregate rows, all arms
+#   $OUT/result.json              the same rows as JSON, with min_mbit
 #   $OUT/arm-<a|b>/result.tsv     the arm's rows
 #   $OUT/arm-<a|b>/samples.tsv    per-interval station samples
 #   $OUT/arm-<a|b>/npu.tsv        per-interval token_info samples
@@ -193,6 +204,10 @@ WINDOW=${WINDOW:-10}
 WARMUP=${WARMUP:-5}
 INTERVAL=${INTERVAL:-1}
 PROCS=${PROCS:-1}
+MIN_MBIT=${MIN_MBIT:-1.0}
+# Seconds a source group gets to honour TERM before it is KILLed, and the same
+# again for the KILL to take effect.  Only a stuck group pays this.
+KILL_WAIT=${KILL_WAIT:-5}
 OUT=${OUT:-}
 DRY_RUN=0
 DEBUGFS_ROOT=${DEBUGFS_ROOT:-/sys/kernel/debug}
@@ -250,6 +265,8 @@ Options:
   --warmup SEC          warm-up before the window (default 5)
   --interval SEC        station/NPU sample interval (default 1, <= window)
   --procs N             copies of each client's source (default 1)
+  --min-mbit MBIT       per-client floor: a row whose rate (max of tx and rx)
+                        is below this is reported idle, not ok (default 1.0)
   --out DIR             output directory (default /tmp/multi-client-<UTC>);
                         an existing directory is never reused
   --dry-run             print the plan and every command; do not send traffic,
@@ -262,8 +279,10 @@ uplink.  When --feeder-if is given, a link below 2500 Mb/s is recorded as
 feeder-limited; it is not hidden or promoted to a Wi-Fi result.
 
 Per-client output: arm, MAC, AP interface, channel, width, NSS, signal,
-tx/rx bytes, seconds, tx/rx Gbit/s, retries, status.  The aggregate row uses
-total bytes / measured seconds, not the sum of rounded per-client rates.
+tx/rx bytes, seconds, tx/rx Gbit/s, retries, status, min_mbit.  The aggregate
+row uses total bytes / measured seconds, not the sum of rounded per-client
+rates.  A client row below --min-mbit is "idle", and an arm with an idle
+client is not valid.
 
 An arm is aborted if a client disconnects, its NSS disappears or changes, or
 a source process exits before the window ends.  A clean skip (fewer than two
@@ -639,6 +658,15 @@ while [ "$#" -gt 0 ]; do
 		PROCS=${1#*=}
 		shift
 		;;
+	--min-mbit)
+		[ "$#" -ge 2 ] || usage_error "--min-mbit needs a rate in Mbit/s"
+		MIN_MBIT=$2
+		shift 2
+		;;
+	--min-mbit=*)
+		MIN_MBIT=${1#*=}
+		shift
+		;;
 	--out)
 		[ "$#" -ge 2 ] || usage_error "--out needs a directory"
 		OUT=$2
@@ -679,6 +707,11 @@ is_uint "$INTERVAL" || usage_error "--interval must be a positive integer"
 is_uint "$PROCS" || usage_error "--procs must be a positive integer"
 [ "$PROCS" -ge 1 ] || usage_error "--procs must be greater than zero"
 [ "$PROCS" -le 64 ] || usage_error "--procs must not exceed 64"
+case $MIN_MBIT in
+''|*[!0-9.]*|*.*.*) usage_error "--min-mbit must be a positive number in Mbit/s" ;;
+esac
+awk -v m="$MIN_MBIT" 'BEGIN { exit (m ~ /^[0-9]+(\.[0-9]+)?$/ && m + 0 > 0) ? 0 : 1 }' ||
+	usage_error "--min-mbit must be a positive number in Mbit/s"
 
 case $ARM in
 a|b|both) ;;
@@ -1163,6 +1196,32 @@ sources_alive() {
 	printf '%s' "$_n"
 }
 
+# The process group of a pid is the fifth field of /proc/<pid>/stat.  The
+# comm field can contain spaces and parentheses, so strip everything through
+# the last ") " and take the third word after it (state, ppid, pgrp).
+proc_pgid() {
+	awk '{ s = $0; sub(/.*\) /, "", s); split(s, a, " "); print a[3]; exit }' \
+		"/proc/$1/stat" 2>/dev/null
+}
+
+is_group_leader() {
+	[ -n "$1" ] && [ "$(proc_pgid "$1")" = "$1" ]
+}
+
+# Non-zombie pids in process group $1, from one /proc scan.
+group_pids() {
+	awk -v g="$1" '
+		FNR == 1 {
+			p = FILENAME
+			sub(/^.*\/proc\//, "", p)
+			sub(/\/stat$/, "", p)
+			s = $0
+			sub(/.*\) /, "", s)
+			split(s, a, " ")
+			if (a[3] == g && a[1] != "Z") print p
+		}' /proc/[0-9]*/stat 2>/dev/null
+}
+
 start_sources() {
 	_src_secs=$((WARMUP + WINDOW + 5))
 	SRC_PIDS=
@@ -1176,7 +1235,7 @@ start_sources() {
 			_log=$ARM_DIR/source-$_idx-$_n.log
 			log_cmd "start source for $_mac (copy $_n/$PROCS): $_src"
 			if [ "$ARM" = b ]; then
-				ssh -n -o BatchMode=yes -o ConnectTimeout=10 -o LogLevel=ERROR \
+				setsid ssh -n -o BatchMode=yes -o ConnectTimeout=10 -o LogLevel=ERROR \
 					"$FEEDER" \
 					"env IFACE=$(shq "$_if") CLIENT=$(shq "$_mac") CLIENT_IP=$(shq "$_ip") ARM=$(shq "$ARM") WINDOW=$(shq "$WINDOW") WARMUP=$(shq "$WARMUP") SOURCE_SECS=$(shq "$_src_secs") PROCS=$(shq "$PROCS") CLIENT_INDEX=$(shq "$_idx") FEEDER=$(shq "$FEEDER") FEEDER_IF=$(shq "$FEEDER_IF") FEEDER_IP=$(shq "$FEEDER_IP") sh -c $(shq "$_src")" \
 					>"$_log" 2>&1 &
@@ -1185,65 +1244,79 @@ start_sources() {
 					WINDOW="$WINDOW" WARMUP="$WARMUP" SOURCE_SECS="$_src_secs" \
 					PROCS="$PROCS" CLIENT_INDEX="$_idx" FEEDER="$FEEDER" \
 					FEEDER_IF="$FEEDER_IF" FEEDER_IP="$FEEDER_IP" OUT="$ARM_DIR" \
-					sh -c "$_src" >"$_log" 2>&1 &
+					setsid sh -c "$_src" >"$_log" 2>&1 &
 			fi
-			SRC_PIDS="$SRC_PIDS $!"
+			_p=$!
+			SRC_PIDS="$SRC_PIDS $_p"
+			# setsid makes the child the leader of its own group, so its pid
+			# is the pgid to TERM later; every descendant inherits it, even
+			# one that has already been reparented away from the tree.  A
+			# child that did not become a leader would share the harness's
+			# own group, so it is refused instead of later group-killing the
+			# harness itself.
+			if ! is_group_leader "$_p"; then
+				sleep 1
+			fi
+			if ! is_group_leader "$_p"; then
+				ARM_STATUS=invalid
+				ARM_REASON="source $_p did not start in its own process group (setsid failed?)"
+				warn "$ARM_REASON"
+				kill -TERM "$_p" 2>/dev/null
+				SRC_EXPECTED=$((ACTIVE_COUNT * PROCS))
+				return 1
+			fi
 			_n=$((_n + 1))
 		done
 	done
 	SRC_EXPECTED=$((ACTIVE_COUNT * PROCS))
+	return 0
 }
 
-# Descendant pids of $1 from one /proc scan.  A source is "sh -c <cmd>", so
-# the process that actually sends is a grandchild or deeper (iperf3 behind
-# ssh, ringblast): killing only the recorded pid left them running, and the
-# next arm then measured the previous arm's traffic.
-tree_pids() {
-	_root=$1
-	# One awk over every /proc/<pid>/stat: the first field after the
-	# "pid (comm) " prefix is the state, the second is the ppid.
-	_map=$(awk '
-		FNR == 1 {
-			p = FILENAME
-			sub(/^.*\/proc\//, "", p)
-			sub(/\/stat$/, "", p)
-			s = $0
-			sub(/.*\) /, "", s)
-			split(s, a, " ")
-			print p, a[2]
-		}' /proc/[0-9]*/stat 2>/dev/null)
-	_front=$_root
+# Processes still alive in any source group, as a space-separated pid list.
+left_in_groups() {
 	_out=
-	while [ -n "$_front" ]; do
-		_next=
-		for _f in $_front; do
-			_next="$_next $(printf '%s\n' "$_map" | awk -v p="$_f" '$2 == p { printf "%s ", $1 }')"
-		done
-		_front=${_next# }
-		_out="$_out $_front"
+	for _p in ${SRC_PIDS:-}; do
+		_pids=$(group_pids "$_p")
+		[ -n "$_pids" ] || continue
+		_out="$_out $_pids"
 	done
 	printf '%s' "${_out# }"
-	unset _map
 }
 
+wait_groups_gone() {
+	_t=0
+	while [ "$_t" -lt "$1" ]; do
+		[ -z "$(left_in_groups)" ] && return 0
+		sleep 1
+		_t=$((_t + 1))
+	done
+	[ -z "$(left_in_groups)" ]
+}
+
+# Sources run in their own process group (start_sources uses setsid), so TERM
+# -pgid reaches the sender no matter how deep it sits or whether it was
+# reparented: killing a pid list left grandchildren (iperf3 behind ssh,
+# ringblast) alive and the next arm then measured the previous arm's traffic.
+# The group is polled to zero, KILLed if TERM is not enough, and a group that
+# survives KILL marks the arm invalid instead of being ignored.
 kill_sources() {
 	[ -n "${SRC_PIDS:-}" ] || return 0
-	_todo=
 	for _p in $SRC_PIDS; do
-		_todo="$_todo $_p $(tree_pids "$_p")"
-	done
-	for _p in $_todo; do
-		kill "$_p" 2>/dev/null
+		kill -TERM -"$_p" 2>/dev/null
 	done
 	for _p in $SRC_PIDS; do
 		wait "$_p" 2>/dev/null
 	done
-	# Anything that ignored TERM, children included, goes now.  The pid list
-	# was taken above; Linux hands out pids in ascending order and only wraps
-	# at pid_max, so none of these can have been recycled in between.
-	for _p in $_todo; do
-		kill -9 "$_p" 2>/dev/null
-	done
+	if ! wait_groups_gone "$KILL_WAIT"; then
+		for _p in $SRC_PIDS; do
+			kill -KILL -"$_p" 2>/dev/null
+		done
+		if ! wait_groups_gone "$KILL_WAIT"; then
+			ARM_STATUS=invalid
+			ARM_REASON="source process group still alive after KILL:$(left_in_groups)"
+			warn "$ARM_REASON"
+		fi
+	fi
 	SRC_PIDS=
 }
 
@@ -1333,7 +1406,8 @@ compute_client_row() {
 	_ch=$(printf '%s\n' "$_meta" | cut -d'|' -f1)
 	_cw=$(printf '%s\n' "$_meta" | cut -d'|' -f2)
 	awk -F'\t' -v arm="$ARM" -v mac="$_mac" -v iface="$_if" \
-		-v ch="$_ch" -v cw="$_cw" -v secs="$WINDOW_SECS" -v i="$_idx" '
+		-v ch="$_ch" -v cw="$_cw" -v secs="$WINDOW_SECS" -v i="$_idx" \
+		-v minm="$MIN_MBIT" '
 		$1 == "window-start" && $4 == i {
 			btx = $11; brx = $12; bret = $13; bfail = $14
 			bnss = $8; bw = $9; bsig = $10
@@ -1356,12 +1430,16 @@ compute_client_row() {
 			width = (aw != "") ? aw : bw
 			sig = (asig != "") ? asig : bsig
 			if (nss == "") status = "invalid"
-			# A client that moved no byte in the window is not a data
-			# point: it printed "0.000 ok" and the aggregate counted an
-			# idle client as a success.  Any traffic at all is accepted;
-			# the arm-level gate is the signed target, not a per-client
-			# floor, so nothing here is a throughput threshold.
-			if (status == "ok" && tx == 0 && rx == 0) status = "idle"
+			# A client below --min-mbit is not a data point.  A client that
+			# moved no byte printed "0.000 ok" and the aggregate counted it
+			# as a success; a small but nonzero rate did the same.  The floor
+			# is the larger of the two directions, so an idle client is "idle"
+			# and an arm with any idle client cannot end ok.
+			maxb = (tx != "" && rx != "") ? (tx > rx ? tx : rx) : ""
+			if (status == "ok" && (secs <= 0 || maxb == "")) status = "invalid"
+			# maxb is in bytes and minm in Mbit/s, so divide bytes*8 by 1e6 here.
+			if (status == "ok" && maxb * 8 / 1000000 / secs < minm + 0)
+				status = "idle"
 			if (width == "") width = cw
 			if (ch == "") ch = "?"
 			if (nss == "") nss = "?"
@@ -1372,8 +1450,8 @@ compute_client_row() {
 			if (fail == "") fail = "?"
 			if (txg == "") txg = "?"
 			if (rxg == "") rxg = "?"
-			printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%.3f\t%s\t%s\t%s\t%s\t%s\n", \
-				arm, mac, iface, ch, width, nss, sig, tx, rx, secs, txg, rxg, retr, fail, status
+			printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%.3f\t%s\t%s\t%s\t%s\t%s\t%s\n", \
+				arm, mac, iface, ch, width, nss, sig, tx, rx, secs, txg, rxg, retr, fail, status, minm
 		}
 	' "$SAMPLES"
 }
@@ -1418,9 +1496,9 @@ print_arm_table() {
 		"$ARM" "AGGREGATE(${ACTIVE_COUNT})" "-" "-" "-" "-" "-" \
 		"$_atx" "$_arx" "$WINDOW_SECS" "$_atxg" "$_arxg" "$_aret" \
 		"$ARM_STATUS"
-	printf '%s\tAGGREGATE(%s)\t-\t-\t-\t-\t-\t%s\t%s\t%s\t%s\t%s\t%s\t-\t%s\n' \
+	printf '%s\tAGGREGATE(%s)\t-\t-\t-\t-\t-\t%s\t%s\t%s\t%s\t%s\t%s\t-\t%s\t%s\n' \
 		"$ARM" "$ACTIVE_COUNT" "$_atx" "$_arx" "$WINDOW_SECS" \
-		"$_atxg" "$_arxg" "$_aret" "$ARM_STATUS" >>"$ARM_DIR/result.tsv"
+		"$_atxg" "$_arxg" "$_aret" "$ARM_STATUS" "$MIN_MBIT" >>"$ARM_DIR/result.tsv"
 }
 
 print_npu_summary() {
@@ -1501,7 +1579,11 @@ run_arm() {
 	capture_stations before
 	capture_debugfs before
 
-	start_sources "$ARM_LABEL"
+	start_sources "$ARM_LABEL" || {
+		kill_sources
+		say "ARM $ARM_LABEL ABORTED: $ARM_REASON"
+		return 1
+	}
 	if ! check_sources; then
 		kill_sources
 		say "ARM $ARM_LABEL ABORTED: $ARM_REASON"
@@ -1597,9 +1679,11 @@ run_arm() {
 	kill_sources
 
 	if [ "$ARM_STATUS" != ok ]; then
-		say "ARM $ARM_LABEL ABORTED after ${WINDOW_SECS}s: $ARM_REASON"
-		printf '%s\tABORTED\t-\t-\t-\t-\t-\t-\t-\t%s\t-\t-\t-\t-\taborted: %s\n' \
-			"$ARM" "$WINDOW_SECS" "$ARM_REASON" >>"$ARM_DIR/result.tsv"
+		case $ARM_STATUS in invalid) _marker=INVALID ;; *) _marker=ABORTED ;; esac
+		say "ARM $ARM_LABEL $_marker after ${WINDOW_SECS}s: $ARM_REASON"
+		printf '%s\t%s\t-\t-\t-\t-\t-\t-\t-\t%s\t-\t-\t-\t-\t%s: %s\t%s\n' \
+			"$ARM" "$_marker" "$WINDOW_SECS" "$_marker" "$ARM_REASON" "$MIN_MBIT" \
+			>>"$ARM_DIR/result.tsv"
 		cat "$ARM_DIR/result.tsv" >>"$OUT/result.tsv"
 		print_npu_summary
 		return 1
@@ -1613,8 +1697,8 @@ run_arm() {
 		# Print the offending row: the operator needs to see which client
 		# was idle, not just that one was.
 		print_arm_table
-		printf '%s\tABORTED\t-\t-\t-\t-\t-\t-\t-\t%s\t-\t-\t-\t-\taborted: %s\n' \
-			"$ARM" "$WINDOW_SECS" "$ARM_REASON" >>"$ARM_DIR/result.tsv"
+		printf '%s\tABORTED\t-\t-\t-\t-\t-\t-\t-\t%s\t-\t-\t-\t-\taborted: %s\t%s\n' \
+			"$ARM" "$WINDOW_SECS" "$ARM_REASON" "$MIN_MBIT" >>"$ARM_DIR/result.tsv"
 		cat "$ARM_DIR/result.tsv" >>"$OUT/result.tsv"
 		print_npu_summary
 		return 1
@@ -1624,6 +1708,42 @@ run_arm() {
 	print_npu_summary
 	cat "$ARM_DIR/result.tsv" >>"$OUT/result.tsv"
 	return 0
+}
+
+# ---------------------------------------------------------------------------
+# result.json
+
+# The same rows as result.tsv, plus the per-client floor, so a consumer does
+# not have to parse a tab table or re-derive the threshold.  Values that the
+# table writes as "?" or "-" become null.
+write_result_json() {
+	awk -F'\t' -v minm="$MIN_MBIT" '
+		function s(v) { gsub(/["\\]/, "_", v); return "\"" v "\"" }
+		function n(v) { return (v == "" || v == "?" || v == "-") ? "null" : v }
+		NR == 1 { next }
+		{
+			rows = rows ((rows == "") ? "" : ",") "\n    {" \
+				"\"arm\": " s($1) ", \"client\": " s($2) ", \"iface\": " s($3) \
+				", \"channel\": " n($4) ", \"width\": " s($5) ", \"nss\": " n($6) \
+				", \"signal\": " n($7) ", \"tx_bytes\": " n($8) ", \"rx_bytes\": " n($9) \
+				", \"seconds\": " n($10) ", \"tx_gbit\": " n($11) ", \"rx_gbit\": " n($12) \
+				", \"retries\": " n($13) ", \"failed\": " n($14) ", \"status\": " s($15) \
+				", \"min_mbit\": " n($16) "}"
+			if (($2 ~ /^AGGREGATE/ || $15 ~ /^(INVALID|ABORTED)/) && !($1 in seen)) {
+				seen[$1] = 1
+				arms = arms ((arms == "") ? "" : ",") "\n    {" "\"arm\": " s($1) \
+					", \"status\": " s($15) ", \"tx_gbit\": " n($11) ", \"rx_gbit\": " n($12) \
+					", \"retries\": " n($13) ", \"seconds\": " n($10) "}"
+			}
+		}
+		END {
+			printf "{\n  \"schema\": \"multi-client/1\",\n  \"min_mbit\": %s,\n", n(minm)
+			printf "  \"rows\": [%s\n  ],\n", rows
+			printf "  \"arms\": [%s\n  ]\n}\n", arms
+		}' "$OUT/result.tsv" >"$OUT/result.json.tmp" &&
+		mv "$OUT/result.json.tmp" "$OUT/result.json" ||
+		warn "could not write $OUT/result.json"
+	log_cmd "wrote $OUT/result.json"
 }
 
 # ---------------------------------------------------------------------------
@@ -1649,8 +1769,8 @@ dry_run_plan() {
 			_i=$((_i + 1))
 		done
 	fi
-	printf '  arm=%s window=%ss warmup=%ss interval=%ss procs=%s\n' \
-		"$_armtext" "$WINDOW" "$WARMUP" "$INTERVAL" "$PROCS"
+	printf '  arm=%s window=%ss warmup=%ss interval=%ss procs=%s min-mbit=%s\n' \
+		"$_armtext" "$WINDOW" "$WARMUP" "$INTERVAL" "$PROCS" "$MIN_MBIT"
 	printf '  output: %s\n' "$OUT"
 	printf '  source window: SOURCE_SECS = %s (warm-up + window + 5)\n' \
 		"$((WARMUP + WINDOW + 5))"
@@ -1660,12 +1780,12 @@ dry_run_plan() {
 	printf '  2. if fewer than 2 requested clients are associated: print SKIP and\n'
 	printf '     exit 0; no traffic, no output directory, no config change\n'
 	printf '  3. per arm: snapshot station dump, token_info and hw-queues\n'
-	printf '  4. start the per-client source(s):\n'
+	printf '  4. start the per-client source(s), each in its own process group:\n'
 	if [ "$_armtext" = a ] || [ "$_armtext" = both ]; then
-		printf '       A: IFACE=... CLIENT=... sh -c <source> (on the AP)\n'
+		printf '       A: IFACE=... setsid sh -c <source> (on the AP)\n'
 	fi
 	if [ "$_armtext" = b ] || [ "$_armtext" = both ]; then
-		printf '       B: ssh %s "env CLIENT=... sh -c <source>" (one per client/proc)\n' \
+		printf '       B: setsid ssh %s "env CLIENT=... sh -c <source>" (one per client/proc)\n' \
 			"${FEEDER:-<feeder>}"
 	fi
 	printf '  5. warm up %ss, take the expected NSS from the last warm-up sample\n' "$WARMUP"
@@ -1673,8 +1793,13 @@ dry_run_plan() {
 		"$WINDOW" "$INTERVAL"
 	printf '     /sys/kernel/debug/ieee80211/*/mt76/token_info (+ hw-queues)\n'
 	printf '  7. abort if a client disconnects, NSS is missing or changes, or a\n'
-	printf '     source process exits; otherwise compute per-client and aggregate\n'
-	printf '     tx/rx Gbit/s from the byte deltas over the measured seconds\n'
+	printf '     source process exits; afterwards TERM each source process group,\n'
+	printf '     poll it to zero, KILL if needed, and report INVALID if a group\n'
+	printf '     survives KILL\n'
+	printf '  8. compute per-client and aggregate tx/rx Gbit/s from the byte deltas\n'
+	printf '     over the measured seconds; a client below %s Mbit/s is idle, and an\n' \
+		"$MIN_MBIT"
+	printf '     arm with an idle client is not ok\n'
 	if [ "$_armtext" = b ] || [ "$_armtext" = both ]; then
 		printf '\nB-path feeder checks (read-only):\n'
 		printf '  ssh %s true\n' "${FEEDER:-<feeder>}"
@@ -1685,6 +1810,7 @@ dry_run_plan() {
 	fi
 	printf '\noutput when run for real:\n'
 	printf '  %s/result.tsv                 per-client + aggregate rows\n' "$OUT"
+	printf '  %s/result.json                the same rows as JSON, with min_mbit\n' "$OUT"
 	printf '  %s/arm-a/... and %s/arm-b/... when both arms run\n' "$OUT" "$OUT"
 	printf '  %s/arm-<a|b>/{samples,npu,result}.tsv; station/token/hw-queues dumps\n' "$OUT"
 	printf '  %s/run.log\n' "$OUT"
@@ -1702,6 +1828,7 @@ fi
 have iw || die "iw is required (install iw or iw-full)"
 have awk || die "awk is required"
 have sed || die "sed is required"
+have setsid || die "setsid is required (install busybox or util-linux setsid)"
 [ -r /proc/uptime ] || die "/proc/uptime is required"
 
 log_cmd "multi-client.sh $SCHEMA starting"
@@ -1780,8 +1907,10 @@ LOG=$OUT/run.log
 		_i=$((_i + 1))
 	done
 	printf 'source=%s\n' "$(get_source 1)"
+	printf 'min_mbit=%s\n' "$MIN_MBIT"
+	printf 'kill_wait=%s\n' "$KILL_WAIT"
 } >"$OUT/meta.txt"
-printf 'arm\tclient\tiface\tchannel\twidth\tnss\tsignal\ttx_bytes\trx_bytes\tseconds\ttx_gbit\trx_gbit\tretries\tfailed\tstatus\n' >"$OUT/result.tsv"
+printf 'arm\tclient\tiface\tchannel\twidth\tnss\tsignal\ttx_bytes\trx_bytes\tseconds\ttx_gbit\trx_gbit\tretries\tfailed\tstatus\tmin_mbit\n' >"$OUT/result.tsv"
 
 if [ "$ARM" = b ] || [ "$ARM" = both ]; then
 	check_feeder
@@ -1803,6 +1932,8 @@ both)
 	fi
 	;;
 esac
+
+write_result_json
 
 if [ "$EXIT_CODE" -eq 0 ]; then
 	say ""
