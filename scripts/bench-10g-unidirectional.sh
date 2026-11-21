@@ -203,9 +203,9 @@ Output directory:
   raw.log                chronological command log
   result.json            machine-readable result (schema
                          bench-10g-unidirectional/v1)
-  baseline.md            --baseline only: the citable record, with a
-                         paste-ready claims.yaml entry that names the
-                         measured link speed
+  baseline.md            --baseline only: the run summary, with a
+                         paste-ready claims.yaml entry that cites
+                         result.json and names the measured link speed
   iperf3-tx.json         raw iperf3 JSON for the TX run
   iperf3-rx.json         raw iperf3 JSON for the RX run
   snapshots/{tx,rx}-{before,after}/
@@ -1101,7 +1101,8 @@ emit_baseline_md() {
 	_id=$(printf '%s' "$LABEL" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9._-]/-/g')
 	printf '# baseline %s\n\n' "$_label_esc"
 	printf 'Recorded by scripts/bench-10g-unidirectional.sh --baseline on %s.\n' "$_ts"
-	printf 'This file is the citable record: every number below was read back\n'
+	printf 'This file summarises the run; its claims.yaml entry cites\n'
+	printf 'result.json, and every number below was read back\n'
 	printf 'out of the capture files of this run, and every qualifier next to it\n'
 	printf 'comes from the same capture.\n\n'
 	printf '| field | value |\n| --- | --- |\n'
@@ -1262,9 +1263,14 @@ emit_baseline_md() {
 	printf -- '- `raw.log` (every command, in order)\n'
 
 	printf '\n## paste-ready claims.yaml entry\n\n'
-	printf 'Commit this file as `scripts/perf-baselines/%s.md` before citing it;\n' \
-		"$_label_esc"
-	printf '`source` must point at a committed line.\n\n'
+	_result_json="$RESULT_DIR/result.json"
+	_tx_line=$(grep -n -m1 '^    "tx": ' "$_result_json" 2>/dev/null | cut -d: -f1)
+	_rx_line=$(grep -n -m1 '^    "rx": ' "$_result_json" 2>/dev/null | cut -d: -f1)
+	[ -n "$_tx_line" ] || _tx_line=1
+	[ -n "$_rx_line" ] || _rx_line=$_tx_line
+	printf 'Append this entry to `scripts/claims.yaml`; it cites the committed\n'
+	printf 'result JSON (line %s), not a prose record:\n\n' "$_tx_line"
+	printf '`scripts/perf-baselines/%s/result.json`\n\n' "$_label_esc"
 	printf '```yaml\n'
 	printf '  - id: baseline-%s\n' "$_id"
 	printf '    claim: "在本仓库 iperf3 基线上（%s Mb/s 链路，%s 驱动，flowtable\n' \
@@ -1273,7 +1279,13 @@ emit_baseline_md() {
 		"$_ft_hw" "$_gbps_tx" "$_gbps_rx"
 	printf '      对应 CPU busy 见记录。"\n'
 	printf '    source:\n'
-	printf '      - "scripts/perf-baselines/%s.md:1"\n' "$_label_esc"
+	printf '      - "scripts/perf-baselines/%s/result.json:%s"\n' \
+		"$_label_esc" "$_tx_line"
+	printf '    verify:\n'
+	printf '      - "text: scripts/perf-baselines/%s/result.json:%s \\"direction\\":\\"tx\\""\n' \
+		"$_label_esc" "$_tx_line"
+	printf '      - "text: scripts/perf-baselines/%s/result.json:%s \\"direction\\":\\"rx\\""\n' \
+		"$_label_esc" "$_rx_line"
 	printf '    evidence: 实测\n'
 	printf '    date: "%s"\n' "$(date -u +%Y-%m-%d)"
 	printf '    status: supported\n'
@@ -1384,7 +1396,7 @@ dry_run_plan() {
 	printf '  %s/result.json\n' "$RESULT_DIR"
 	printf '  %s/raw.log\n' "$RESULT_DIR"
 	if [ "$BASELINE" = 1 ]; then
-		printf '  %s/baseline.md   # citable record, paste-ready claims.yaml entry\n' \
+		printf '  %s/baseline.md   # run summary; claims.yaml cites result.json\n' \
 			"$RESULT_DIR"
 	fi
 }
