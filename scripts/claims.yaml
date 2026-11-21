@@ -488,6 +488,10 @@ claims:
       - "text: target/linux/airoha/patches-7.4/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:38 act->police.overhead || act->police.mtu) {"
       - "text: target/linux/airoha/patches-7.4/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:39 act->police.overhead) {"
       - "text: target/linux/airoha/patches-7.4/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:42 peakrate/avrate/overhead police is not supported"
+      - "text: target/linux/airoha/patches-7.3/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:10 net/sched/act_police.c:168-172"
+      - "text: target/linux/airoha/patches-7.3/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:38 act->police.overhead || act->police.mtu) {"
+      - "text: target/linux/airoha/patches-7.3/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:39 act->police.overhead) {"
+      - "text: target/linux/airoha/patches-7.3/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:42 peakrate/avrate/overhead police is not supported"
       - "text: target/linux/airoha/patches-7.4/99991-net-airoha-let-the-tc-police-flow-reach-the-PPE-meter.patch:54 avrate/overhead police is not supported"
 
   - id: cve-2026-98822-backported
