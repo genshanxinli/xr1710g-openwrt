@@ -24,8 +24,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check fields, sources and statuses
-        run: python3 scripts/check-claims.py
+      # --strict --max-unverified is the budget, and it is enforced here.  The
+      # default mode only validates fields/sources/statuses and prints the
+      # unverified count; that count was decorative, so "the unverified pile
+      # grew" never turned a PR red.  5 rows are unverified today; the budget
+      # is 9 so one work item may sit unverified while its measurement runs.
+      # Lower the number when a row gets verified: it is a ratchet, not a
+      # licence to add four permanently-unverified rows.
+      - name: Check fields, sources and statuses (strict unverified budget)
+        run: python3 scripts/check-claims.py --strict --max-unverified 9
 
       # One extra step: re-check the CONTENT of the rows that carry a verify:
       # assertion.  A cited line must still say what the row claims and a
@@ -55,5 +62,6 @@ jobs:
       - name: Check the README upstream record (no refs needed)
         run: sh scripts/track-upstream.sh --static
 
-      # scripts/check-claims.py --strict --max-unverified N is available for
-      # release checks; the PR job only enforces the ledger's own invariants.
+      # The unverified budget above is the enforceable half of this ledger:
+      # an unverified-count regression fails the PR that adds the row, which is
+      # where it can still be fixed, not a release that reads the ledger later.

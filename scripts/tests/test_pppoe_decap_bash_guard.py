@@ -7,9 +7,10 @@ die at the first bash-only line with
 
     syntax error: unexpected "("
 
-before any guard could run.  The delivered script is `#!/bin/sh` and re-execs
-under bash, so --help must print normal usage instead.  Run from the
-repository root:
+before any guard could run.  The script now says `#!/usr/bin/env bash` (it was
+a `#!/bin/sh` label on a bash body, which every `sh -n` sweep reported as a
+syntax error) and still re-execs under bash, so a `sh <script>` call has to
+print normal usage instead.  Run from the repository root:
 
     python3 scripts/tests/test_pppoe_decap_bash_guard.py
 """
