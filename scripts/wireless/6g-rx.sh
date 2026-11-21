@@ -612,7 +612,7 @@ Options:
                       baseline is sampled once before the traffic window and
                       subtracted from both IRQ groups, so hif2 beacons alone
                       cannot win the verdict.
-  --out DIR           result directory (default ./6g-rx-<epoch>).  Must not
+  --out DIR           result directory (default /tmp/6g-rx-<epoch>).  Must not
                       exist; raw snapshots and raw.log are kept there.
   --dry-run           print the planned commands, snapshot paths and
                       counter names; do not touch the device, run iperf3,
@@ -959,7 +959,14 @@ validate_regex --pcie-pattern "$PCIE_PATTERN"
 validate_regex --hif-pattern "$HIF_PATTERN"
 
 if [ -z "$OUT" ]; then
-	OUT=./6g-rx-$(date +%s)
+	# Absolute default.  A relative ./6g-rx-<epoch> followed the caller's
+	# working directory: the "restore after a hard kill" path printed below
+	# then depended on where the script was started, and a run started from /
+	# tried to create /6g-rx-<epoch>.  A run directory named 6g-rx-<epoch> is
+	# deliberately distinct from the skip fallback no_client_default_dir
+	# writes (6g-rx-no-client.<stamp>.<pid>), so a no-client record can never
+	# land in the directory that make_out() fills with raw.log.
+	OUT=/tmp/6g-rx-$(date +%s)
 fi
 
 # --- dry run ----------------------------------------------------------
