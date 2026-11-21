@@ -22,21 +22,24 @@ jobs:
       # the package feeds into one asset: a release asset cannot keep the
       # targets/<board>/<subtarget>/packages layout that apk needs, a tarball
       # can.
+      #
+      # This step never skips. build-distfeeds.sh already refuses an empty
+      # bin/, and `test -s` plus fail_on_unmatched_files make a missing feed
+      # turn the job red; the old `else echo skipping` branch let the release
+      # publish without its feeds and say nothing (#6).
       - name: Pack distfeeds
         run: |
-          if [ -d bin/targets ] || [ -d bin/packages ]; then
-            ./scripts/build-distfeeds.sh distfeeds
-            tar -czf distfeeds.tar.gz -C distfeeds .
-          else
-            echo "no build output in the workspace, skipping distfeeds"
-          fi
+          ./scripts/build-distfeeds.sh distfeeds
+          tar -czf distfeeds.tar.gz -C distfeeds .
+          test -s distfeeds.tar.gz
+          ls -l distfeeds.tar.gz
 
       - name: Release
         uses: softprops/action-gh-release@v3
         with:
           draft: true
           prerelease: true
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
           files: |
             distfeeds.tar.gz
             bin/targets/**/*.itb
