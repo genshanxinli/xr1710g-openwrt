@@ -456,3 +456,18 @@ claims:
     verify:
       - "text: target/linux/airoha/an7581/target.mk:10 uboot-envtools kmod-nft-bridge kmod-sched-act-police kmod-sched-flower"
       - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:9 Add a default-off module parameter, airoha_ppe_meter."
+
+  - id: cve-2026-98822-backported
+    claim: "CVE-2026-98822 的 AP_VLAN 单播绕过已封堵：mac80211 包补丁 018 把 ieee80211_lookup_ra_sta() 的非 control-port 查找从 sta_info_get_bss() 改成只查本接口的 sta_info_get()，同一 BSS 其它 VLAN 的 STA 不再被匹配；6.18 内核队列 947 同步同一修法，7.3/7.4 的内核树本身已带 bool bss 版本。"
+    source:
+      - package/kernel/mac80211/patches/subsys/018-wifi-mac80211-prevent-AP-VLAN-tx-from-other-interfa.patch:55
+      - target/linux/generic/pending-6.18/947-net-mac80211-prevent-AP-VLAN-tx-from-other-interfaces.patch:66
+      - package/kernel/mac80211/Makefile:15
+    evidence: 代码
+    date: "2026-11-21"
+    status: supported
+    verify:
+      - "text: package/kernel/mac80211/patches/subsys/018-wifi-mac80211-prevent-AP-VLAN-tx-from-other-interfa.patch:55 sta = sta_info_get(sdata, skb->data);"
+      - "text: target/linux/generic/pending-6.18/947-net-mac80211-prevent-AP-VLAN-tx-from-other-interfaces.patch:66 sta = sta_info_get(sdata, skb->data);"
+      - "text: package/kernel/mac80211/Makefile:15 PKG_RELEASE:=11"
+    notes: "运行时 mac80211 来自 package/kernel/mac80211 的 backports-7.2，018 在这个源树上按 -F0 顺序应用（61 个 subsys 补丁含 018 全部无 fuzz），补丁号接在 016 之后。7.3 内核树判据：net/mac80211/tx.c:2533-2535 的签名带 bool bss、2557-2560 按 bss 分支；7.4-rc3 判据：net/mac80211/tx.c:2628-2630 与 2652-2655。两者都已含 7f93ca31f7fd，故不再往 pending-7.3/7.4 放重复补丁。f0（干净 worktree，不含主 checkout 的未提交 99991）：7.4 449/0/44、7.3 344/0/594、6.18 690→691/0/442。未上设备实测。"
