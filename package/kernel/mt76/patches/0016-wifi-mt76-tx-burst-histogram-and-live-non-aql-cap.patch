@@ -66,7 +66,7 @@ index 41d1d48..9c3bb24 100644
 +	seq_puts(s, "frames        count   percent\n");
 +	for (i = 0; i < MT_TX_BURST_BUCKETS; i++) {
 +		u64 count = hist[i];
-+		u64 pct = total ? count * 10000 / total : 0;
++		u64 pct = total ? div64_u64(count * 10000, total) : 0;
 +
 +		if (i == MT_TX_BURST_OVERFLOW)
 +			seq_printf(s, ">%5u %12llu   %5llu.%02llu%%\n",
