@@ -134,10 +134,15 @@ def main(dirs):
         by_missing.setdefault(record.get("missing") or "unknown", []).append(record)
 
     # Keys whose fix is a setting on this board, not a purchase.  A blocked
-    # record is always a configuration block.
-    CONFIG_KEYS = {"6ghz-owe-mismatch", "6ghz-only-bss"}
+    # record is a configuration block unless its key is listed as hardware:
+    # "2.5g-peer" is written by both the skip (no-client) and the "no port
+    # advertises 2500baseT" block, and both mean the same missing peer.
+    CONFIG_KEYS = {"6ghz-owe-mismatch", "6ghz-only-bss", "port-in-bridge"}
+    HARDWARE_KEYS = {"2.5g-peer"}
 
     def klass(missing, items):
+        if missing in HARDWARE_KEYS:
+            return "hardware"
         if missing in CONFIG_KEYS or any(
                 r.get("status") == "blocked" for r in items):
             return "configuration"
