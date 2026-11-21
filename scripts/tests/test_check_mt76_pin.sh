@@ -244,6 +244,78 @@ else
 	fail "--help exits non-zero"
 fi
 
+# --- 9: mirror.moved -- the reader is allowed to be the thing that stopped ---
+#
+# The default reader is the fork mirror in PKG_SOURCE_URL, which is frozen on
+# purpose (it is the reproducible source of the pin).  A check that fired by
+# default would therefore turn every default-path run into "blocked", so the
+# reader audit is opt-in: MT76_MIRROR_REF names the reader that is supposed to
+# move.  up-0's HEAD is dated 2026-10-08, the pin date, so it has produced
+# nothing after the pin: "keep" would be a claim nobody measured.
+
+run_case mirror-default 0 keep \
+	MT76_PIN_FILE="$PIN_AT_TIP" MT76_PATCH_DIR="$PATCHES" \
+	MT76_UPSTREAM_REPO="$WORK/up-0" MT76_UPSTREAM_REF=main
+printf '%s\n' "$OUT" | grep -q '^mirror.moved *unknown$' ||
+	fail "mirror-default: an unset MT76_MIRROR_REF must not audit a reader; output: $OUT"
+
+run_case mirror-parked 2 blocked \
+	MT76_PIN_FILE="$PIN_QUIET" MT76_PATCH_DIR="$PATCHES" \
+	MT76_UPSTREAM_REPO="$WORK/up-3" MT76_UPSTREAM_REF=main \
+	MT76_MIRROR_REF="$WORK/up-0"
+printf '%s\n' "$OUT" | grep -q '^mirror.moved *no$' ||
+	fail "mirror-parked: mirror.moved is not no; output: $OUT"
+printf '%s\n' "$OUT" | grep -q '^mirror.date *2026-10-08$' ||
+	fail "mirror-parked: mirror.date does not name the day the reader stopped; output: $OUT"
+printf '%s\n' "$OUT" | grep -q '^behind.commits *3$' ||
+	fail "mirror-parked: the upstream comparison itself must still be reported; output: $OUT"
+printf '%s\n' "$OUT" | grep -q 'keep is not evidence' ||
+	fail "mirror-parked: reason does not say why keep was withdrawn; output: $OUT"
+
+# the same reader once it is moving again: keep stands
+run_case mirror-advancing 0 keep \
+	MT76_PIN_FILE="$PIN_QUIET" MT76_PATCH_DIR="$PATCHES" \
+	MT76_UPSTREAM_REPO="$WORK/up-3" MT76_UPSTREAM_REF=main \
+	MT76_MIRROR_REF=main
+printf '%s\n' "$OUT" | grep -q '^mirror.moved *yes$' ||
+	fail "mirror-advancing: mirror.moved is not yes; output: $OUT"
+
+# an unreadable reader ref is unknown, never a silent "no"
+run_case mirror-typo 0 keep \
+	MT76_PIN_FILE="$PIN_QUIET" MT76_PATCH_DIR="$PATCHES" \
+	MT76_UPSTREAM_REPO="$WORK/up-3" MT76_UPSTREAM_REF=main \
+	MT76_MIRROR_REF=no-such-branch
+printf '%s\n' "$OUT" | grep -q '^mirror.moved *unknown$' ||
+	fail "mirror-typo: an unreadable reader must be unknown; output: $OUT"
+
+# --- 10: blocked.by -- a real count of commits this tree cannot absorb -------
+
+write_pin_blocked() {
+	write_pin "$1" "$2" "$3"
+	printf 'PKG_MIRROR_BLOCKED_BY:=cfg80211_scs_desc, cfg80211_dscp_to_up\n' >>"$1"
+}
+
+PIN_BLOCKED_QUIET="$WORK/pin-blocked-quiet"
+write_pin_blocked "$PIN_BLOCKED_QUIET" 2026-10-08 "$pin3"
+# below the bump threshold the symbol list is a note, not a verdict
+run_case blocked-by-keep 0 keep \
+	MT76_PIN_FILE="$PIN_BLOCKED_QUIET" MT76_PATCH_DIR="$PATCHES" \
+	MT76_UPSTREAM_REPO="$WORK/up-3" MT76_UPSTREAM_REF=main
+printf '%s\n' "$OUT" | grep -q '^blocked.by *cfg80211_scs_desc,cfg80211_dscp_to_up$' ||
+	fail "blocked-by-keep: blocked.by is not the normalised list; output: $OUT"
+
+PIN_BLOCKED_DRIFT="$WORK/pin-blocked-drift"
+write_pin_blocked "$PIN_BLOCKED_DRIFT" 2026-10-08 "$pin12"
+# 12 commits ahead would be "bump", but acting on it means writing those
+# symbols into a kernel this tree does not have: blocked, with the count.
+run_case blocked-by-bump 2 blocked \
+	MT76_PIN_FILE="$PIN_BLOCKED_DRIFT" MT76_PATCH_DIR="$PATCHES" \
+	MT76_UPSTREAM_REPO="$WORK/up-12" MT76_UPSTREAM_REF=main
+printf '%s\n' "$OUT" | grep -q '^behind.commits *12$' ||
+	fail "blocked-by-bump: behind.commits is not 12; output: $OUT"
+printf '%s\n' "$OUT" | grep -q '^reason *upstream needs 2 cfg80211/nl80211 symbols' ||
+	fail "blocked-by-bump: reason does not name the missing symbols; output: $OUT"
+
 [ "$FAILED" = 0 ] || {
 	printf 'check-mt76-pin cases failed\n' >&2
 	exit 1

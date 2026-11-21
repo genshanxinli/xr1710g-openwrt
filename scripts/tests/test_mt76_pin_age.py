@@ -4,7 +4,9 @@
 The script answers one question -- "how many upstream days is the mt76 pin
 behind?" -- and the answer is a verdict plus an exit status:
 
-  fresh    age <= 30   exit 0
+  fresh    age <= 30 and commits_behind < 50               exit 0
+  backlog  age <= 30 and commits_behind >= 50              exit 0, plus
+           `backlog-pin: N commits behind` on stderr
   stale    31 .. 90    exit 0, plus `stale-pin: N days behind` on stderr
   blocked  > 90, or an unreadable pin date / upstream tip   exit 2
 
@@ -70,9 +72,11 @@ def rows(stdout):
 
 
 def inject(pin_date, upstream_date, pin_sha="abc1234567890",
-           upstream_sha="def1234567890"):
+           upstream_sha="def1234567890", commits_behind=None):
     spec = "pin_date=%s pin_sha=%s upstream_date=%s upstream_sha=%s" % (
         pin_date, pin_sha, upstream_date, upstream_sha)
+    if commits_behind is not None:
+        spec += " commits_behind=%s" % commits_behind
     return {"MT76_PIN_AGE_UNDER_TEST": spec}
 
 
@@ -135,6 +139,66 @@ class VerdictBandTest(unittest.TestCase):
         self.assertEqual(rows(out)["verdict"], "fresh")
 
 
+class BacklogTest(unittest.TestCase):
+    """A young pin can still be sitting on a mountain of unabsorbed commits.
+
+    Age answers "has upstream been quiet?"; it cannot answer "how much upstream
+    work is unabsorbed" -- one busy morning is 143 commits without moving the
+    date.  These cases pin the second axis, including the honest "unknown".
+    """
+
+    def test_young_and_heavy_is_a_backlog_not_fresh(self):
+        rc, out, err = run(inject("2026-10-28", "2026-11-21", commits_behind=143))
+        self.assertEqual(rc, 0, "a backlog is a warning, not a failed job")
+        self.assertEqual(rows(out)["verdict"], "backlog")
+        self.assertEqual(rows(out)["age"], "24 days")
+        self.assertEqual(rows(out)["commits_behind"], "143")
+        self.assertEqual(
+            err.strip(),
+            "backlog-pin: 143 commits behind (>= 50) while age is 24 days")
+
+    def test_a_small_backlog_on_a_young_pin_stays_fresh(self):
+        rc, out, err = run(inject("2026-10-28", "2026-11-21", commits_behind=49))
+        self.assertEqual(rc, 0)
+        self.assertEqual(rows(out)["verdict"], "fresh")
+        self.assertEqual(rows(out)["commits_behind"], "49")
+        self.assertEqual(err, "")
+
+    def test_the_backlog_threshold_is_the_documented_default(self):
+        # 50 is the default boundary: 49 fresh, 50 backlog.
+        _, out, _ = run(inject("2026-10-28", "2026-11-21", commits_behind=50))
+        self.assertEqual(rows(out)["verdict"], "backlog")
+
+    def test_the_threshold_is_configurable(self):
+        env = dict(inject("2026-10-28", "2026-11-21", commits_behind=143),
+                   MT76_PIN_AGE_STALE_COMMITS="200")
+        rc, out, err = run(env)
+        self.assertEqual(rc, 0)
+        self.assertEqual(rows(out)["verdict"], "fresh")
+        self.assertEqual(err, "")
+
+    def test_an_unknown_count_keeps_the_age_bands_but_says_so(self):
+        rc, out, err = run(inject("2026-10-28", "2026-11-21"))
+        self.assertEqual(rc, 0)
+        self.assertEqual(rows(out)["verdict"], "fresh")
+        self.assertEqual(rows(out)["commits_behind"], "unknown")
+        self.assertEqual(err, "")
+
+    def test_an_old_pin_stays_stale_even_with_a_backlog(self):
+        # The day bands are not replaced by the commit axis: 50 days behind is
+        # stale whether or not the commit count is known.
+        rc, out, err = run(inject("2026-10-01", "2026-11-20", commits_behind=143))
+        self.assertEqual(rc, 0)
+        self.assertEqual(rows(out)["verdict"], "stale")
+        self.assertEqual(err.strip(), "stale-pin: 50 days behind")
+
+    def test_an_unreadable_upstream_is_still_blocked(self):
+        rc, out, _ = run({"MT76_PIN_AGE_UNDER_TEST":
+                          "pin_date=2026-10-28 upstream_date= commits_behind=143"})
+        self.assertEqual(rc, 2)
+        self.assertEqual(rows(out)["verdict"], "blocked")
+
+
 class ReaderTest(unittest.TestCase):
     """The real path: Makefile -> pin, bare cache -> tip, then the date math."""
 
@@ -187,8 +251,21 @@ class ReaderTest(unittest.TestCase):
         self.assertEqual(rows(out)["pin"], "2026-10-08 (%s)" % shas[0][:8])
         self.assertEqual(rows(out)["upstream master"], "2026-10-20 (%s)" % shas[1][:8])
         self.assertEqual(rows(out)["age"], "12 days")
+        self.assertEqual(rows(out)["commits_behind"], "1",
+                         "the cache holds the pin, so the count is measured")
         self.assertEqual(rows(out)["verdict"], "fresh")
         self.assertEqual(err, "")
+
+    def test_a_pin_missing_from_the_cache_is_unknown_not_fresh(self):
+        # A shallow or truncated cache cannot count; the row must say so
+        # instead of showing a number nobody measured.
+        repo, shas = self.make_upstream(["2026-10-08", "2026-10-20"])
+        pin = self.write_pin("2026-10-08", "0" * 40)
+        rc, out, _ = run(dict(self.env, MT76_PIN_FILE=str(pin),
+                              MT76_PIN_AGE_REPO=str(repo)))
+        self.assertEqual(rc, 0)
+        self.assertEqual(rows(out)["commits_behind"], "unknown")
+        self.assertEqual(rows(out)["verdict"], "fresh")
 
     def test_a_missing_cache_is_blocked_and_names_the_fix(self):
         pin = self.write_pin("2026-10-08", "46b67e5b7c49313d11b2b2d83df3c8025406d63e")

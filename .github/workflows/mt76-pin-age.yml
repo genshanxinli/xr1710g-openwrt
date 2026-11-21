@@ -18,8 +18,9 @@
 # that upstream-drift.yml needs for "first Monday of the quarter": there is no
 # quarter here, so a monthly cron is stated as one.
 #
-# Signal: fresh is silent, stale is a green run with a ::warning:: (age 31..90
-# is a "schedule the bump", not a failed job), blocked (> 90 days or an
+# Signal: fresh is silent, backlog and stale are green runs with a ::warning::
+# (age 31..90 is a "schedule the bump", not a failed job; a young pin with >= 50
+# unabsorbed commits is a backlog, not fresh), blocked (> 90 days or an
 # unreadable upstream) fails the job with ::error:: -- a scheduled run that
 # goes red is the only notification this repository gets without an SMTP
 # setup, and a silent green when upstream could not be read is the failure
@@ -59,9 +60,9 @@ jobs:
         id: age
         run: |
           set -eu
-          # --fetch creates or refreshes the depth-1 cache in the git common
-          # dir; the script itself is read-only and blocks (rc 2) when the
-          # cache cannot be read, so a failed clone cannot look fresh.
+          # --fetch creates or refreshes the cache in the git common dir; the
+          # script is read-only and blocks (rc 2) when the cache cannot be
+          # read, so a failed clone cannot look fresh.
           rc=0
           python3 scripts/mt76-pin-age.py --fetch >age.txt 2>stale.txt || rc=$?
           cat age.txt
@@ -78,7 +79,7 @@ jobs:
             echo '```'
             echo ""
             echo "- verdict: \`${verdict:-none}\`"
-            echo "- exit code: \`$rc\` (0 fresh/stale, 2 blocked)"
+            echo "- exit code: \`$rc\` (0 fresh/backlog/stale, 2 blocked)"
             if [ -s stale.txt ]; then
               echo "- stale signal: \`$(head -n 1 stale.txt)\`"
             fi
@@ -86,7 +87,7 @@ jobs:
               echo "- reason: $reason"
             fi
             echo ""
-            echo "阈值: age <= 30 fresh / 31..90 stale / > 90 blocked;"
+            echo "阈值: age <= 30 且 commits_behind < 50 fresh / age <= 30 但积压 >= 50 backlog / 31..90 stale / > 90 blocked;"
             echo "upstream = openwrt/mt76 master 的 commit date, pin = Makefile 的 PKG_SOURCE_DATE。"
           } >> "$GITHUB_STEP_SUMMARY"
           echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
@@ -103,7 +104,7 @@ jobs:
               echo "mt76 pin fresh: 上游没有积累未吸收的时间，什么都不用做"
               exit 0
               ;;
-            stale)
+            backlog | stale)
               echo "::warning::$(head -n 1 stale.txt)"
               exit 0
               ;;
