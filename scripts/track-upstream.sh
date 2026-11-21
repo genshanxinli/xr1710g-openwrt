@@ -36,6 +36,19 @@
 #   --remote REMOTE    remote whose refs/remotes/REMOTE/* are read (default: upstream)
 #   --track "A B ..."  upstream branches to report (default: "kernel73 kernel74 main")
 #   --mirror REF       local mirror of upstream/kernel73 (default: origin/kernel73)
+#   --gate-branch B    branch the sync verdict is measured on (default: the
+#                      branch matching target/linux/airoha/an7581/target.mk's
+#                      KERNEL_PATCHVER, else the first --track entry)
+#   --verdict          print ok|review|must-act for the gate branch and exit
+#                      0 ok / 1 review / 2 must-act / 3 unknown.  These codes
+#                      belong to this mode only; the drift report below keeps
+#                      0 in-sync / 1 drift / 2 unknown.  Axes are commits
+#                      behind, files differing from the gate tip, and pending
+#                      commits touching the paths the fork actually builds.
+#   --list-hot         print the pending hot-path commits and exit
+#   --review-behind N  --act-behind N   commit thresholds (default 100 / 400)
+#   --review-files N   --act-files N    file thresholds   (default 400 / 1200)
+#   --review-hot N     --act-hot N      hot-commit thresholds (default 25 / 80)
 #   --check            verify the README record against the refs; 0 match,
 #                      1 stale, 2 not enough refs to judge (prints the fix)
 #   --static           with --check: verify only the record's shape and that its
@@ -51,11 +64,28 @@ REMOTE=upstream
 LOCAL=HEAD
 TRACK="kernel73 kernel74 main"
 MIRROR=origin/kernel73
+GATE=
+# Triage thresholds, measured on 2026-11-21: the fork is ~880-883 commits and
+# ~2800 files behind upstream, after four weeks without an absorption, and
+# ~110 of the missing commits touch the paths this fork actually builds.
+# review fires at roughly three days of upstream churn (100 commits / 400
+# files), must-act at roughly two weeks (400 / 1200).  The hot-commit axis is
+# the actionable one: it is the list a human has to cherry-pick, and it is
+# what makes `must-act` mean "schedule the pick session", not "rebase".
+REVIEW_BEHIND=100
+ACT_BEHIND=400
+REVIEW_FILES=400
+ACT_FILES=1200
+REVIEW_HOT=25
+ACT_HOT=80
+HOT_PATHS="target/linux/airoha target/linux/generic/pending-7.3 target/linux/generic/pending-7.4 package/kernel/mac80211 package/kernel/mt76 package/firmware/linux-firmware tools/npu-firmware"
 FETCH=0
 QUIET=0
 CHECK=0
 STATIC=0
 RECORD=0
+VERDICT=0
+LISTHOT=0
 RECFILE=README.md
 DEFECT=0
 
@@ -70,6 +100,15 @@ while [ $# -gt 0 ]; do
 	--remote) REMOTE=${2:?--remote needs a name}; shift ;;
 	--track) TRACK=${2:?--track needs a branch list}; shift ;;
 	--mirror) MIRROR=${2:?--mirror needs a ref}; shift ;;
+	--gate-branch) GATE=${2:?--gate-branch needs a branch}; shift ;;
+	--verdict) VERDICT=1 ;;
+	--list-hot) LISTHOT=1 ;;
+	--review-behind) REVIEW_BEHIND=${2:?--review-behind needs a number}; shift ;;
+	--act-behind) ACT_BEHIND=${2:?--act-behind needs a number}; shift ;;
+	--review-files) REVIEW_FILES=${2:?--review-files needs a number}; shift ;;
+	--act-files) ACT_FILES=${2:?--act-files needs a number}; shift ;;
+	--review-hot) REVIEW_HOT=${2:?--review-hot needs a number}; shift ;;
+	--act-hot) ACT_HOT=${2:?--act-hot needs a number}; shift ;;
 	--check) CHECK=1 ;;
 	--static) CHECK=1; STATIC=1 ;;
 	--record) RECORD=1 ;;
@@ -176,6 +215,45 @@ LOCAL_SHA=$(git rev-parse --verify --quiet "$LOCAL^{commit}" 2>/dev/null) || {
 	exit 2
 }
 
+# The branch a sync verdict is measured on is the one the target actually
+# builds, not the oldest tracked branch: an7581 flipped to KERNEL_PATCHVER 7.4
+# on 2026-11-20 while the README record still names kernel73.  Reading the
+# pin keeps the verdict honest across that kind of flip without editing the
+# record (which --static would then reject).
+gate_branch() {
+	if [ -n "$GATE" ]; then
+		printf '%s\n' "$GATE"
+		return
+	fi
+	pv=$(sed -n 's/^KERNEL_PATCHVER:=//p' target/linux/airoha/an7581/target.mk 2>/dev/null | head -n 1)
+	if [ -n "$pv" ]; then
+		b="kernel$(printf '%s' "$pv" | tr -d '.')"
+		case " $TRACK " in
+		*" $b "*)
+			printf '%s\n' "$b"
+			return
+			;;
+		esac
+	fi
+	printf '%s\n' "$TRACK" | tr ' ' '\n' | head -n 1
+}
+GATE=$(gate_branch)
+gate_ref="refs/remotes/$REMOTE/$GATE"
+gate_behind=
+
+# --list-hot is the worklist behind a must-act verdict: the pending commits
+# that touch what this fork builds.  Read the list, not the diff: the diff is
+# ~2800 files of upstream churn the fork intentionally does not carry.
+if [ "$LISTHOT" = 1 ]; then
+	has_ref "$gate_ref" || {
+		echo "track-upstream: gate branch $GATE is not a resolved ref" >&2
+		exit 3
+	}
+	# shellcheck disable=SC2086 # HOT_PATHS is a deliberate pathspec list
+	git log --oneline "$LOCAL_SHA..$gate_ref" -- $HOT_PATHS
+	exit 0
+fi
+
 if [ "$CHECK" = 1 ]; then
 	record_static || {
 		echo "verdict: record malformed" >&2
@@ -239,6 +317,10 @@ for b in $TRACK; do
 	fi
 	behind=$(git rev-list --count "$LOCAL_SHA..$ref")
 	ahead=$(git rev-list --count "$ref..$LOCAL_SHA")
+	if [ "$b" = "$GATE" ]; then
+		gate_behind=$behind
+		gate_ref=$ref
+	fi
 	state=in-sync
 	if [ "$behind" -gt 0 ]; then
 		state=behind
@@ -276,6 +358,41 @@ say ""
 if [ "$resolved" -eq 0 ]; then
 	say "verdict: unknown - no refs/remotes/$REMOTE/*; run with --fetch"
 	exit 2
+fi
+
+# --verdict turns the drift report into a decision with an expiry date: three
+# axes (commits behind, files differing, pending hot-path commits) each hatch
+# at review and at must-act.  The report above answers "are we behind"; this
+# answers "does it matter yet", which is the question a periodic run asks.
+if [ "$VERDICT" = 1 ]; then
+	if ! has_ref "$gate_ref"; then
+		printf '%s\n' "verdict: unknown - gate branch $GATE is not a resolved ref"
+		exit 3
+	fi
+	if [ -z "$gate_behind" ]; then
+		printf '%s\n' "verdict: unknown - gate branch $GATE shares no base with $LOCAL"
+		exit 3
+	fi
+	gate_files=$(git diff --name-only "$LOCAL_SHA" "$gate_ref" | wc -l | tr -d ' ')
+	# shellcheck disable=SC2086 # HOT_PATHS is a deliberate pathspec list
+	gate_hot=$(git rev-list --count "$LOCAL_SHA..$gate_ref" -- $HOT_PATHS)
+	if [ "$gate_behind" -ge "$ACT_BEHIND" ] || [ "$gate_files" -ge "$ACT_FILES" ] ||
+		[ "$gate_hot" -ge "$ACT_HOT" ]; then
+		v=must-act
+		code=2
+	elif [ "$gate_behind" -ge "$REVIEW_BEHIND" ] || [ "$gate_files" -ge "$REVIEW_FILES" ] ||
+		[ "$gate_hot" -ge "$REVIEW_HOT" ]; then
+		v=review
+		code=1
+	else
+		v=ok
+		code=0
+	fi
+	# The verdict line is the output of this mode, so --quiet (added for the
+	# report table) must not eat it: a CI job reads the code and the line.
+	printf '%s\n' "verdict: $v (branch=$GATE behind=$gate_behind files=$gate_files hot=$gate_hot)"
+	printf '%s\n' "         review >= $REVIEW_BEHIND/$REVIEW_FILES/$REVIEW_HOT, must-act >= $ACT_BEHIND/$ACT_FILES/$ACT_HOT"
+	exit "$code"
 fi
 if [ "$unknown" -eq 1 ]; then
 	say "verdict: unknown - cannot judge every branch above"
