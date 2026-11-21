@@ -17,17 +17,23 @@ UNI_TXPOWER control enum, struct tx_power_ctrl and
 mt7996_mcu_set_tx_power_ctrl, so those parts are dropped here to avoid
 duplicate definitions. Only UNI_TXPOWER_SHOW_INFO is added to mcu.h.
 
+
+Re-anchored to mt76 2026.10.28~0936617d.  Upstream now issues the SKU limit
+control unconditionally in the run path and the PHY bool block grew an
+offchan_bcn_stopped flag, so this version keeps upstream's SKU call and only
+adds the backoff control next to it, using the new goto-disable_radio error
+path.  phy->sku_limit_en stays in place for the debugfs reader in 0015.
+
 Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
 ---
- eeprom.c        |   9 ++
- mt7996/init.c   |  16 ++-
- mt7996/main.c   |  10 ++
- mt7996/mcu.c    | 329 ++++++++++++++++++++++++++++++++++++++++++++++++++++----
- mt7996/mcu.h    |   1 +
+ eeprom.c |   9 ++
+ mt7996/init.c |  16 +-
+ mt7996/main.c |   5 +
+ mt7996/mcu.c | 329 +++++++++++++++++++++++++++++++++++++++---
+ mt7996/mcu.h |   1 +
  mt7996/mt7996.h |   4 +
- 6 files changed, 349 insertions(+), 20 deletions(-)
+ 6 files changed, 344 insertions(+), 20 deletions(-)
 
-diff --git a/eeprom.c b/eeprom.c
 --- a/eeprom.c
 +++ b/eeprom.c
 @@ -516,6 +516,15 @@
@@ -46,7 +52,6 @@ diff --git a/eeprom.c b/eeprom.c
  	val = mt76_get_of_array_s8(np, "paths-cck", &len, ARRAY_SIZE(dest->path.cck));
  	mt76_apply_array_limit(dev, dest->path.cck, ARRAY_SIZE(dest->path.cck), val,
  			       target_power, txs_delta, &max_power, n_chains, MT76_SKU_BACKOFF);
-diff --git a/mt7996/init.c b/mt7996/init.c
 --- a/mt7996/init.c
 +++ b/mt7996/init.c
 @@ -362,15 +362,23 @@
@@ -93,27 +98,20 @@ diff --git a/mt7996/init.c b/mt7996/init.c
  	if (phy->mt76->cap.has_2ghz)
  		__mt7996_init_txpower(phy, &phy->mt76->sband_2g.sband);
  	if (phy->mt76->cap.has_5ghz)
-diff --git a/mt7996/main.c b/mt7996/main.c
 --- a/mt7996/main.c
 +++ b/mt7996/main.c
-@@ -39,6 +39,16 @@
+@@ -39,6 +39,11 @@
  	if (ret)
- 		return ret;
+ 		goto disable_radio;
  
-+	ret = mt7996_mcu_set_tx_power_ctrl(phy, UNI_TXPOWER_SKU_POWER_LIMIT_CTRL,
-+					   phy->sku_limit_en);
-+	if (ret)
-+		return ret;
-+
 +	ret = mt7996_mcu_set_tx_power_ctrl(phy, UNI_TXPOWER_BACKOFF_POWER_LIMIT_CTRL,
 +					   phy->sku_path_en);
 +	if (ret)
-+		return ret;
++		goto disable_radio;
 +
  	set_bit(MT76_STATE_RUNNING, &phy->mt76->state);
  
  	ieee80211_queue_delayed_work(dev->mphy.hw, &phy->mt76->mac_work,
-diff --git a/mt7996/mcu.c b/mt7996/mcu.c
 --- a/mt7996/mcu.c
 +++ b/mt7996/mcu.c
 @@ -5,6 +5,7 @@
@@ -367,7 +365,7 @@ diff --git a/mt7996/mcu.c b/mt7996/mcu.c
  static u8
  mt7996_mcu_get_sta_nss(u16 mcs_map)
  {
-@@ -5882,6 +6119,7 @@
+@@ -6181,6 +6418,7 @@
  int mt7996_mcu_set_txpower_sku(struct mt7996_phy *phy)
  {
  #define TX_POWER_LIMIT_TABLE_RATE	0
@@ -375,7 +373,7 @@ diff --git a/mt7996/mcu.c b/mt7996/mcu.c
  	struct mt7996_dev *dev = phy->dev;
  	struct mt76_phy *mphy = phy->mt76;
  	struct tx_power_limit_table_ctrl {
-@@ -5899,45 +6137,100 @@
+@@ -6198,45 +6436,100 @@
  		.power_limit_type = TX_POWER_LIMIT_TABLE_RATE,
  		.band_idx = phy->mt76->band_idx,
  	};
@@ -494,10 +492,9 @@ diff --git a/mt7996/mcu.c b/mt7996/mcu.c
  }
  
  int mt7996_mcu_cp_support(struct mt7996_dev *dev, u8 mode)
-diff --git a/mt7996/mcu.h b/mt7996/mcu.h
 --- a/mt7996/mcu.h
 +++ b/mt7996/mcu.h
-@@ -1090,6 +1090,7 @@
+@@ -1155,6 +1155,7 @@
  	UNI_TXPOWER_BACKOFF_POWER_LIMIT_CTRL = 3,
  	UNI_TXPOWER_POWER_LIMIT_TABLE_CTRL = 4,
  	UNI_TXPOWER_ATE_MODE_CTRL = 6,
@@ -505,19 +502,18 @@ diff --git a/mt7996/mcu.h b/mt7996/mcu.h
  };
  
  enum {
-diff --git a/mt7996/mt7996.h b/mt7996/mt7996.h
 --- a/mt7996/mt7996.h
 +++ b/mt7996/mt7996.h
-@@ -463,6 +463,8 @@
+@@ -467,6 +467,8 @@
  	bool has_aux_rx;
  	bool counter_reset;
  	bool rdd_tx_paused;
 +	bool sku_limit_en;
 +	bool sku_path_en;
+ 	bool offchan_bcn_stopped;
  };
  
- struct mt7996_dev {
-@@ -875,6 +877,8 @@
+@@ -894,6 +896,8 @@
  int mt7996_mcu_get_temperature(struct mt7996_phy *phy);
  int mt7996_mcu_set_thermal_throttling(struct mt7996_phy *phy, u8 state);
  int mt7996_mcu_set_thermal_protect(struct mt7996_phy *phy, bool enable);
