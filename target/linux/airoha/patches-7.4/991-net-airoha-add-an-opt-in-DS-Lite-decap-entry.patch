@@ -257,21 +257,23 @@
  	flow_action_for_each(i, act, &rule->action) {
  		switch (act->id) {
  		case FLOW_ACTION_MANGLE:
-@@ -2283,6 +2394,13 @@
- 		data.meter = meter;
+@@ -2266,6 +2377,15 @@
+ 		}
  	}
  
 +	/* A DS-Lite decapsulation flow is plain IPv4-in-IPv6; a PPPoE
 +	 * session inside the tunnel would need both headers encoded,
-+	 * which this minimal path does not do.
++	 * which this minimal path does not do.  This has to be decided
++	 * before the meter is allocated: below the allocation the only
++	 * way out is put_smac, so a plain return there leaks the group.
 +	 */
 +	if (offload_type == PPE_PKT_TYPE_IPV4_DSLITE && data.pppoe.num)
 +		return -EOPNOTSUPP;
 +
- 	/* A flow whose ingress and egress devices are both ports of the same
- 	 * bridge never leaves L2, so the PPE must forward it without touching
- 	 * the IP TTL.  Routing -- including entering or leaving the bridge --
-@@ -2361,9 +2479,11 @@
+ 	if (!is_valid_ether_addr(data.eth.h_source) ||
+ 	    !is_valid_ether_addr(data.eth.h_dest))
+ 		return -EINVAL;
+@@ -2361,9 +2481,11 @@
  		case FLOW_ACT_MANGLE_HDR_TYPE_TCP:
  		case FLOW_ACT_MANGLE_HDR_TYPE_UDP:
  			err = airoha_ppe_flow_mangle_ports(act, &data);
@@ -283,7 +285,7 @@
  			break;
  		case FLOW_ACT_MANGLE_HDR_TYPE_ETH:
  			/* handled earlier */
-@@ -2377,6 +2497,18 @@
+@@ -2377,6 +2499,18 @@
  			goto put_smac;
  	}
  

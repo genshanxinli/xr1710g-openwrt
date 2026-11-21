@@ -21,7 +21,7 @@
  struct airoha_flow_data {
  	struct ethhdr eth;
  
-@@ -605,6 +619,8 @@
+@@ -613,6 +627,8 @@
  		u8 tunnel_id;
  		u16 tunnel_mtu;
  	} dslite;
@@ -30,7 +30,7 @@
  };
  
  enum airoha_flow_entry_type {
-@@ -972,6 +988,7 @@
+@@ -988,6 +1004,7 @@
  int airoha_ppe_probe_entry_alias(struct airoha_ppe *ppe);
  void airoha_ppe_foe_entry_get_stats(struct airoha_ppe *ppe, u32 hash,
  				    struct airoha_foe_stats64 *stats);
@@ -48,11 +48,10 @@
  #include <net/ipv6.h>
  #include <linux/if_vlan.h>
  #include <net/pkt_cls.h>
-@@ -84,6 +85,21 @@
- module_param(airoha_ppe_dslite, bool, 0444);
+@@ -113,6 +114,21 @@
  MODULE_PARM_DESC(airoha_ppe_dslite,
  		 "Offload IPv4-in-IPv6 DS-Lite decapsulation flows to the PPE");
-+
+ 
 +/* A 6rd entry still needs the outer IPv4 header from a PPE tunnel table
 + * entry, which this driver does not manage.  Mapping the host-side tunnel
 + * parameters onto the FOE entry is therefore opt-in: at 0 no flow is marked
@@ -67,10 +66,11 @@
 +{
 +	return airoha_ppe_6rd;
 +}
- 
++
  static const struct rhashtable_params airoha_flow_table_params = {
  	.head_offset = offsetof(struct airoha_flow_table_entry, node),
-@@ -1456,7 +1472,9 @@
+ 	.key_offset = offsetof(struct airoha_flow_table_entry, cookie),
+@@ -1516,7 +1532,9 @@
  
  	val = *ib2 & (AIROHA_FOE_IB2_NBQ | AIROHA_FOE_IB2_PSE_PORT |
  		      AIROHA_FOE_IB2_PSE_QOS | AIROHA_FOE_IB2_FAST_PATH);
@@ -81,7 +81,7 @@
  
  	nbq = pse_port == 1 ? 6 : 5;
  	*ib2 &= ~(AIROHA_FOE_IB2_NBQ | AIROHA_FOE_IB2_PSE_PORT |
-@@ -2147,6 +2165,120 @@
+@@ -2223,6 +2241,120 @@
  	return ret;
  }
  
@@ -202,7 +202,7 @@
  static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
  					   struct flow_cls_offload *f)
  {
-@@ -2243,6 +2375,10 @@
+@@ -2327,6 +2459,10 @@
  	    airoha_ppe_dslite_flow(eth, meta.key->ingress_ifindex, &data))
  		offload_type = PPE_PKT_TYPE_IPV4_DSLITE;
  
@@ -213,7 +213,7 @@
  	flow_action_for_each(i, act, &rule->action) {
  		switch (act->id) {
  		case FLOW_ACTION_MANGLE:
-@@ -2287,9 +2423,38 @@
+@@ -2372,11 +2508,40 @@
  
  			police = act;
  			break;
@@ -228,8 +228,8 @@
  		default:
  			return -EOPNOTSUPP;
  		}
-+	}
-+
+ 	}
+ 
 +	/* The underlay is the redirect target when the inner packet is
 +	 * encapsulated, and the device the tunnel packet arrived on when it
 +	 * is decapsulated.  Its MTU bounds the inner packet.
@@ -249,21 +249,23 @@
 +			mtu = odev->mtu;
 +		}
 +		data.sixrd.tunnel_mtu = airoha_ppe_6rd_mtu(mtu);
- 	}
- 
- 	if (!is_valid_ether_addr(data.eth.h_source) ||
-@@ -2429,6 +2594,8 @@
- 		if (err)
++	}
++
+ 	/* A DS-Lite decapsulation flow is plain IPv4-in-IPv6; a PPPoE
+ 	 * session inside the tunnel would need both headers encoded,
+ 	 * which this minimal path does not do.  This has to be decided
+@@ -2517,6 +2682,8 @@
  			goto put_smac;
  	}
-+
-+	airoha_ppe_foe_entry_set_6rd(&hwe, &data);
  
++	airoha_ppe_foe_entry_set_6rd(&hwe, &data);
++
  	e = kzalloc_obj(*e);
  	if (!e) {
+ 		err = -ENOMEM;
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -581,6 +581,73 @@
+@@ -715,6 +715,73 @@
  }
  DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_dslite);
  
@@ -337,7 +339,7 @@
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  {
  	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-@@ -596,6 +663,8 @@
+@@ -734,6 +801,8 @@
  			    &airoha_ppe_debugfs_bind_rate_fops);
  	debugfs_create_file("tb_regs", 0444, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_tb_regs_fops);
