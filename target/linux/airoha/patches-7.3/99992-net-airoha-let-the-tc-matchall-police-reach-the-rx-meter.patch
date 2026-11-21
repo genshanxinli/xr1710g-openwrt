@@ -25,7 +25,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -3979,10 +3979,15 @@
+@@ -3045,10 +3045,15 @@
  		return -EOPNOTSUPP;
  	}
  
