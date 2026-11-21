@@ -1,46 +1,65 @@
-# Issue #189: keep the fork parent (OpenWRT-fanboy/OpenW1700k) visible without
-# trusting the GitHub "Sync fork" button, which only exists for same-named
-# branches and would replace xr1710g with the parent's default branch.
+# Issue #189: the fork parent (OpenWRT-fanboy/OpenW1700k) stays visible, but
+# the "should we sync yet" decision is not re-argued here.  That decision was
+# taken in #189 (keep the deviation; no full rebase - the first replayed commit
+# already hits 171 add/add conflicts, the device builds 7.4 while the rebase
+# would land on 7.3) and turned into an exit code by PR #329:
 #
-# This job is report-only on purpose. It never pushes, merges, rebases or
-# touches a branch: it runs scripts/track-upstream.sh, and when that exits 1
-# (drift) it opens at most one issue - or appends at most one comment when the
-# same drift fingerprint was not reported before - then fails so the drift
-# shows up in the Actions tab. Exit 2 (upstream refs unreadable, no merge-base,
-# fetch failed) also fails, but posts nothing: a transient network failure is
-# not a repo finding. The merge itself stays a human decision because upstream
-# force-pushes kernel73/kernel74/ubi2/snapshot/w1701k/failsafe2 - a pin from
-# last week is not a baseline.
+#   0  ok        nothing to do, nothing to record
+#   1  review    record one line in #189, wait for the next quarter
+#   2  must-act  schedule the S2 pick window (security -> airoha -> mt76)
+#   3  unknown   the refs are broken (fetch failed, branch deleted): fix refs
 #
-# This job needs a runner and this repository has none (Actions runners: 0), so
-# in practice it never executes: the scheduled run would only sit queued. The
-# half that does run in CI is `scripts/track-upstream.sh --static` in
-# claims.yml, and the refs half is `scripts/track-upstream.sh --check` (or
-# `--fetch --check`) on any full local clone, which is how the record in
-# README.md is kept current until a runner exists again.
+# This workflow only carries that code to a scheduler.  It never pushes,
+# merges, rebases, tags or edits a branch; it reads refs and reads the verdict.
+#
+# Schedule: the decision is reviewed once per quarter.  GitHub cron has neither
+# "first Monday of the quarter" nor a quarterly frequency, so the cron says
+# "Monday that falls in the first seven days of a month" (that is the first
+# Monday) and the first step says "only January/April/July/October".  A run that
+# catches February, May, August or November exits 0 on purpose: a skipped month
+# is not a failure, and a green run with one line of explanation is easier to
+# read than a disabled schedule someone will forget to re-enable.
+#
+# A must-act verdict fails the job on purpose.  A scheduled run that goes red
+# is the only notification GitHub sends to the owner without an SMTP setup;
+# printing the verdict in a green run would make the one actionable state
+# indistinguishable from the three harmless ones.
+#
+# This repository has no Actions runner (`actions/runners` total_count = 0),
+# so nothing here has executed yet: the first real run is the first Monday of
+# the next quarter-start month.  Until then the local equivalents are
+# `sh scripts/track-upstream.sh --fetch --verdict` (needs a full clone) and
+# `sh scripts/track-upstream.sh --static` in claims.yml (shallow, no refs).
 
-name: Upstream drift
+name: Upstream drift verdict
 
 on:
   schedule:
-    - cron: '17 5 * * 1'
+    # A Monday in days 1-7 is the first Monday of that month; the quarter gate
+    # in the first step keeps the other eight months quiet.
+    - cron: '17 5 1-7 * 1'
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'check = report only; verdict = also fail the job on must-act'
+        type: choice
+        options:
+          - verdict
+          - check
+        default: verdict
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}
-  cancel-in-progress: true
+  group: upstream-drift
+  cancel-in-progress: false
 
 jobs:
-  drift:
-    name: OpenW1700k drift report
+  verdict:
+    name: OpenW1700k drift verdict
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      issues: write
+    timeout-minutes: 20
     steps:
       - name: Check out with full history
         uses: actions/checkout@v6
@@ -48,64 +67,76 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Fetch the fork parent
+      - name: Run only in the first month of a quarter
+        id: quarter
         run: |
           set -eu
-          git remote add upstream https://github.com/OpenWRT-fanboy/OpenW1700k.git
-          git fetch --prune --quiet upstream
-          echo "upstream branches: $(git branch -r --list 'upstream/*' | wc -l)"
+          month=$(date -u +%m)
+          if [ "$GITHUB_EVENT_NAME" = schedule ]; then
+            case "$month" in
+              01|04|07|10)
+                echo "quarter: 季度首月 $month，继续"
+                ;;
+              *)
+                echo "不是季度首月，跳过（月份 $month；季度首月只有 1/4/7/10）"
+                echo "不是季度首月，跳过（月份 $month）" >> "$GITHUB_STEP_SUMMARY"
+                echo "quarter=0" >> "$GITHUB_OUTPUT"
+                exit 0
+                ;;
+            esac
+          fi
+          echo "quarter=$month" >> "$GITHUB_OUTPUT"
 
-      - name: Measure drift
-        id: measure
+      - name: Fetch upstream and read the verdict
+        id: verdict
+        if: steps.quarter.outputs.quarter != '0'
+        env:
+          MODE: ${{ inputs.mode || 'verdict' }}
         run: |
+          set -eu
+          # track-upstream.sh --fetch fetches this remote; a force-pushed
+          # upstream is why no pin is trusted as a baseline anywhere here.
+          git remote add upstream https://github.com/OpenWRT-fanboy/OpenW1700k.git 2>/dev/null || true
           set +e
-          sh scripts/track-upstream.sh \
-            --local refs/remotes/origin/xr1710g \
-            --mirror refs/remotes/origin/kernel73 >drift.txt 2>&1
+          sh scripts/track-upstream.sh --fetch --quiet --verdict >verdict.txt 2>&1
           code=$?
           set -e
-          cat drift.txt
-          echo "code=$code" >>"$GITHUB_OUTPUT"
-          echo "fingerprint=$(sha256sum drift.txt | cut -c1-12)" >>"$GITHUB_OUTPUT"
-          if [ "$code" -eq 2 ]; then
-            echo "::error::cannot measure upstream drift (exit 2) - see the log above"
-          fi
+          cat verdict.txt
 
-      - name: Report drift in a single issue
-        if: steps.measure.outputs.code == '1'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          FP: ${{ steps.measure.outputs.fingerprint }}
-          TITLE: 'upstream drift: OpenW1700k is ahead of xr1710g'
-        run: |
-          set -eu
+          sh scripts/track-upstream.sh --list-hot >hot.txt 2>&1 || true
+          hot_total=$(wc -l <hot.txt | tr -d ' ')
+
           {
-            printf '自动检查（`.github/workflows/upstream-drift.yml`，只读）发现本仓落后于 fork 父仓库 `OpenWRT-fanboy/OpenW1700k`。\n\n'
-            printf '<!-- drift-fingerprint: %s -->\n\n' "$FP"
-            printf '```\n'
-            cat drift.txt
-            printf '```\n\n'
-            printf '落后分支或 `kernel73` 镜像内容不同，都是要人决定的事：上游会 force-push，上次记录的 pin 不能当基线复用。\n'
-            printf '同步流程见 README 与 #189；本 workflow 不会 push、merge 或 rebase。\n'
-          } >body.md
-          num=$(gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
-          if [ -n "$num" ]; then
-            if gh issue view "$num" --json comments --jq '.comments[].body' | grep -qF "drift-fingerprint: $FP"; then
-              echo "同一份漂移已在 #$num 报过（fingerprint $FP），不再重复评论"
-            else
-              gh issue comment "$num" --body-file body.md
-              echo "已向 #$num 追加评论（fingerprint $FP）"
-            fi
-          else
-            gh issue create --title "$TITLE" --body-file body.md
+            echo "## Upstream drift verdict"
+            echo ""
+            echo '```'
+            cat verdict.txt
+            echo '```'
+            echo ""
+            echo "- exit code: \`$code\` (0 ok / 1 review / 2 must-act / 3 unknown)"
+            echo "- mode: \`$MODE\`"
+            echo "- hot-path commits: $hot_total, first 30 below"
+            echo ""
+            echo '```'
+            head -30 hot.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$code" -eq 0 ]; then
+            echo "verdict ok: 无需动作，本季度到此为止"
+            exit 0
           fi
-
-      - name: Fail when drift was reported
-        if: steps.measure.outputs.code == '1'
-        run: |
-          echo "::error::upstream drift reported above; failing so it stays visible"
+          if [ "$code" -eq 1 ]; then
+            echo "verdict review: 在 issue #189 记一条，等下一个季度首月"
+            exit 0
+          fi
+          if [ "$code" -eq 2 ]; then
+            if [ "$MODE" = check ]; then
+              echo "::warning::verdict must-act (mode=check: 只报告，不失败)"
+              exit 0
+            fi
+            echo "::error::verdict must-act: 排 S2 挑拣窗口（顺序 安全 -> airoha -> mt76）"
+            exit 1
+          fi
+          echo "::error::verdict unknown (exit $code): refs 坏了，当天修 refs"
           exit 1
-
-      - name: Fail when the measurement was impossible
-        if: steps.measure.outputs.code == '2'
-        run: exit 1
