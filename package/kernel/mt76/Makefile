@@ -11,6 +11,10 @@ PKG_SOURCE_PROTO:=git
 PKG_SOURCE_DATE:=2026-10-28
 PKG_SOURCE_VERSION:=46b67e5b7c49313d11b2b2d83df3c8025406d63e
 PKG_MIRROR_HASH:=c1a46a098a0b424a958983e4ce4ef8c3b9d66ed4367e748589fae2c2932fd457
+# Upstream symbols this tree (linux-7.4-rc3 / backports 7.2) does not have, so the
+# commits that need them cannot be absorbed.  Read by scripts/check-mt76-pin.sh
+# (blocked.by row); the list mirrors scripts/claims.yaml, id mt76-pin-drift.
+PKG_MIRROR_BLOCKED_BY:=NL80211_EXT_FEATURE_SCS,NL80211_EXT_FEATURE_MSCS,cfg80211_scs_desc,cfg80211_dscp_to_up,cfg80211_flow_info,ieee80211_sta_flow_prio,IEEE80211_TX_CTRL_STREAM_CLASSIFIED,IEEE80211_TX_CTRL_EXPLICIT_UP
 
 PKG_MAINTAINER:=Felix Fietkau <nbd@nbd.name>
 PKG_USE_NINJA:=0

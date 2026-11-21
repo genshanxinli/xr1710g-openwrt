@@ -48,6 +48,22 @@
 #   MT76_SOURCE_URL        default PKG_SOURCE_URL from the pin file
 #   MT76_BUMP_MIN_COMMITS  default 10
 #   MT76_LOCAL_PATCH_LIMIT default 50
+#   MT76_MIRROR_REF        default empty (no mirror check)
+#
+# MT76_MIRROR_REF names the *reader* whose progress is audited: a repository
+# directory (its HEAD is used) or a branch inside MT76_UPSTREAM_REPO.  It is
+# opt-in on purpose.  The default reader this script has always used is the
+# frozen fork mirror in PKG_SOURCE_URL, so a check that fired by default would
+# turn every default-path run into "blocked" -- the pin file and the reader
+# would disagree with each other, not with upstream.  Give the variable only
+# when the reader is supposed to be moving; then a reader that has not moved
+# since the pin date can no longer produce a "keep".
+#
+# blocked.by: an optional PKG_MIRROR_BLOCKED_BY:=<symbol,symbol,...> in the pin
+# file records the upstream symbols this tree does not have yet (see
+# scripts/claims.yaml, mt76-pin-drift).  It is printed verbatim, and a "bump"
+# that would need missing symbols is downgraded to "blocked": the count is
+# real, but acting on it is a re-write, not a re-anchor.
 #
 # The upstream clone is a cache, not an input: --fetch refreshes it, --offline
 # never touches the network.  The default is --offline so a CI run cannot
@@ -68,6 +84,7 @@ REF=${MT76_UPSTREAM_REF:-main}
 REPO=${MT76_UPSTREAM_REPO:-}
 BUMP_MIN=${MT76_BUMP_MIN_COMMITS:-10}
 PATCH_LIMIT=${MT76_LOCAL_PATCH_LIMIT:-50}
+MIRROR_REF=${MT76_MIRROR_REF:-}
 
 need_value() {
 	if [ $# -lt 2 ]; then
@@ -126,6 +143,10 @@ done
 pin_date=$(sed -n 's/^PKG_SOURCE_DATE:=//p' "$PIN_FILE" | head -n 1)
 pin_sha=$(sed -n 's/^PKG_SOURCE_VERSION:=//p' "$PIN_FILE" | head -n 1)
 source_url=$(sed -n 's/^PKG_SOURCE_URL:=//p' "$PIN_FILE" | head -n 1)
+# Comma-separated upstream symbols this tree cannot supply yet.  Whitespace is
+# stripped so "a, b" and "a,b" are the same list.
+blocked_by=$(sed -n 's/^PKG_MIRROR_BLOCKED_BY:=//p' "$PIN_FILE" | head -n 1 |
+	tr -d ' \t')
 if [ -n "${MT76_SOURCE_URL:-}" ]; then
 	source_url=$MT76_SOURCE_URL
 fi
@@ -160,6 +181,11 @@ row pin.date "$pin_date"
 row pin.sha "$(short "$pin_sha")"
 row local.patches "$patch_count"
 row local.limit "$PATCH_LIMIT"
+blocked_n=0
+if [ -n "$blocked_by" ]; then
+	blocked_n=$(printf '%s\n' "$blocked_by" | awk -F, '{ print NF }')
+	row blocked.by "$blocked_by"
+fi
 row upstream.ref "$REF"
 
 verdict=''
@@ -257,6 +283,58 @@ fi
 if [ -z "$verdict" ]; then
 	verdict=keep
 fi
+
+# --- reader progress ---------------------------------------------------------
+# A reader that has not moved since the pin date cannot answer "should the pin
+# move?": comparing the pin against a frozen mirror only measures how stale the
+# mirror is.  Opt-in (MT76_MIRROR_REF), so the default path keeps its verdict.
+mirror_moved=unknown
+mirror_date=''
+if [ -n "$MIRROR_REF" ]; then
+	row mirror.ref "$MIRROR_REF"
+	if [ -d "$MIRROR_REF" ]; then
+		mirror_repo=$MIRROR_REF
+		mirror_spec=HEAD
+	else
+		mirror_repo=$REPO
+		mirror_spec=refs/heads/$MIRROR_REF
+	fi
+	mirror_sha=$(git -C "$mirror_repo" rev-parse -q --verify \
+		"$mirror_spec^{commit}" 2>/dev/null) || mirror_sha=''
+	if [ -z "$mirror_sha" ]; then
+		mirror_sha=$(git -C "$mirror_repo" rev-parse -q --verify \
+			"$MIRROR_REF^{commit}" 2>/dev/null) || mirror_sha=''
+	fi
+	if [ -n "$mirror_sha" ]; then
+		mirror_date=$(git -C "$mirror_repo" log -1 --format=%cs "$mirror_sha" \
+			2>/dev/null) || mirror_date=''
+	fi
+	if [ -n "$mirror_date" ]; then
+		# pin_date - mirror_date >= 0 means the reader has produced nothing
+		# after the date the pin declares: it is not moving, it is parked.
+		mirror_lag=$(days_between "$mirror_date" "$pin_date")
+		if [ -n "$mirror_lag" ]; then
+			row mirror.date "$mirror_date"
+			if [ "$mirror_lag" -ge 0 ]; then
+				mirror_moved=no
+			else
+				mirror_moved=yes
+			fi
+		fi
+	fi
+fi
+row mirror.moved "$mirror_moved"
+
+# --- evidence that changes the verdict ---------------------------------------
+# "bump" is only actionable when the upstream symbols it needs exist here.
+if [ "$verdict" = bump ] && [ "$blocked_n" -gt 0 ]; then
+	block "upstream needs $blocked_n cfg80211/nl80211 symbols this tree does not have"
+fi
+# "keep" is only evidence when the reader could have moved.
+if [ "$verdict" = keep ] && [ "$mirror_moved" = no ]; then
+	block "reader has not moved since $mirror_date, so keep is not evidence"
+fi
+
 row verdict "$verdict"
 if [ -n "$reason" ]; then
 	row reason "$reason"

@@ -31,7 +31,13 @@ matter how old the pin itself becomes.
 
 verdict / exit status (the workflow keys on both):
 
-  fresh    age <= 30     exit 0
+  fresh    age <= 30 and fewer than MT76_PIN_AGE_STALE_COMMITS commits behind
+                                                       exit 0
+  backlog  age <= 30 but >= MT76_PIN_AGE_STALE_COMMITS commits behind
+                         exit 0, plus one `backlog-pin: N commits behind` line
+                         on stderr (a green run with a ::warning:: annotation:
+                         the upstream is young but has piled up unabsorbed
+                         work, which the age band alone cannot see)
   stale    31 .. 90      exit 0, plus one `stale-pin: N days behind` line on
                          stderr (a green run with a ::warning:: annotation)
   blocked  age > 90, or the pin date / upstream tip is unreadable
@@ -41,6 +47,16 @@ verdict / exit status (the workflow keys on both):
                          gets without an SMTP setup, and a silent "fresh" when
                          upstream could not be read is the failure this
                          contract prevents.)
+
+The commit count is the second axis on purpose.  Age answers "has the upstream
+been quiet?" -- which is the right question for a pin that sits on a moving
+branch over months.  It cannot answer "how much upstream work is unabsorbed":
+one busy morning upstream is 143 commits while the date barely moves.  Both
+rows are printed, so a reader can see which one decided the verdict.  When the
+count cannot be read (--offline without the pin commit in the cache, or a
+shallow cache), the row says `commits_behind: unknown` and the age bands decide
+alone -- the same behaviour as before this axis existed, but never a claim that
+the count was checked.
 
 Offline is the default, like check-mt76-pin.sh: the upstream cache is a local
 input, `--fetch` refreshes or creates it.  Without a cache the pin rows still
@@ -56,7 +72,8 @@ Output rows (machine-readable, `key: value`):
   pin: DATE (SHORT_SHA)
   upstream BRANCH: DATE (SHORT_SHA) | unavailable
   age: N days | unknown
-  verdict: fresh|stale|blocked
+  commits_behind: N | unknown
+  verdict: fresh|backlog|stale|blocked
   reason: ...                       (blocked only)
 
 Environment:
@@ -64,10 +81,13 @@ Environment:
   MT76_PIN_AGE_REPO          default <git-common-dir>/mt76-openwrt.git
   MT76_PIN_AGE_REF           default master
   MT76_PIN_AGE_URL           default https://github.com/openwrt/mt76
+  MT76_PIN_AGE_STALE_COMMITS default 50; a young pin (age <= 30) with this many
+                             unabsorbed commits is a backlog, not fresh
   MT76_PIN_AGE_UNDER_TEST    "key=value ..." injection for the tests:
                              pin_date, pin_sha, upstream_date (absent or empty
                              means "upstream unreadable"), upstream_sha,
-                             upstream_ref.  It skips the Makefile and git.
+                             upstream_ref, commits_behind (absent or empty means
+                             "not countable").  It skips the Makefile and git.
 """
 
 import os
@@ -83,11 +103,20 @@ STALE_MAX = 90
 
 DEFAULT_UPSTREAM_URL = "https://github.com/openwrt/mt76"
 DEFAULT_REF = "master"
+DEFAULT_STALE_COMMITS = 50
 
 
 def usage_error(message):
     print("mt76-pin-age: %s" % message, file=sys.stderr)
     sys.exit(2)
+
+
+def stale_commits_limit():
+    raw = os.environ.get("MT76_PIN_AGE_STALE_COMMITS", str(DEFAULT_STALE_COMMITS))
+    try:
+        return int(raw)
+    except ValueError:
+        usage_error("MT76_PIN_AGE_STALE_COMMITS wants an integer, got %r" % raw)
 
 
 def short(sha):
@@ -132,6 +161,11 @@ def cache_path():
     return Path(os.environ.get("TMPDIR", "/tmp")) / "mt76-openwrt.git"
 
 
+def is_shallow(repo):
+    rc, out, _ = git(["-C", str(repo), "rev-parse", "--is-shallow-repository"])
+    return rc == 0 and out == "true"
+
+
 def refresh(repo, ref, url):
     """Create or update the bare cache.  Returns '' on success, else a reason."""
     clone = not repo.exists()
@@ -140,14 +174,20 @@ def refresh(repo, ref, url):
     # the second attempt is free when the first one worked.
     for _ in range(2):
         if clone:
-            args = ["clone", "-q", "--bare", "--depth", "1", "--branch", ref,
-                    url, str(repo)]
+            # No --depth: a shallow cache cannot answer "how many commits
+            # behind", which is the second half of the verdict below.
+            args = ["clone", "-q", "--bare", "--branch", ref, url, str(repo)]
             what = "clone from %s (branch %s)" % (url, ref)
         else:
-            # An explicit refspec keeps the update identical for a depth-1 cache
-            # and a full one: no remote config is assumed.
-            args = ["-C", str(repo), "fetch", "-q", "--depth", "1", "--prune",
-                    "origin", "refs/heads/%s:refs/heads/%s" % (ref, ref)]
+            if is_shallow(repo):
+                # Caches created by older runs are depth-1; deepen once so the
+                # commit count stops being unknown.
+                git(["-C", str(repo), "fetch", "-q", "--unshallow", "--prune",
+                     "origin"])
+            # An explicit refspec keeps the update independent of the remote
+            # config: no remote refspec is assumed.
+            args = ["-C", str(repo), "fetch", "-q", "--prune",
+                    "origin", "+refs/heads/%s:refs/heads/%s" % (ref, ref)]
             what = "fetch in %s (branch %s)" % (repo, ref)
         rc, _, err = git(args)
         if rc == 0:
@@ -168,6 +208,29 @@ def upstream_tip(repo, ref):
     if rc != 0 or not tip_date:
         return sha, ""
     return tip_date, sha
+
+
+def commits_behind(repo, pin_sha, tip_sha):
+    """Commits reachable from tip_sha and not from pin_sha; None when uncountable.
+
+    None is not zero: a shallow cache, a pin that predates the cache or a pin
+    on another lineage all mean "the count was not measured", and the caller
+    prints `commits_behind: unknown` rather than a made-up number.
+    """
+    if not pin_sha or not tip_sha:
+        return None
+    rc, _, _ = git(["-C", str(repo), "cat-file", "-e", "%s^{commit}" % pin_sha])
+    if rc != 0:
+        return None
+    rc, _, _ = git(["-C", str(repo), "merge-base", "--is-ancestor",
+                    pin_sha, tip_sha])
+    if rc != 0:
+        return None
+    rc, out, _ = git(["-C", str(repo), "rev-list", "--count",
+                      "%s..%s" % (pin_sha, tip_sha)])
+    if rc != 0 or not out.isdigit():
+        return None
+    return int(out)
 
 
 def age_in_days(pin_date, tip_date):
@@ -226,6 +289,8 @@ def main(argv):
             usage_error("unknown argument: %s" % arg)
 
     tip_date, tip_sha, problem = "", "", ""
+    behind = None
+    stale_commits = stale_commits_limit()
     injected = override()
     if injected:
         pin_date = injected.get("pin_date", "")
@@ -234,6 +299,12 @@ def main(argv):
         tip_date = injected.get("upstream_date", "")
         tip_sha = injected.get("upstream_sha", "")
         problem = "" if tip_date else "test injection: upstream_date is absent"
+        raw_behind = injected.get("commits_behind", "")
+        if raw_behind:
+            if not raw_behind.isdigit():
+                usage_error("MT76_PIN_AGE_UNDER_TEST commits_behind wants an "
+                            "integer, got %r" % raw_behind)
+            behind = int(raw_behind)
     else:
         pin_date, pin_sha = read_pin(pin_file)
         if fetch:
@@ -242,6 +313,8 @@ def main(argv):
             tip_date, tip_sha = upstream_tip(repo, ref)
             if not tip_date:
                 problem = "no readable %s tip in %s; run once with --fetch" % (ref, repo)
+            else:
+                behind = commits_behind(repo, pin_sha, tip_sha)
         elif not problem:
             problem = "no upstream cache at %s; run once with --fetch" % repo
 
@@ -257,12 +330,20 @@ def main(argv):
         # negative drift; report it as 0 and let the reviewer look at the pin.
         days = 0
     print("age: %s" % ("%d days" % days if days is not None else "unknown"))
+    print("commits_behind: %s" % ("%d" % behind if behind is not None else "unknown"))
 
     if days is None:
         print("verdict: blocked")
         print("reason: %s" % (problem or "pin date %r is not YYYY-MM-DD" % pin_date))
         return 2
     if days <= FRESH_MAX:
+        if behind is not None and behind >= stale_commits:
+            # Young by date, heavy by commits: the age band alone cannot say
+            # this, and calling it fresh is the blind spot this axis removes.
+            print("verdict: backlog")
+            print("backlog-pin: %d commits behind (>= %d) while age is %d days"
+                  % (behind, stale_commits, days), file=sys.stderr)
+            return 0
         print("verdict: fresh")
         return 0
     if days <= STALE_MAX:
