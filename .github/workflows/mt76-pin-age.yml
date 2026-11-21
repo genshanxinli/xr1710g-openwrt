@@ -1,0 +1,119 @@
+# Issue #9, the half that needs no hardware: how many days of upstream mt76 the
+# pin is behind.  #9 recorded the decision ("the pin moves when upstream has
+# accumulated more than MT76_BUMP_MIN_COMMITS, patch set included"); this
+# workflow makes the *date* half of that visible without anyone remembering to
+# look.
+#
+# It is deliberately not .github/workflows/upstream-drift.yml: that one asks
+# "should the fork parent be synced this quarter" (OpenW1700k, quarterly, with
+# a 1/4/7/10 month gate).  This one asks "how much upstream time is unabsorbed
+# in the mt76 pin" (openwrt/mt76 master, monthly, no gate).  Two questions,
+# two exit codes, two schedules -- mixing them would make one red run mean
+# either thing.
+#
+# Schedule: the 2nd of every month at 06:43 UTC.  The minute differs from the
+# quarterly gate's 05:17 on purpose: GitHub cron is UTC and the two jobs share
+# only a runner label, but running them in the same minute makes the Actions
+# tab unreadable when both are red.  The 2nd also avoids the 1-7 * 1 formula
+# that upstream-drift.yml needs for "first Monday of the quarter": there is no
+# quarter here, so a monthly cron is stated as one.
+#
+# Signal: fresh is silent, stale is a green run with a ::warning:: (age 31..90
+# is a "schedule the bump", not a failed job), blocked (> 90 days or an
+# unreadable upstream) fails the job with ::error:: -- a scheduled run that
+# goes red is the only notification this repository gets without an SMTP
+# setup, and a silent green when upstream could not be read is the failure
+# this check exists to remove.  The full rows always land in the step summary.
+#
+# This repository has no Actions runner (`actions/runners` total_count = 0),
+# so nothing here has executed yet: the first real run is the first 2nd of a
+# month after this merges.  Until then the local equivalent is
+# `python3 scripts/mt76-pin-age.py --fetch`.
+
+name: mt76 pin age
+
+on:
+  schedule:
+    - cron: '43 6 2 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mt76-pin-age
+  cancel-in-progress: false
+
+jobs:
+  age:
+    name: mt76 pin age
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the pin
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Read the pin age against openwrt/mt76 master
+        id: age
+        run: |
+          set -eu
+          # --fetch creates or refreshes the depth-1 cache in the git common
+          # dir; the script itself is read-only and blocks (rc 2) when the
+          # cache cannot be read, so a failed clone cannot look fresh.
+          rc=0
+          python3 scripts/mt76-pin-age.py --fetch >age.txt 2>stale.txt || rc=$?
+          cat age.txt
+          if [ -s stale.txt ]; then
+            cat stale.txt >&2
+          fi
+          verdict=$(awk '$1 == "verdict:" { print $2 }' age.txt)
+          reason=$(sed -n 's/^reason: //p' age.txt | head -n 1)
+          {
+            echo "## mt76 pin age"
+            echo ""
+            echo '```'
+            cat age.txt
+            echo '```'
+            echo ""
+            echo "- verdict: \`${verdict:-none}\`"
+            echo "- exit code: \`$rc\` (0 fresh/stale, 2 blocked)"
+            if [ -s stale.txt ]; then
+              echo "- stale signal: \`$(head -n 1 stale.txt)\`"
+            fi
+            if [ -n "$reason" ]; then
+              echo "- reason: $reason"
+            fi
+            echo ""
+            echo "阈值: age <= 30 fresh / 31..90 stale / > 90 blocked;"
+            echo "upstream = openwrt/mt76 master 的 commit date, pin = Makefile 的 PKG_SOURCE_DATE。"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+
+      - name: Annotate the verdict
+        env:
+          VERDICT: ${{ steps.age.outputs.verdict }}
+          RC: ${{ steps.age.outputs.rc }}
+        run: |
+          set -eu
+          case "$VERDICT" in
+            fresh)
+              echo "mt76 pin fresh: 上游没有积累未吸收的时间，什么都不用做"
+              exit 0
+              ;;
+            stale)
+              echo "::warning::$(head -n 1 stale.txt)"
+              exit 0
+              ;;
+            blocked)
+              reason=$(sed -n 's/^reason: //p' age.txt | head -n 1)
+              echo "::error::mt76 pin blocked: ${reason:-upstream unreadable}"
+              exit 1
+              ;;
+            *)
+              echo "::error::mt76-pin-age produced no verdict (rc=$RC); 看 step summary"
+              exit 1
+              ;;
+          esac
