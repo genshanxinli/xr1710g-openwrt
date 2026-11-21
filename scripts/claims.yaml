@@ -340,19 +340,20 @@ claims:
       - "text: target/linux/airoha/patches-7.3/970-net-airoha-soe-readonly-probe.patch:56 obj-$(CONFIG_NET_AIROHA_SOE) += airoha_soe_probe.o"
 
   - id: mt76-pin-drift
-    claim: "本树 mt76 pin 是 package/kernel/mt76/Makefile 的 2026-10-08 / 639e1287（OpenWRT-fanboy/mt76-firmware 的 261008 分支尖），它不是上游 main 的祖先：main 走另一条 firmware 线（0936617d，2026-10-28），跨线计数 83 个 commit。scripts/check-mt76-pin.sh 把升不升判成 keep|bump|blocked 并返回 0|1|2；本树当前判定是 blocked（换线不是追平）。"
+    claim: "本树 mt76 pin 是 package/kernel/mt76/Makefile 的 2026-10-28 / 46b67e5b（OpenWRT-fanboy/mt76-firmware 的 main 分支上的提交，落后 main 尖 8 个 commit）。它已从 261008 线的 639e1287 换到 main 线：639e1287 不是 main 的祖先（merge-base = 467ae2e3），换线后 scripts/check-mt76-pin.sh 的判定从 blocked(rc=2) 变成 keep(rc=0)。不再前推到 main 尖 0936617d 的原因不是面子问题：main 最后 8 个 commit 用到本树 cfg80211（linux-7.4-rc3 / backports-7.2）没有的 API，编译不过。"
     source:
       - package/kernel/mt76/Makefile:11
       - package/kernel/mt76/Makefile:12
       - scripts/check-mt76-pin.sh:41
       - scripts/tests/test_check_mt76_pin.sh:179
+      - package/kernel/mt76/patches/0010-enable-firmware-txpower-limit.patch:1
     evidence: 实测
     date: "2026-11-21"
     status: supported
-    notes: "2026-11-21 在 git-common-dir 的 mt76-upstream.git（ghfast 镜像克隆，3.2 MB）上实测：main=0936617d、261008=639e1287、git merge-base main 261008 = 467ae2e3、639e1287 不是 main 的祖先、rev-list --count 639e1287..main = 83。数字会随时间漂移，所以判据只认脚本输出；pin 本身未改（升 pin 要重锚 21 个补丁）。同一份缓存不参与构建，克隆失败时脚本判 blocked 而不是 keep。"
+    notes: "2026-11-21 实测（git-common-dir 的 mt76-upstream.git 缓存）：main=0936617d(2026-10-28)，261008=639e1287(2026-10-08) 只在 261008 上，639e1287..main=83、main..639e1287=1（那 1 个是 639e1287 自己的 firmware 提交）。新 pin 46b67e5b 是 main 的祖先，落后 8 个 commit，<= MT76_BUMP_MIN_COMMITS(10)，所以脚本判 keep。为什么停在 46b67e5b：真编三次——0936617d 在 mt7996/init.c:545-546 报 NL80211_EXT_FEATURE_SCS/MSCS 未定义且 mt7996/mt7996.h:870 的 cfg80211_scs_desc 不可见；d7e3bee8 在 mt7996/mcu.c:683 报 cfg80211_dscp_to_up 隐式声明；再往前 7f2f67ee/238538d7/0936617d 还要 cfg80211_flow_info、ieee80211_sta_flow_prio、IEEE80211_TX_CTRL_STREAM_CLASSIFIED/EXPLICIT_UP。linux-7.4-rc3 的 include/net/cfg80211.h 与 include/linux/nl80211.h 里都没有这些符号，backports 最新发布也只是 7.2，所以 46b67e5b 是本树当前能编过的最新上游 commit。补丁侧：20 个本地补丁全量 -F0 重放 BAD=0/fuzz=0/no .rej，0013/0014/0023 因上游已实现而删除（a13a2be9 等 6 个、2bb98336+d2712ce4、cd0c5fdf），0010 的两个 hunk 用 diff -u 重锚，0022 保留（46b67e5b 上上游还是 4 参数调用，本树内核是 5 参数）。"
     verify:
-      - "text: package/kernel/mt76/Makefile:11 PKG_SOURCE_DATE:=2026-10-08"
-      - "text: package/kernel/mt76/Makefile:12 PKG_SOURCE_VERSION:=639e128702780b398c1c36782b77899ce6bcb1fa"
+      - "text: package/kernel/mt76/Makefile:11 PKG_SOURCE_DATE:=2026-10-28"
+      - "text: package/kernel/mt76/Makefile:12 PKG_SOURCE_VERSION:=46b67e5b7c49313d11b2b2d83df3c8025406d63e"
       - "text: scripts/check-mt76-pin.sh:41 blocked    not decidable / not actionable"
       - "text: scripts/tests/test_check_mt76_pin.sh:179 run_case pin-on-side-branch 2 blocked"
 
