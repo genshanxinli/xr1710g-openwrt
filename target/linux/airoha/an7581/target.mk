@@ -7,7 +7,7 @@ KERNEL_PATCHVER:=7.4
 FEATURES+=pwm
 
 DEFAULT_PACKAGES += \
-	uboot-envtools kmod-nft-bridge kmod-sched-act-police
+	uboot-envtools kmod-nft-bridge kmod-sched-act-police kmod-sched-flower
 
 # airoha-en7581-npu-firmware (the MT7992 blob) is not a default package.  Only
 # the MT7992 reference boards load it - an7581-evb.dtso and
@@ -21,6 +21,13 @@ DEFAULT_PACKAGES += \
 # FLOW_ACTION_POLICE to the PPE.  Without the module an ingress shaper fails
 # with "No such file or directory" and nothing says why.  No in-tree script
 # installs such a filter today; this only makes the capability reachable.
+#
+# kmod-sched-flower pairs with it: patch 989 accepts a police action from a
+# tc flower filter (and only from flower) to allocate a per-flow PPE meter
+# group, so without cls_flower the "tc ... flower ... action police" command
+# cannot even be constructed.  Only an7581 gets both: it is the only airoha
+# subtarget that builds 7.4 by default (en7523 and an7583 inherit 6.18 from
+# ../Makefile), and patches-6.18 has no 989 - no meter path there.
 
 # bridger is in the tree but deliberately unused here.  It is one of the
 # routes to getting bridged traffic into the PPE; bridger would need

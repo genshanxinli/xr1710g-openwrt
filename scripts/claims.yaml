@@ -427,3 +427,17 @@ claims:
       - "text: target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:241 bool routing = flowtable->type->family != NFPROTO_BRIDGE;"
       - "text: package/network/config/firewall4/patches/001-add-bridge-flowtable-support.patch:39 flowtable bridge fw4 fb"
     notes: "Consequence for #2: the guard does not cover the GDM4/GDM1 shape on the default fw4 inet flowtable.  Verified by bypass2 against the applied 7.4 tree."
+
+  - id: flower-packaged-for-per-flow-meter
+    claim: "kmod-sched-flower 进了 an7581 的默认镜像，tc flower 才能在设备上构造出来；patch 989 只在 flower 过滤器上接受 police action 并分配每流 PPE meter 组，缺了 cls_flower 这条每流 meter 路径在实机上无法验证。"
+    source:
+      - target/linux/airoha/an7581/target.mk:10
+      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:9
+      - package/kernel/linux/modules/netsupport.mk:963
+    evidence: 代码
+    date: "2026-11-21"
+    status: supported
+    notes: "只断言打包与驱动侧接受路径；profiles 生成后 CONFIG_PACKAGE_kmod-sched-flower=y 会让 CONFIG_NET_CLS_FLOWER=m 进内核 .config，模块产物与设备行为本机未验。en7523/an7583 默认内核 6.18 没有 989，故不加。"
+    verify:
+      - "text: target/linux/airoha/an7581/target.mk:10 uboot-envtools kmod-nft-bridge kmod-sched-act-police kmod-sched-flower"
+      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:9 Add a default-off module parameter, airoha_ppe_meter."
