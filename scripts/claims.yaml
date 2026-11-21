@@ -415,3 +415,15 @@ claims:
     verify:
       - "text: scripts/wireless/irq-napi-ab.sh:1668 npu_beacon_rate \"$before\" \"$after\" \"${IRQ_SAMPLE_S:-1}\""
       - "text: package/kernel/mt76/patches/0021-wifi-mt76-skip-redundant-NPU-TX-linearize.patch:97 passthrough: %llu"
+  - id: nft-bridged-guard-inet-only
+    claim: "The nft flowtable offload guard that records the per-direction ingress port and refuses to offload once a second port appears only runs on table bridge flowtables.  The 675-05 pending patch computes \"bool routing = flowtable->type->family != NFPROTO_BRIDGE;\" so the family split happens before the guard, and this firmware feeds br-lan bridged packets into the inet fw4 flowtable instead (50-nf-bridge-call sets nf_call_iptables=1), where the guard never executes."
+    source:
+      - target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:241
+      - target/linux/airoha/an7581/base-files/etc/hotplug.d/net/50-nf-bridge-call:28
+    evidence: 代码
+    date: 2026-11-21
+    status: supported
+    verify:
+      - "text: target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:241 bool routing = flowtable->type->family != NFPROTO_BRIDGE;"
+      - "text: package/network/config/firewall4/patches/001-add-bridge-flowtable-support.patch:39 flowtable bridge fw4 fb"
+    notes: "Consequence for #2: the guard does not cover the GDM4/GDM1 shape on the default fw4 inet flowtable.  Verified by bypass2 against the applied 7.4 tree."
