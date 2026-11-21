@@ -18,31 +18,28 @@ openwrt/openwrt                  (upstream source, default: main)
 ```
 
 The branch was originally carried over by replaying it, so the SHAs differ
-from upstream's even where the subject lines match. That is history now:
-since the sync of 2026-10-24, `upstream/kernel73` is a real ancestor of
-`xr1710g`, and
+from upstream's even where the subject lines match. It has since drifted away
+from a clean ancestry: measured on 2026-11-21, the fork parent's `kernel73`
+tip is **not** an ancestor of `xr1710g` — the merge-base is still
+`5192094fd6`, and the last real absorption of upstream work is `bc0b2ed82a`
+(2026-10-24), so `xr1710g` carries 511 commits upstream does not have while
+missing 880 of theirs. Check it instead of trusting this paragraph:
 
 ```sh
-git merge-base --is-ancestor upstream/kernel73 HEAD && echo "in sync"
+scripts/track-upstream.sh                 # the table; exits 1 while it drifts
+git merge-base --is-ancestor upstream/kernel73 HEAD; echo "exit=$?"   # 1
 ```
 
-succeeds. Everything upstream has on `kernel73` is contained in `xr1710g`;
-what remains on top is the XR1710G device support and our own fixes. The
-pre-sync state is preserved as the tag `pre-sync-2026-10-24`, which is the
+The pre-sync state is preserved as the tag `pre-sync-2026-10-24`, which is the
 rollback point (`git reset --hard pre-sync-2026-10-24`).
 
 Because `kernel73` does not exist in the fork by default, GitHub's *Sync fork*
 button never offers it, and syncing `main` would replace `xr1710g` with the
 fork parent's default branch — do not use it. The branch is mirrored here so
-the relationship is visible and so a sync has somewhere to land; keep it
-byte-identical to `upstream/kernel73` and do not commit to it:
-
-```sh
-git fetch upstream
-git push --force origin upstream/kernel73:refs/heads/kernel73
-```
-
-To pick up new upstream work, merge from `upstream/kernel73` into `xr1710g`:
+the relationship is visible and so a sync has somewhere to land. The mirror is
+tracked, not trusted: on 2026-11-21 it was 35 commits ahead of and 273 behind
+`upstream/kernel73`, with 628 differing files — a recorded deviation, not a
+byte-identical copy. Refresh it only after a sync has landed:
 
 ```sh
 git fetch upstream
@@ -50,6 +47,9 @@ git switch xr1710g
 git merge upstream/kernel73        # resolve, then make target/linux/prepare
 git push --force origin upstream/kernel73:refs/heads/kernel73   # re-mirror
 ```
+
+What is machine-checked — and where the moving counters live — is in
+[Upstream drift record](#upstream-drift-record).
 
 The XR1710G shares the AN7581 platform with the W1700K but is **not** a clone:
 it uses an RTL8261BE 10G PHY instead of the RTL8261N, drives the 1G port LEDs
@@ -146,6 +146,22 @@ recovery path as untested on hardware.
   once it is.
 - The hardware LuCI pages are part of the image: Airoha NPU, flow sense, fan
   control, Wi-Fi 7 and MLO.
+
+## Upstream drift record
+
+`scripts/track-upstream.sh` measures the fork parent; the line below is the
+part `--check` can assert, and the `Claim ledger` job re-checks its shape on
+every pull request. The moving counters — branch tips, ahead/behind, how many
+files the mirror differs by — are deliberately not here: they change with
+every upstream push. They live in issue #189 and in the script's own output.
+
+<!-- upstream-record: checked=2026-11-21 merge_base=5192094fd6 ancestor=no mirror_tree=different branches=kernel73,kernel74,main mirror=origin/kernel73 local=HEAD -->
+
+After a real sync, replace that line with `scripts/track-upstream.sh
+--record`. Nothing refreshes it automatically: `.github/workflows/
+upstream-drift.yml` runs `scripts/track-upstream.sh` on a Monday cron, but
+this repository has no runner, so the job never executes — run `--check`
+locally (or in the `Claim ledger` job's static form) instead.
 
 ## Documentation
 

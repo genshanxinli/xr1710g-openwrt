@@ -11,6 +11,13 @@
 # not a repo finding. The merge itself stays a human decision because upstream
 # force-pushes kernel73/kernel74/ubi2/snapshot/w1701k/failsafe2 - a pin from
 # last week is not a baseline.
+#
+# This job needs a runner and this repository has none (Actions runners: 0), so
+# in practice it never executes: the scheduled run would only sit queued. The
+# half that does run in CI is `scripts/track-upstream.sh --static` in
+# claims.yml, and the refs half is `scripts/track-upstream.sh --check` (or
+# `--fetch --check`) on any full local clone, which is how the record in
+# README.md is kept current until a runner exists again.
 
 name: Upstream drift
 

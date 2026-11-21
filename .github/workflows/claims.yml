@@ -44,5 +44,16 @@ jobs:
           python3 -m unittest scripts/tests/test_claims_verify.py \
             scripts/tests/test_claims_sources_exist.py
 
+      # Issue #189: README records the upstream-drift facts in one
+      # <!-- upstream-record: ... --> line rather than in prose.  This checkout
+      # is shallow (depth 1) and has no upstream/* or origin/kernel73 refs, so
+      # only the static half can run here: the line must be well formed and must
+      # describe the defaults scripts/track-upstream.sh compares against.  The
+      # refs half is `scripts/track-upstream.sh --check` on a full clone - the
+      # weekly workflow that would run it has no runner, so this is the only
+      # place CI ever touches the record.
+      - name: Check the README upstream record (no refs needed)
+        run: sh scripts/track-upstream.sh --static
+
       # scripts/check-claims.py --strict --max-unverified N is available for
       # release checks; the PR job only enforces the ledger's own invariants.
