@@ -41,6 +41,11 @@
 #   BLOCKED: no device port advertises 2500baseT
 #   BLOCKED: lan2 is in br-lan
 #
+# An unreachable device is not one of those: port detection has no evidence
+# at all, so it stops with exit 2 instead of claiming the port is missing:
+#
+#   BLOCKED: cannot reach <USER@DEVICE> (<first ssh error line>)
+#
 # The second one is the common case on a base tree: lan2 is a br-lan member
 # by default, and a bridged port is not a usable 2.5G data port.  This
 # script never edits a bridge, a UCI file or a firewall: it prints the
@@ -210,9 +215,15 @@ with exit 0 because nothing was measured and nothing failed:
   BLOCKED: no device port advertises 2500baseT
   BLOCKED: <port> is in br-lan
 
-The second one prints the commands that clear it; this script changes no
-bridge, no UCI and no firewall, so the operator runs them (or asks for the
-plan with --detach-from-bridge).
+An unreachable device is an environment problem, not a hardware verdict:
+auto-detection cannot read ethtool, so the script stops with exit 2 instead
+of reporting a missing port:
+
+  BLOCKED: cannot reach <USER@DEVICE> (<first ssh error line>)
+
+The "<port> is in br-lan" line prints the commands that clear it; this script
+changes no bridge, no UCI and no firewall, so the operator runs them (or
+asks for the plan with --detach-from-bridge).
 
 Missing ssh, ethtool, ip or awk is an error, not a skip; iperf3 is
 required once a 2.5G link is present.  The bench host must accept inbound
@@ -740,11 +751,24 @@ resolve_device_ports() {
 	# Fill DEV_LAN_IF/DEV_WAN_IF when the caller named neither or only one.
 	# A port is a candidate when its ethtool link modes mention 2500baseT;
 	# that is the only claim made here, the link itself is checked later.
-	local label other c no_port=
+	local label other c err first no_port=''
 
 	if [ -n "$DEV_LAN_IF" ] && [ -n "$DEV_WAN_IF" ]; then
 		return 0
 	fi
+
+	# Port detection reads ethtool on the device, so a first contact that
+	# fails is an environment problem, not evidence about the hardware.  It
+	# used to be folded into the empty candidate list and reported as "no
+	# device port advertises 2500baseT" with exit 0 (issue #70).  Stop here
+	# instead, with a non-zero status and the ssh error that caused it.
+	err=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$DEVICE" true \
+		2>&1 >/dev/null) || {
+		first=$(printf '%s\n' "$err" | sed -n '1p')
+		printf 'BLOCKED: cannot reach %s (%s)\n' "$DEVICE" \
+			"${first:-ssh failed}"
+		exit 2
+	}
 
 	DEV_CANDIDATES=$(dev_phys_ports)
 	for label in $SEL_PORTS; do
@@ -1447,6 +1471,7 @@ dry_run() {
 	printf 'skip: a real run prints exactly "SKIP: no 2.5G link" and exits 0 unless both ends are 2500Mb/s\n'
 	printf 'blocked: BLOCKED: no device port advertises 2500baseT, or BLOCKED: <port> is in br-lan\n'
 	printf 'blocked: both mean nothing was measured and nothing failed; each exits 0\n'
+	printf 'unreachable: BLOCKED: cannot reach <host> (<ssh error>) exits 2; port detection had no evidence\n'
 	printf 'protocols: %s; duration=%ss parallel=%s udp_rate=%sM iperf_port=%s\n' \
 		"$PROTO" "$DURATION" "$PARALLEL" "$UDP_RATE" "$IPERF_PORT"
 

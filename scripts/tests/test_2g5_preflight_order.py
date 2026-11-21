@@ -87,24 +87,31 @@ class Base(unittest.TestCase):
             check=False,
         )
 
+    def stub_ssh(self, body):
+        """Replace the PATH ssh with a stub; BODY runs instead of ssh."""
+        ssh = self.bin / "ssh"
+        if ssh.is_symlink() or ssh.exists():
+            ssh.unlink()
+        ssh.write_text("#!/bin/sh\n" + body)
+        ssh.chmod(0o755)
+
 
 class WiredTest(Base):
     """scripts/wireless/2.5g-wired.sh: an absent host NIC is a clean skip."""
 
     def test_absent_nic_skips_before_the_iperf3_check(self):
+        # The device answers but advertises no 2500baseT port, which is the
+        # clean BLOCKED this case protects.  An unreachable device is the
+        # separate case in test_2g5_ssh_unreachable.py.
+        self.stub_ssh("exit 0\n")
         result = self.run_script(
             WIRED,
             ["--device", UNREACHABLE, "--host-lan10g-if", "hw89nope0",
              "--ports", "lan10g"],
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        # Either clean precondition is fine: the invariant this test protects
-        # is that a missing link never reaches the traffic tools.  An
-        # unreachable device is caught by the device-port resolution first,
-        # which prints BLOCKED instead of SKIP.
-        self.assertRegex(
-            result.stdout, r"(SKIP: no 2\.5G link|BLOCKED: no device port advertises 2500baseT)"
-        )
+        self.assertIn("BLOCKED: no device port advertises 2500baseT",
+                      result.stdout)
         self.assertNotIn("iperf3", result.stderr)
 
 

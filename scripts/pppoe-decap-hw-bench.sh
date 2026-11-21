@@ -1,5 +1,17 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-or-later
+#
+# shellcheck disable=SC3010,SC3011,SC3014,SC3028,SC3030,SC3040,SC3043,SC3044,SC3050,SC3054
+# The body below is bash (declare -A, arrays).  `sh <script>` used to die in
+# the parser at the first of those, before main() could say anything; re-exec
+# under bash so the caller gets a normal run or usage instead (issue #70).
+if [ -z "${BASH_VERSION:-}" ]; then
+	command -v bash >/dev/null 2>&1 || {
+		printf 'BLOCKED: this script needs bash, run: bash %s\n' "$0" >&2
+		exit 2
+	}
+	exec bash "$0" "$@"
+fi
 #
 # pppoe-decap-hw-bench.sh - reproducible PPPoE hardware-decap validation.
 #
