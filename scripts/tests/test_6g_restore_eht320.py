@@ -1,0 +1,297 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-or-later
+"""Offline tests for scripts/wireless/6g-restore-eht320.sh.
+
+Four behaviours are pinned here, none of them needing a radio or a device:
+
+  * a config whose radio2.htmode drifted off the repository default is
+    reported as drift, and the read-only run writes nothing at all;
+  * --apply rewrites radio2.htmode to the default and verifies that
+    ieee80211be reached the live hostapd config;
+  * a failed verification rolls the config file (and the pending UCI delta)
+    back to the exact bytes it found, and exits non-zero;
+  * a config that is already at the default is left untouched.
+
+The bench is a staged config file, a staged hostapd config, a fake uci that
+only knows ``wireless.radio2.htmode`` and writes the staged file, and a fake
+wifi that fabricates the post-reload hostapd config.  No device is touched.
+
+Red half of the proof: point the test at a broken copy of the script and it
+must fail.
+
+    G6_RESTORE_UNDER_TEST=/tmp/6g-restore-no-rollback.sh \\
+        python3 -m unittest scripts.tests.test_6g_restore_eht320
+
+The test prints the path it is exercising before it runs, because a copy that
+silently keeps testing the repository file proves nothing.
+
+Run from the repository root:
+
+    python3 -m unittest scripts.tests.test_6g_restore_eht320
+"""
+
+import os
+import shutil
+import stat
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPT = Path(
+    os.environ.get(
+        "G6_RESTORE_UNDER_TEST",
+        REPO_ROOT / "scripts/wireless/6g-restore-eht320.sh",
+    )
+).resolve()
+DEFAULTS = REPO_ROOT / "target/linux/airoha/an7581/base-files/etc/uci-defaults/51_wireless-tuning"
+GUARD = REPO_ROOT / "scripts/lib/uci-restore-guard.sh"
+
+print("script under test: %s" % SCRIPT)
+print("defaults read from: %s" % DEFAULTS)
+
+CONFIG_HE20 = """\
+config wifi-device 'radio2'
+\toption type 'mac80211'
+\toption band '6g'
+\toption channel '37'
+\toption htmode 'HE20'
+\toption country 'US'
+\toption he_bss_color '39'
+\toption disabled '0'
+"""
+
+CONFIG_EHT320 = CONFIG_HE20.replace("option htmode 'HE20'", "option htmode 'EHT320'")
+
+HOSTAPD_NO_BE = """\
+hw_mode=a
+channel=37
+ieee80211ax=1
+"""
+
+HOSTAPD_BE = """\
+hw_mode=a
+channel=37
+ieee80211ax=1
+ieee80211be=1
+eht_oper_chwidth=9
+eht_oper_centr_freq_seg0_idx=31
+"""
+
+# A uci that knows exactly one option and rewrites the staged config file:
+# "set" is the write and "commit" is the point at which it lands, the same
+# split the real uci has (which is why the delta exists at all).
+FAKE_UCI = r"""#!/usr/bin/env python3
+import os, sys, re
+
+cfg = os.environ["FAKE_UCI_CFG"]
+delta = os.environ.get("FAKE_UCI_DELTA", "")
+log = os.environ["FAKE_UCI_LOG"]
+
+argv = sys.argv[1:]
+quiet = False
+if argv[:1] == ["-q"]:
+    quiet = True
+    argv = argv[1:]
+
+with open(log, "a") as handle:
+    handle.write(" ".join(argv) + "\n")
+
+def get(option):
+    text = open(cfg).read()
+    match = re.search(r"option %s '([^']*)'" % re.escape(option), text)
+    if match is None:
+        return None
+    return match.group(1)
+
+if argv == ["get", "wireless.radio2.htmode"]:
+    value = get("htmode")
+    if value is None:
+        sys.exit(1)
+    print(value)
+    sys.exit(0)
+
+if len(argv) == 2 and argv[0] == "set" and argv[1].startswith("wireless.radio2.htmode="):
+    value = argv[1].split("=", 1)[1]
+    text = open(cfg).read()
+    new, count = re.subn(r"option htmode '[^']*'", "option htmode '%s'" % value, text)
+    if count == 0:
+        new = text + "\toption htmode '%s'\n" % value
+    # Mirror real uci: the write lands in the delta first.
+    if delta:
+        open(delta, "w").write(new)
+    else:
+        open(cfg, "w").write(new)
+    sys.exit(0)
+
+if argv == ["commit", "wireless"]:
+    if delta and os.path.exists(delta):
+        shutil_move = os.environ.get("FAKE_UCI_MOVE")
+        if shutil_move:
+            os.replace(delta, cfg)
+        else:
+            data = open(delta).read()
+            open(cfg, "w").write(data)
+            os.unlink(delta)
+    sys.exit(0)
+
+if not quiet:
+    sys.stderr.write("fake uci: unsupported %r\n" % (argv,))
+sys.exit(1)
+"""
+
+# A wifi that stands in for the real reload: when the config now asks for an
+# EHT width and FAKE_WIFI_EMIT_BE=1, it writes the post-reload hostapd config
+# the way hostapd would; otherwise it leaves the config untouched (the arm
+# that proves the verification failure path).
+FAKE_WIFI = r"""#!/bin/sh
+printf '%s\n' "$*" >> "${FAKE_WIFI_LOG:?}"
+[ "${FAKE_WIFI_EMIT_BE:-1}" = "1" ] || exit 0
+grep -q "option htmode 'EHT" "$FAKE_UCI_CFG" || exit 0
+cat > "$FAKE_HOSTAPD_CFG" <<'EOF'
+hw_mode=a
+channel=37
+ieee80211ax=1
+ieee80211be=1
+eht_oper_chwidth=9
+eht_oper_centr_freq_seg0_idx=31
+EOF
+"""
+
+
+def write_exec(path: Path, text: str) -> None:
+    path.write_text(text)
+    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
+class Bench:
+    """A throwaway root with the staged config, hostapd, delta and fakes."""
+
+    def __init__(self, config: str, hostapd: str):
+        self.tmp = Path(tempfile.mkdtemp(prefix="6g-restore-eht320."))
+        self.bin = self.tmp / "bin"
+        self.bin.mkdir()
+        self.cfg = self.tmp / "wireless"
+        self.cfg.write_text(config)
+        self.hostapd = self.tmp / "hostapd-phy0.2.conf"
+        self.hostapd.write_text(hostapd)
+        self.delta = self.tmp / "delta-wireless"
+        self.uci_log = self.tmp / "uci.log"
+        self.wifi_log = self.tmp / "wifi.log"
+        self.urg_dir = self.tmp / "restore"
+        self.uci_log.write_text("")
+        self.wifi_log.write_text("")
+
+        write_exec(self.bin / "uci", FAKE_UCI)
+        write_exec(self.bin / "wifi", FAKE_WIFI)
+        # The guard's "command -v $URG_WIFI" check only needs a name it can
+        # find; the fake above is on PATH under that name.
+        self.env = dict(os.environ)
+        self.env.update({
+            "PATH": "%s:%s" % (self.bin, os.environ.get("PATH", "/usr/bin:/bin")),
+            "WIRELESS_CFG": str(self.cfg),
+            "HOSTAPD_CONF": str(self.hostapd),
+            "G6_DEFAULTS": str(DEFAULTS),
+            "G6_VERIFY_TIMEOUT": "2",
+            "URG_LIB": str(GUARD),
+            "URG_DIR": str(self.urg_dir),
+            "URG_DELTA": str(self.delta),
+            "URG_WIFI": "wifi",
+            "FAKE_UCI_CFG": str(self.cfg),
+            "FAKE_UCI_DELTA": str(self.delta),
+            "FAKE_UCI_LOG": str(self.uci_log),
+            "FAKE_WIFI_LOG": str(self.wifi_log),
+            "FAKE_HOSTAPD_CFG": str(self.hostapd),
+            "FAKE_UCI_MOVE": "1",
+        })
+
+    def run(self, *args, emit_be="1"):
+        env = dict(self.env)
+        env["FAKE_WIFI_EMIT_BE"] = emit_be
+        return subprocess.run(
+            ["sh", str(SCRIPT), *args],
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=60,
+        )
+
+    def uci_calls(self) -> str:
+        return self.uci_log.read_text()
+
+    def reloads(self) -> str:
+        return self.wifi_log.read_text()
+
+    def close(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+
+class RestoreTest(unittest.TestCase):
+    def setUp(self):
+        self.benches = []
+
+    def tearDown(self):
+        for bench in self.benches:
+            bench.close()
+
+    def bench(self, config: str = CONFIG_HE20, hostapd: str = HOSTAPD_NO_BE):
+        b = Bench(config, hostapd)
+        self.benches.append(b)
+        return b
+
+    def test_drift_is_reported_and_nothing_is_written(self):
+        b = self.bench()
+        before = b.cfg.read_bytes()
+        result = b.run()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("status:   drift", result.stdout)
+        self.assertIn("current:  radio2.htmode=HE20", result.stdout)
+        self.assertIn("expected: radio2.htmode=EHT320", result.stdout)
+        self.assertEqual(b.cfg.read_bytes(), before)
+        self.assertEqual(b.uci_calls(), "")
+        self.assertEqual(b.reloads(), "")
+
+    def test_apply_writes_the_default_and_verifies(self):
+        b = self.bench()
+        result = b.run("--apply")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("set wireless.radio2.htmode=EHT320", b.uci_calls())
+        self.assertEqual(
+            b.cfg.read_text(),
+            CONFIG_HE20.replace("option htmode 'HE20'", "option htmode 'EHT320'"),
+        )
+        self.assertIn("reload", b.reloads())
+        self.assertIn("verify:   ieee80211be present", result.stdout)
+        self.assertIn("status:   restored to EHT320", result.stdout)
+        self.assertFalse(b.delta.exists(), "a committed delta must not be left behind")
+        self.assertFalse(b.urg_dir.exists(), "a clean run must disarm its restore point")
+
+    def test_failed_verification_rolls_back(self):
+        b = self.bench()
+        before = b.cfg.read_bytes()
+        result = b.run("--apply", emit_be="0")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("verify:   FAILED", result.stderr)
+        self.assertEqual(
+            b.cfg.read_bytes(),
+            before,
+            "the config file must be byte-identical after a rollback",
+        )
+        self.assertFalse(
+            b.delta.exists(),
+            "a delta created by the failed run must be removed, not folded in later",
+        )
+
+    def test_already_at_the_default_is_left_alone(self):
+        b = self.bench(config=CONFIG_EHT320, hostapd=HOSTAPD_BE)
+        result = b.run("--apply")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("status:   default", result.stdout)
+        self.assertIn("apply:    already at EHT320, nothing written", result.stdout)
+        self.assertEqual(b.uci_calls(), "", "a no-op run must not call uci at all")
+        self.assertEqual(b.cfg.read_text(), CONFIG_EHT320)
+
+
+if __name__ == "__main__":
+    unittest.main()
