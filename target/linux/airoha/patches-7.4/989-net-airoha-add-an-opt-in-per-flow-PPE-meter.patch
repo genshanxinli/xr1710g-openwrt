@@ -1,6 +1,60 @@
+From: OpenWrt <openwrt@example.org>
+Date: Sun, 15 Nov 2026 00:00:00 +0800
+Subject: [PATCH] net: airoha: add an opt-in per-flow PPE meter from tc police
+
+tc police is refused by the PPE flow offload path: it hits the default
+-EOPNOTSUPP arm of airoha_ppe_flow_offload_replace(), and every FOE
+entry hardcodes AIROHA_FOE_SHAPER_ID to 0x7f ("no meter").
+
+Add a default-off module parameter, airoha_ppe_meter.  With it at 0 the
+driver behaves exactly as before: police is still refused, every entry
+keeps SHAPER_ID 0x7f and no meter register is written.
+
+With it at 1, a tc police action is accepted for non-L2 flows.  The
+driver:
+
+- reads rate_bytes_ps and burst (packet-rate police is refused);
+- allocates one of the 63 meter groups (0..62) with a bitmap and a
+  refcount;
+- programs the PPE group register at FE + 0x200c + 16 * group with the
+  vendor SDK byte-mode encoding, and the matching QDMA0 ingress TRTCM
+  index at QDMA0 + 0x70 with the same rate and bucket;
+- writes the group number into AIROHA_FOE_SHAPER_ID instead of 0x7f;
+- releases the group in airoha_ppe_foe_flow_remove_entry(), which
+  covers tc delete, flow expiry through FLOW_CLS_DESTROY and the
+  insert-failure path.
+
+Peakrate is deliberately refused: the PPE group register carries one
+token rate and the probe leaves the QDMA block in rate-limit mode, so
+there is no second bucket to program.  The rate and bucket encodings
+come from the vendor SDK (ppeMeterRegConfig()/METER_REG_BYTE_* and the
+QDMA TRTCM parameter fields the mainline driver already uses); their
+accuracy against a packet generator is unverified because this is a
+code-landing PoC without hardware validation.
+
+Expose a read-only /sys/kernel/debug/ppe/meter dump with the allocated
+group, requested rate/peakrate/burst, refcount and the live PPE
+register value.
+
+The dump walks only the groups this driver allocated.  The window that
+holds them (FE + 0x200c, 63 registers 16 bytes apart) is ordinary frame
+engine register space: on AN7581 group 2 reads REG_FE_GDM4_RMBI_FRAG at
+FE + 0x202c, group 48 lands in the WAN MTU block and most of the rest
+reads back deadbeef.  Dumping every group printed those unrelated
+registers as if they were meter state, which makes "never programmed"
+indistinguishable from "programmed with a rate the driver did not
+intend" -- the exact question the dump exists to answer.  A group is
+printed only while its refcount is non-zero.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+ drivers/net/ethernet/airoha/airoha_eth.h | 59 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_ppe.c | 342 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_ppe_debugfs.c | 50 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 447 insertions(+), 4 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -397,6 +397,36 @@
+@@ -397,6 +397,36 @@ struct airoha_foe_mac_info {
  #define AIROHA_FOE_METER_GRP3			GENMASK(8, 5)
  #define AIROHA_FOE_METER_GRP2			GENMASK(4, 0)
  
@@ -37,7 +91,7 @@
  struct airoha_foe_bridge {
  	u32 dest_mac_hi;
  
-@@ -539,6 +569,12 @@
+@@ -539,6 +569,12 @@ struct airoha_flow_data {
  		u16 sid;
  		u8 num;
  	} pppoe;
@@ -50,7 +104,7 @@
  };
  
  enum airoha_flow_entry_type {
-@@ -561,6 +597,12 @@
+@@ -561,6 +597,12 @@ struct airoha_flow_table_entry {
  
  	struct airoha_foe_stats64 stats;
  	enum airoha_flow_entry_type type;
@@ -63,7 +117,7 @@
  	u32 ingress_dev_idx;
  	unsigned long ingress_stamp;
  	unsigned long no_hw_since;
-@@ -685,6 +727,13 @@
+@@ -685,6 +727,13 @@ enum airoha_ppe_entry_alias {
  	AIROHA_PPE_ENTRY_ALIAS_FAILED,
  };
  
@@ -77,11 +131,10 @@
  struct airoha_ppe {
  	struct airoha_ppe_dev dev;
  	struct airoha_eth *eth;
-@@ -719,6 +768,16 @@
- 	 */
+@@ -720,6 +769,16 @@ struct airoha_ppe {
  	u32 bind_rate_l3;
  	u32 bind_rate_l2b;
-+
+ 
 +	/* tc police flow state.  Only touched while airoha_ppe_meter is
 +	 * enabled; allocation, the register writes and release are
 +	 * serialized by flow_offload_mutex in airoha_ppe.c.  The
@@ -91,20 +144,13 @@
 +	DECLARE_BITMAP(meter_bitmap, AIROHA_PPE_METER_NUM);
 +	struct airoha_ppe_meter meter[AIROHA_PPE_METER_NUM];
 +	bool meter_enabled;
- 
++
  	struct dentry *debugfs_dir;
  };
+ 
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -7,6 +7,7 @@
- #include <linux/ip.h>
- #include <linux/ipv6.h>
- #include <linux/module.h>
-+#include <linux/moduleparam.h>
- #include <linux/of_platform.h>
- #include <linux/moduleparam.h>
- #include <linux/platform_device.h>
-@@ -61,6 +62,300 @@
+@@ -61,6 +61,300 @@ static const struct rhashtable_params ai
  	.automatic_shrinking = true,
  };
  
@@ -405,7 +451,7 @@
  /* How many counter slots per PPE this build could ask the NPU for.  This is
   * a property of the build and the SoC, not of what the NPU ended up agreeing
   * to, and it has to stay that way: the counter buffer is allocated in
-@@ -704,7 +999,7 @@
+@@ -704,7 +998,7 @@ static int airoha_ppe_foe_entry_prepare(
  	if (airoha_ppe_netdev_is_shaped(egress))
  		return -EOPNOTSUPP;
  
@@ -414,7 +460,7 @@
  
  	val = FIELD_PREP(AIROHA_FOE_IB1_BIND_STATE, AIROHA_FOE_STATE_BIND) |
  	      FIELD_PREP(AIROHA_FOE_IB1_BIND_PACKET_TYPE, type) |
-@@ -1364,6 +1659,13 @@
+@@ -1364,6 +1658,13 @@ static void airoha_ppe_foe_flow_remove_e
  
  	if (type >= PPE_PKT_TYPE_IPV6_ROUTE_3T)
  		airoha_ppe_put_smac_id(ppe->eth, smac_id);
@@ -428,7 +474,7 @@
  }
  
  static int
-@@ -1731,11 +2033,14 @@
+@@ -1731,11 +2032,14 @@ static int airoha_ppe_flow_offload_repla
  {
  	struct flow_rule *rule = flow_cls_offload_flow_rule(f);
  	struct airoha_flow_table_entry *e;
@@ -445,7 +491,7 @@
  	struct airoha_foe_entry hwe;
  	struct net_device *indev;
  	bool bridged, has_ports, use_3t;
-@@ -1839,6 +2144,18 @@
+@@ -1840,6 +2144,18 @@ static int airoha_ppe_flow_offload_repla
  			data.pppoe.sid = act->pppoe.sid;
  			data.pppoe.num++;
  			break;
@@ -464,11 +510,10 @@
  		default:
  			return -EOPNOTSUPP;
  		}
-@@ -1847,6 +2164,19 @@
- 	if (!is_valid_ether_addr(data.eth.h_source) ||
+@@ -1849,6 +2165,19 @@ static int airoha_ppe_flow_offload_repla
  	    !is_valid_ether_addr(data.eth.h_dest))
  		return -EINVAL;
-+
+ 
 +	/* Allocate the meter only after every action and the L2 header
 +	 * have been accepted: all the early returns above then stay
 +	 * allocation-free, and from here on put_smac is the single
@@ -481,10 +526,11 @@
 +
 +		data.meter = meter;
 +	}
- 
++
  	/* A flow whose ingress and egress devices are both ports of the same
  	 * bridge never leaves L2, so the PPE must forward it without touching
-@@ -1871,7 +2201,7 @@
+ 	 * the IP TTL.  Routing -- including entering or leaving the bridge --
+@@ -1872,7 +2201,7 @@ static int airoha_ppe_flow_offload_repla
  	err = airoha_ppe_foe_entry_prepare(eth, &hwe, odev, offload_type,
  					   &data, l4proto, dsfield, bridged);
  	if (err)
@@ -493,7 +539,7 @@
  
  	if (has_ports) {
  		struct flow_match_ports ports;
-@@ -1955,6 +2285,7 @@
+@@ -1956,6 +2285,7 @@ static int airoha_ppe_flow_offload_repla
  	}
  
  	e->cookie = f->cookie;
@@ -501,17 +547,17 @@
  	e->ingress_dev_idx = meta.key->ingress_ifindex;
  	e->ingress_stamp = jiffies;
  	memcpy(&e->data, &hwe, sizeof(e->data));
-@@ -1978,6 +2309,9 @@
- 	kfree(e);
+@@ -1980,6 +2310,9 @@ free_entry:
  put_smac:
  	airoha_ppe_foe_entry_put_smac_id(eth, &hwe);
-+
+ 
 +	if (meter != AIROHA_PPE_METER_NONE)
 +		airoha_ppe_meter_free(eth->ppe, meter);
- 
++
  	return err;
  }
-@@ -2405,6 +2739,7 @@
+ 
+@@ -2406,6 +2739,7 @@ int airoha_ppe_init(struct airoha_eth *e
  	eth->ppe = ppe;
  	ppe->bind_rate_l3 = AIROHA_PPE_DEFAULT_BIND_RATE;
  	ppe->bind_rate_l2b = AIROHA_PPE_DEFAULT_BIND_RATE;
@@ -521,7 +567,7 @@
  	foe_size = ppe_num_entries * sizeof(struct airoha_foe_entry);
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -470,6 +470,44 @@
+@@ -470,6 +470,54 @@ static const struct file_operations airo
  	.write		= airoha_ppe_debugfs_flush_write,
  };
  
@@ -542,14 +588,24 @@
 +
 +	for (i = 0; i < AIROHA_PPE_METER_NUM; i++) {
 +		const struct airoha_ppe_meter *meter = &ppe->meter[i];
-+		u32 reg = airoha_fe_rr(eth, AIROHA_PPE_METER_GROUP(i));
-+		u32 bucket = FIELD_GET(AIROHA_PPE_METER_BUCKET, reg);
-+		u32 rate = FIELD_GET(AIROHA_PPE_METER_RATE, reg);
-+		u64 hw_rate = (u64)rate *
-+			      ((reg & AIROHA_PPE_METER_TICK) ? 16000 : 128000);
++		u32 reg, bucket, rate;
++		u64 hw_rate;
 +
-+		if (!meter->refcount && !reg)
++		/* Only a group this driver allocated has its state in
++		 * ppe->meter[].  The register window holding the groups is
++		 * shared with the rest of the frame engine, so reading a
++		 * group that was never ours returns an unrelated register
++		 * (0x200c + 16 * i, a fragment counter, a WAN MTU, ...)
++		 * that cannot be told apart from a programmed meter.
++		 */
++		if (!meter->refcount)
 +			continue;
++
++		reg = airoha_fe_rr(eth, AIROHA_PPE_METER_GROUP(i));
++		bucket = FIELD_GET(AIROHA_PPE_METER_BUCKET, reg);
++		rate = FIELD_GET(AIROHA_PPE_METER_RATE, reg);
++		hw_rate = (u64)rate *
++			  ((reg & AIROHA_PPE_METER_TICK) ? 16000 : 128000);
 +
 +		seq_printf(m,
 +			   "meter %2u refcount %u rate %u peakrate %u burst %u",
@@ -566,7 +622,7 @@
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  {
  	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-@@ -485,6 +523,8 @@
+@@ -485,6 +533,8 @@ int airoha_ppe_debugfs_init(struct airoh
  			    &airoha_ppe_debugfs_bind_rate_fops);
  	debugfs_create_file("tb_regs", 0444, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_tb_regs_fops);

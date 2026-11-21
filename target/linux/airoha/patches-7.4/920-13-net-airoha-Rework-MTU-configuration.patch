@@ -1,19 +1,90 @@
+From 99e204d255c9b47a188dd79762b9406d9c5fed9b Mon Sep 17 00:00:00 2001
+Message-ID: <99e204d255c9b47a188dd79762b9406d9c5fed9b.1779348625.git.lorenzo@kernel.org>
+In-Reply-To: <e15783f7c987e199ecf80b3d858ed5a86d33c508.1779348625.git.lorenzo@kernel.org>
+References: <e15783f7c987e199ecf80b3d858ed5a86d33c508.1779348625.git.lorenzo@kernel.org>
+From: Lorenzo Bianconi <lorenzo@kernel.org>
+Date: Wed, 20 May 2026 17:16:39 +0200
+Subject: [PATCH 13/13] net: airoha: Rework MTU configuration
+
+Signed-off-by: Lorenzo Bianconi <lorenzo@kernel.org>
+---
+ drivers/net/ethernet/airoha/airoha_eth.c  | 85 +++++++++++------------
+ drivers/net/ethernet/airoha/airoha_eth.h  |  1 +
+ drivers/net/ethernet/airoha/airoha_ppe.c  |  8 +--
+ drivers/net/ethernet/airoha/airoha_regs.h |  9 ++-
+ 4 files changed, 49 insertions(+), 54 deletions(-)
+
+ drivers/net/ethernet/airoha/airoha_eth.c | 19 +++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_eth.h | 1 +
+ drivers/net/ethernet/airoha/airoha_ppe.c | 34 ++++++++++++++++++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_regs.h | 4 ++++
+ 4 files changed, 55 insertions(+), 3 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -3781,9 +3781,9 @@ static void airoha_disable_qos_for_gdm34
+@@ -2421,6 +2421,17 @@ static void airoha_dev_set_xmit_frame_si
+ 					 VLAN_ETH_HLEN + netdev->mtu));
+ }
+ 
++static void airoha_dev_set_mtu(struct net_device *netdev)
++{
++	struct airoha_gdm_dev *dev = netdev_priv(netdev);
++
++	airoha_ppe_set_mtu(dev);
++	if (!airoha_is_lan_gdm_dev(dev))
++		airoha_fe_rmw(dev->eth, REG_WAN_MTU0,
++			      WAN_MTU0_MASK,
++			      FIELD_PREP(WAN_MTU0_MASK, netdev->mtu));
++}
++
+ static int airoha_dev_open(struct net_device *netdev)
+ {
+ 	struct airoha_gdm_dev *dev = netdev_priv(netdev);
+@@ -2452,7 +2463,7 @@ static int airoha_dev_open(struct net_de
+ 		airoha_fe_clear(qdma->eth, REG_GDM_INGRESS_CFG(port->id),
+ 				GDM_STAG_EN_MASK);
+ 
+-	airoha_dev_set_xmit_frame_size(netdev);
++	airoha_dev_set_mtu(netdev);
+ 	port->users++;
+ 
+ 	if (!airoha_is_lan_gdm_dev(dev) &&
+@@ -2476,7 +2487,7 @@ static int airoha_dev_stop(struct net_de
+ 	airoha_set_vip_for_gdm_port(dev, false);
+ 
+ 	if (--port->users)
+-		airoha_ppe_set_xmit_frame_size(dev);
++		airoha_ppe_set_mtu(dev);
+ 	else
+ 		airoha_set_gdm_port_fwd_cfg(dev->eth,
+ 					    REG_GDM_FWD_CFG(port->id),
+@@ -2746,7 +2757,7 @@ static int airoha_dev_change_mtu(struct
+ 
+ 	WRITE_ONCE(netdev->mtu, mtu);
+ 	if (port->users)
+-		airoha_dev_set_xmit_frame_size(netdev);
++		airoha_dev_set_mtu(netdev);
+ 
+ 	return 0;
+ }
+@@ -3864,6 +3875,7 @@ static void airoha_disable_qos_for_gdm34
  
  	clear_bit(AIROHA_DEV_F_WAN, &dev->flags);
  	airoha_dev_set_qdma(dev);
-+	airoha_dev_set_xmit_frame_size(netdev);
++	airoha_dev_set_mtu(netdev);
  
  	airoha_set_macaddr(dev, netdev->dev_addr);
--	airoha_ppe_set_xmit_frame_size(dev);
+ 	airoha_ppe_set_xmit_frame_size(dev);
+@@ -3929,6 +3941,7 @@ static int airoha_enable_qos_for_gdm34(s
+ 		goto error_disable_loopback;
  
- 	if (netif_running(netdev))
- 		airoha_set_gdm_port_fwd_cfg(dev->eth,
+ 	airoha_dev_set_xmit_frame_size(netdev);
++	airoha_dev_set_mtu(netdev);
+ 	if (netif_running(netdev)) {
+ 		u32 pse_port;
+ 
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -822,6 +822,7 @@
+@@ -822,6 +822,7 @@ airoha_qdma_deref(struct airoha_gdm_dev
  void airoha_ppe_set_xmit_frame_size(struct airoha_gdm_dev *dev);
  void airoha_ppe_set_cpu_port(struct airoha_gdm_dev *dev, u8 ppe_id, u8 fport);
  bool airoha_ppe_is_enabled(struct airoha_eth *eth, int index);
@@ -23,7 +94,7 @@
  int airoha_ppe_setup_tc_block_cb(struct airoha_ppe_dev *dev, void *type_data);
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -192,6 +192,39 @@
+@@ -192,6 +192,39 @@ void airoha_ppe_set_xmit_frame_size(stru
  		      __field_prep(FP_EGRESS_MTU_MASK(index), len));
  }
  
@@ -63,7 +134,7 @@
  static void airoha_ppe_hw_init(struct airoha_ppe *ppe)
  {
  	u32 sram_ppe_num_data_entries = airoha_ppe_get_sram_num_entries(ppe);
-@@ -304,6 +337,7 @@
+@@ -304,6 +337,7 @@ static void airoha_ppe_hw_init(struct ai
  				 airoha_ppe_is_enabled(eth, 1);
  			fport = airoha_get_fe_port(dev);
  			airoha_ppe_set_cpu_port(dev, ppe_id, fport);
@@ -73,14 +144,14 @@
  	}
 --- a/drivers/net/ethernet/airoha/airoha_regs.h
 +++ b/drivers/net/ethernet/airoha/airoha_regs.h
-@@ -407,6 +407,10 @@
- #define REG_SRC_PORT_FC_MAP6		0x2298
- #define FC_ID_OF_SRC_PORT_MASK(_n)	GENMASK(4 + ((_n) << 3), ((_n) << 3))
- #define FC_MAP6_DEF_VALUE		0x1b1a1918
-+
+@@ -412,6 +412,10 @@
+ #define WAN_MTU1_MASK			GENMASK(29, 16)
+ #define WAN_MTU0_MASK			GENMASK(13, 0)
+ 
 +#define REG_WAN_MTU0			0x2300
 +#define WAN_MTU1_MASK			GENMASK(29, 16)
 +#define WAN_MTU0_MASK			GENMASK(13, 0)
++
+ #define REG_CDM5_RX_OQ1_DROP_CNT	0x29d4
  
- #define REG_WAN_MTU0			0x2300
- #define WAN_MTU1_MASK			GENMASK(29, 16)
+ /* QDMA */

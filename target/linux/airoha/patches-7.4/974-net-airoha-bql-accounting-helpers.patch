@@ -17,9 +17,66 @@ is draining, which is what the release-image gate measures.
 
 Signed-off-by: OpenWrt <openwrt@example.org>
 
+ drivers/net/ethernet/airoha/airoha_eth.c | 30 ++++++++++++++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_eth.h | 3 +++
+ 2 files changed, 31 insertions(+), 2 deletions(-)
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -1415,6 +1415,30 @@ static void airoha_unmap_xmit_buf(struct
+ 	e->dma_type = AIROHA_DMA_UNMAPPED;
+ }
+ 
++static void airoha_qdma_tx_bql_add(struct airoha_queue *q,
++				   struct sk_buff *skb)
++{
++	q->bql[0] += skb->len;
++	q->bql[1]++;
++	q->bql_dirty = true;
++}
++
++static void airoha_qdma_tx_bql_flush(struct airoha_queue *q,
++				     struct netdev_queue *txq)
++{
++	if (!q->bql_dirty)
++		return;
++
++	/* Several net_device TX queues can share one hw QDMA TX queue, so the
++	 * completion is reported for the queue that owns the skb.
++	 */
++	netdev_tx_completed_queue(txq, q->bql[1], q->bql[0]);
++
++	q->bql[0] = 0;
++	q->bql[1] = 0;
++	q->bql_dirty = false;
++}
++
+ static int airoha_qdma_tx_napi_poll(struct napi_struct *napi, int budget)
+ {
+ 	struct airoha_tx_irq_queue *irq_q;
+@@ -1491,8 +1515,9 @@ static int airoha_qdma_tx_napi_poll(stru
+ 
+ 			txq = skb_get_tx_queue(skb->dev, skb);
+ 
++			airoha_qdma_tx_bql_add(q, skb);
+ 			spin_lock_bh(&dev->txq_lock[qidx]);
+-			netdev_tx_completed_queue(txq, 1, skb->len);
++			airoha_qdma_tx_bql_flush(q, txq);
+ 			spin_unlock_bh(&dev->txq_lock[qidx]);
+ 
+ 			dev_kfree_skb_any(skb);
+@@ -1669,7 +1694,8 @@ static void airoha_qdma_tx_cleanup(struc
+ 				struct netdev_queue *txq;
+ 
+ 				txq = skb_get_tx_queue(skb->dev, skb);
+-				netdev_tx_completed_queue(txq, 1, skb->len);
++				airoha_qdma_tx_bql_add(q, skb);
++				airoha_qdma_tx_bql_flush(q, txq);
+ 				dev_kfree_skb_any(skb);
+ 				e->skb = NULL;
+ 			}
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -238,6 +238,9 @@
+@@ -238,6 +238,9 @@ struct airoha_queue {
  	int buf_size;
  	bool txq_stopped;
  	bool flushing;

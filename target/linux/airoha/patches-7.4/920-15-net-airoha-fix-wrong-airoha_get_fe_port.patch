@@ -13,9 +13,13 @@ AN7583 SoC.
 Fixes: e4e5ce823bdd ("net: airoha: Add AN7583 SoC support")
 Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
 ---
+ drivers/net/ethernet/airoha/airoha_eth.c | 12 ++++++++++++
+ 1 files changed, 2 insertions(+), 10 deletions(-)
+ drivers/net/ethernet/airoha/airoha_eth.c | 12 ++++++++++++
+ 1 files changed, 2 insertions(+), 10 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -2744,17 +2744,9 @@ static u32 airoha_get_dsa_tag(struct sk_
+@@ -2829,17 +2829,9 @@ static u32 airoha_get_dsa_tag(struct sk_
  int airoha_get_fe_port(struct airoha_gdm_dev *dev)
  {
  	struct airoha_gdm_port *port = dev->port;

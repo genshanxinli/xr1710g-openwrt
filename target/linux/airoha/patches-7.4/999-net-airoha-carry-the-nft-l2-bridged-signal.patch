@@ -1,3 +1,17 @@
+ include/net/netfilter/nf_flow_table.h | 2 ++
+ net/netfilter/nf_flow_table_path.c | 10 ++++++++++
+ net/netfilter/nf_flow_table_core.c | 1 +
+ drivers/net/ethernet/airoha/airoha_ppe.c | 28 ++++++++++++++++++++++++++++
+ include/net/flow_offload.h | 1 +
+ net/netfilter/nf_flow_table_offload.c | 1 +
+ 6 files changed, 31 insertions(+), 12 deletions(-)
+ include/net/netfilter/nf_flow_table.h | 2 ++
+ net/netfilter/nf_flow_table_path.c | 10 ++++++++++
+ net/netfilter/nf_flow_table_core.c | 1 +
+ drivers/net/ethernet/airoha/airoha_ppe.c | 28 ++++++++++++++++++++++++++++
+ include/net/flow_offload.h | 1 +
+ net/netfilter/nf_flow_table_offload.c | 1 +
+ 6 files changed, 31 insertions(+), 12 deletions(-)
 --- a/include/net/netfilter/nf_flow_table.h
 +++ b/include/net/netfilter/nf_flow_table.h
 @@ -165,6 +165,7 @@ struct flow_offload_tuple {
@@ -37,7 +51,7 @@
  	    is_bridging)
 --- a/net/netfilter/nf_flow_table_core.c
 +++ b/net/netfilter/nf_flow_table_core.c
-@@ -155,6 +155,7 @@ static int flow_offload_fill_route(struc
+@@ -156,6 +156,7 @@ static int flow_offload_fill_route(struc
  		       ETH_ALEN);
  		flow_tuple->out.ifidx = route->tuple[dir].out.ifindex;
  		flow_tuple->bridge_path = route->tuple[dir].out.bridge_path;
@@ -47,21 +61,21 @@
  		break;
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -100,6 +100,13 @@
- {
+@@ -128,6 +128,13 @@ bool airoha_ppe_6rd_enabled(void)
  	return airoha_ppe_6rd;
  }
-+
+ 
 +/* -1: use the kernel bridge_input signal (default)
 + *  0: force "routed" (TTL decrement) for A/B testing
 + *  1: force "L2-bridged" (no TTL decrement) for A/B testing
 + */
 +static int airoha_ppe_bridged_force = -1;
 +module_param_named(bridged_force, airoha_ppe_bridged_force, int, 0644);
- 
++
  static const struct rhashtable_params airoha_flow_table_params = {
  	.head_offset = offsetof(struct airoha_flow_table_entry, node),
-@@ -2393,7 +2400,6 @@
+ 	.key_offset = offsetof(struct airoha_flow_table_entry, cookie),
+@@ -2468,7 +2475,6 @@ static int airoha_ppe_flow_offload_repla
  	struct flow_match_meta meta;
  	u8 dsfield = 0, l4proto = 0, meter = AIROHA_PPE_METER_NONE;
  	struct airoha_foe_entry hwe;
@@ -69,16 +83,11 @@
  	bool bridged, has_ports, use_3t, nat_rewrite = false;
  	int err, i, offload_type;
  	u16 addr_type = 0;
-@@ -2606,17 +2612,15 @@
+@@ -2692,17 +2698,15 @@ static int airoha_ppe_flow_offload_repla
  	 * This cannot be told from the dissector keys: bridged packets reach
  	 * the inet flowtable through br_netfilter and are encoded as
  	 * IPV4_HNAPT, exactly like routed ones.
-+	 *
-+	 * Do not infer it from the ingress/egress netdevs either: a routed
-+	 * flow between two VLAN subinterfaces of the same physical port
-+	 * resolves to one bridge port on both ends.  nft_flow_route() sees
-+	 * the original skb and exports the only reliable answer.
- 	 */
+-	 */
 -	bridged = false;
 -	if (odev && netif_is_bridge_port(odev)) {
 -		rcu_read_lock();
@@ -89,6 +98,12 @@
 -			  netdev_master_upper_dev_get_rcu(odev);
 -		rcu_read_unlock();
 -	}
++	 *
++	 * Do not infer it from the ingress/egress netdevs either: a routed
++	 * flow between two VLAN subinterfaces of the same physical port
++	 * resolves to one bridge port on both ends.  nft_flow_route() sees
++	 * the original skb and exports the only reliable answer.
++	 */
 +	bridged = f->bridge_input;
 +	if (airoha_ppe_bridged_force >= 0)
 +		bridged = !!airoha_ppe_bridged_force;
@@ -97,7 +112,7 @@
  					   &data, l4proto, dsfield, bridged);
 --- a/include/net/flow_offload.h
 +++ b/include/net/flow_offload.h
-@@ -696,6 +696,7 @@
+@@ -696,6 +696,7 @@ struct flow_cls_offload {
  	enum flow_cls_command command;
  	bool use_act_stats;
  	unsigned long cookie;
@@ -107,7 +122,7 @@
  	u32 classid;
 --- a/net/netfilter/nf_flow_table_offload.c
 +++ b/net/netfilter/nf_flow_table_offload.c
-@@ -916,6 +916,7 @@
+@@ -932,6 +932,7 @@ static void nf_flow_offload_init(struct
  	cls_flow->common.extack = extack;
  	cls_flow->command = cmd;
  	cls_flow->cookie = (unsigned long)tuple;

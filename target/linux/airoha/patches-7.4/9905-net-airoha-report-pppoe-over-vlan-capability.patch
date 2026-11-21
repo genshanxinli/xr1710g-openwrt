@@ -53,9 +53,17 @@ the negative path is code-reviewed and compile-tested only.
 
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
+ include/net/flow_offload.h | 7 +++++++
+ net/netfilter/nf_flow_table_offload.c | 15 +++++++++++++++
+ drivers/net/ethernet/airoha/airoha_ppe.c | 68 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 90 insertions(+), 0 deletions(-)
+ include/net/flow_offload.h | 7 +++++++
+ net/netfilter/nf_flow_table_offload.c | 15 +++++++++++++++
+ drivers/net/ethernet/airoha/airoha_ppe.c | 68 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 90 insertions(+), 0 deletions(-)
 --- a/include/net/flow_offload.h
 +++ b/include/net/flow_offload.h
-@@ -699,6 +699,13 @@
+@@ -699,6 +699,13 @@ struct flow_cls_offload {
  	struct flow_rule *rule;
  	struct flow_stats stats;
  	u32 classid;
@@ -71,7 +79,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  enum offload_act_command  {
 --- a/net/netfilter/nf_flow_table_offload.c
 +++ b/net/netfilter/nf_flow_table_offload.c
-@@ -896,6 +896,21 @@
+@@ -912,6 +912,21 @@ static void nf_flow_offload_init(struct
  				 const struct flow_offload_tuple *tuple,
  				 struct netlink_ext_ack *extack)
  {
@@ -95,11 +103,10 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	cls_flow->common.extack = extack;
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -47,6 +47,26 @@
- module_param(airoha_ppe_3t, bool, 0444);
+@@ -47,6 +47,26 @@ module_param(airoha_ppe_3t, bool, 0444);
  MODULE_PARM_DESC(airoha_ppe_3t,
  		 "Offload flows without L4 ports as 3-tuple PPE entries");
-+
+ 
 +/* A PPPoE session inside an 802.1Q tag needs two headers stripped on
 + * ingress.  The flowtable can only express one of them: this kernel's flow
 + * action enum has FLOW_ACTION_VLAN_POP but no FLOW_ACTION_PPPOE_POP, so
@@ -119,10 +126,11 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +module_param_named(pppoe_vlan_refuse, airoha_ppe_pppoe_vlan_refuse, bool, 0644);
 +MODULE_PARM_DESC(pppoe_vlan_refuse,
 +		 "Refuse PPPoE-over-VLAN flows the PPE cannot express instead of programming a wrong entry");
- 
++
  static const struct rhashtable_params airoha_flow_table_params = {
  	.head_offset = offsetof(struct airoha_flow_table_entry, node),
-@@ -2398,9 +2418,57 @@
+ 	.key_offset = offsetof(struct airoha_flow_table_entry, cookie),
+@@ -2398,9 +2418,57 @@ static int airoha_ppe_flow_offload_stats
  	return 0;
  }
  

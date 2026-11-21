@@ -26,9 +26,13 @@ points are covered by the move and no new helper is needed.
 Fixes: 201 ("net: airoha: reject a HTB leaf that cannot shape anything")
 Signed-off-by: OpenWrt <openwrt@example.org>
 ---
+ drivers/net/ethernet/airoha/airoha_eth.c | 44 ++++++++++++++++++++++++++++++++++++++++++++
+ 1 files changed, 22 insertions(+), 22 deletions(-)
+ drivers/net/ethernet/airoha/airoha_eth.c | 44 ++++++++++++++++++++++++++++++++++++++++++++
+ 1 files changed, 22 insertions(+), 22 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -3456,6 +3456,7 @@ static int airoha_qdma_set_tx_rate_limit
+@@ -3500,6 +3500,7 @@ static int airoha_qdma_set_tx_rate_limit
  static int airoha_tc_htb_modify_queue(struct net_device *dev,
  				      struct tc_htb_qopt_offload *opt)
  {
@@ -36,7 +40,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	u32 channel = TC_H_MIN(opt->classid) % AIROHA_NUM_QOS_CHANNELS;
  	u32 rate = div_u64(opt->rate, 1000) << 3; /* kbps */
  	int err;
-@@ -3465,6 +3466,27 @@ static int airoha_tc_htb_modify_queue(st
+@@ -3509,6 +3510,27 @@ static int airoha_tc_htb_modify_queue(st
  		return -EINVAL;
  	}
  
@@ -64,7 +68,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	err = airoha_qdma_set_tx_rate_limit(dev, channel, rate, opt->quantum);
  	if (err)
  		NL_SET_ERR_MSG_MOD(opt->extack,
-@@ -3481,28 +3503,6 @@ static int airoha_tc_htb_alloc_leaf_queu
+@@ -3525,28 +3547,6 @@ static int airoha_tc_htb_alloc_leaf_queu
  	struct airoha_gdm_dev *dev = netdev_priv(netdev);
  	struct airoha_qdma *qdma;
  

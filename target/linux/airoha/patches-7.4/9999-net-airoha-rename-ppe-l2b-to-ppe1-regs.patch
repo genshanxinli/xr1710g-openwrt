@@ -25,9 +25,13 @@ node stays the raw slice it always was.
 
 Signed-off-by: OpenWrt <openwrt@example.org>
 ---
+ drivers/net/ethernet/airoha/airoha_ppe_debugfs.c | 72 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 files changed, 31 insertions(+), 41 deletions(-)
+ drivers/net/ethernet/airoha/airoha_ppe_debugfs.c | 72 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 files changed, 31 insertions(+), 41 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -383,58 +383,48 @@
+@@ -383,58 +383,48 @@ static int airoha_ppe_debugfs_tb_regs_sh
  }
  DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_tb_regs);
  
@@ -56,23 +60,22 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 + * +0x44, the two default cports at +0x48/+0x4c and tb_hash_cfg at +0x50.  The
 + * words between them belong to the same block but have no name in the
 + * driver's register map, so they are printed as they read.
-  *
-- * The rest of the window is printed raw because nothing else in it is
-- * documented.
-- */
--static int airoha_ppe_debugfs_l2b_show(struct seq_file *m, void *private)
++ *
 + * This used to be called an L2B table and decoded as an ethertype mask plus
 + * an ethertype table.  There is no separate L2B table at these addresses: the
 + * window is a slice of the PPE1 register block, and the field names the old
 + * dump invented for +0x08c and +0x0d0 are not documented anywhere this driver
 + * can check.  The register values are the data; the labels were a guess and
 + * are gone.
-+ *
+  *
+- * The rest of the window is printed raw because nothing else in it is
+- * documented.
 + * The NPU can write these registers, so a dump is a snapshot and not a
 + * coherent view of anything.  Do not confuse the window with the NPU's own
 + * 0x1e900000..0x1ebfffff register file, which must not be read from the
 + * A53: a read there hangs the SoC.
-+ */
+  */
+-static int airoha_ppe_debugfs_l2b_show(struct seq_file *m, void *private)
 +#define AIROHA_PPE1_REGS_BASE		(PPE1_BASE + 0x200)
 +#define AIROHA_PPE1_REGS_WORDS		64
 +
@@ -105,22 +108,18 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 -		}
 -
 -		seq_putc(m, '\n');
--	}
--
--	return 0;
--}
--DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_l2b);
 +		seq_printf(m, "%02d 0x%04x %08x\n", i, off,
 +			   airoha_fe_rr(eth, off));
-+	}
-+
-+	return 0;
-+}
+ 	}
+ 
+ 	return 0;
+ }
+-DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_l2b);
 +DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_ppe1_regs);
  
  /* Write-only (0200) node that returns both PPE tables to the state they have
   * after probe, so a repeated fill experiment can start from bound 0 again.
-@@ -785,8 +775,8 @@
+@@ -933,8 +923,8 @@ int airoha_ppe_debugfs_init(struct airoh
  			    &airoha_ppe_debugfs_dslite_fops);
  	debugfs_create_file("meter", 0444, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_meter_fops);
