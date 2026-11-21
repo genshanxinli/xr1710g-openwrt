@@ -31,7 +31,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -683,6 +683,11 @@ struct airoha_ppe {
+@@ -709,6 +709,11 @@
  	 */
  	bool foe_stats_enabled;
  
@@ -45,9 +45,9 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -24,6 +24,17 @@
- DEFINE_MUTEX(flow_offload_mutex);
- static DEFINE_SPINLOCK(ppe_lock);
+@@ -72,6 +72,17 @@
+  */
+ unsigned int airoha_ppe_pppoe_decap;
  
 +/* 802.1ad/QinQ: the PPE has a programmable VLAN TPID (REG_PPE_VLAN_TPID),
 + * but pushing a 0x88a8 tag through the hardware is not verified, so the
@@ -63,7 +63,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static const struct rhashtable_params airoha_flow_table_params = {
  	.head_offset = offsetof(struct airoha_flow_table_entry, node),
  	.key_offset = offsetof(struct airoha_flow_table_entry, cookie),
-@@ -1219,6 +1230,18 @@ static int airoha_ppe_entry_idle_time(st
+@@ -1383,6 +1394,18 @@
  	return airoha_ppe_get_entry_idle_time(ppe, e->data.ib1);
  }
  
@@ -82,7 +82,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
  					   struct flow_cls_offload *f)
  {
-@@ -1309,7 +1332,7 @@ static int airoha_ppe_flow_offload_repla
+@@ -1482,7 +1505,7 @@
  			break;
  		case FLOW_ACTION_VLAN_PUSH:
  			if (data.vlan.num == 2 ||
@@ -91,7 +91,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  				return -EOPNOTSUPP;
  
  			data.vlan.hdr[data.vlan.num].id = act->vlan.vid;
-@@ -1822,6 +1845,12 @@ int airoha_ppe_init(struct airoha_eth *e
+@@ -2061,6 +2084,12 @@
  	if (err)
  		goto error_l2_flow_table_destroy;
  
@@ -104,7 +104,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	return 0;
  
  error_l2_flow_table_destroy:
-@@ -1851,4 +1880,7 @@ void airoha_ppe_deinit(struct airoha_eth
+@@ -2090,4 +2119,7 @@
  	rhashtable_destroy(&eth->ppe->l2_flows);
  	rhashtable_destroy(&eth->flow_table);
  	debugfs_remove(eth->ppe->debugfs_dir);
@@ -122,9 +122,9 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
  static void airoha_debugfs_ppe_print_tuple(struct seq_file *m,
  					   void *src_addr, void *dest_addr,
-@@ -173,6 +174,17 @@ static int airoha_ppe_debugfs_foe_bind_s
+@@ -317,6 +318,17 @@
  }
- DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_foe_bind);
+ DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_pppoe);
  
 +static int airoha_ppe_debugfs_tpid_show(struct seq_file *m, void *private)
 +{
@@ -140,7 +140,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  {
  	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-@@ -180,6 +192,8 @@ int airoha_ppe_debugfs_init(struct airoh
+@@ -328,6 +340,8 @@
  			    &airoha_ppe_debugfs_foe_all_fops);
  	debugfs_create_file("bind", 0444, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_foe_bind_fops);
