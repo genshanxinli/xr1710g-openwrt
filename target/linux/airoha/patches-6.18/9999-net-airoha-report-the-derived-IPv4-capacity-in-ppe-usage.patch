@@ -28,9 +28,9 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -174,6 +174,76 @@
+@@ -318,6 +318,76 @@
  }
- DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_foe_bind);
+ DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_pppoe);
  
 +static int airoha_ppe_debugfs_foe_usage_show(struct seq_file *m,
 +					    void *private)
@@ -105,7 +105,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static int airoha_ppe_debugfs_tpid_show(struct seq_file *m, void *private)
  {
  	struct airoha_ppe *ppe = m->private;
-@@ -235,6 +305,8 @@
+@@ -383,6 +453,8 @@
  			    &airoha_ppe_debugfs_foe_all_fops);
  	debugfs_create_file("bind", 0444, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_foe_bind_fops);
