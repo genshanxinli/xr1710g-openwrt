@@ -1,0 +1,281 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Fri, 20 Nov 2026 13:00:00 +0800
+Subject: [PATCH] netfilter: nf_flow_table: count why a flow gives a packet
+ back to the slow path
+
+When a flow is in the table but a packet is handed back to the normal
+forwarding path, the reason is invisible: nf_flow_offload_forward() and
+nf_flow_offload_ipv6_forward() all `return 0` and the packet looks like
+an ordinary cache miss.  Triage of "the flow is offloaded but some ACKs
+still crawl the slow path" then needs a guess: is it an MTU mismatch on
+this path, a state check failure (out-of-window ACK, unexpected TCP
+flags), or a stale destination that also tears the flow down?
+
+There are only three exits, and they are all cheap to label:
+
+  MTU    - nf_flow_exceeds_mtu(): the packet exceeds the flow MTU
+  state  - nf_flow_state_check(): TCP window/flags or UDP length mismatch
+  dst    - nf_flow_dst_check(): neighbour is gone, we tear the flow down
+
+Count them per reason, for IPv4 and IPv6, and expose the totals through
+debugfs because the interesting build has CONFIG_NF_FLOW_TABLE_PROCFS off
+and CONFIG_FTRACE off, so neither /proc/net/stat/nf_flowtable nor a
+tracepoint is available on the image.  debugfs is on (CONFIG_DEBUG_FS=y,
+CONFIG_DEBUG_FS_ALLOW_ALL=y).
+
+Counting sits behind a static key that is disabled by default, so an
+armed-by-default kernel with CONFIG_NF_FLOW_TABLE_GIVEUP_STATS=y still
+executes a patched NOP at each site and does no work until the counters
+are requested:
+
+  echo 1 > /sys/kernel/debug/nf_flow_table/giveup   # arm, clear counters
+  ... reproduce ...
+  cat /sys/kernel/debug/nf_flow_table/giveup
+  echo 0 > /sys/kernel/debug/nf_flow_table/giveup   # disarm
+
+The counters are global (all netns, all flowtables) on purpose: this is a
+triage hook, not an accounting interface, and keeping it out of the flow
+lookup avoids touching the per-flow data structures.  No return value,
+packet path or default changes when the key is off.
+
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/include/net/netfilter/nf_flow_table.h
++++ b/include/net/netfilter/nf_flow_table.h
+@@ -12,6 +12,7 @@
+ #include <net/dst.h>
+ #include <linux/if_pppox.h>
+ #include <linux/ppp_defs.h>
++#include <linux/jump_label.h>
+ 
+ struct nf_flowtable;
+ struct nf_flow_rule;
+@@ -454,4 +455,32 @@
+ }
+ #endif /* CONFIG_NF_FLOW_TABLE_PROCFS */
+ 
++/*
++ * Why nf_flow_offload_forward() handed a packet back to the slow path.
++ * Counters are global (all netns, all flowtables) and are only maintained
++ * while nf_flow_giveup_enabled is on, so a build with
++ * CONFIG_NF_FLOW_TABLE_GIVEUP_STATS but the jump label off pays nothing.
++ */
++enum nf_flow_giveup_reason {
++	NF_FLOW_GIVEUP_MTU,
++	NF_FLOW_GIVEUP_STATE,
++	NF_FLOW_GIVEUP_DST,
++	NF_FLOW_GIVEUP_MAX,
++};
++
++#if IS_ENABLED(CONFIG_NF_FLOW_TABLE_GIVEUP_STATS)
++extern struct static_key_false nf_flow_giveup_enabled;
++extern atomic64_t nf_flow_giveup_count[NF_FLOW_GIVEUP_MAX];
++
++static inline void nf_flow_giveup_inc(enum nf_flow_giveup_reason reason)
++{
++	if (static_branch_unlikely(&nf_flow_giveup_enabled))
++		atomic64_inc(&nf_flow_giveup_count[reason]);
++}
++#else
++static inline void nf_flow_giveup_inc(enum nf_flow_giveup_reason reason)
++{
++}
++#endif
++
+ #endif /* _NF_FLOW_TABLE_H */
+--- a/net/netfilter/Kconfig
++++ b/net/netfilter/Kconfig
+@@ -726,6 +726,18 @@
+ 	  This option enables for the flow table offload statistics
+ 	  to be shown in procfs under net/netfilter/nf_flowtable.
+ 
++config NF_FLOW_TABLE_GIVEUP_STATS
++	bool "Flow table give-up reason counters in debugfs"
++	depends on NF_FLOW_TABLE
++	depends on DEBUG_FS
++	help
++	  Count why the software flow table handed a packet back to the slow
++	  path: MTU exceeded, invalid L4 state, or a stale destination.  The
++	  counters are shown in debugfs as nf_flow_table/giveup; counting is
++	  behind a jump label that is off by default, write "1" to the file
++	  before reproducing and "0" afterwards.  Meant for triage of flows
++	  that never get offloaded, not for production traffic.
++
+ config NETFILTER_XTABLES
+ 	tristate "Netfilter Xtables support (required for ip_tables)"
+ 	default m if NETFILTER_ADVANCED=n
+--- a/net/netfilter/nf_flow_table_core.c
++++ b/net/netfilter/nf_flow_table_core.c
+@@ -19,6 +19,10 @@
+ #if IS_ENABLED(CONFIG_NET_SWITCHDEV)
+ #include <net/switchdev.h>
+ #endif
++#if IS_ENABLED(CONFIG_NF_FLOW_TABLE_GIVEUP_STATS)
++#include <linux/debugfs.h>
++#include <linux/seq_file.h>
++#endif
+ 
+ static DEFINE_MUTEX(flowtable_lock);
+ static LIST_HEAD(flowtables);
+@@ -1033,6 +1037,96 @@
+ 	.notifier_call	= nf_flow_table_netdev_event,
+ };
+ 
++#if IS_ENABLED(CONFIG_NF_FLOW_TABLE_GIVEUP_STATS)
++DEFINE_STATIC_KEY_FALSE(nf_flow_giveup_enabled);
++atomic64_t nf_flow_giveup_count[NF_FLOW_GIVEUP_MAX];
++
++static const char *const nf_flow_giveup_name[NF_FLOW_GIVEUP_MAX] = {
++	[NF_FLOW_GIVEUP_MTU]	= "mtu",
++	[NF_FLOW_GIVEUP_STATE]	= "state",
++	[NF_FLOW_GIVEUP_DST]	= "dst",
++};
++
++static int nf_flow_giveup_show(struct seq_file *s, void *v)
++{
++	unsigned int i;
++
++	seq_printf(s, "enabled %u\n",
++		   static_branch_unlikely(&nf_flow_giveup_enabled) ? 1 : 0);
++
++	for (i = 0; i < NF_FLOW_GIVEUP_MAX; i++)
++		seq_printf(s, "%-8s %llu\n", nf_flow_giveup_name[i],
++			   (unsigned long long)atomic64_read(&nf_flow_giveup_count[i]));
++
++	return 0;
++}
++
++static int nf_flow_giveup_open(struct inode *inode, struct file *file)
++{
++	return single_open(file, nf_flow_giveup_show, NULL);
++}
++
++/* "1" arms counting and clears the counters, "0" disarms it. */
++static ssize_t nf_flow_giveup_write(struct file *file,
++				    const char __user *ubuf, size_t len,
++				    loff_t *ppos)
++{
++	char buf[8];
++	unsigned int i;
++
++	if (!len || len >= sizeof(buf))
++		return -EINVAL;
++	if (copy_from_user(buf, ubuf, len))
++		return -EFAULT;
++
++	buf[len] = '\0';
++
++	switch (buf[0]) {
++	case '1':
++		for (i = 0; i < NF_FLOW_GIVEUP_MAX; i++)
++			atomic64_set(&nf_flow_giveup_count[i], 0);
++		static_branch_enable(&nf_flow_giveup_enabled);
++		break;
++	case '0':
++		static_branch_disable(&nf_flow_giveup_enabled);
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	return len;
++}
++
++static const struct file_operations nf_flow_giveup_fops = {
++	.owner		= THIS_MODULE,
++	.open		= nf_flow_giveup_open,
++	.read		= seq_read,
++	.write		= nf_flow_giveup_write,
++	.llseek		= seq_lseek,
++	.release	= single_release,
++};
++
++static struct dentry *nf_flow_giveup_dir;
++
++static void __init nf_flow_giveup_debugfs_init(void)
++{
++	nf_flow_giveup_dir = debugfs_create_dir("nf_flow_table", NULL);
++	if (IS_ERR_OR_NULL(nf_flow_giveup_dir))
++		return;
++
++	debugfs_create_file("giveup", 0644, nf_flow_giveup_dir, NULL,
++			    &nf_flow_giveup_fops);
++}
++
++static void __exit nf_flow_giveup_debugfs_exit(void)
++{
++	debugfs_remove_recursive(nf_flow_giveup_dir);
++}
++#else
++static inline void nf_flow_giveup_debugfs_init(void) { }
++static inline void nf_flow_giveup_debugfs_exit(void) { }
++#endif /* CONFIG_NF_FLOW_TABLE_GIVEUP_STATS */
++
+ static int __init nf_flow_table_module_init(void)
+ {
+ 	int ret;
+@@ -1070,6 +1164,8 @@
+ 		goto out_switchdev;
+ #endif
+ 
++	nf_flow_giveup_debugfs_init();
++
+ 	return 0;
+ 
+ #if IS_ENABLED(CONFIG_NET_SWITCHDEV)
+@@ -1089,6 +1185,7 @@
+ 
+ static void __exit nf_flow_table_module_exit(void)
+ {
++	nf_flow_giveup_debugfs_exit();
+ #if IS_ENABLED(CONFIG_NET_SWITCHDEV)
+ 	unregister_switchdev_notifier(&flow_offload_switchdev_notifier);
+ 	flush_workqueue(flow_mac_cleanup_wq);
+--- a/net/netfilter/nf_flow_table_ip.c
++++ b/net/netfilter/nf_flow_table_ip.c
+@@ -521,15 +521,20 @@
+ 	if (flow->tuplehash[!dir].tuple.tun_num)
+ 		mtu -= sizeof(*iph);
+ 
+-	if (unlikely(nf_flow_exceeds_mtu(skb, mtu)))
++	if (unlikely(nf_flow_exceeds_mtu(skb, mtu))) {
++		nf_flow_giveup_inc(NF_FLOW_GIVEUP_MTU);
+ 		return 0;
++	}
+ 
+ 	iph = (struct iphdr *)(skb_network_header(skb) + ctx->offset);
+ 	thoff = (iph->ihl * 4) + ctx->offset;
+-	if (nf_flow_state_check(flow, iph->protocol, skb, thoff))
++	if (nf_flow_state_check(flow, iph->protocol, skb, thoff)) {
++		nf_flow_giveup_inc(NF_FLOW_GIVEUP_STATE);
+ 		return 0;
++	}
+ 
+ 	if (!nf_flow_dst_check(&tuplehash->tuple)) {
++		nf_flow_giveup_inc(NF_FLOW_GIVEUP_DST);
+ 		flow_offload_teardown(flow);
+ 		return 0;
+ 	}
+@@ -1158,15 +1163,20 @@
+ 	if (flow->tuplehash[!dir].tuple.tun_num)
+ 		mtu -= sizeof(*ip6h);
+ 
+-	if (unlikely(nf_flow_exceeds_mtu(skb, mtu)))
++	if (unlikely(nf_flow_exceeds_mtu(skb, mtu))) {
++		nf_flow_giveup_inc(NF_FLOW_GIVEUP_MTU);
+ 		return 0;
++	}
+ 
+ 	ip6h = (struct ipv6hdr *)(skb_network_header(skb) + ctx->offset);
+ 	thoff = sizeof(*ip6h) + ctx->offset;
+-	if (nf_flow_state_check(flow, ip6h->nexthdr, skb, thoff))
++	if (nf_flow_state_check(flow, ip6h->nexthdr, skb, thoff)) {
++		nf_flow_giveup_inc(NF_FLOW_GIVEUP_STATE);
+ 		return 0;
++	}
+ 
+ 	if (!nf_flow_dst_check(&tuplehash->tuple)) {
++		nf_flow_giveup_inc(NF_FLOW_GIVEUP_DST);
+ 		flow_offload_teardown(flow);
+ 		return 0;
+ 	}
