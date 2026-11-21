@@ -229,6 +229,21 @@ NETWATCHDOG_GUARD=$(dirname "$0")/../lib/netwatchdog-guard.sh
 # shellcheck source=../lib/netwatchdog-guard.sh
 . "$NETWATCHDOG_GUARD"
 
+# --add-bss writes a temporary section with "uci set" and commits it, so the
+# restore point has to cover the pending UCI delta and not only the config
+# file: "uci commit" folds /tmp/.uci/wireless into /etc/config/wireless, and a
+# delta left behind is flushed by the next unrelated commit - the config then
+# changes with nobody doing the write.  Best effort: an old tree without the
+# library still runs, it just keeps the $OUT backup as its only restore point.
+UCI_RESTORE_GUARD=$(dirname "$0")/../lib/uci-restore-guard.sh
+if [ -r "$UCI_RESTORE_GUARD" ]; then
+	# shellcheck source=../lib/uci-restore-guard.sh
+	. "$UCI_RESTORE_GUARD"
+else
+	printf '%s: warning: shared library not found: %s; the pending UCI delta will not be restored\n' \
+		"${0##*/}" "$UCI_RESTORE_GUARD" >&2
+fi
+
 # Shared "no client" record (scripts/wireless/lib/no-client.sh).  Best effort:
 # a harness must still skip, and still exit 0, when the record cannot be
 # written.
@@ -1361,6 +1376,14 @@ create_bss() {
 	printf 'restore after a hard kill (SIGKILL): cp -p %s %s && wifi reload\n' \
 		"$WIRELESS_BACKUP" "$WIRELESS_CONFIG"
 
+	# $OUT lives on tmpfs: keep a second restore point outside /tmp and take
+	# the pending UCI delta with it, so a wiped /tmp or a killed run still
+	# leaves something to restore from, delta included.
+	if command -v urg_init >/dev/null 2>&1; then
+		urg_init "6g-rx-add-bss-$$" "$WIRELESS_CONFIG" >>"${RAW_LOG:-/dev/null}" 2>&1 ||
+			warn "cannot create a durable restore point outside /tmp; the backup is $WIRELESS_BACKUP"
+	fi
+
 	nw_guard_init --apply --no-trap --label 6g-rx-add-bss \
 		--result-json "$OUT/netwatchdog.json"
 	nw_guard_take ||
@@ -1479,9 +1502,22 @@ cleanup() {
 			else
 				printf '%s: temporary BSS removed\n' "$PROG"
 			fi
+			# The file is back; the delta this run wrote is not.  Put it back
+			# too, otherwise the next "uci commit wireless" (any script, any
+			# operator) flushes the temporary section into the config.
+			if command -v urg_restore_delta >/dev/null 2>&1; then
+				urg_mark_dirty
+				urg_restore_delta ||
+					{
+						printf '%s: ERROR: could not restore the pending UCI delta %s\n' \
+							"$PROG" "$URG_DELTA" >&2
+						_cleanup_rc=1
+					}
+			fi
 			if digest_matches "$WIRELESS_CONFIG" "$ORIG_DIGEST"; then
 				printf '%s: config restored (digest %s)\n' \
 					"$PROG" "$ORIG_DIGEST"
+				command -v urg_disarm >/dev/null 2>&1 && urg_disarm
 			else
 				printf '%s: ERROR: config digest mismatch after restore (expected %s, now %s)\n' \
 					"$PROG" "$ORIG_DIGEST" \

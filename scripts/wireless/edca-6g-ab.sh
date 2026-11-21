@@ -339,6 +339,20 @@ NETWATCHDOG_GUARD=$(dirname "$0")/../lib/netwatchdog-guard.sh
 # shellcheck source=../lib/netwatchdog-guard.sh
 . "$NETWATCHDOG_GUARD"
 
+# The hostapd arm rewrites the config with "uci set"/"uci commit", so the
+# restore point has to cover the pending UCI delta (/tmp/.uci/wireless) and
+# not only the config file: a delta left behind is flushed into the config by
+# the next unrelated commit, and the file then changes with nobody doing the
+# write.  Best effort: an old tree still runs on the $RESULT_DIR backup.
+UCI_RESTORE_GUARD=$(dirname "$0")/../lib/uci-restore-guard.sh
+if [ -r "$UCI_RESTORE_GUARD" ]; then
+	# shellcheck source=../lib/uci-restore-guard.sh
+	. "$UCI_RESTORE_GUARD"
+else
+	printf '%s: warning: shared library not found: %s; the pending UCI delta will not be restored\n' \
+		"${0##*/}" "$UCI_RESTORE_GUARD" >&2
+fi
+
 note() { printf '%s\n' "$*" >&2; }
 
 say() { printf '%s\n' "$*"; }
@@ -907,7 +921,15 @@ restore_all() {
 		note "restore error: $EDCA6G_WIRELESS_CONF md5 changed ($WIRELESS_MD5_BEFORE -> $WIRELESS_MD5_AFTER)"
 		RESTORE_OK=0
 	fi
+	if [ "$HOSTAPD_CHANGED" = 1 ] && command -v urg_restore_delta >/dev/null 2>&1; then
+		urg_mark_dirty
+		if ! urg_restore_delta; then
+			note "restore error: could not restore the pending UCI delta $URG_DELTA"
+			RESTORE_OK=0
+		fi
+	fi
 	if [ "$RESTORE_OK" = 1 ]; then
+		command -v urg_disarm >/dev/null 2>&1 && urg_disarm
 		say 'Restore: ok'
 	else
 		note 'Restore: FAILED'
@@ -1830,6 +1852,13 @@ fi
 if [ -n "$EDCA_APPLY" ] && [ -r "$EDCA_APPLY" ]; then
 	cp "$EDCA_APPLY" "$EDCA_BACKUP" ||
 		die "cannot back up $EDCA_APPLY"
+fi
+
+# Second restore point outside the (tmpfs) result directory, plus the pending
+# UCI delta the hostapd arm is about to touch.
+if [ -f "$EDCA6G_WIRELESS_CONF" ] && command -v urg_init >/dev/null 2>&1; then
+	urg_init edca-6g-ab "$EDCA6G_WIRELESS_CONF" >/dev/null ||
+		die "cannot create the restore point for $EDCA6G_WIRELESS_CONF"
 fi
 
 trap 'on_exit $?' EXIT
