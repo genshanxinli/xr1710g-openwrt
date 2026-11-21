@@ -83,6 +83,18 @@ topdir=${TOPDIR:-$(cd "$(dirname "$0")/.." && pwd)}
 out=${1:-$topdir/distfeeds}
 bin=$topdir/bin
 
+# Everything this script publishes was copied out of bin/ while it ran. If bin/
+# gained build output after this moment, a build was still writing and the copy
+# may hold an index that already names a version whose .apk had not landed yet
+# (that is how base-files 1722~23751e1da6 got published against a
+# 1722~1226d64f38.apk). Checked again at the end; see the find below.
+# Sub-second precision, else a file written just before this line looks newer
+# than the run itself; %N is GNU-only, so fall back to whole seconds.
+start_epoch=$(date +%s.%N 2>/dev/null || true)
+case $start_epoch in
+'' | *N*) start_epoch=$(date +%s) ;;
+esac
+
 if [ ! -d "$bin/packages" ] && [ ! -d "$bin/targets" ]; then
 	printf '%s: no build output under %s, run make first\n' "$0" "$bin" >&2
 	exit 1
@@ -117,6 +129,7 @@ import json, os, sys
 out = sys.argv[1]
 total = kmods = 0
 rows = []
+stale = []
 for root, _, files in os.walk(out):
     if "index.json" not in files:
         continue
@@ -128,9 +141,29 @@ for root, _, files in os.walk(out):
     k = len([p for p in names if p.startswith(("kmod-", "kernel"))])
     total += n
     kmods += k
-    rows.append((os.path.relpath(path, out), n, k))
+    rel = os.path.relpath(path, out)
+    rows.append((rel, n, k))
     if not os.path.exists(os.path.join(root, "packages.adb")):
         sys.exit("%s: index.json without packages.adb" % root)
+
+    # The index is what a client installs from, so every version it names must
+    # have its .apk in this same directory. The published tree is only ever a
+    # copy, and the copy races a running build: the index can be written before
+    # the .apk it describes. A missing apk here is a stale index, not a warning.
+    stems = [f[:-4] for f in files if f.endswith(".apk")]
+    for name, ver in sorted(pkgs.items()):
+        # A real apk index maps name -> version string. Anything else has no
+        # version to match a file name against (the shell test's shape-only
+        # fixtures use {}), so it cannot be checked here.
+        if not isinstance(ver, str):
+            continue
+        if name + "-" + ver in stems:
+            continue
+        # Some packages put an extra token in the file name (index "libatomic"
+        # -> libatomic1-14.4.0-r5.apk), so the version suffix is the anchor.
+        if any(s.startswith(name) and s.endswith("-" + ver) for s in stems):
+            continue
+        stale.append((rel, name, ver))
 
 if not rows:
     sys.exit("no repository index found under %s" % out)
@@ -138,6 +171,18 @@ if not rows:
 core = [r for r in rows if r[0].startswith("targets/")]
 if not core or not core[0][2]:
     sys.exit("core feed carries no kernel/kmod entries: %r" % (rows,))
+
+if stale:
+    for rel, name, ver in stale:
+        sys.stderr.write(
+            "%s: stale-index: declares %s %s but no .apk on disk\n"
+            % (rel, name, ver)
+        )
+    sys.exit(
+        "stale-index: %d declared package(s) missing from the copied tree; "
+        "bin/ was likely being written while this ran, refusing to publish"
+        % len(stale)
+    )
 
 for rel, n, k in sorted(rows):
     print("%-52s %4d packages %4d kmod/kernel" % (rel, n, k))
@@ -157,6 +202,18 @@ EOF
 # the public half only so a feed from another build tree can be verified.
 if [ -f "$topdir/public-key.pem" ]; then
 	cp "$topdir/public-key.pem" "$out/public-key.pem"
+fi
+
+# Nothing above writes into bin/, so any build output newer than start_epoch is
+# a build that was still running: the tree we just packed may be a half-written
+# snapshot even when the index happened to agree at copy time. Refuse it rather
+# than publish a batch that cannot be reinstalled.
+newer=$(find "$bin" -newermt "@$start_epoch" \
+	\( -name '*.apk' -o -name 'index.json' -o -name '*.itb' \) -print 2>/dev/null | head -n 5)
+if [ -n "$newer" ]; then
+	printf '%s: bin/ changed while this ran (a build is writing it), refusing to publish:\n' "$0" >&2
+	printf '%s\n' "$newer" | sed -e 's/^/  /' >&2
+	exit 1
 fi
 
 printf 'distfeeds written to %s\n' "$out"
