@@ -13,6 +13,12 @@ name: Shell syntax
 #
 # There is no allowlist.  A script that will not parse under its own
 # interpreter is a bug in that script, not a line to add here.
+#
+# The second gate here is scripts/check-test-cleanup-safety.py: an `ast` sweep
+# over scripts/tests/**.py that refuses `rmtree` on a path parsed out of the
+# program under test (2026-11-21: that pattern deleted a 100+ GB build tree).
+# It rides in this workflow rather than a new file so the job name - and any
+# branch protection keyed on it - stays put; it needs no shell to run.
 
 on:
   pull_request:
@@ -20,6 +26,8 @@ on:
       - '**/*.sh'
       - 'scripts/check-shell-syntax.py'
       - 'scripts/tests/test_check_shell_syntax.py'
+      - 'scripts/check-test-cleanup-safety.py'
+      - 'scripts/tests/**/*.py'
       - '.github/workflows/shell-syntax.yml'
   push:
     branches:
@@ -28,6 +36,8 @@ on:
       - '**/*.sh'
       - 'scripts/check-shell-syntax.py'
       - 'scripts/tests/test_check_shell_syntax.py'
+      - 'scripts/check-test-cleanup-safety.py'
+      - 'scripts/tests/**/*.py'
       - '.github/workflows/shell-syntax.yml'
   workflow_dispatch:
 
@@ -56,3 +66,11 @@ jobs:
 
       - name: Parse every tracked *.sh
         run: python3 scripts/check-shell-syntax.py
+
+      # Same deal: prove the cleanup-safety gate on a fixture it must refuse
+      # and one it must accept before trusting its verdict on the real tree.
+      - name: Test the cleanup-safety gate
+        run: python3 scripts/tests/test_check_test_cleanup_safety.py
+
+      - name: Refuse cleanups of a path parsed out of the script under test
+        run: python3 scripts/check-test-cleanup-safety.py
