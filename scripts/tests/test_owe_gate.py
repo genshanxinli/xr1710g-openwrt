@@ -27,7 +27,20 @@ What is asserted here, with no device and no radio:
     uci fix, so a configuration block can never look like a measured skip;
   * hw-gap-report.sh lists 6ghz-owe-mismatch as its own row with
     Class=configuration, separate from the hardware rows;
-  * the temporary 6 GHz BSS of the T-type harnesses stays OWE/SAE + PMF.
+  * the temporary 6 GHz BSS of the T-type harnesses stays OWE/SAE + PMF;
+  * on a board where all three bands share one SSID (the #347 board) the
+    gate fires *before* select_bss, so the run is blocked/6ghz-owe-mismatch
+    instead of skipped as no-client/6ghz-only-bss.
+
+Red half of the ordering proof: delete the pre-select
+
+    block_on_owe_mismatch
+
+call from a copy of 6g-rx.sh and
+
+    SIXG_RX_UNDER_TEST=<copy> python3 -m unittest scripts.tests.test_owe_gate
+
+fails with "SKIP, not BLOCKED" - exactly the #347 symptom.
 
 Red halves of the proof (both reproduced in the PR body):
 
@@ -51,6 +64,7 @@ Run from the repository root:
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -109,7 +123,7 @@ GATED = {
 
 
 def make_bindir(root: Path, encryption: str | None) -> Path:
-    """A PATH whose iwinfo/uci answer from the environment, not the device."""
+    """A PATH whose iwinfo/uci/iw answer from the environment, not the device."""
     bindir = root / "bin"
     bindir.mkdir()
     iwinfo = bindir / "iwinfo"
@@ -126,12 +140,41 @@ def make_bindir(root: Path, encryption: str | None) -> Path:
         'cat "$FAKE_UCI"\n'
     )
     uci.chmod(0o755)
-    for tool in ("awk", "basename", "cat", "date", "head", "mkdir", "mv",
-                 "sed", "sh", "tr"):
+    iw = bindir / "iw"
+    iw.write_text(
+        "#!/bin/sh\n"
+        '[ "$1" = dev ] && printf "%s\\n" "${FAKE_IW_DEV:-}"\n'
+        "exit 0\n"
+    )
+    iw.chmod(0o755)
+    for tool in ("awk", "basename", "cat", "cp", "cut", "date", "dirname", "grep",
+                 "head", "ip", "mkdir", "mv", "rm", "sed", "sh", "sleep",
+                 "tr"):
         found = shutil.which(tool)
         if found is not None:
             (bindir / tool).symlink_to(found)
     return bindir
+
+
+# Every band on the #347 board uses the same SSID, so select_bss finds no
+# 6G-only BSS.  phy0.2-ap0 is the EHT320 6 GHz VAP that answers OWE on air.
+THREE_BAND_SAME_SSID = """\
+phy#0
+\tInterface phy0-ap0
+\t\tssid OpenWrt
+\t\ttype AP
+\t\tchannel 6 (2437 MHz), width: 20 MHz, center1: 2437 MHz
+phy#1
+\tInterface phy1-ap0
+\t\tssid OpenWrt
+\t\ttype AP
+\t\tchannel 36 (5180 MHz), width: 80 MHz, center1: 5210 MHz
+phy#2
+\tInterface phy0.2-ap0
+\t\tssid OpenWrt
+\t\ttype AP
+\t\tchannel 37 (6135 MHz), width: 320 MHz, center1: 6105 MHz
+"""
 
 
 class LibHelperTest(unittest.TestCase):
@@ -238,6 +281,69 @@ class ScriptWiringTest(unittest.TestCase):
             with self.subTest(script=name):
                 self.assertIn("option encryption 'sae'", text)
                 self.assertIn("option ieee80211w '2'", text)
+
+
+class ScriptNoBssOweOrderTest(unittest.TestCase):
+    """#347: one SSID on all three bands must block, not skip as hardware."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="owe-order."))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.bindir = make_bindir(self.tmp, "OWE (CCMP)")
+        self.uci = self.tmp / "wireless"
+        self.out = self.tmp / "out"
+
+    def run_script(self, encryption="OWE (CCMP)", uci=OPEN_6G_UCI):
+        self.uci.write_text(uci)
+        env = dict(os.environ)
+        env["PATH"] = str(self.bindir)
+        env["FAKE_ENCRYPTION"] = encryption
+        env["FAKE_UCI"] = str(self.uci)
+        env["FAKE_IW_DEV"] = THREE_BAND_SAME_SSID
+        return subprocess.run(
+            [SH, str(SIXG_RX), "--out", str(self.out)],
+            env=env, capture_output=True, text=True, timeout=180,
+            cwd=str(REPO_ROOT),
+        )
+
+    def test_same_ssid_on_every_band_blocks_before_the_skip(self):
+        proc = self.run_script()
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIn("BLOCKED:", proc.stdout)
+        self.assertIn("wireless.default_radio2.encryption is open",
+                      proc.stdout)
+        self.assertNotIn(
+            "SKIP:", proc.stdout,
+            "no 6G-only BSS must not hide the OWE block (#347)\n%s"
+            % proc.stdout,
+        )
+        record = json.loads((self.out / "result.json").read_text())
+        self.assertEqual(record["status"], "blocked")
+        self.assertEqual(record["missing"], "6ghz-owe-mismatch")
+        self.assertIn("uci set wireless.default_radio2.encryption=owe",
+                      record["command"])
+
+    def test_missing_hardware_still_skips_when_the_air_is_sae(self):
+        proc = self.run_script(encryption="SAE (CCMP)")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("SKIP:", proc.stdout)
+        # No output directory exists before BSS selection, so the skip falls
+        # back to /tmp; read the record path it printed and clean it up.
+        match = re.search(r"no-client record: (\S+)", proc.stdout)
+        self.assertIsNotNone(match, proc.stdout)
+        record_path = Path(match.group(1))
+        self.addCleanup(shutil.rmtree, record_path.parent, True)
+        record = json.loads(record_path.read_text())
+        self.assertEqual(record["status"], "no-client")
+        self.assertEqual(record["missing"], "6ghz-only-bss")
+
+    def test_gate_call_precedes_select_bss(self):
+        text = SIXG_RX.read_text()
+        self.assertLess(
+            text.index("\nblock_on_owe_mismatch\n"),
+            text.index("\nselect_bss\n"),
+            "the OWE gate must run before a 6G-only BSS is required",
+        )
 
 
 class GapReportClassTest(unittest.TestCase):
