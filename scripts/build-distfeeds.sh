@@ -79,7 +79,8 @@ case ${1:-} in
 	;;
 esac
 
-topdir=${TOPDIR:-$(cd "$(dirname "$0")/.." && pwd)}
+here=$(cd "$(dirname "$0")/.." && pwd)
+topdir=${TOPDIR:-$here}
 out=${1:-$topdir/distfeeds}
 bin=$topdir/bin
 
@@ -123,10 +124,10 @@ fi
 # Verify the indexes really describe the packages we are about to publish,
 # and that the core feed carries kernel + kmods. python3 because jq is not
 # guaranteed on the build hosts.
-python3 - "$out" <<'EOF'
-import json, os, sys
+python3 - "$out" "$bin" "$topdir" "$here" <<'EOF'
+import glob, hashlib, json, os, subprocess, sys
 
-out = sys.argv[1]
+out, bin, topdir, here = sys.argv[1:5]
 total = kmods = 0
 rows = []
 stale = []
@@ -192,6 +193,50 @@ manifest = {
     "kmods": kmods,
     "feeds": [{"index": r[0], "packages": r[1], "kmods": r[2]} for r in sorted(rows)],
 }
+
+# A feed is installable only against the image that was built next to it: the
+# signing key is generated per build (package/Makefile), so `apk` on any other
+# image gets an untrusted signature.  Name the image it belongs to, so "which
+# feed goes with which image" is a lookup instead of a guess (#362).
+# Both fields are always written.  Missing evidence is null plus one note on
+# stderr, never an omitted key: the public key went missing exactly because a
+# check that could not find its input said nothing at all.
+images = sorted(glob.glob(os.path.join(bin, "targets", "*", "*", "*-sysupgrade.itb")))
+image_sha256 = None
+if len(images) == 1:
+    digest = hashlib.sha256()
+    with open(images[0], "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    image_sha256 = digest.hexdigest()
+elif not images:
+    sys.stderr.write("note: no *-sysupgrade.itb under %s, MANIFEST image_sha256 is null\n" % bin)
+else:
+    sys.stderr.write(
+        "note: %d *-sysupgrade.itb under %s (%s), MANIFEST image_sha256 is null\n"
+        % (len(images), bin, ", ".join(os.path.basename(p) for p in images))
+    )
+manifest["image_sha256"] = image_sha256
+
+# The commit that produced bin/.  TOPDIR is the checkout on a builder and a
+# bare unpack directory in the release tier, so fall back to this script's own
+# tree, which the release tier does check out at the tag the build was made for.
+git_commit = None
+for repo in (topdir, here):
+    try:
+        run = subprocess.run(
+            ["git", "-C", repo, "rev-parse", "HEAD"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True,
+        )
+    except OSError:
+        break  # no git on this host; the loop below turns that into null + note
+    if run.returncode == 0 and run.stdout.strip():
+        git_commit = run.stdout.strip()
+        break
+if git_commit is None:
+    sys.stderr.write("note: cannot resolve HEAD from %s, MANIFEST git_commit is null\n" % topdir)
+manifest["git_commit"] = git_commit
+
 with open(os.path.join(out, "MANIFEST.json"), "w") as f:
     json.dump(manifest, f, indent=1, sort_keys=True)
     f.write("\n")

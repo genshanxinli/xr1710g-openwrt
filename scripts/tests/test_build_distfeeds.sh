@@ -57,7 +57,7 @@ fi
 cat >"$tree/bin/targets/board/sub/packages/index.json" <<'EOF'
 {"packages": {"kernel-7.3-r1": {}, "kmod-fake-7.3-r1": {}, "fake-1": {}}}
 EOF
-if TOPDIR=$tree sh "$script" "$tmp/out" >"$tmp/good.log"; then
+if TOPDIR=$tree sh "$script" "$tmp/out" >"$tmp/good.log" 2>"$tmp/good.err"; then
 	ok "accepts core index with kernel/kmod"
 else
 	no "accepts core index with kernel/kmod"
@@ -77,6 +77,41 @@ if [ -f "$tmp/out/distfeeds.list" ] &&
 	ok "distfeeds.list lists both indexes"
 else
 	no "distfeeds.list lists both indexes"
+fi
+
+# #362 B: the feed names the image and commit it belongs to.  This tree has no
+# .itb, so image_sha256 must be null *and* present, with a note on stderr -- a
+# field that quietly disappears when its evidence is missing is the defect.
+if python3 -c "
+import json, sys
+m = json.load(open(sys.argv[1]))
+sys.exit(0 if (m['image_sha256'] is None and 'git_commit' in m
+               and set(m) == {'packages', 'kmods', 'feeds', 'image_sha256',
+                              'git_commit'}) else 1)
+" "$tmp/out/MANIFEST.json" && grep -q 'MANIFEST image_sha256 is null' "$tmp/good.err"; then
+	ok "MANIFEST keeps image_sha256: null plus a note when no image is present"
+else
+	no "MANIFEST keeps image_sha256: null plus a note when no image is present"
+fi
+
+# With exactly one sysupgrade image it is named by digest.
+: >"$tree/bin/targets/board/sub/openwrt-board-sub-sysupgrade.itb"
+if TOPDIR=$tree sh "$script" "$tmp/out-img" >"$tmp/img.log" 2>"$tmp/img.err"; then
+	want=$(python3 -c "
+import hashlib, sys
+print(hashlib.sha256(open(sys.argv[1], 'rb').read()).hexdigest())
+" "$tree/bin/targets/board/sub/openwrt-board-sub-sysupgrade.itb")
+	got=$(python3 -c "
+import json, sys
+print(json.load(open(sys.argv[1]))['image_sha256'])
+" "$tmp/out-img/MANIFEST.json")
+	if [ "$got" = "$want" ]; then
+		ok "MANIFEST names the sysupgrade image by sha256"
+	else
+		no "MANIFEST names the sysupgrade image by sha256 (got $got)"
+	fi
+else
+	no "MANIFEST names the sysupgrade image by sha256 (run failed)"
 fi
 
 

@@ -125,6 +125,15 @@ jobs:
           test -f "$RUNNER_TEMP/build/bin/targets/airoha/an7581/packages/packages.adb" ||
             fail "the fetched feed tree has no targets/airoha/an7581/packages/packages.adb"
 
+          # The asset is packed from bin/, so --strip-components=1 puts its
+          # public-key.pem at build/bin/public-key.pem, while build-distfeeds.sh
+          # only looks at $TOPDIR/public-key.pem.  It looked, found nothing and
+          # said nothing, so the re-derived tree shipped one file short (#362).
+          # Move the key to the path the script reads, and make its absence red:
+          # a feed without the key cannot be verified by any device.
+          cp "$RUNNER_TEMP/build/bin/public-key.pem" "$RUNNER_TEMP/build/public-key.pem" \
+            || { echo "::error::the distfeeds asset carries no public-key.pem"; exit 1; }
+
       - name: Re-derive the published tree from the build output
         run: |
           TOPDIR="$RUNNER_TEMP/build" ./scripts/build-distfeeds.sh distfeeds
