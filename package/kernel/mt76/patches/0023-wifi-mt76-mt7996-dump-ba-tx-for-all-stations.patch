@@ -1,0 +1,81 @@
+From: OpenWrt <openwrt@example.org>
+Date: Sat, 21 Nov 2026 09:40:00 +0800
+Subject: [PATCH] wifi: mt76: mt7996: dump the TX BA window for all stations
+
+The per-STA ba_tx file is created from mt7996_sta_add_debugfs(), so it only
+exists after a station associated.  A throughput run that never had a peer,
+or a bring-up board, cannot tell whether the dump is wired up at all.
+
+Create a ba_tx file in the device directory as well.  It walks the stations
+with ieee80211_iterate_stations_atomic() and prints the same fields the
+per-STA file prints, prefixed by the station address, so the file itself
+exists and reads back cleanly on a device with no station.  Like the
+per-STA file it only reads driver state and is mode 0400.
+
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+
+--- a/mt7996/debugfs.c
++++ b/mt7996/debugfs.c
+@@ -1080,6 +1080,52 @@
+ 
+ DEFINE_SHOW_ATTRIBUTE(mt7996_aql);
+ 
++/*
++ * The per-STA ba_tx file only exists once a station is associated.  Dump the
++ * same TX block-ack state for every station from the device directory so the
++ * file can still be read and exercised when no station is present; with no
++ * station it prints the header only.
++ */
++struct mt7996_hw_ba_tx_iter {
++	struct seq_file *s;
++};
++
++static void
++mt7996_hw_ba_tx_sta_iter(void *data, struct ieee80211_sta *sta)
++{
++	struct mt7996_hw_ba_tx_iter *iter = data;
++	struct mt7996_sta *msta = (struct mt7996_sta *)sta->drv_priv;
++	int tid;
++
++	for (tid = 0; tid < IEEE80211_NUM_TIDS; tid++) {
++		struct mt7996_sta_ba *ba = &msta->ba_tx[tid];
++
++		if (!(msta->ba_tx_mask & BIT(tid)))
++			continue;
++
++		seq_printf(iter->s, "%pM %d %u %u %u\n", sta->addr, tid,
++			   ba->buf_size, ba->ssn, ba->amsdu);
++	}
++}
++
++static int
++mt7996_hw_ba_tx_show(struct seq_file *s, void *data)
++{
++	struct mt7996_dev *dev = s->private;
++	struct mt7996_hw_ba_tx_iter iter = {
++		.s = s,
++	};
++
++	seq_puts(s, "addr tid buf_size ssn amsdu\n");
++
++	ieee80211_iterate_stations_atomic(dev->mphy.hw,
++					  mt7996_hw_ba_tx_sta_iter, &iter);
++
++	return 0;
++}
++
++DEFINE_SHOW_ATTRIBUTE(mt7996_hw_ba_tx);
++
+ static int
+ mt7996_twt_stats(struct seq_file *s, void *data)
+ {
+@@ -1577,6 +1623,8 @@
+ 
+ 	debugfs_create_file("hw-queues", 0400, dir, dev,
+ 			    &mt7996_hw_queues_fops);
++	debugfs_create_file("ba_tx", 0400, dir, dev,
++			    &mt7996_hw_ba_tx_fops);
+ 	debugfs_create_file("xmit-queues", 0400, dir, dev,
+ 			    &mt7996_xmit_queues_fops);
+ 	debugfs_create_file("tx_stats", 0400, dir, dev, &mt7996_tx_stats_fops);
