@@ -15,7 +15,7 @@
  struct airoha_flow_data {
  	struct ethhdr eth;
  
-@@ -621,6 +629,12 @@
+@@ -629,6 +637,12 @@
  	} dslite;
  
  	struct airoha_ppe_6rd sixrd;
@@ -30,7 +30,7 @@
  enum airoha_flow_entry_type {
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -872,6 +872,97 @@
+@@ -900,6 +900,97 @@
  #endif
  }
  
@@ -128,22 +128,22 @@
  static void airoha_ppe_foe_set_bridge_addrs(struct airoha_foe_bridge *br,
  					    struct ethhdr *eh)
  {
-@@ -1142,6 +1233,14 @@
- 				smac_id = sid;
- 			}
+@@ -1196,6 +1287,14 @@
  		}
-+	}
-+
+ 	}
+ 
 +	if (data->mcast_mask) {
 +		/* The hardware replicates through the switch port mask
 +		 * written below.  The SDK keeps multicast entries off the
 +		 * SRAM fast path; do the same.
 +		 */
 +		val &= ~AIROHA_FOE_IB2_FAST_PATH;
- 	}
- 
++	}
++
  	if (is_multicast_ether_addr(data->eth.h_dest))
-@@ -1226,7 +1325,8 @@
+ 		val |= AIROHA_FOE_IB2_MULTICAST;
+ 
+@@ -1278,7 +1377,8 @@
  	if (wlan_etype >= 0) {
  		l2->etype = wlan_etype;
  	} else if (dsa_port >= 0) {
@@ -153,15 +153,15 @@
  		l2->etype |= !data->vlan.num ? BIT(15) : 0;
  	} else if (data->pppoe.num) {
  		l2->etype = ETH_P_PPP_SES;
-@@ -2458,8 +2558,25 @@
- 	}
+@@ -2552,9 +2652,26 @@
+ 		return -EOPNOTSUPP;
  
  	if (!is_valid_ether_addr(data.eth.h_source) ||
 -	    !is_valid_ether_addr(data.eth.h_dest))
 +	    (!is_valid_ether_addr(data.eth.h_dest) &&
 +	     !is_multicast_ether_addr(data.eth.h_dest)))
  		return -EINVAL;
-+
+ 
 +	/* A multicast flow cannot be sent to the single port of the
 +	 * unicast path.  Accept it only when the egress is a switch port
 +	 * and at least two members of its bridge can be replicated in
@@ -177,12 +177,13 @@
 +		if (!data.mcast_mask)
 +			return -EOPNOTSUPP;
 +	}
- 
++
  	/* Allocate the meter only after every action and the L2 header
  	 * have been accepted: all the early returns above then stay
+ 	 * allocation-free, and from here on put_smac is the single
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -648,6 +648,109 @@
+@@ -782,6 +782,109 @@
  }
  DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_6rd);
  
@@ -292,7 +293,7 @@
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  {
  	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-@@ -663,6 +766,8 @@
+@@ -801,6 +904,8 @@
  			    &airoha_ppe_debugfs_bind_rate_fops);
  	debugfs_create_file("tb_regs", 0444, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_tb_regs_fops);
@@ -303,11 +304,10 @@
  	debugfs_create_file("dslite", 0444, ppe->debugfs_dir, ppe,
 --- a/drivers/net/ethernet/airoha/airoha_regs.h
 +++ b/drivers/net/ethernet/airoha/airoha_regs.h
-@@ -344,6 +344,14 @@
- #define PPE_SRAM_HASH1_EN_MASK			BIT(8)
+@@ -345,6 +345,14 @@
  #define PPE_SRAM_HASH0_MODE_MASK		GENMASK(7, 4)
  #define PPE_SRAM_TABLE_EN_MASK			BIT(0)
-+
+ 
 +/* Legacy PPE multicast PSE-port map (vendor SDK: PPE2_MCAST_PPSE).
 + * The register is not implemented on AN7581: it reads back as
 + * 0xdeadbeef and the vendor SDK never writes it, so the hardware 1->N
@@ -315,6 +315,7 @@
 + * the L2 etype word instead.  ppe/mcast prints the raw value.
 + */
 +#define REG_PPE_MCAST_PPSE(_n)			(((_n) ? PPE2_BASE : PPE1_BASE) + 0x284)
- 
++
  #define REG_PPE_MTU_BASE(_n)			(((_n) ? PPE2_BASE : PPE1_BASE) + 0x304)
  #define REG_PPE_MTU(_m, _n)			(REG_PPE_MTU_BASE(_m) + (((_n) / 2) << 2))
+ #define FP_EGRESS_MTU_MASK(_n)			GENMASK(13 + (((_n) % 2) << 4), ((_n) % 2) << 4)
