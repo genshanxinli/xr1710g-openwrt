@@ -1106,6 +1106,24 @@ EOF
 	AP_WIDTH=320
 }
 
+# record_dir LABEL: where a record goes when --result-json was not given.
+# An explicit --result-json still decides its own directory, as before.  With
+# no --result-json the old fallback was `dirname /tmp/x` = /tmp, so every run
+# wrote the same /tmp/result.json: two matrix runs overwrote each other's
+# record and hw-gap-report.sh, which scans /tmp, picked up whoever else's
+# record happened to be there.  Each run now gets its own directory under /tmp
+# (no_client_default_dir), and LABEL keeps the blocked and no-client records
+# of one run apart even though they are mutually exclusive branches.
+record_dir() {
+	if [ -n "$RESULT_JSON" ]; then
+		dirname "$RESULT_JSON"
+		return 0
+	fi
+	_rd_dir=$(no_client_default_dir "$PROG")/${1:-record}
+	mkdir -p "$_rd_dir" 2>/dev/null || :
+	printf '%s\n' "$_rd_dir"
+}
+
 # skip_no_client [MISSING] [REASON]: no usable 320 MHz client, so the matrix
 # has nothing to measure.  The skip line stays "SKIP: no 320 client"; the two
 # lines after it name the missing hardware and the command to run once it
@@ -1121,11 +1139,11 @@ skip_no_client() {
 		_owe_iface=$(printf '%s\n' "$CANDIDATES" | awk -F'|' 'NF { print $1; exit }')
 	fi
 	if [ -n "$_owe_iface" ] && _mm=$(nc_owe_mismatch "$_owe_iface"); then
-		nc_owe_mismatch_block "$(dirname "${RESULT_JSON:-/tmp/x}")" 47 "$_mm"
+		nc_owe_mismatch_block "$(record_dir blocked)" 47 "$_mm"
 		exit 2
 	fi
 	_nc_run='sh scripts/wireless/6g320-matrix.sh --iface <6GHZ_320_AP_IFACE> --client-ssh <ROOT@HOST> --client-model <MODEL> --client-driver <DRIVER> --client-firmware <FIRMWARE> --result-json <DIR>/result.json'
-	_rec=$(no_client_record "$(dirname "${RESULT_JSON:-/tmp/x}")" 47 "$_nc_missing" \
+	_rec=$(no_client_record "$(record_dir no-client)" 47 "$_nc_missing" \
 		"$_nc_run" "$_nc_reason" \
 		"per-arm TX/RX width (320 MHz) and NSS from iw station dump" \
 		"per-arm throughput, retries and failed frames" \
