@@ -67,9 +67,13 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _cleanup import safe_rmtree  # noqa: E402  (scripts/tests/_cleanup.py)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LIB = Path(
@@ -332,7 +336,7 @@ class ScriptNoBssOweOrderTest(unittest.TestCase):
         match = re.search(r"no-client record: (\S+)", proc.stdout)
         self.assertIsNotNone(match, proc.stdout)
         record_path = Path(match.group(1))
-        self.addCleanup(shutil.rmtree, record_path.parent, True)
+        self.addCleanup(safe_rmtree, record_path.parent)
         record = json.loads(record_path.read_text())
         self.assertEqual(record["status"], "no-client")
         self.assertEqual(record["missing"], "6ghz-only-bss")

@@ -50,9 +50,13 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _cleanup import safe_rmtree  # noqa: E402  (scripts/tests/_cleanup.py)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = Path(
@@ -116,7 +120,7 @@ class NoBssRecordTest(unittest.TestCase):
     def tearDown(self):
         # The fallback directory lives under /tmp, outside self.tmp.
         if self.record is not None:
-            shutil.rmtree(self.record.parent, ignore_errors=True)
+            safe_rmtree(self.record.parent)
 
     def run_harness(self):
         env = os.environ.copy()
