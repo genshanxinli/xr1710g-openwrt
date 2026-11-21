@@ -1,6 +1,12 @@
+ drivers/net/ethernet/airoha/airoha_eth.c | 44 ++++++++++++++++++++++++++++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_eth.h | 2 ++
+ 2 files changed, 46 insertions(+), 0 deletions(-)
+ drivers/net/ethernet/airoha/airoha_eth.c | 44 ++++++++++++++++++++++++++++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_eth.h | 2 ++
+ 2 files changed, 46 insertions(+), 0 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -619,6 +619,47 @@ static void airoha_dev_lro_disable(struc
+@@ -651,6 +651,47 @@ static void airoha_dev_lro_disable(struc
  	airoha_fe_lro_disable(eth, qdma_id);
  }
  
@@ -48,7 +54,7 @@
  static int airoha_fe_init(struct airoha_eth *eth)
  {
  	airoha_fe_maccr_init(eth);
-@@ -1923,6 +1964,8 @@ static int airoha_hw_init(struct platfor
+@@ -1955,6 +1996,8 @@ static int airoha_hw_init(struct platfor
  	if (err)
  		goto error;
  
@@ -57,7 +63,7 @@
  	set_bit(DEV_STATE_INITIALIZED, &eth->state);
  
  	return 0;
-@@ -1940,6 +1983,7 @@ static void airoha_hw_cleanup(struct air
+@@ -1972,6 +2015,7 @@ static void airoha_hw_cleanup(struct air
  	for (i = 0; i < ARRAY_SIZE(eth->qdma); i++)
  		airoha_qdma_cleanup(eth, &eth->qdma[i]);
  	airoha_ppe_deinit(eth);
@@ -67,7 +73,7 @@
  static void airoha_qdma_start_napi(struct airoha_qdma *qdma)
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -718,6 +718,8 @@
+@@ -718,6 +718,8 @@ struct airoha_eth {
  
  	struct airoha_qdma qdma[AIROHA_MAX_NUM_QDMA];
  	struct airoha_gdm_port *ports[AIROHA_MAX_NUM_GDM_PORTS];

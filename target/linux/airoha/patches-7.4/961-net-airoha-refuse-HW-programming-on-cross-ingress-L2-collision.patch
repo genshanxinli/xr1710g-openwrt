@@ -1,6 +1,14 @@
+ drivers/net/ethernet/airoha/airoha_eth.h | 3 +++
+ drivers/net/ethernet/airoha/airoha_ppe.c | 123 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ include/linux/soc/airoha/airoha_offload.h | 13 +++++++++++++
+ 3 files changed, 137 insertions(+), 2 deletions(-)
+ drivers/net/ethernet/airoha/airoha_eth.h | 3 +++
+ drivers/net/ethernet/airoha/airoha_ppe.c | 123 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ include/linux/soc/airoha/airoha_offload.h | 13 +++++++++++++
+ 3 files changed, 137 insertions(+), 2 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -558,6 +558,9 @@
+@@ -558,6 +558,9 @@ struct airoha_flow_table_entry {
  
  	struct airoha_foe_stats64 stats;
  	enum airoha_flow_entry_type type;
@@ -23,7 +31,7 @@
  #include <net/ipv6.h>
  #include <linux/if_vlan.h>
  #include <net/pkt_cls.h>
-@@ -1282,6 +1284,105 @@
+@@ -1282,6 +1284,105 @@ airoha_ppe_foe_commit_subflow_entry(stru
  	return 0;
  }
  
@@ -129,7 +137,7 @@
  static void airoha_ppe_foe_insert_entry(struct airoha_ppe *ppe,
  					struct sk_buff *skb,
  					u32 hash, bool rx_wlan)
-@@ -1291,7 +1392,7 @@
+@@ -1291,7 +1392,7 @@ static void airoha_ppe_foe_insert_entry(
  	struct airoha_foe_entry *hwe;
  	bool commit_done = false;
  	struct hlist_node *n;
@@ -138,7 +146,7 @@
  
  	spin_lock_bh(&ppe_lock);
  
-@@ -1328,7 +1429,7 @@
+@@ -1328,7 +1429,7 @@ static void airoha_ppe_foe_insert_entry(
  	airoha_ppe_foe_set_bridge_addrs(&br, eth_hdr(skb));
  	e = rhashtable_lookup_fast(&ppe->l2_flows, &br,
  				   airoha_l2_flow_table_params);
@@ -147,7 +155,7 @@
  		airoha_ppe_foe_commit_subflow_entry(ppe, e, hash, rx_wlan);
  unlock:
  	spin_unlock_bh(&ppe_lock);
-@@ -1339,8 +1440,20 @@
+@@ -1339,8 +1440,20 @@ airoha_ppe_foe_l2_flow_commit_entry(stru
  				    struct airoha_flow_table_entry *e)
  {
  	struct airoha_flow_table_entry *prev;
@@ -168,7 +176,7 @@
  	prev = rhashtable_lookup_get_insert_fast(&ppe->l2_flows, &e->l2_node,
  						 airoha_l2_flow_table_params);
  	if (!prev)
-@@ -1476,6 +1589,7 @@
+@@ -1476,6 +1589,7 @@ static int airoha_ppe_flow_offload_repla
  	struct airoha_flow_data data = {};
  	struct net_device *odev = NULL;
  	struct flow_action_entry *act;
@@ -176,16 +184,16 @@
  	u8 dsfield = 0, l4proto = 0;
  	struct airoha_foe_entry hwe;
  	int err, i, offload_type;
-@@ -1487,6 +1601,8 @@
- 
+@@ -1488,6 +1602,8 @@ static int airoha_ppe_flow_offload_repla
  	if (!flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_META))
  		return -EOPNOTSUPP;
-+
-+	flow_rule_match_meta(rule, &meta);
  
++	flow_rule_match_meta(rule, &meta);
++
  	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_CONTROL)) {
  		struct flow_match_control match;
-@@ -1662,6 +1778,8 @@
+ 
+@@ -1663,6 +1779,8 @@ static int airoha_ppe_flow_offload_repla
  	}
  
  	e->cookie = f->cookie;
@@ -194,7 +202,7 @@
  	memcpy(&e->data, &hwe, sizeof(e->data));
  
  	err = airoha_ppe_foe_flow_commit_entry(eth->ppe, e);
-@@ -2043,6 +2161,7 @@
+@@ -2044,6 +2162,7 @@ int airoha_ppe_init(struct airoha_eth *e
  
  	ppe->dev.ops.setup_tc_block_cb = airoha_ppe_setup_tc_block_cb;
  	ppe->dev.ops.check_skb = airoha_ppe_check_skb;
@@ -204,7 +212,7 @@
  	eth->ppe = ppe;
 --- a/include/linux/soc/airoha/airoha_offload.h
 +++ b/include/linux/soc/airoha/airoha_offload.h
-@@ -21,6 +21,7 @@
+@@ -21,6 +21,7 @@ struct airoha_ppe_dev {
  		void (*check_skb)(struct airoha_ppe_dev *dev,
  				  struct sk_buff *skb, u16 hash,
  				  bool rx_wlan);
@@ -212,7 +220,7 @@
  	} ops;
  
  	void *priv;
-@@ -42,6 +43,12 @@
+@@ -42,6 +43,12 @@ static inline void airoha_ppe_dev_check_
  {
  	dev->ops.check_skb(dev, skb, hash, rx_wlan);
  }
@@ -225,16 +233,16 @@
  #else
  static inline struct airoha_ppe_dev *airoha_ppe_get_dev(struct device *dev)
  {
-@@ -62,6 +69,12 @@
- 					    struct sk_buff *skb, u16 hash,
+@@ -63,6 +70,12 @@ static inline void airoha_ppe_dev_check_
  					    bool rx_wlan)
  {
-+}
+ }
 +
 +static inline u32
 +airoha_ppe_dev_get_l2_dual_window_ms(struct airoha_ppe_dev *dev)
 +{
 +	return 0;
- }
++}
  #endif
  
+ #define NPU_NUM_CORES		8

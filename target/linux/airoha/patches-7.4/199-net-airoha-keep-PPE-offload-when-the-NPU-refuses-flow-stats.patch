@@ -1,3 +1,8 @@
+ drivers/net/ethernet/airoha/airoha_npu.c | 9 +++++++++
+ drivers/net/ethernet/airoha/airoha_eth.h | 6 ++++++
+ drivers/net/ethernet/airoha/airoha_regs.h | 5 +++++
+ drivers/net/ethernet/airoha/airoha_ppe.c | 41 +++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 58 insertions(+), 3 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_npu.c
 +++ b/drivers/net/ethernet/airoha/airoha_npu.c
 @@ -450,6 +450,15 @@ static int airoha_npu_ppe_stats_setup(st
@@ -18,7 +23,7 @@
  				  size);
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -670,6 +670,12 @@
+@@ -670,6 +670,12 @@ struct airoha_ppe {
  
  	struct airoha_foe_stats *foe_stats;
  	dma_addr_t foe_stats_dma;
@@ -47,11 +52,10 @@
  #define REG_FE_PSE_BUF_SET		0x0090
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -143,6 +143,14 @@
- 		sram_ppe_num_data_entries -= sram_num_stats_entries;
+@@ -144,6 +144,14 @@ static void airoha_ppe_hw_init(struct ai
  	sram_ppe_num_data_entries =
  		PPE_RAM_NUM_ENTRIES_SHIFT(sram_ppe_num_data_entries);
-+
+ 
 +	/* Counted flows are steered through port 6, the CDM3 path to the NPU,
 +	 * and that port is flow controlled separately from the others. Let it
 +	 * take part in shared-buffer flow control only while counters are in
@@ -59,10 +63,11 @@
 +	 */
 +	if (sram_num_stats_entries > 0 && ppe->foe_stats_enabled)
 +		airoha_fe_clear(eth, PSE_FC_CFG, PSE_PORT6_SHARE_DIS);
- 
++
  	for (i = 0; i < eth->soc->num_ppe; i++) {
  		airoha_fe_wr(eth, REG_PPE_TB_BASE(i),
-@@ -622,6 +630,9 @@
+ 			     ppe->foe_dma + sram_tb_size);
+@@ -622,6 +630,9 @@ static void airoha_ppe_foe_flow_stats_re
  {
  	int i, ppe_num_stats_entries;
  
@@ -72,17 +77,17 @@
  	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
  	if (ppe_num_stats_entries < 0)
  		return;
-@@ -639,6 +650,9 @@
- 	u32 index, pse_port, val, *data, *ib2, *meter;
+@@ -640,6 +651,9 @@ static void airoha_ppe_foe_flow_stats_up
  	int ppe_num_stats_entries;
  	u8 nbq;
-+
+ 
 +	if (unlikely(!ppe->foe_stats_enabled))
 +		return;
- 
++
  	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
  	if (ppe_num_stats_entries < 0)
-@@ -1311,6 +1325,9 @@
+ 		return;
+@@ -1312,6 +1326,9 @@ void airoha_ppe_foe_entry_get_stats(stru
  	struct airoha_npu *npu;
  	u32 index;
  
@@ -92,7 +97,7 @@
  	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
  	if (ppe_num_stats_entries < 0)
  		return;
-@@ -1324,7 +1341,7 @@
+@@ -1325,7 +1342,7 @@ void airoha_ppe_foe_entry_get_stats(stru
  	rcu_read_lock();
  
  	npu = rcu_dereference(eth->npu);
@@ -101,7 +106,7 @@
  		u64 packets = ppe->foe_stats[index].packets;
  		u64 bytes = ppe->foe_stats[index].bytes;
  		struct airoha_foe_stats npu_stats;
-@@ -1456,8 +1473,26 @@
+@@ -1457,8 +1474,26 @@ static int airoha_ppe_offload_setup(stru
  	if (ppe_num_stats_entries > 0) {
  		err = npu->ops.ppe_init_stats(npu, ppe->foe_stats_dma,
  					      ppe_num_stats_entries);

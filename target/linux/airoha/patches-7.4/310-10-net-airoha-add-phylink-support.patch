@@ -1,6 +1,16 @@
+ drivers/net/ethernet/airoha/Kconfig | 1 +
+ drivers/net/ethernet/airoha/airoha_eth.c | 191 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_eth.h | 7 +++++++
+ drivers/net/ethernet/airoha/airoha_regs.h | 12 ++++++++++++
+ 4 files changed, 205 insertions(+), 6 deletions(-)
+ drivers/net/ethernet/airoha/Kconfig | 1 +
+ drivers/net/ethernet/airoha/airoha_eth.c | 191 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_eth.h | 7 +++++++
+ drivers/net/ethernet/airoha/airoha_regs.h | 12 ++++++++++++
+ 4 files changed, 205 insertions(+), 6 deletions(-)
 --- a/drivers/net/ethernet/airoha/Kconfig
 +++ b/drivers/net/ethernet/airoha/Kconfig
-@@ -20,6 +20,7 @@
+@@ -20,6 +20,7 @@ config NET_AIROHA
  	depends on NET_DSA || !NET_DSA
  	select NET_AIROHA_NPU
  	select PAGE_POOL
@@ -18,7 +28,7 @@
  #include <linux/u64_stats_sync.h>
  #include <net/dst_metadata.h>
  #include <net/ip6_checksum.h>
-@@ -2113,7 +2114,7 @@
+@@ -2176,7 +2177,7 @@ static void airoha_update_hw_stats(struc
  	u32 val, i = 0;
  	u64 data;
  
@@ -27,7 +37,7 @@
  
  	/* Read relevant MIB for GDM with multiple port attached */
  	if (port->id == AIROHA_GDM3_IDX || port->id == AIROHA_GDM4_IDX)
-@@ -2315,7 +2316,7 @@
+@@ -2378,7 +2379,7 @@ static void airoha_update_hw_stats(struc
  
  	u64_stats_update_end(&dev->stats.syncp);
  
@@ -36,7 +46,7 @@
  }
  
  static void airoha_update_netdev_features(struct airoha_gdm_dev *dev)
-@@ -2367,6 +2368,14 @@
+@@ -2430,6 +2431,14 @@ static int airoha_dev_open(struct net_de
  
  	qdma = airoha_qdma_deref(dev);
  
@@ -51,7 +61,7 @@
  	netif_tx_start_all_queues(netdev);
  	err = airoha_set_vip_for_gdm_port(dev, true);
  	if (err)
-@@ -2413,6 +2422,9 @@
+@@ -2476,6 +2485,9 @@ static int airoha_dev_stop(struct net_de
  	if (netdev->features & NETIF_F_LRO)
  		airoha_dev_lro_disable(dev);
  
@@ -61,7 +71,7 @@
  	return 0;
  }
  
-@@ -3055,6 +3067,24 @@
+@@ -3118,6 +3130,24 @@ airoha_ethtool_get_rmon_stats(struct net
  	} while (u64_stats_fetch_retry(&dev->stats.syncp, start));
  }
  
@@ -86,7 +96,7 @@
  static int airoha_qdma_set_chan_tx_sched(struct net_device *netdev,
  					 int channel, enum tx_sched_mode mode,
  					 const u16 *weights, u8 n_weights)
-@@ -3961,6 +3991,7 @@
+@@ -4024,6 +4054,7 @@ static const struct ethtool_ops airoha_e
  	.get_eth_mac_stats      = airoha_ethtool_get_mac_stats,
  	.get_rmon_stats		= airoha_ethtool_get_rmon_stats,
  	.get_link_ksettings	= airoha_ethtool_get_link_ksettings,
@@ -94,7 +104,7 @@
  	.get_link		= ethtool_op_get_link,
  };
  
-@@ -4016,6 +4047,155 @@
+@@ -4079,6 +4110,155 @@ bool airoha_is_valid_gdm_dev(struct airo
  	return false;
  }
  
@@ -250,7 +260,7 @@
  static int airoha_alloc_gdm_device(struct airoha_eth *eth,
  				   struct airoha_gdm_port *port,
  				   int nbq, struct device_node *np)
-@@ -4079,7 +4259,7 @@
+@@ -4142,7 +4322,7 @@ static int airoha_alloc_gdm_device(struc
  	dev->nbq = nbq;
  	port->devs[index] = dev;
  
@@ -259,7 +269,7 @@
  }
  
  static int airoha_alloc_gdm_port(struct airoha_eth *eth,
-@@ -4114,7 +4294,7 @@
+@@ -4177,7 +4357,7 @@ static int airoha_alloc_gdm_port(struct
  		return -ENOMEM;
  
  	port->id = id;
@@ -268,7 +278,7 @@
  	eth->ports[p] = port;
  
  	err = airoha_metadata_dst_alloc(port);
-@@ -4310,6 +4490,8 @@
+@@ -4373,6 +4553,8 @@ error_napi_stop:
  			netdev = netdev_from_priv(dev);
  			if (netdev->reg_state == NETREG_REGISTERED)
  				unregister_netdev(netdev);
@@ -277,7 +287,7 @@
  			of_node_put(netdev->dev.of_node);
  		}
  		airoha_metadata_dst_free(port);
-@@ -4348,6 +4530,7 @@
+@@ -4411,6 +4593,7 @@ static void airoha_remove(struct platfor
  
  			netdev = netdev_from_priv(dev);
  			unregister_netdev(netdev);
@@ -287,7 +297,7 @@
  		airoha_metadata_dst_free(port);
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -645,6 +645,9 @@
+@@ -645,6 +645,9 @@ struct airoha_gdm_dev {
  	 * QDMA migration.
  	 */
  	spinlock_t txq_lock[AIROHA_NUM_NETDEV_TX_RINGS];
@@ -297,7 +307,7 @@
  };
  
  struct airoha_gdm_port {
-@@ -652,8 +655,8 @@
+@@ -652,8 +655,8 @@ struct airoha_gdm_port {
  	int id;
  	int users;
  
@@ -310,11 +320,10 @@
  };
 --- a/drivers/net/ethernet/airoha/airoha_regs.h
 +++ b/drivers/net/ethernet/airoha/airoha_regs.h
-@@ -375,6 +375,18 @@
- #define IP_ASSEMBLE_NBQ_MASK		GENMASK(20, 16)
+@@ -376,6 +376,18 @@
  #define IP_FRAGMENT_PORT_MASK		GENMASK(8, 5)
  #define IP_FRAGMENT_NBQ_MASK		GENMASK(4, 0)
-+
+ 
 +#define REG_FE_GDM4_TMBI_FRAG		0x2028
 +#define GDM4_SGMII1_TX_WEIGHT_MASK	GENMASK(31, 26)
 +#define GDM4_SGMII1_TX_FRAG_SIZE_MASK	GENMASK(25, 16)
@@ -326,6 +335,7 @@
 +#define GDM4_SGMII1_RX_FRAG_SIZE_MASK	GENMASK(25, 16)
 +#define GDM4_SGMII0_RX_WEIGHT_MASK	GENMASK(15, 10)
 +#define GDM4_SGMII0_RX_FRAG_SIZE_MASK	GENMASK(9, 0)
- 
++
  #define REG_MC_VLAN_EN			0x2100
  #define MC_VLAN_EN_MASK			BIT(0)
+ 

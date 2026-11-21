@@ -1,3 +1,9 @@
+ drivers/net/ethernet/airoha/airoha_eth.c | 114 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_eth.h | 1 +
+ 2 files changed, 112 insertions(+), 3 deletions(-)
+ drivers/net/ethernet/airoha/airoha_eth.c | 114 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_eth.h | 1 +
+ 2 files changed, 112 insertions(+), 3 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
 @@ -9,6 +9,8 @@
@@ -91,9 +97,9 @@
  u32 airoha_rr(void __iomem *base, u32 offset)
  {
  	return readl(base + offset);
-@@ -722,8 +799,25 @@ static void airoha_pse_debugfs_init(stru
- 	debugfs_create_file("queues", 0444, eth->debugfs_dir, eth,
- 			    &airoha_pse_debugfs_queues_fops);
+@@ -766,8 +843,25 @@ static void airoha_pse_debugfs_init(stru
+ 	debugfs_create_file("weights", 0444, eth->debugfs_dir, eth,
+ 			    &airoha_pse_debugfs_weights_fops);
  }
 +
 +static int airoha_qdma_debugfs_napi_weight_show(struct seq_file *m,
@@ -117,7 +123,7 @@
  #endif
  
  static int airoha_fe_init(struct airoha_eth *eth)
-@@ -1222,7 +1316,9 @@ static int airoha_qdma_init_rx_queue(str
+@@ -1266,7 +1360,9 @@ static int airoha_qdma_init_rx_queue(str
  
  	q->buf_size = lro_q ? pp_params.max_len : pp_params.max_len / 2;
  	q->ndesc = ndesc;
@@ -128,7 +134,7 @@
  
  	airoha_qdma_wr(qdma, REG_RX_RING_BASE(qid), dma_addr);
  	airoha_qdma_rmw(qdma, REG_RX_RING_SIZE(qid),
-@@ -1549,8 +1645,9 @@ static int airoha_qdma_tx_irq_init(struc
+@@ -1618,8 +1714,9 @@ static int airoha_qdma_tx_irq_init(struc
  	irq_q->size = size;
  	irq_q->qdma = qdma;
  
@@ -140,7 +146,7 @@
  
  	airoha_qdma_wr(qdma, REG_TX_IRQ_BASE(id), dma_addr);
  	airoha_qdma_rmw(qdma, REG_TX_IRQ_CFG(id), TX_IRQ_DEPTH_MASK,
-@@ -2063,6 +2160,7 @@ static int airoha_hw_init(struct platfor
+@@ -2152,6 +2249,7 @@ static int airoha_hw_init(struct platfor
  		goto error;
  
  	airoha_pse_debugfs_init(eth);
@@ -148,7 +154,7 @@
  
  	set_bit(DEV_STATE_INITIALIZED, &eth->state);
  
-@@ -2078,9 +2176,14 @@ static void airoha_hw_cleanup(struct air
+@@ -2167,9 +2265,14 @@ static void airoha_hw_cleanup(struct air
  {
  	int i;
  
@@ -163,7 +169,7 @@
  	debugfs_remove(eth->debugfs_dir);
  }
  
-@@ -4427,6 +4530,11 @@ static int airoha_probe(struct platform_
+@@ -4549,6 +4652,11 @@ static int airoha_probe(struct platform_
  	if (err)
  		goto error_netdev_free;
  
@@ -177,7 +183,7 @@
  		airoha_qdma_set(&eth->qdma[i], REG_QDMA_GLOBAL_CFG,
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -829,6 +829,7 @@
+@@ -829,6 +829,7 @@ struct airoha_eth {
  	u32 updmem_seq;
  
  	struct dentry *debugfs_dir;

@@ -21,9 +21,13 @@ quietly break ring re-arming.
 
 Signed-off-by: OpenWrt <openwrt@example.org>
 ---
+ drivers/net/ethernet/airoha/airoha_eth.c | 14 ++++++++++++++
+ 1 files changed, 14 insertions(+), 0 deletions(-)
+ drivers/net/ethernet/airoha/airoha_eth.c | 14 ++++++++++++++
+ 1 files changed, 14 insertions(+), 0 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -1281,6 +1281,20 @@ static int airoha_qdma_init_rx(struct ai
+@@ -1325,6 +1325,20 @@ static int airoha_qdma_init_rx(struct ai
  {
  	int i;
  

@@ -22,9 +22,13 @@ next boot, which is what a register-level A/B experiment needs.
 
 Signed-off-by: OpenWrt <openwrt@example.org>
 ---
+ drivers/net/ethernet/airoha/airoha_ppe_debugfs.c | 94 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 files changed, 94 insertions(+), 0 deletions(-)
+ drivers/net/ethernet/airoha/airoha_ppe_debugfs.c | 94 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 files changed, 94 insertions(+), 0 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -405,6 +405,98 @@
+@@ -405,6 +405,98 @@ static int airoha_ppe_debugfs_tb_regs_sh
  }
  DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_tb_regs);
  
@@ -123,7 +127,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  /* The first 64 words of PPE1's register block.  FE 0x0e00 is
   * PPE1_BASE + 0x200, so this window is the same one tb_regs reads a register
   * at a time: glo_cfg at +0x00, ppe_flow_cfg at +0x04, ip_proto_chk at +0x08,
-@@ -789,6 +881,8 @@
+@@ -937,6 +1029,8 @@ int airoha_ppe_debugfs_init(struct airoh
  			    &airoha_ppe_debugfs_bind_rate_fops);
  	debugfs_create_file("tb_regs", 0444, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_tb_regs_fops);

@@ -27,9 +27,13 @@ the port MIB tx packets must be 1 +/- 0.01.
 
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
+ drivers/net/ethernet/airoha/airoha_eth.c | 16 ++++++++++++++++
+ 1 files changed, 12 insertions(+), 4 deletions(-)
+ drivers/net/ethernet/airoha/airoha_eth.c | 16 ++++++++++++++++
+ 1 files changed, 12 insertions(+), 4 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -3157,12 +3157,20 @@ static int airoha_qdma_get_tx_ets_stats(
+@@ -3286,12 +3286,20 @@ static int airoha_qdma_get_tx_ets_stats(
  	cpu_tx_packets = airoha_qdma_rr(qdma, REG_CNTR_VAL(channel << 1));
  	fwd_tx_packets = airoha_qdma_rr(qdma,
  					REG_CNTR_VAL((channel << 1) + 1));

@@ -11,9 +11,13 @@ behaviour changes.
 
 Signed-off-by: OpenWrt <openwrt@example.org>
 
+ drivers/net/ethernet/airoha/airoha_eth.c | 4 ++++
+ 1 files changed, 2 insertions(+), 2 deletions(-)
+ drivers/net/ethernet/airoha/airoha_eth.c | 4 ++++
+ 1 files changed, 2 insertions(+), 2 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -1159,7 +1159,7 @@
+@@ -1203,7 +1203,7 @@ static int airoha_qdma_rx_napi_poll(stru
  		done += cur;
  	} while (cur && done < budget);
  
@@ -22,7 +26,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  		struct airoha_qdma *qdma = q->qdma;
  		int i, qid = q - &qdma->q_rx[0];
  		int intr_reg = qid < RX_DONE_HIGH_OFFSET ? QDMA_INT_REG_IDX1
-@@ -1480,7 +1480,7 @@
+@@ -1524,7 +1524,7 @@ unlock:
  				IRQ_CLEAR_LEN_MASK, (done & 0x7f));
  	}
  

@@ -70,9 +70,17 @@ after 9905, and 9904 would sort before it.
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 
+ drivers/net/ethernet/airoha/airoha_eth.h | 16 ++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_ppe.c | 84 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_ppe_debugfs.c | 138 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 238 insertions(+), 0 deletions(-)
+ drivers/net/ethernet/airoha/airoha_eth.h | 16 ++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_ppe.c | 84 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_ppe_debugfs.c | 138 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 238 insertions(+), 0 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -568,6 +568,14 @@
+@@ -568,6 +568,14 @@ struct airoha_flow_data {
  	struct {
  		u16 sid;
  		u8 num;
@@ -87,7 +95,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	} pppoe;
  
  	/* Meter group requested by a tc police action, or
-@@ -918,6 +926,14 @@
+@@ -918,6 +926,14 @@ bool airoha_is_valid_gdm_dev(struct airo
  
  extern struct mutex flow_offload_mutex;
  
@@ -104,7 +112,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  {
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -68,6 +68,34 @@
+@@ -67,6 +67,34 @@ module_param_named(pppoe_vlan_refuse, ai
  MODULE_PARM_DESC(pppoe_vlan_refuse,
  		 "Refuse PPPoE-over-VLAN flows the PPE cannot express instead of programming a wrong entry");
  
@@ -139,7 +147,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  static const struct rhashtable_params airoha_flow_table_params = {
  	.head_offset = offsetof(struct airoha_flow_table_entry, node),
  	.key_offset = offsetof(struct airoha_flow_table_entry, cookie),
-@@ -1036,6 +1064,30 @@
+@@ -1035,6 +1063,30 @@ static int airoha_ppe_foe_entry_prepare(
  		val |= AIROHA_FOE_IB1_BIND_TTL;
  	hwe->ib1 = val;
  
@@ -170,7 +178,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	val = FIELD_PREP(AIROHA_FOE_IB2_PORT_AG, 0x1f);
  	if (netdev) {
  		struct airoha_wdma_info info = {};
-@@ -1159,6 +1211,14 @@
+@@ -1158,6 +1210,14 @@ static int airoha_ppe_foe_entry_prepare(
  		l2->etype |= !data->vlan.num ? BIT(15) : 0;
  	} else if (data->pppoe.num) {
  		l2->etype = ETH_P_PPP_SES;
@@ -185,7 +193,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	}
  
  	return 0;
-@@ -1702,6 +1762,22 @@
+@@ -1701,6 +1761,22 @@ airoha_ppe_foe_commit_subflow_entry(stru
  	if (!hwe_p)
  		return -EINVAL;
  
@@ -208,7 +216,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	f = kzalloc_obj(*f, GFP_ATOMIC);
  	if (!f)
  		return -ENOMEM;
-@@ -2076,6 +2152,14 @@
+@@ -2075,6 +2151,14 @@ static int airoha_ppe_flow_offload_repla
  
  	flow_rule_match_meta(rule, &meta);
  
@@ -225,7 +233,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -508,9 +508,147 @@
+@@ -518,9 +518,147 @@ static int airoha_ppe_debugfs_meter_show
  }
  DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_meter);
  

@@ -1,6 +1,12 @@
+ drivers/net/ethernet/airoha/airoha_eth.c | 16 ++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_regs.h | 2 ++
+ 2 files changed, 13 insertions(+), 5 deletions(-)
+ drivers/net/ethernet/airoha/airoha_eth.c | 16 ++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_regs.h | 2 ++
+ 2 files changed, 13 insertions(+), 5 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -1164,13 +1164,16 @@ static int airoha_qdma_rx_napi_poll(stru
+@@ -1208,13 +1208,16 @@ static int airoha_qdma_rx_napi_poll(stru
  		int i, qid = q - &qdma->q_rx[0];
  		int intr_reg = qid < RX_DONE_HIGH_OFFSET ? QDMA_INT_REG_IDX1
  							 : QDMA_INT_REG_IDX2;
@@ -18,7 +24,7 @@
  		}
  	}
  
-@@ -1877,16 +1880,19 @@ static irqreturn_t airoha_irq_handler(in
+@@ -1947,16 +1950,19 @@ static irqreturn_t airoha_irq_handler(in
  	if (!test_bit(DEV_STATE_INITIALIZED, &qdma->eth->state))
  		return IRQ_NONE;
  

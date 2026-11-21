@@ -29,9 +29,19 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  drivers/net/ethernet/airoha/airoha_regs.h         |  6 ++++++
  4 files changed, 57 insertions(+), 1 deletions(-)
 
+ drivers/net/ethernet/airoha/airoha_eth.h | 5 +++++
+ drivers/net/ethernet/airoha/airoha_ppe.c | 34 ++++++++++++++++++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_ppe_debugfs.c | 13 +++++++++++++
+ drivers/net/ethernet/airoha/airoha_regs.h | 6 ++++++
+ 4 files changed, 57 insertions(+), 1 deletions(-)
+ drivers/net/ethernet/airoha/airoha_eth.h | 5 +++++
+ drivers/net/ethernet/airoha/airoha_ppe.c | 34 ++++++++++++++++++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_ppe_debugfs.c | 13 +++++++++++++
+ drivers/net/ethernet/airoha/airoha_regs.h | 6 ++++++
+ 4 files changed, 57 insertions(+), 1 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -854,6 +854,11 @@
+@@ -862,6 +862,11 @@ struct airoha_ppe {
  	struct airoha_ppe_meter meter[AIROHA_PPE_METER_NUM];
  	bool meter_enabled;
  
@@ -45,11 +55,10 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -100,6 +100,17 @@
- {
+@@ -128,6 +128,17 @@ bool airoha_ppe_6rd_enabled(void)
  	return airoha_ppe_6rd;
  }
-+
+ 
 +/* 802.1ad/QinQ: the PPE has a programmable VLAN TPID (REG_PPE_VLAN_TPID),
 + * but pushing a 0x88a8 tag through the hardware is not verified, so the
 + * support is opt-in.  The parameter belongs to the airoha_eth module; when
@@ -60,10 +69,11 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +module_param(airoha_ppe_qinq, bool, 0444);
 +MODULE_PARM_DESC(airoha_ppe_qinq,
 +		 "Enable 802.1ad/QinQ TPID support in the PPE flow path");
- 
++
  /* -1: use the kernel bridge_input signal (default)
   *  0: force "routed" (TTL decrement) for A/B testing
-@@ -2386,6 +2397,18 @@
+  *  1: force "L2-bridged" (no TTL decrement) for A/B testing
+@@ -2461,6 +2472,18 @@ static void airoha_ppe_foe_entry_set_6rd
  		hwe->ib1 |= AIROHA_FOE_IB1_BIND_TUNNEL_DECAP;
  }
  
@@ -82,7 +92,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
  					   struct flow_cls_offload *f)
  {
-@@ -2501,7 +2524,7 @@
+@@ -2585,7 +2608,7 @@ static int airoha_ppe_flow_offload_repla
  			break;
  		case FLOW_ACTION_VLAN_PUSH:
  			if (data.vlan.num == 2 ||
@@ -91,7 +101,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  				return -EOPNOTSUPP;
  
  			data.vlan.hdr[data.vlan.num].id = act->vlan.vid;
-@@ -3283,6 +3306,12 @@
+@@ -3369,6 +3392,12 @@ int airoha_ppe_init(struct airoha_eth *e
  	if (err)
  		goto error_l2_flow_table_destroy;
  
@@ -104,18 +114,17 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	return 0;
  
  error_l2_flow_table_destroy:
-@@ -3312,4 +3341,7 @@
+@@ -3398,4 +3427,7 @@ void airoha_ppe_deinit(struct airoha_eth
  	rhashtable_destroy(&eth->ppe->l2_flows);
  	rhashtable_destroy(&eth->flow_table);
  	debugfs_remove(eth->ppe->debugfs_dir);
--}
 +
 +	if (airoha_ppe_qinq)
 +		airoha_fe_wr(eth, REG_PPE_VLAN_TPID, eth->ppe->vlan_tpid);
-+}
+ }
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -751,6 +751,17 @@
+@@ -895,6 +895,17 @@ static int airoha_ppe_debugfs_mcast_show
  }
  DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_mcast);
  
@@ -133,30 +142,27 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  {
  	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-@@ -779,6 +790,8 @@
+@@ -927,6 +938,8 @@ int airoha_ppe_debugfs_init(struct airoh
  
  	debugfs_create_file("flush", 0200, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_flush_fops);
--
--	return 0;
--}
 +	debugfs_create_file("tpid", 0444, ppe->debugfs_dir, ppe,
 +			    &airoha_ppe_debugfs_tpid_fops);
-+
-+	return 0;
-+}
+ 
+ 	return 0;
+ }
 --- a/drivers/net/ethernet/airoha/airoha_regs.h
 +++ b/drivers/net/ethernet/airoha/airoha_regs.h
-@@ -356,6 +356,12 @@
- #define REG_PPE_MTU_BASE(_n)			(((_n) ? PPE2_BASE : PPE1_BASE) + 0x304)
+@@ -357,6 +357,12 @@
  #define REG_PPE_MTU(_m, _n)			(REG_PPE_MTU_BASE(_m) + (((_n) / 2) << 2))
  #define FP_EGRESS_MTU_MASK(_n)			GENMASK(13 + (((_n) % 2) << 4), ((_n) % 2) << 4)
-+
+ 
 +/* TPID the PPE recognises as a VLAN tag; both PPE instances share it.  It
 + * lives in the PPE1 block at 0x1fb50f18 on the AN7581 and is 16 bits wide.
 + */
 +#define REG_PPE_VLAN_TPID			(PPE1_BASE + 0x318)
 +#define PPE_VLAN_TPID_MASK			GENMASK(15, 0)
- 
++
  #define REG_PPE_RAM_CTRL(_n)			(((_n) ? PPE2_BASE : PPE1_BASE) + 0x31c)
  #define PPE_SRAM_CTRL_ACK_MASK			BIT(31)
+ #define PPE_SRAM_CTRL_DUAL_SUCESS_MASK		BIT(30)

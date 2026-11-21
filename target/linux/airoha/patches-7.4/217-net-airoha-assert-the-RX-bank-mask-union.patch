@@ -23,9 +23,11 @@ coverage fails to compile.  No functional change.
 Signed-off-by: OpenWrt <openwrt@example.org>
 ---
 
+ drivers/net/ethernet/airoha/airoha_eth.c | 19 +++++++++++++++++++
+ 1 files changed, 19 insertions(+), 0 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -1913,6 +1913,25 @@
+@@ -1957,6 +1957,25 @@ static int airoha_qdma_init_irq_banks(st
  	struct airoha_eth *eth = qdma->eth;
  	int i, id = qdma - &eth->qdma[0];
  

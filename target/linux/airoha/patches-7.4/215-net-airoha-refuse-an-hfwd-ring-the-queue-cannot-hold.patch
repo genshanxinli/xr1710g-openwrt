@@ -19,9 +19,13 @@ zero-length descriptor array and leaves the queue with no descriptors at all.
 
 Signed-off-by: OpenWrt <openwrt@example.org>
 ---
+ drivers/net/ethernet/airoha/airoha_eth.c | 6 ++++++
+ 1 files changed, 6 insertions(+), 0 deletions(-)
+ drivers/net/ethernet/airoha/airoha_eth.c | 6 ++++++
+ 1 files changed, 6 insertions(+), 0 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -1683,6 +1683,12 @@ static int airoha_qdma_init_hfwd_queues(
+@@ -1727,6 +1727,12 @@ static int airoha_qdma_init_hfwd_queues(
  		 * reserved memory size and the payload buffer size
  		 */
  		num_desc = div_u64(rmem->size, buf_size);
