@@ -18,6 +18,8 @@
 #     description for another board -- are 74 (notify_firmware_broken) and
 #     forceable=0, so -F cannot bypass those
 #     (target/linux/airoha/an7581/base-files/lib/upgrade/platform.sh:48-62).
+#     A major compat_version mismatch is 74 as well (lib/upgrade/fwtool.sh),
+#     which is what makes issue #7 a real gate rather than a suggestion.
 #     Everything else can be forced.  This gate therefore treats -F as a
 #     separate, explicit decision: it is refused unless --i-know is also given,
 #     and it is still refused when the backup did not succeed.
@@ -379,16 +381,28 @@ if [ "$PROBE" = 0 ]; then
 		if command -v sysupgrade >/dev/null 2>&1; then
 			sysupgrade -T "$IMAGE" >"$WORK/sysupgrade-T.log" 2>&1
 			SRC=$?
+			# Never assume that a rejected image is forceable: with --force,
+			# ask the validator again with -F and let it decide.  A major
+			# compat version mismatch (UBI layout 1.x vs 2.0) is reported as
+			# notify_firmware_broken, so `-T -F` still exits 1 there and this
+			# row fails (issue #7).  -T never writes to flash.
+			SRC_FORCED=1
+			[ "$FORCE" = 1 ] && {
+				sysupgrade -T -F "$IMAGE" >"$WORK/sysupgrade-TF.log" 2>&1
+				SRC_FORCED=$?
+			}
 			if [ "$SRC" = 0 ]; then
 				row sysupgrade.T 0 "$SRC" PASS
-			elif [ "$FORCE" = 1 ] && [ "$SRC" = 1 ]; then
-				# forceable=1: -F would let this through -- but only with
-				# --i-know, which the consent row above already required.
+			elif [ "$FORCE" = 1 ] && [ "$SRC_FORCED" = 0 ]; then
+				# forceable=1 (missing signature, unknown board): -F lets it
+				# through, but only with --i-know, which the consent row above
+				# already required.
 				row sysupgrade.T 0 "$SRC (forceable)" PASS
 				err "note: sysupgrade -T rejected the image, proceeding because --force --i-know was given"
 			else
 				row sysupgrade.T 0 "$SRC" FAIL
 				sed 's/^/    /' "$WORK/sysupgrade-T.log" >&2
+				[ "$FORCE" = 1 ] && sed 's/^/    /' "$WORK/sysupgrade-TF.log" >&2
 				die "$EXIT_IMAGE" "sysupgrade -T rejected the image and -F cannot override this rejection"
 			fi
 		else

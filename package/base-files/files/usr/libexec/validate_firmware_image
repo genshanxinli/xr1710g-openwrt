@@ -45,7 +45,20 @@ FWTOOL_SIGNATURE=$?
 
 fwtool_check_image "$1" >&2
 FWTOOL_DEVICE_MATCH=$?
-[ "$FWTOOL_DEVICE_MATCH" -ne 0 ] && notify_firmware_invalid
+# 74 = a major compat version mismatch: the image was built for a different
+# partition layout (UBI 1.x vs 2.0), which is a soft brick, not a decision the
+# operator gets to force past.  The other failures fwtool_check_image reports
+# (no signature, no metadata, board not in the image) stay forceable.
+case "$FWTOOL_DEVICE_MATCH" in
+0)
+	;;
+74)
+	notify_firmware_broken
+	;;
+*)
+	notify_firmware_invalid
+	;;
+esac
 
 json_set_namespace validate_firmware_image old_ns
 json_init
