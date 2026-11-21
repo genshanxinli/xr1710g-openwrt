@@ -27,10 +27,12 @@
 # --baseline adds the part a number needs to be citable: a label, a
 # free-form environment note, one static snapshot of the link (speed,
 # duplex, driver), the offload features, the flowtable stanza and the
-# kernel, plus CPU busy seconds per direction.  It writes baseline.md
-# next to result.json with a paste-ready claims.yaml entry, and the entry
-# states the measured link speed, so a 1G run can never be quoted as a
-# 10G baseline.
+# kernel, plus CPU busy seconds per direction.  The citable record is
+# result.json itself (schema bench-10g-unidirectional/v1): --baseline only
+# widens it with an "environment" section, and prints a paste-ready
+# claims.yaml entry whose source is that file.  The entry states the
+# measured link speed, so a 1G run can never be quoted as a 10G baseline.
+# No document is written: this repo keeps measurements in result.json.
 #
 # --peer-connects makes the box under test the passive end: it runs
 # "iperf3 -s -1 -J" and the peer drives the traffic.  The box under test
@@ -132,11 +134,14 @@ Optional inputs:
 Options:
   --baseline                  also record the environment (link speed,
                               duplex, driver, offload features, flowtable
-                              stanza, kernel, CPU count) in snapshots/env/,
-                              and write baseline.md with a paste-ready
-                              claims.yaml entry naming the measured link
-                              speed.  Needed before a number may be
-                              quoted as a result.
+                              stanza, kernel, CPU count) in snapshots/env/
+                              and in the "environment" section of
+                              result.json, then print a paste-ready
+                              claims.yaml entry whose source is
+                              result.json:1 and which names the measured
+                              link speed.  Needed before a number may be
+                              quoted as a result.  Nothing is written
+                              besides result.json and its captures.
   --peer-connects             the box under test is the passive end: it
                               runs "iperf3 -s -1 -J -p PORT" twice (once
                               per direction) and the peer runs
@@ -202,10 +207,7 @@ direction, because none of it changes during the run:
 Output directory:
   raw.log                chronological command log
   result.json            machine-readable result (schema
-                         bench-10g-unidirectional/v1)
-  baseline.md            --baseline only: the citable record, with a
-                         paste-ready claims.yaml entry that names the
-                         measured link speed
+                         bench-10g-unidirectional/v1); the citable record
   iperf3-tx.json         raw iperf3 JSON for the TX run
   iperf3-rx.json         raw iperf3 JSON for the RX run
   snapshots/{tx,rx}-{before,after}/
@@ -1007,11 +1009,13 @@ emit_direction() {
 	printf '"error":%s}\n' "$_err"
 }
 
-# --baseline: the citable record.  Every number here is read back out of
-# the capture files of this run (never from the terminal), and every line
-# that qualifies a number is printed next to it, so a reader can tell a 1G
-# measurement from a 10G one without asking.
-emit_baseline_md() {
+# --baseline: the citable record, printed to stdout on top of result.json.
+# Every number here is read back out of the capture files of this run
+# (never from the terminal), and every line that qualifies a number is
+# printed next to it, so a reader can tell a 1G measurement from a 10G one
+# without asking.  Nothing is written to a file: result.json is the record,
+# because this repo keeps measurements as data, not as prose documents.
+emit_baseline_summary() {
 	_tx_st=$1
 	_rx_st=$2
 	_edir=$(snapshot_dir env)
@@ -1099,11 +1103,11 @@ emit_baseline_md() {
 
 	_label_esc=$(json_escape "$LABEL")
 	_id=$(printf '%s' "$LABEL" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9._-]/-/g')
-	printf '# baseline %s\n\n' "$_label_esc"
+	printf 'baseline %s\n\n' "$_label_esc"
 	printf 'Recorded by scripts/bench-10g-unidirectional.sh --baseline on %s.\n' "$_ts"
-	printf 'This file is the citable record: every number below was read back\n'
-	printf 'out of the capture files of this run, and every qualifier next to it\n'
-	printf 'comes from the same capture.\n\n'
+	printf 'result.json in this directory is the citable record: every number\n'
+	printf 'below was read back out of the capture files of this run, and every\n'
+	printf 'qualifier next to it comes from the same capture.\n\n'
 	printf '| field | value |\n| --- | --- |\n'
 	printf '| label | %s |\n' "$_label_esc"
 	printf '| recorded at (UTC) | %s |\n' "$_ts"
@@ -1258,13 +1262,14 @@ emit_baseline_md() {
 		printf -- '- `snapshots/env/%s`\n' "$_f"
 	done
 	printf -- '- `iperf3-tx.json`, `iperf3-rx.json` (raw iperf3 JSON)\n'
-	printf -- '- `result.json` (parsed result, schema bench-10g-unidirectional/v1)\n'
+	printf -- '- `result.json` (the record, schema bench-10g-unidirectional/v1)\n'
 	printf -- '- `raw.log` (every command, in order)\n'
 
 	printf '\n## paste-ready claims.yaml entry\n\n'
-	printf 'Commit this file as `scripts/perf-baselines/%s.md` before citing it;\n' \
+	printf 'Copy the directory under scripts/perf-baselines/%s/ as is, so the\n' \
 		"$_label_esc"
-	printf '`source` must point at a committed line.\n\n'
+	printf 'source line below resolves in a checkout.  result.json is the record:\n'
+	printf 'no summary document is written, and none should be added.\n\n'
 	printf '```yaml\n'
 	printf '  - id: baseline-%s\n' "$_id"
 	printf '    claim: "在本仓库 iperf3 基线上（%s Mb/s 链路，%s 驱动，flowtable\n' \
@@ -1273,7 +1278,7 @@ emit_baseline_md() {
 		"$_ft_hw" "$_gbps_tx" "$_gbps_rx"
 	printf '      对应 CPU busy 见记录。"\n'
 	printf '    source:\n'
-	printf '      - "scripts/perf-baselines/%s.md:1"\n' "$_label_esc"
+	printf '      - "scripts/perf-baselines/%s/result.json:1"\n' "$_label_esc"
 	printf '    evidence: 实测\n'
 	printf '    date: "%s"\n' "$(date -u +%Y-%m-%d)"
 	printf '    status: supported\n'
@@ -1384,8 +1389,9 @@ dry_run_plan() {
 	printf '  %s/result.json\n' "$RESULT_DIR"
 	printf '  %s/raw.log\n' "$RESULT_DIR"
 	if [ "$BASELINE" = 1 ]; then
-		printf '  %s/baseline.md   # citable record, paste-ready claims.yaml entry\n' \
+		printf '  %s/result.json  # citable record: schema, environment, per-direction\n' \
 			"$RESULT_DIR"
+		printf '  (no other record file is written; the claims.yaml entry is printed)\n'
 	fi
 }
 
@@ -1703,20 +1709,15 @@ mv "$RESULT_DIR/result.json.tmp" "$RESULT_DIR/result.json" ||
 	die "cannot move result.json into place"
 rm -rf "$TMPDIR_RUN"
 
-if [ "$BASELINE" = 1 ]; then
-	# the citable record is written last, so it can only ever describe a
-	# run whose result.json already exists.
-	emit_baseline_md "$tx_status" "$rx_status" \
-		>"$RESULT_DIR/baseline.md.tmp" ||
-		die "cannot write $RESULT_DIR/baseline.md.tmp"
-	mv "$RESULT_DIR/baseline.md.tmp" "$RESULT_DIR/baseline.md" ||
-		die "cannot move baseline.md into place"
-fi
-
 printf '\nTX: exit %s, result: %s\n' "$tx_status" "$RESULT_DIR/result.json"
 printf 'RX: exit %s, raw log: %s\n' "$rx_status" "$RAW_LOG"
 if [ "$BASELINE" = 1 ]; then
-	printf 'baseline record: %s/baseline.md\n' "$RESULT_DIR"
+	# printed last, so the summary can only ever describe a run whose
+	# result.json already exists; nothing extra is written to disk.
+	printf '\n'
+	emit_baseline_summary "$tx_status" "$rx_status"
+	printf '\nbaseline record: %s/result.json (no other file is written)\n' \
+		"$RESULT_DIR"
 fi
 
 _rc=0

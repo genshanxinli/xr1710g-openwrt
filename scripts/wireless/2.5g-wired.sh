@@ -26,10 +26,26 @@
 # firewall, and a blocking host firewall makes an arm fail rather than
 # silently measure zero.
 #
-# A host NIC that is absent or not at 2500 Mb/s, or a device port that is
-# absent or not at 2500 Mb/s, is a clean skip:
+# The device port is auto-detected: the first physical netdev that
+# advertises 2500baseT, preferring lan2 then wan.  Pass --dev-lan10g-if /
+# --dev-wan10g-if to override.
+#
+# A host NIC that is absent or not at 2500 Mb/s, or a detected device port
+# whose link is not at 2500 Mb/s, is a clean skip:
 #
 #   SKIP: no 2.5G link
+#
+# A missing precondition, rather than a slow link, is reported the same way
+# (exit 0, nothing measured) but with its own greppable first word:
+#
+#   BLOCKED: no device port advertises 2500baseT
+#   BLOCKED: lan2 is in br-lan
+#
+# The second one is the common case on a base tree: lan2 is a br-lan member
+# by default, and a bridged port is not a usable 2.5G data port.  This
+# script never edits a bridge, a UCI file or a firewall: it prints the
+# exact commands an operator has to run, and --detach-from-bridge prints
+# that plan without attempting the measurement.
 
 set -u
 
@@ -39,8 +55,17 @@ SSH_OPTS=${SSH_OPTS:--o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval
 
 DEVICE=${DEVICE:-root@192.168.1.1}
 DEVICE_IP=
-DEV_LAN_IF=lan10g
-DEV_WAN_IF=wan10g
+# Empty means "auto-detect on the device": the selected port is the first
+# physical netdev that advertises 2500baseT, preferring lan2 then wan
+# (the base-tree names of the two 10G RJ45 ports).  lan10g/wan10g are
+# lab-image names and do not exist on a stock/base tree.
+DEV_LAN_IF=${DEV_LAN_IF:-}
+DEV_WAN_IF=${DEV_WAN_IF:-}
+DEV_CANDIDATES=
+# Device-side sysfs root.  /sys on a real unit; an offline test (or an
+# image mounted for inspection) can point it elsewhere.  Read only.
+DEV_SYSFS=${DEV_SYSFS:-/sys}
+DETACH_FROM_BRIDGE=0
 PORTS=both
 SEL_PORTS=
 HOST_LAN_IF=
@@ -121,13 +146,23 @@ Device selection:
   --device USER@IPV4         SSH target on the management network (lan3
                              by convention; default: root@192.168.1.1,
                              env DEVICE)
-  --dev-lan10g-if NAME       device netdev for the 10G LAN port (default:
-                             lan10g).  A lab image exposes it as lan10g; the
-                             base tree names it lan2, which sits in br-lan
-                             and is refused here as a data port.
+  --dev-lan10g-if NAME       device netdev for the 10G LAN port.  Omitted
+                             means auto-detected: the first physical netdev
+                             whose ethtool link modes include 2500baseT,
+                             preferring lan2.  The base tree names this port
+                             lan2 and keeps it in br-lan, which is a
+                             precondition, not a failure; see
+                             --detach-from-bridge below.
   --dev-wan10g-if NAME       device netdev for the 10G WAN port (default:
-                             wan10g; the base tree names it wan).
-  --ports both|lan10g|wan10g ports to test (default: both)
+                             auto-detected, wan preferred).
+  --ports both|lan10g|wan10g ports to test (default: both).  The labels are
+                             historical: lan10g/wan10g mean the LAN and the
+                             WAN 2.5G RJ45 port, whatever the netdev is
+                             really called.
+  --detach-from-bridge       do not measure.  Print the exact commands that
+                             move the detected port out of br-lan, and the
+                             ones that put it back, then exit 0.  This
+                             script never runs them.
 
 Bench-host NICs (one per selected device port):
   --host-lan10g-if NAME      host 2.5G NIC cabled to lan10g
@@ -169,6 +204,16 @@ cabled to it.  Otherwise it exits 0 with exactly:
 
   SKIP: no 2.5G link
 
+A missing precondition is not a slow link and is reported separately, also
+with exit 0 because nothing was measured and nothing failed:
+
+  BLOCKED: no device port advertises 2500baseT
+  BLOCKED: <port> is in br-lan
+
+The second one prints the commands that clear it; this script changes no
+bridge, no UCI and no firewall, so the operator runs them (or asks for the
+plan with --detach-from-bridge).
+
 Missing ssh, ethtool, ip or awk is an error, not a skip; iperf3 is
 required once a 2.5G link is present.  The bench host must accept inbound
 traffic to the temporary /32 addresses on its data NICs; no host or
@@ -197,8 +242,10 @@ Examples:
   sudo ./scripts/wireless/2.5g-wired.sh --device root@192.168.1.1 \
       --ports lan10g --host-lan10g-if enp9s0 --proto tcp
 
-  # Base-tree names: wan is usable, but lan2 is inside br-lan and is
-  # refused; the lab image must expose the 10G LAN port outside the bridge.
+  # Base-tree names: wan is usable as-is; lan2 is inside br-lan.  Ask what
+  # it would take to use lan2, then run the printed commands yourself.
+  ./scripts/wireless/2.5g-wired.sh --ports lan10g --host-lan10g-if enp9s0 \
+      --detach-from-bridge
   sudo ./scripts/wireless/2.5g-wired.sh --ports wan10g \
       --dev-wan10g-if wan --host-wan10g-if enp10s0
 EOF
@@ -223,6 +270,15 @@ skip_no_link() {
 	# Keep this line exact: the issue and callers grep it.
 	[ $# -eq 0 ] || note "$1"
 	printf 'SKIP: no 2.5G link\n'
+	exit 0
+}
+
+blocked() {
+	# blocked MESSAGE [DETAIL]
+	# A precondition that is missing, rather than a link that is slow.
+	# Nothing was measured, so nothing failed: still exit 0.
+	[ $# -lt 2 ] || note "$2"
+	printf 'BLOCKED: %s\n' "$1"
 	exit 0
 }
 
@@ -329,12 +385,43 @@ dev_have() {
 }
 
 dev_iface_exists() {
-	ssh_dev "test -e /sys/class/net/$1"
+	ssh_dev "test -e $DEV_SYSFS/class/net/$1"
 }
 
 dev_master() {
-	ssh_dev "if [ -e /sys/class/net/$1/master ]; then readlink /sys/class/net/$1/master 2>/dev/null || printf 'bridge\n'; fi" |
+	# -L as well as -e: kernel sysfs always has a resolvable target, but an
+	# offline fake tree or a mounted image may hold the symlink alone.
+	ssh_dev "if [ -L $DEV_SYSFS/class/net/$1/master ] || [ -e $DEV_SYSFS/class/net/$1/master ]; then readlink $DEV_SYSFS/class/net/$1/master 2>/dev/null || printf 'bridge\n'; fi" |
 		sed 's#.*/##'
+}
+
+dev_phys_ports() {
+	# Physical device netdevs whose ethtool link modes mention 2500baseT,
+	# in preference order: lan2, then wan, then the rest.  One SSH round
+	# trip, ethtool and grep only: no bridge, UCI or firewall is touched.
+	# Every $-name below belongs to the remote shell, not to this one, and
+	# DEV_SYSFS is expanded here on purpose so an offline test can point it
+	# at a fake tree.
+	# shellcheck disable=SC2029
+	ssh_dev "for d in $DEV_SYSFS/class/net/*; do
+		i=\${d##*/}
+		case \$i in
+		lo|br-*|wl*|wlan*|phy*|veth*|docker*|virbr*|tun*|tap*|wg*|tailscale*|ppp*|ifb*|bond*|sit*|ip6tnl*|nss*)
+			continue
+			;;
+		esac
+		ethtool \"\$i\" 2>/dev/null | grep -q 2500baseT || continue
+		printf '%s\n' \"\$i\"
+	done" | awk '
+		{ if ($0 == "lan2") pre = $0; else if ($0 == "wan") wan = $0
+		  else rest = rest " " $0 }
+		END {
+			if (pre != "") print pre
+			if (wan != "") print wan
+			n = split(rest, r, " ")
+			for (i = 1; i <= n; i++)
+				if (r[i] != "") print r[i]
+		}'
 }
 
 dev_speed() {
@@ -550,6 +637,103 @@ label_dev_if() {
 	esac
 }
 
+set_dev_if() {
+	# set_dev_if LABEL IFACE
+	case $1 in
+	lan10g) DEV_LAN_IF=$2 ;;
+	wan10g) DEV_WAN_IF=$2 ;;
+	esac
+}
+
+detach_plan() {
+	local label dev_if master dev_ip host_ip cleared=0
+
+	printf 'DETACH PLAN: what a 2.5G run needs before it can measure\n'
+	printf 'device: %s; nothing is executed here, no bridge is changed\n' \
+		"$DEVICE"
+	for label in $SEL_PORTS; do
+		dev_if=$(label_dev_if "$label")
+		case $label in
+		lan10g) dev_ip=$LAN_DEV_IP; host_ip=$LAN_HOST_IP ;;
+		wan10g) dev_ip=$WAN_DEV_IP; host_ip=$WAN_HOST_IP ;;
+		esac
+		printf '\n'
+		printf 'port %s: dev_iface=%s dev_ip=%s host_ip=%s\n' \
+			"$label" "$dev_if" "$dev_ip" "$host_ip"
+		if [ -z "$dev_if" ]; then
+			printf 'port %s: <not resolved: pass --dev-%s-if>\n' "$label" "$label"
+			continue
+		fi
+		master=$(dev_master "$dev_if")
+		if [ -z "$master" ]; then
+			printf 'port %s: %s is not in a bridge; no detach needed\n' \
+				"$label" "$dev_if"
+			continue
+		fi
+		cleared=1
+		print_bridge_plan "$dev_if" "$master"
+	done
+
+	if [ "$cleared" -eq 0 ]; then
+		printf 'nothing to detach for the selected port(s)\n'
+	fi
+	exit 0
+}
+
+print_bridge_plan() {
+	# print_bridge_plan DEV_IF BRIDGE
+	# Printed, never executed: this script does not edit a bridge, a UCI
+	# file or a firewall, so the operator runs these.
+	local dev_if="$1" bridge="$2" netif
+
+	netif=${bridge#br-}
+	printf 'precondition: %s is a member of %s; a bridged port cannot be a 2.5G data port\n' \
+		"$dev_if" "$bridge"
+	printf 'this script changes no bridge, no UCI and no firewall; run these yourself:\n'
+	printf '  # detach; not persistent: a reboot or "ifup %s" re-attaches it\n' "$netif"
+	printf '  ip link set %s down\n' "$dev_if"
+	printf '  ip link set %s nomaster\n' "$dev_if"
+	printf '  ip link set %s up\n' "$dev_if"
+	printf '  # re-attach when the measurement is done\n'
+	printf '  ip link set %s down\n' "$dev_if"
+	printf '  ip link set %s master %s\n' "$dev_if" "$bridge"
+	printf '  ip link set %s up\n' "$dev_if"
+	printf 'check first that the SSH session does not ride %s:\n' "$dev_if"
+	printf '  ssh ... "ip route get <bench host>"   # must not print "dev %s"\n' "$dev_if"
+}
+
+resolve_device_ports() {
+	# Fill DEV_LAN_IF/DEV_WAN_IF when the caller named neither or only one.
+	# A port is a candidate when its ethtool link modes mention 2500baseT;
+	# that is the only claim made here, the link itself is checked later.
+	local label other c no_port=
+
+	if [ -n "$DEV_LAN_IF" ] && [ -n "$DEV_WAN_IF" ]; then
+		return 0
+	fi
+
+	DEV_CANDIDATES=$(dev_phys_ports)
+	for label in $SEL_PORTS; do
+		[ -n "$(label_dev_if "$label")" ] && continue
+		case $label in
+		lan10g) other=$DEV_WAN_IF ;;
+		wan10g) other=$DEV_LAN_IF ;;
+		esac
+		# shellcheck disable=SC2086
+		for c in $DEV_CANDIDATES; do
+			[ "$c" = "$other" ] && continue
+			set_dev_if "$label" "$c"
+			break
+		done
+	done
+
+	for label in $SEL_PORTS; do
+		[ -n "$(label_dev_if "$label")" ] || no_port="$no_port $label"
+	done
+	[ -z "$no_port" ] || blocked "no device port advertises 2500baseT" \
+		"nothing on $DEVICE reports 2500baseT in its ethtool link modes (candidates:${DEV_CANDIDATES:+ $(printf '%s' "$DEV_CANDIDATES" | tr '\n' ' ')}); pass --dev-lan10g-if/--dev-wan10g-if for port(s)$no_port"
+}
+
 check_device() {
 	local label dev_if speed duplex master ssh_client_ip mgmt_dev
 
@@ -566,8 +750,11 @@ check_device() {
 		dev_iface_exists "$dev_if" ||
 			skip_no_link "device interface $dev_if is absent"
 		master=$(dev_master "$dev_if")
-		[ -z "$master" ] ||
-			die "device $dev_if is a member of bridge $master; the lab port must be outside the bridge (this script makes no bridge change)"
+		if [ -n "$master" ]; then
+			print_bridge_plan "$dev_if" "$master"
+			blocked "$dev_if is in $master" \
+				"$dev_if is a member of $master; detach it first (see the commands above), then run this test again"
+		fi
 		speed=$(dev_speed "$dev_if") ||
 			die "cannot run ethtool on $DEVICE:$dev_if"
 		[ "$speed" = "2500" ] ||
@@ -1218,11 +1405,13 @@ dry_run() {
 	HOST_DEFAULT_IF=$(default_route_dev)
 
 	printf 'DRY-RUN: 2.5G bidirectional wired test plan\n'
-	printf 'device: %s (SSH checked at run time; lan10g/wan10g must be 2500Mb/s)\n' \
+	printf 'device: %s (SSH checked at run time; the port must be 2500Mb/s)\n' \
 		"$DEVICE"
 	printf 'safety: no SSH, no traffic, no address/route change, no directory created\n'
-	printf 'topology: host 2.5G NIC <-> lan10g; host 2.5G NIC <-> wan10g; SSH on lan3/management; no lan10g<->wan10g cable\n'
+	printf 'topology: host 2.5G NIC <-> LAN 2.5G port; host 2.5G NIC <-> WAN 2.5G port; SSH on lan3/management; no port<->port cable\n'
 	printf 'skip: a real run prints exactly "SKIP: no 2.5G link" and exits 0 unless both ends are 2500Mb/s\n'
+	printf 'blocked: BLOCKED: no device port advertises 2500baseT, or BLOCKED: <port> is in br-lan\n'
+	printf 'blocked: both mean nothing was measured and nothing failed; each exits 0\n'
 	printf 'protocols: %s; duration=%ss parallel=%s udp_rate=%sM iperf_port=%s\n' \
 		"$PROTO" "$DURATION" "$PARALLEL" "$UDP_RATE" "$IPERF_PORT"
 
@@ -1243,6 +1432,8 @@ dry_run() {
 		lan10g) dev_if=$DEV_LAN_IF; dev_ip=$LAN_DEV_IP; host_ip=$LAN_HOST_IP ;;
 		wan10g) dev_if=$DEV_WAN_IF; dev_ip=$WAN_DEV_IP; host_ip=$WAN_HOST_IP ;;
 		esac
+		[ -n "$dev_if" ] ||
+			dev_if="<auto: first physical port advertising 2500baseT, lan2 first>"
 		printf 'port %s: dev_iface=%s dev_ip=%s host_ip=%s host_iface=%s\n' \
 			"$label" "$dev_if" "$dev_ip" "$host_ip" "$host_if"
 	done
@@ -1284,6 +1475,11 @@ parse_args() {
 			;;
 		--dry-run)
 			DRY_RUN=1
+			shift
+			continue
+			;;
+		--detach-from-bridge)
+			DETACH_FROM_BRIDGE=1
 			shift
 			continue
 			;;
@@ -1371,11 +1567,20 @@ parse_args() {
 	is_uint "$TAIL" || usage_error "--tail must be an integer"
 	[ "$TAIL" -le 60 ] || usage_error "--tail must be 0..60"
 
-	is_ifname "$DEV_LAN_IF" || usage_error "--dev-lan10g-if must be an interface name"
-	is_ifname "$DEV_WAN_IF" || usage_error "--dev-wan10g-if must be an interface name"
-	[ "$DEV_LAN_IF" != "$DEV_WAN_IF" ] ||
-		usage_error "device lan10g and wan10g must be different interfaces"
-	case $DEV_LAN_IF:$DEV_WAN_IF in
+	# An empty --dev-* is legal: the port is auto-detected on the device.
+	if [ -n "$DEV_LAN_IF" ]; then
+		is_ifname "$DEV_LAN_IF" ||
+			usage_error "--dev-lan10g-if must be an interface name"
+	fi
+	if [ -n "$DEV_WAN_IF" ]; then
+		is_ifname "$DEV_WAN_IF" ||
+			usage_error "--dev-wan10g-if must be an interface name"
+	fi
+	if [ -n "$DEV_LAN_IF" ] && [ -n "$DEV_WAN_IF" ]; then
+		[ "$DEV_LAN_IF" != "$DEV_WAN_IF" ] ||
+			usage_error "device lan10g and wan10g must be different interfaces"
+	fi
+	case ${DEV_LAN_IF:-}:${DEV_WAN_IF:-} in
 	lan3:*|*:lan3|br-lan:*|*:br-lan)
 		usage_error "lan3/br-lan is management and cannot be a data port"
 		;;
@@ -1423,12 +1628,19 @@ main() {
 	[ "$DRY_RUN" -eq 1 ] && dry_run
 
 	check_commands run
-	resolve_host_nics
+	# The device port is resolved before the host NICs: "no 2.5G data port
+	# on the device" is a precondition no host NIC can fix, and it must not
+	# be reported as a missing host link.
+	resolve_device_ports
+	[ "$DETACH_FROM_BRIDGE" -eq 1 ] && detach_plan
 
 	[ "$(id -u 2>/dev/null || printf '1')" = "0" ] ||
 		die "run as root on the bench host: temporary ip addr/route need CAP_NET_ADMIN"
 
+	# Device preconditions before host NICs: a bridged or absent data port
+	# cannot be fixed by any host NIC, and must not be reported as one.
 	check_device
+	resolve_host_nics
 
 	if [ -n "$OUT_DIR_OPT" ]; then
 		OUT_DIR=$OUT_DIR_OPT

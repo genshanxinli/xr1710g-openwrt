@@ -171,14 +171,14 @@ claims:
     notes: "issue #26 明确要求 TX/RX 分开；1G 的单向记录已提交（baseline-lan4-1g-2026-11-20），10G 链路与双向/全双工基线仍无。单向数字不能写成双向吞吐。"
 
   - id: stock-bridge-gap
-    claim: "待测目标，不是测量结果：纯 L2 桥接下 stock 固件与本移植的相对差距，本仓库没有任何一次可重放的测量。issue #3/#13 转引的 stock 约 9.4 Gbit/s、本移植约 3.2 Gbit/s 都是现场口述/转引的目标值。"
+    claim: "条件式待测命题，不是测量结果：只有当同一台 XR1710G 在纯 L2 桥接拓扑下、同一条链路、同一 iperf3 参数上分别跑 stock 固件与本移植，并且两个方向各得到一份 result.json（TX 与 RX 分开，绝不并发）时，「stock 与本移植的桥接吞吐差距」才成立；本仓库没有任何一对这样的测量，因此不主张任何比值。issue #3/#13 转引的 stock 约 9.4 Gbit/s、本移植约 3.2 Gbit/s 都是现场口述/转引的目标值，无论单向还是双向都不能放在结果位置。"
     source:
       - https://github.com/genshanxinli/xr1710g-openwrt/issues/3
       - https://github.com/genshanxinli/xr1710g-openwrt/issues/13
     evidence: 推断
     date: "2026-11-15"
     status: unverified
-    notes: "两个数字都不许放在结果位置。原因：本机只有 1000 Mb/s 的 lan4（lan2/wan carrier 0），没有 2.5G/10G 对端，也没有 stock 固件在这台机器上运行；1G 链路上的实测见 baseline-lan4-1g-2026-11-20（0.x Gbit/s），与 9.4/3.2 不可比，也不能据此推算 10G 比值。"
+    notes: "补齐这条需要的两件外部条件，本机都拿不到：(1) stock 固件镜像——本机无法取得，手上只有本移植的构建产物；(2) 能承载 2.5G/10G 的对端与对等端口——本机只有 1000 Mb/s 的 lan4，lan2/wan 的 carrier 为 0，也没有 2.5G USB 网卡。因此 stock 侧数据不可得，本条保持 unverified。已有的 1G 单向实测见 baseline-lan4-1g-2026-11-20（TX 0.704 / RX 0.887 Gbit/s），它是本移植单侧记录，与 9.4/3.2 既不可比，也不能据此推算 10G 比值或双向吞吐。"
 
   - id: baseline-lan4-1g-2026-11-20
     claim: "1000 Mb/s lan4 链路上，本移植单向 iperf3 吞吐为 TX 0.704 Gbit/s、RX 0.887 Gbit/s；该次流量没有被 PPE 绑定（bound_delta 0），按软件路径处理，CPU busy 约 9.5%（TX）/37.9%（RX）占墙钟。"
