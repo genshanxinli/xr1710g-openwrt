@@ -374,14 +374,15 @@ claims:
   - id: flash-gate-exit-table
     claim: "G0 门禁的「不行」是 6 个值的封闭表：0 通过、2 用法缺失、3 无 -i-know 的 -F、4 布局或镜像不匹配、5 备份失败、6 sysupgrade -T 拒收。scripts/tests/test_flash_gate_exitcodes.sh 给每个码跑一个情境，并把 EXIT_* 常量、--help 里的表、实测退出码三者交叉核对；renumber 或漏进 help 都会让它红。"
     source:
-      - scripts/flash-gate.sh:72
-      - scripts/flash-gate.sh:76
+      - scripts/flash-gate.sh:74
+      - scripts/flash-gate.sh:78
       - scripts/tests/test_flash_gate_exitcodes.sh:93
     evidence: 实测
     date: "2026-11-21"
     status: supported
     notes: "6 个情境都是离线 fixture（stub dd/sysupgrade/fwtool，合成 /proc/mtd 与分区块），不碰真机；-F 之后 code 74 是否仍存活由别处验证，这里只证明退出码可枚举。sysupgrade -T 的 rc=1 由 stub 注入，真机的 rc=1 未在本轮复现。"
     verify:
-      - "text: scripts/flash-gate.sh:72 EXIT_USAGE=2"
-      - "text: scripts/flash-gate.sh:76 EXIT_IMAGE=6"
+      - "text: scripts/flash-gate.sh:74 EXIT_USAGE=2"
+      - "text: scripts/flash-gate.sh:75 EXIT_FORCE=3"
+      - "text: scripts/flash-gate.sh:78 EXIT_IMAGE=6"
       - "text: scripts/tests/test_flash_gate_exitcodes.sh:93 TABLE_CONST=$(printf '0"
