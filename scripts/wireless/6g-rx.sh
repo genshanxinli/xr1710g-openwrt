@@ -57,9 +57,16 @@
 #   PROC_INTERRUPTS  path to an interrupts snapshot  (default /proc/interrupts)
 #   DEBUGFS          debugfs mount point             (default /sys/kernel/debug)
 #
-# Exit status: 0 measurement ran or the run was a clean SKIP; 1 the source
-# or measurement failed, or the config restore failed; 2 invalid arguments
-# or an impossible setup.
+# band_bytes is optional in the kernel.  When the mt76 debugfs tree has no
+# band_bytes file, the per-band A-MPDU measurement is recorded as UNKNOWN
+# (result.json: "band_bytes_unavailable": true) and the run is not ok: a
+# counter nobody could read must never be reported as a measured zero.
+#
+# Exit status: 0 the measurement ran and every counter it needs was read, or
+# the run was a clean SKIP (no iperf3, no 6G-only BSS, no STA source); 1 the
+# source or measurement failed, the measurement is incomplete (band_bytes
+# absent, A-MPDU byte counter unreadable), or the config restore failed;
+# 2 invalid arguments or an impossible setup.
 
 set -u
 umask 077
@@ -118,6 +125,8 @@ DIGEST_ALGO=
 SRC_PID=
 TOKEN_INFO_PATH=
 BAND_BYTES_PATH=
+BAND_BYTES_PRESENT=0
+BAND_BYTES_UNAVAILABLE=0
 SIXG_BAND=2
 
 # Result values.
@@ -226,6 +235,8 @@ warn() {
 
 skip() {
 	cleanup_tmp
+	RESULT_STATUS=skip
+	write_result_json 0
 	printf 'SKIP: %s\n' "$*"
 	exit 0
 }
@@ -371,6 +382,92 @@ is_positive() {
 	[ "$1" -gt 0 ]
 }
 
+json_str() {
+	# Every value that lands in result.json goes through here: a path, a
+	# verdict reason or an SSID must never break the file.
+	printf '"%s"' "$(printf '%s' "$1" |
+		sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/	/\\t/g' -e 's/\r/\\r/g')"
+}
+
+json_num() {
+	# A counter, a rate or nothing.  "n/a" is not a number and must not be
+	# written as one.
+	case ${1:-} in
+	''|*[!0-9.]*|*.*.*) printf 'null' ;;
+	*) printf '%s' "$1" ;;
+	esac
+}
+
+# --- result.json ------------------------------------------------------
+
+# RESULT_STATUS is the one word a wrapper reads: ok means the measurement ran
+# and every counter it needs was read; unknown means the kernel does not
+# expose one of them, so nothing here may be called ok; invalid means the
+# source or the measurement failed; skip means this board had nothing to
+# measure.
+RESULT_STATUS=invalid
+
+write_result_json() {
+	_rc=$1
+	if [ "${OUT_CREATED:-0}" != 1 ] || [ -z "${OUT:-}" ]; then
+		return 0
+	fi
+	_ok=false
+	[ "$RESULT_STATUS" = ok ] && _ok=true
+	_bu=false
+	[ "$BAND_BYTES_UNAVAILABLE" = 1 ] && _bu=true
+	if [ -n "$STA_IP" ]; then
+		_mode=reverse
+		_apcmd="iperf3 -c $STA_IP -R -t $WINDOW -p $PORT -P $PARALLEL"
+		_stacmd="iperf3 -s -p $PORT"
+	else
+		_mode=listen
+		_apcmd="iperf3 -s -1 -p $PORT"
+		_stacmd=$(listen_client_command)
+	fi
+	{
+		printf '{\n'
+		printf '  "schema": "6g-rx/v1",\n'
+		printf '  "timestamp": %s,\n' "$(json_str "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)")"
+		printf '  "status": %s,\n' "$(json_str "$RESULT_STATUS")"
+		printf '  "ok": %s,\n' "$_ok"
+		printf '  "exit_rc": %s,\n' "$(json_num "$_rc")"
+		printf '  "result_dir": %s,\n' "$(json_str "$OUT")"
+		printf '  "ap": {"iface": %s, "phy": %s, "freq_mhz": %s, "ssid": %s, "ethtool_iface": %s},\n' \
+			"$(json_str "$SEL_IFACE")" "$(json_str "$SEL_PHY")" \
+			"$(json_num "$SEL_FREQ")" "$(json_str "$SEL_SSID")" \
+			"$(json_str "$ETHTOOL_IFACE")"
+		printf '  "sta": {"mac": %s, "signal_dbm": %s},\n' \
+			"$(json_str "$STA_MAC")" "$(json_num "$STA_SIGNAL")"
+		printf '  "direction": {"mode": %s, "ap_command": %s, "sta_command": %s, "udp": %s, "seconds": %s, "parallel": %s, "port": %s},\n' \
+			"$(json_str "$_mode")" "$(json_str "$_apcmd")" "$(json_str "$_stacmd")" \
+			"$([ "$PROTO" = udp ] && printf true || printf false)" \
+			"$(json_num "$WINDOW")" "$(json_num "$PARALLEL")" "$(json_num "$PORT")"
+		printf '  "band_bytes_unavailable": %s,\n' "$_bu"
+		printf '  "band_bytes_path": %s,\n' "$(json_str "$BAND_BYTES_PATH")"
+		printf '  "counters": {\n'
+		printf '    "station_rx_bytes": %s,\n' "$(json_num "$RX_BYTES_DELTA")"
+		printf '    "station_rx_packets": %s,\n' "$(json_num "$RX_PACKETS_DELTA")"
+		printf '    "ethtool_ampdu_bytes": %s,\n' "$(json_num "$AMPDU_BYTES_DELTA")"
+		printf '    "ethtool_ampdu_cnt": %s,\n' "$(json_num "$AMPDU_CNT_DELTA")"
+		printf '    "band_ampdu_bytes": %s,\n' "$(json_num "$BAND_AMPDU_DELTA")"
+		printf '    "band_ampdu_status": %s\n' \
+			"$(if [ "$BAND_BYTES_UNAVAILABLE" = 1 ]; then printf '"UNKNOWN"'; else printf '"measured"'; fi)"
+		printf '  },\n'
+		printf '  "iperf_rx_bps": %s,\n' "$(json_num "$IPERF_RX_BPS")"
+		printf '  "rx_mbit_s": %s,\n' "$(json_num "$RX_MBIT_S")"
+		printf '  "counter_window_s": %s,\n' "$(json_num "$COUNTER_SECONDS")"
+		printf '  "irq": {"pcie0_excess": %s, "hif2_excess": %s, "pcie0_active": %s, "hif2_active": %s},\n' \
+			"$(json_num "$IRQ_PCIE0_EXCESS")" "$(json_num "$IRQ_HIF2_EXCESS")" \
+			"$(json_num "$IRQ_PCIE0_ACTIVE")" "$(json_num "$IRQ_HIF2_ACTIVE")"
+		printf '  "verdict": %s,\n' "$(json_str "$VERDICT")"
+		printf '  "verdict_reason": %s\n' "$(json_str "$VERDICT_REASON")"
+		printf '}\n'
+	} >"$OUT/result.json.tmp" 2>/dev/null &&
+		mv "$OUT/result.json.tmp" "$OUT/result.json" 2>/dev/null
+	return 0
+}
+
 # --- usage ------------------------------------------------------------
 
 usage() {
@@ -457,7 +554,9 @@ Measurements:
                   measures the beacon/background rate of each group first.
   token_info      token_count, wed_token_count, rx_token_size and the
                   npu_rx0/npu_rx1 queued depths (NPU/RRO queue evidence)
-  band_bytes      rx_ampdu_bytes for Phy band 2 (6 GHz)
+  band_bytes      rx_ampdu_bytes for Phy band 2 (6 GHz).  The file exists only
+                  in kernels whose mt76 exposes it; when it is absent the
+                  measurement is UNKNOWN, never ok
   netdev          /sys/class/net/<AP iface>/statistics/rx_bytes
 
 Verdict:
@@ -491,8 +590,10 @@ Examples:
   ./scripts/wireless/6g-rx.sh --add-bss --seconds 30
   ./scripts/wireless/6g-rx.sh --sta-ip 192.168.1.23 --seconds 20
 
-Exit status: 0 ran or clean SKIP, 1 source/measurement or restore failure,
-2 invalid arguments or impossible setup.
+Exit status: 0 the measurement ran (all counters read) or the run was a clean
+SKIP, 1 source/measurement or restore failure or an incomplete measurement
+(a counter the kernel does not expose), 2 invalid arguments or impossible
+setup.
 EOF
 }
 
@@ -1443,13 +1544,47 @@ find_debugfs_file() {
 	return 1
 }
 
+# mt76 band_bytes exists only in kernels that export it, so every read is
+# preceded by this probe.  A missing counter makes the per-band A-MPDU
+# measurement UNKNOWN: it is a counter nobody could read, not a zero delta,
+# and the run must never be reported as ok.
+band_bytes_available() {
+	if [ -n "$BAND_BYTES_PATH" ] && [ -r "$BAND_BYTES_PATH" ]; then
+		BAND_BYTES_PRESENT=1
+		BAND_BYTES_UNAVAILABLE=0
+		return 0
+	fi
+	BAND_BYTES_PRESENT=0
+	BAND_BYTES_UNAVAILABLE=1
+	BAND_BYTES_PATH=
+	return 1
+}
+
+capture_band_bytes() {
+	# $1 destination.  Returns 1 when the counter is not there or could not
+	# be read; the caller keeps the evidence UNKNOWN either way.
+	_cb_dest=$1
+	if ! band_bytes_available; then
+		write_note "$_cb_dest" "n/a: band_bytes not present in this kernel (UNKNOWN, not zero)"
+		return 1
+	fi
+	capture "$_cb_dest" cat "$BAND_BYTES_PATH"
+	if [ ! -s "$_cb_dest" ] || grep -q '^capture failed:' "$_cb_dest"; then
+		BAND_BYTES_PRESENT=0
+		BAND_BYTES_UNAVAILABLE=1
+		BAND_BYTES_PATH=
+		return 1
+	fi
+	return 0
+}
+
 resolve_debugfs() {
 	TOKEN_INFO_PATH=$(find_debugfs_file token_info) || TOKEN_INFO_PATH=
 	BAND_BYTES_PATH=$(find_debugfs_file band_bytes) || BAND_BYTES_PATH=
 	[ -n "$TOKEN_INFO_PATH" ] ||
 		warn "mt76 token_info not found under $DEBUGFS; NPU queue evidence will be n/a"
-	[ -n "$BAND_BYTES_PATH" ] ||
-		warn "mt76 band_bytes not found under $DEBUGFS; 6G band A-MPDU evidence will be n/a"
+	band_bytes_available ||
+		warn "mt76 band_bytes not found under $DEBUGFS; the per-band 6G A-MPDU measurement is UNKNOWN (result.json: band_bytes_unavailable=true) and the run cannot be ok"
 }
 
 # --- snapshots and parsing --------------------------------------------
@@ -1470,11 +1605,7 @@ snapshot_before() {
 	else
 		write_note "$OUT/token-info-before.txt" "n/a: token_info not found"
 	fi
-	if [ -n "$BAND_BYTES_PATH" ]; then
-		capture "$OUT/band-bytes-before.txt" cat "$BAND_BYTES_PATH"
-	else
-		write_note "$OUT/band-bytes-before.txt" "n/a: band_bytes not found"
-	fi
+	capture_band_bytes "$OUT/band-bytes-before.txt" || true
 	capture "$OUT/ap-rx-before.txt" cat "/sys/class/net/$SEL_IFACE/statistics/rx_bytes"
 	capture "$OUT/uptime-before.txt" cat /proc/uptime
 }
@@ -1497,11 +1628,7 @@ snapshot_after() {
 	else
 		write_note "$OUT/token-info-after.txt" "n/a: token_info not found"
 	fi
-	if [ -n "$BAND_BYTES_PATH" ]; then
-		capture "$OUT/band-bytes-after.txt" cat "$BAND_BYTES_PATH"
-	else
-		write_note "$OUT/band-bytes-after.txt" "n/a: band_bytes not found"
-	fi
+	capture_band_bytes "$OUT/band-bytes-after.txt" || true
 	capture "$OUT/ap-rx-after.txt" cat "/sys/class/net/$SEL_IFACE/statistics/rx_bytes"
 }
 
@@ -1832,9 +1959,23 @@ analyze() {
 	BA_CNT_AFTER=$(ethtool_value "$OUT/ethtool-after.txt" rx_ba_cnt)
 	BA_CNT_DELTA=$(counter_delta "$BA_CNT_BEFORE" "$BA_CNT_AFTER")
 
-	BAND_AMPDU_BEFORE=$(band_bytes_value "$OUT/band-bytes-before.txt" "$SIXG_BAND")
-	BAND_AMPDU_AFTER=$(band_bytes_value "$OUT/band-bytes-after.txt" "$SIXG_BAND")
-	BAND_AMPDU_DELTA=$(counter_delta "$BAND_AMPDU_BEFORE" "$BAND_AMPDU_AFTER")
+	# Per-band A-MPDU bytes.  probe_band_bytes() already decided whether the
+	# counter exists; a missing one leaves the measurement UNKNOWN instead of
+	# a fabricated zero.
+	if [ "$BAND_BYTES_PRESENT" = 1 ]; then
+		BAND_AMPDU_BEFORE=$(band_bytes_value "$OUT/band-bytes-before.txt" "$SIXG_BAND")
+		BAND_AMPDU_AFTER=$(band_bytes_value "$OUT/band-bytes-after.txt" "$SIXG_BAND")
+		BAND_AMPDU_DELTA=$(counter_delta "$BAND_AMPDU_BEFORE" "$BAND_AMPDU_AFTER")
+		if [ -z "$BAND_AMPDU_DELTA" ]; then
+			BAND_BYTES_PRESENT=0
+			BAND_BYTES_UNAVAILABLE=1
+		fi
+	else
+		BAND_AMPDU_BEFORE=
+		BAND_AMPDU_AFTER=
+		BAND_AMPDU_DELTA=
+		BAND_BYTES_UNAVAILABLE=1
+	fi
 
 	COUNTER_SECONDS=$(uptime_delta "$OUT/uptime-before.txt" "$OUT/uptime-after.txt")
 
@@ -2047,14 +2188,13 @@ print_report() {
 	printf '  rx_ba_cnt              before %-12s after %-12s delta %s\n' \
 		"$(val_or_na "$BA_CNT_BEFORE")" "$(val_or_na "$BA_CNT_AFTER")" \
 		"$(val_or_na "$BA_CNT_DELTA")"
-	# band_bytes is not in this kernel's mt76 debugfs, so the old line always
-	# printed "delta n/a (Phy band 2 ...)" and looked like a failed read.  Say
-	# what it is: the counter does not exist here.
-	if [ -n "$BAND_BYTES_PATH" ]; then
+	# band_bytes is not in every kernel's mt76 debugfs.  When it is absent the
+	# measurement is UNKNOWN, not a zero delta and not an ok result.
+	if [ "$BAND_BYTES_PRESENT" = 1 ]; then
 		printf '  mt76 band_bytes Phy band %s rx_ampdu_bytes delta %s (%s)\n' \
 			"$SIXG_BAND" "$(val_or_na "$BAND_AMPDU_DELTA")" "$BAND_BYTES_PATH"
 	else
-		printf '  mt76 band_bytes: not present in this kernel (no per-band 6G A-MPDU MIB; use the ethtool and station counters above)\n'
+		printf '  mt76 band_bytes UNKNOWN: not present in this kernel (no per-band 6G A-MPDU MIB; the ethtool and station counters above stand, result.json records band_bytes_unavailable=true)\n'
 	fi
 
 	printf '\niperf3 receiver:\n'
@@ -2194,10 +2334,15 @@ fi
 
 # A 6G STA exists from here on, so the measurement tools are now required.
 # Checking them earlier made a no-STA board exit 1 instead of skipping.
-for _cmd in ethtool iperf3; do
-	command -v "$_cmd" >/dev/null 2>&1 ||
-		die "required command not found: $_cmd"
-done
+command -v ethtool >/dev/null 2>&1 ||
+	die "required command not found: ethtool"
+
+# iperf3 is not a fatal prerequisite: a host without it has no source, so
+# there is nothing to measure.  That is a clean SKIP (rc=0), not an error,
+# and it says why instead of dying on someone else's missing tool.
+if ! command -v iperf3 >/dev/null 2>&1; then
+	skip "no iperf3 on this host, so the 6G RX uplink cannot be measured; install iperf3 and rerun"
+fi
 
 make_out
 
@@ -2252,12 +2397,31 @@ fi
 
 if [ -z "$AMPDU_BYTES_DELTA" ]; then
 	printf '\nERROR: rx_ampdu_bytes_cnt delta is unavailable; the A-MPDU byte evidence is incomplete\n' >&2
+	RESULT_STATUS=invalid
+	write_result_json 1
+	exit 1
+fi
+
+# The per-band counter is optional in the kernel.  Its absence makes the
+# measurement UNKNOWN: the rest of the evidence still stands, but nothing here
+# may be called ok.
+if [ "$BAND_BYTES_UNAVAILABLE" = 1 ]; then
+	printf '\nUNKNOWN: mt76 band_bytes is not present in this kernel, so the per-band 6G A-MPDU byte delta could not be measured; result.json records band_bytes_unavailable=true and the run is not ok (the ethtool and station counters above were read)\n' >&2
+	RESULT_STATUS=unknown
+	write_result_json 1
 	exit 1
 fi
 
 if [ "$VERDICT" = undetermined ] && ! is_positive "$RX_BYTES_DELTA"; then
 	printf '\nERROR: the source ran but the station RX bytes did not increase\n' >&2
+	RESULT_STATUS=invalid
+	write_result_json 1
 	exit 1
 fi
 
+RESULT_STATUS=ok
+printf 'result.json: %s (status=%s band_bytes_unavailable=%s)\n' \
+	"$OUT/result.json" "$RESULT_STATUS" \
+	"$([ "$BAND_BYTES_UNAVAILABLE" = 1 ] && printf true || printf false)"
+write_result_json 0
 exit 0

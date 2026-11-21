@@ -285,6 +285,27 @@ class BothArmsTest(unittest.TestCase):
         self.assertEqual([a["arm"] for a in data["arms"]], ["a", "b"])
         self.assertEqual((Path(out) / "meta.txt").read_text().count("min_mbit=1.0"), 1)
 
+class MinMbpsAliasTest(unittest.TestCase):
+    """--min-mbps is the same floor as --min-mbit, and the arm says how many
+    clients it cost.  An operator reading "ok" next to a quiet client is the
+    defect this guards: the count line has to name the below-floor rows."""
+
+    def test_min_mbps_alias_and_status_counts(self):
+        out = Path(tempfile.mkdtemp(prefix="mc50-out-")) / "out"
+        fix = Fixture([(MAC1, 6.0), (MAC2, 0.05)], out)
+        proc = fix.run(extra=["--min-mbps", "5"])
+        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        self.assertIn("ok=1 below_floor=1 invalid=0", proc.stdout, proc.stdout)
+        data = json.loads((Path(out) / "result.json").read_text())
+        self.assertEqual(data["min_mbit"], 5.0)
+
+    def test_min_mbps_needs_a_value(self):
+        out = Path(tempfile.mkdtemp(prefix="mc50-out-")) / "out"
+        fix = Fixture([(MAC1, 6.0), (MAC2, 6.0)], out)
+        proc = fix.run(extra=["--min-mbps"])
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIn("--min-mbps", proc.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
