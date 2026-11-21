@@ -73,11 +73,22 @@ fwtool_check_image() {
 		# If in Step 1 the oem_file was found and valid, the $oem == "b3000" so
 		# [ ("$dev" == "b3000) == ("$oem" == "b3000") ] so firmware is valid oem
 		if [ "$dev" = "$device" ] || [ "$dev" = "$oem" ]; then
-			# major compat version -> no sysupgrade
+			# major compat version -> no sysupgrade, and -F must not
+			# override it either.  A major bump means the image expects a
+			# different partition layout (compat 2.0 = the UBI partition
+			# carries BMT/BBT at the end of flash), so writing it over the
+			# layout that is on flash now leaves a box that only a UART
+			# recovery can bring back.  74 is the same "broken, not
+			# forceable" status platform_check_image() uses for a foreign
+			# device tree; validate_firmware_image turns it into
+			# notify_firmware_broken.  Every other rejection here stays
+			# forceable: no signature, no metadata and an unknown board are
+			# "you may be doing something odd", not "this will brick it".
 			if [ "${devicecompat%.*}" != "${imagecompat%.*}" ]; then
 				v "The device is supported, but this image is incompatible for sysupgrade based on the image version ($devicecompat->$imagecompat)."
 				[ -n "$compatmessage" ] && v "$compatmessage"
-				return 1
+				v "A different major compat version means a different flash layout, so -F cannot override this."
+				return 74
 			fi
 
 			# minor compat version -> sysupgrade with -n required
