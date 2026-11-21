@@ -631,19 +631,26 @@ irq_cpu_totals() {
 	[ -r "$1" ] || return 1
 	awk -v tag="${2:-irq}" '
 		NR == 1 {
-			for (i = 2; i <= NF; i++) {
+			# The header has no label column: $1 is CPU0.  Data rows put
+			# the IRQ number in $1, so header field i belongs to data
+			# field i + 1.  Starting at $2 here (the old code) skipped
+			# CPU0, shifted every other CPU one column left and lost the
+			# last CPU, so the idle/rate sample that picks the split
+			# target named the wrong CPUs.
+			for (i = 1; i <= NF; i++) {
 				c = $i
 				sub(/^CPU/, "", c)
 				if (c ~ /^[0-9]+$/) {
-					col[++ncpu] = i - 1
-					colname[i - 1] = c
+					n++
+					col[n] = i + 1
+					colname[n] = c
 				}
 			}
 			next
 		}
 		{
-			for (k = 1; k <= ncpu; k++) {
-				i = col[k] + 1
+			for (k = 1; k <= n; k++) {
+				i = col[k]
 				if (i > NF)
 					continue
 				v = $i
@@ -652,7 +659,7 @@ irq_cpu_totals() {
 			}
 		}
 		END {
-			for (k = 1; k <= ncpu; k++)
+			for (k = 1; k <= n; k++)
 				printf "irq %s %s %d\n", tag, colname[k], sum[k] + 0
 		}
 	' "$1"
