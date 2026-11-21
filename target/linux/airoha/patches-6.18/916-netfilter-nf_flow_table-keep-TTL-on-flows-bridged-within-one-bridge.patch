@@ -53,8 +53,8 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +		return false;
 +
 +	rcu_read_lock();
-+	outdev = dev_get_by_index_rcu(ctx->net, tuple->out.ifidx);
-+	indev = dev_get_by_index_rcu(ctx->net, tuple->iifidx);
++	outdev = dev_get_by_index_rcu(dev_net(ctx->in), tuple->out.ifidx);
++	indev = dev_get_by_index_rcu(dev_net(ctx->in), tuple->iifidx);
 +	bridged = outdev && indev && netif_is_bridge_port(outdev) &&
 +		  netdev_master_upper_dev_get_rcu(outdev) ==
 +		  netdev_master_upper_dev_get_rcu(indev);
