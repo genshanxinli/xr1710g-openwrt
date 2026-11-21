@@ -96,15 +96,7 @@
  };
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -7,6 +7,7 @@
- #include <linux/ip.h>
- #include <linux/ipv6.h>
- #include <linux/module.h>
-+#include <linux/moduleparam.h>
- #include <linux/of_platform.h>
- #include <linux/moduleparam.h>
- #include <linux/platform_device.h>
-@@ -61,6 +62,300 @@
+@@ -61,6 +61,300 @@
  	.automatic_shrinking = true,
  };
  
@@ -405,7 +397,7 @@
  /* How many counter slots per PPE this build could ask the NPU for.  This is
   * a property of the build and the SoC, not of what the NPU ended up agreeing
   * to, and it has to stay that way: the counter buffer is allocated in
-@@ -704,7 +999,7 @@
+@@ -704,7 +998,7 @@
  	if (airoha_ppe_netdev_is_shaped(egress))
  		return -EOPNOTSUPP;
  
@@ -414,7 +406,7 @@
  
  	val = FIELD_PREP(AIROHA_FOE_IB1_BIND_STATE, AIROHA_FOE_STATE_BIND) |
  	      FIELD_PREP(AIROHA_FOE_IB1_BIND_PACKET_TYPE, type) |
-@@ -1364,6 +1659,13 @@
+@@ -1364,6 +1658,13 @@
  
  	if (type >= PPE_PKT_TYPE_IPV6_ROUTE_3T)
  		airoha_ppe_put_smac_id(ppe->eth, smac_id);
@@ -428,7 +420,7 @@
  }
  
  static int
-@@ -1731,11 +2033,14 @@
+@@ -1731,11 +2032,14 @@
  {
  	struct flow_rule *rule = flow_cls_offload_flow_rule(f);
  	struct airoha_flow_table_entry *e;
@@ -445,7 +437,7 @@
  	struct airoha_foe_entry hwe;
  	struct net_device *indev;
  	bool bridged, has_ports, use_3t;
-@@ -1839,6 +2144,18 @@
+@@ -1840,6 +2144,18 @@
  			data.pppoe.sid = act->pppoe.sid;
  			data.pppoe.num++;
  			break;
@@ -464,7 +456,7 @@
  		default:
  			return -EOPNOTSUPP;
  		}
-@@ -1847,6 +2164,19 @@
+@@ -1848,6 +2164,19 @@
  	if (!is_valid_ether_addr(data.eth.h_source) ||
  	    !is_valid_ether_addr(data.eth.h_dest))
  		return -EINVAL;
@@ -484,7 +476,7 @@
  
  	/* A flow whose ingress and egress devices are both ports of the same
  	 * bridge never leaves L2, so the PPE must forward it without touching
-@@ -1871,7 +2201,7 @@
+@@ -1872,7 +2201,7 @@
  	err = airoha_ppe_foe_entry_prepare(eth, &hwe, odev, offload_type,
  					   &data, l4proto, dsfield, bridged);
  	if (err)
@@ -493,7 +485,7 @@
  
  	if (has_ports) {
  		struct flow_match_ports ports;
-@@ -1955,6 +2285,7 @@
+@@ -1956,6 +2285,7 @@
  	}
  
  	e->cookie = f->cookie;
@@ -501,7 +493,7 @@
  	e->ingress_dev_idx = meta.key->ingress_ifindex;
  	e->ingress_stamp = jiffies;
  	memcpy(&e->data, &hwe, sizeof(e->data));
-@@ -1978,6 +2309,9 @@
+@@ -1979,6 +2309,9 @@
  	kfree(e);
  put_smac:
  	airoha_ppe_foe_entry_put_smac_id(eth, &hwe);
@@ -511,7 +503,7 @@
  
  	return err;
  }
-@@ -2405,6 +2739,7 @@
+@@ -2406,6 +2739,7 @@
  	eth->ppe = ppe;
  	ppe->bind_rate_l3 = AIROHA_PPE_DEFAULT_BIND_RATE;
  	ppe->bind_rate_l2b = AIROHA_PPE_DEFAULT_BIND_RATE;
@@ -521,7 +513,7 @@
  	foe_size = ppe_num_entries * sizeof(struct airoha_foe_entry);
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -470,6 +470,44 @@
+@@ -470,6 +470,54 @@
  	.write		= airoha_ppe_debugfs_flush_write,
  };
  
@@ -542,14 +534,24 @@
 +
 +	for (i = 0; i < AIROHA_PPE_METER_NUM; i++) {
 +		const struct airoha_ppe_meter *meter = &ppe->meter[i];
-+		u32 reg = airoha_fe_rr(eth, AIROHA_PPE_METER_GROUP(i));
-+		u32 bucket = FIELD_GET(AIROHA_PPE_METER_BUCKET, reg);
-+		u32 rate = FIELD_GET(AIROHA_PPE_METER_RATE, reg);
-+		u64 hw_rate = (u64)rate *
-+			      ((reg & AIROHA_PPE_METER_TICK) ? 16000 : 128000);
++		u32 reg, bucket, rate;
++		u64 hw_rate;
 +
-+		if (!meter->refcount && !reg)
++		/* The group register only holds a rate once this driver has
++		 * programmed the group.  An unallocated one reads back
++		 * 0xdeadbeef on real silicon, which would decode into a
++		 * plausible-looking rate and bucket, so the software record
++		 * is the gate and the register is touched only for a group
++		 * this driver owns.
++		 */
++		if (!meter->refcount)
 +			continue;
++
++		reg = airoha_fe_rr(eth, AIROHA_PPE_METER_GROUP(i));
++		bucket = FIELD_GET(AIROHA_PPE_METER_BUCKET, reg);
++		rate = FIELD_GET(AIROHA_PPE_METER_RATE, reg);
++		hw_rate = (u64)rate *
++			  ((reg & AIROHA_PPE_METER_TICK) ? 16000 : 128000);
 +
 +		seq_printf(m,
 +			   "meter %2u refcount %u rate %u peakrate %u burst %u",
@@ -566,7 +568,7 @@
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  {
  	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-@@ -485,6 +523,8 @@
+@@ -485,6 +533,8 @@
  			    &airoha_ppe_debugfs_bind_rate_fops);
  	debugfs_create_file("tb_regs", 0444, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_tb_regs_fops);
