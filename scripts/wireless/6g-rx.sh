@@ -277,6 +277,18 @@ skip_no_client() {
 	exit 0
 }
 
+# A 6 GHz AP that advertises OWE while a band=6g wifi-iface is still open
+# cannot carry an open-only client: hostapd forces OWE + PMF(2) on 6 GHz.
+# Filed as "no client" this puts a configuration fix on the purchase list
+# (#347), so the gate runs before any STA skip and exits non-zero.
+block_on_owe_mismatch() {
+	[ -n "${1:-}" ] || return 0
+	_mm=$(nc_owe_mismatch "$1") || return 0
+	cleanup_tmp
+	nc_owe_mismatch_block "${OUT:-}" 48 "$_mm"
+	exit 2
+}
+
 cleanup_tmp() {
 	if [ -n "${TMP_TABLE:-}" ]; then
 		rm -f "$TMP_TABLE" "$TMP_TABLE.resolved" "$TMP_TABLE.candidates" 2>/dev/null
@@ -2341,9 +2353,11 @@ if [ "$_sel_rc" -eq 2 ]; then
 	if [ "$STA_WAIT" -gt 0 ]; then
 		choose_station || true
 		if ! wait_for_station "$STA_WAIT"; then
+			block_on_owe_mismatch "$SEL_IFACE"
 			skip_no_client "no 6G STA $STA_MAC on $SEL_IFACE; pass --iface if another 6G BSS is selected" 6ghz-eht-client "sh scripts/wireless/6g-rx.sh --iface <6GHZ_AP_IFACE> --sta <STA_MAC> --sta-ip <STA_IP>"
 		fi
 	else
+		block_on_owe_mismatch "$SEL_IFACE"
 		skip_no_client "no 6G STA $STA_MAC on $SEL_IFACE; pass --iface if another 6G BSS is selected" 6ghz-eht-client "sh scripts/wireless/6g-rx.sh --iface <6GHZ_AP_IFACE> --sta <STA_MAC> --sta-ip <STA_IP>"
 	fi
 	_sel_rc=0
@@ -2363,6 +2377,7 @@ fi
 
 if ! choose_station; then
 	if ! wait_for_station "$STA_WAIT"; then
+		block_on_owe_mismatch "$SEL_IFACE"
 		skip_no_client "no 6G STA on $SEL_IFACE (SSID \"$SEL_SSID\"); pass --iface if another 6G BSS is selected" 6ghz-eht-client "sh scripts/wireless/6g-rx.sh --iface <6GHZ_AP_IFACE> --sta <STA_MAC> --sta-ip <STA_IP>"
 	fi
 fi

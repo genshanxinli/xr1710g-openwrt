@@ -1889,6 +1889,17 @@ while [ "$_i" -le "$CLIENT_COUNT" ]; do
 done
 
 if [ "$ACTIVE_COUNT" -lt 2 ]; then
+	# A 6 GHz AP forced to OWE + PMF(2) cannot be joined by an open-only
+	# client; that is a configuration block, not a second client to buy
+	# (#347).  Every AP interface is checked, 6 GHz only.
+	for _owe_if in $AP_IFACES; do
+		_owe_freq=$(iface_info "$_owe_if" | cut -d'|' -f3)
+		[ "$(band_of_freq "$_owe_freq")" = 6G ] || continue
+		if _mm=$(nc_owe_mismatch "$_owe_if"); then
+			nc_owe_mismatch_block "${OUT:-}" 50 "$_mm"
+			exit 2
+		fi
+	done
 	_rec=$(no_client_record "${OUT:-}" 50 second-associated-wifi-client \
 		"sh scripts/wireless/multi-client.sh --client <MAC_A> --client <MAC_B> --out <DIR>" \
 		"only $ACTIVE_COUNT of $CLIENT_COUNT requested client(s) associated; need at least 2" \
