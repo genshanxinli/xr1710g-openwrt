@@ -68,8 +68,8 @@ UPSTREAM_MAIN_SHA = "8b34d6283fc51dc3d5235d4ea3c97c72cd8ed506"
 PR_26296_HEAD = "1b981abdd1931f7bde8defc2965260572bc6bfec"
 UPSTREAM_MT76 = ("https://github.com/openwrt/mt76", "2026-10-28",
                  "0936617dc529ff9da0385221d3fa6de732231177")
-LOCAL_MT76 = ("https://github.com/OpenWRT-fanboy/mt76-firmware", "2026-10-08",
-              "639e128702780b398c1c36782b77899ce6bcb1fa")
+LOCAL_MT76 = ("https://github.com/OpenWRT-fanboy/mt76-firmware", "2026-10-28",
+              "46b67e5b7c49313d11b2b2d83df3c8025406d63e")
 
 NPU_BLOBS = {
     "en7581_MT7996_npu_rv32.bin": (125832,
