@@ -486,7 +486,15 @@ dev_phys_ports() {
 	# shellcheck disable=SC2029
 	ssh_dev "for d in $DEV_SYSFS/class/net/*; do
 		i=\${d##*/}
+		# An unmatched glob leaves the literal '*'.  Without the first arm
+		# it passed the filters below and reached the host side, where
+		# 'for c in \$DEV_CANDIDATES' expanded it against the current
+		# directory: a run with a bad DEV_SYSFS then picked BSDmakefile as
+		# the device port and reported that interface absent.
 		case \$i in
+		''|'*')
+			continue
+			;;
 		lo|br-*|wl*|wlan*|phy*|veth*|docker*|virbr*|tun*|tap*|wg*|tailscale*|ppp*|ifb*|bond*|sit*|ip6tnl*|nss*)
 			continue
 			;;

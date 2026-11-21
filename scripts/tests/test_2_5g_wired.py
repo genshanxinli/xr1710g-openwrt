@@ -29,7 +29,11 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-SCRIPT = REPO / "scripts/wireless/2.5g-wired.sh"
+SCRIPT = Path(
+    os.environ.get(
+        "TWO_G5_SCRIPT_UNDER_TEST", REPO / "scripts/wireless/2.5g-wired.sh"
+    )
+).resolve()
 
 IPERF_JSON = """{
 \t"start": {"version": "iperf 3.20"},
@@ -176,7 +180,7 @@ class ScriptFixture:
             "\tSupported link modes:   2500baseT/Full\n"
             "\tAdvertised link modes:  2500baseT/Full\n")
 
-    def run(self, *args, timeout=120):
+    def run(self, *args, timeout=120, env_extra=None, cwd=None):
         env = dict(os.environ)
         env.update({
             "PATH": "%s:%s" % (self.bin, os.environ["PATH"]),
@@ -188,11 +192,13 @@ class ScriptFixture:
             "DEV_SYSFS": str(self.dev),
             "SSH_OPTS": "-o BatchMode=yes",
         })
+        if env_extra:
+            env.update(env_extra)
         env.pop("DEVICE", None)
         return subprocess.run(
             ["sh", str(SCRIPT), "--device", "root@192.0.2.1"] + list(args),
             capture_output=True, text=True, env=env, timeout=timeout,
-            cwd=str(self.tmp))
+            cwd=str(cwd or self.tmp))
 
     def logged(self):
         return self.calls.read_text()
@@ -300,6 +306,73 @@ class SourceTest(unittest.TestCase):
         self.assertIn('blocked "$dev_if is in $master"', self.source)
         self.assertIn("print_bridge_plan", self.source)
         self.assertIn("detach_plan", self.source)
+
+
+ALWAYS_2G5_ETHTOOL = """#!/bin/sh
+# Answers 2500baseT for every name, the literal '*' included: the board did
+# answer it, which is how '*' passed the device-side ethtool filter.
+case "$1" in
+-i) printf 'driver: r8169\\n' ;;
+-S) printf '     tx_errors: 0\\n     rx_errors: 0\\n' ;;
+*)
+	printf 'Settings for %s:\\n' "$1"
+	printf '\\tSpeed: 2500Mb/s\\n'
+	printf '\\tDuplex: Full\\n'
+	printf '\\tLink detected: yes\\n'
+	printf '\\tSupported link modes:   2500baseT/Full\\n'
+	;;
+esac
+"""
+
+# Top-level names of this repository: what an unquoted glob of '*' turns into
+# when the host-side loop runs with the repository as its working directory.
+REPO_FILE_NAMES = (
+    "BSDmakefile",
+    "COPYING",
+    "Config.in",
+    "LICENSES",
+    "Makefile",
+    "README.md",
+)
+
+
+class MissingDevSysfsTest(unittest.TestCase):
+    """DEV_SYSFS with no class/net must not hand the literal '*' to the host."""
+
+    def test_unmatched_glob_is_not_a_port(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fx = ScriptFixture(tmp)
+            write_fake(fx.bin / "ethtool", ALWAYS_2G5_ETHTOOL)
+            run = fx.run(
+                "--ports", "both", "--out-dir", str(Path(tmp) / "out"),
+                env_extra={"DEV_SYSFS": str(Path(tmp) / "does-not-exist")},
+                cwd=REPO,
+            )
+            out = run.stdout + run.stderr
+            self.assertEqual(run.returncode, 0, out)
+            for name in REPO_FILE_NAMES:
+                self.assertNotIn(
+                    name, out,
+                    "the literal '*' reached the host loop and expanded against "
+                    "the current directory:\n" + out)
+            self.assertIn("BLOCKED: no device port advertises 2500baseT",
+                          run.stdout)
+            self.assertNotIn("device interface", out)
+
+    def test_explicit_ports_skip_without_repo_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fx = ScriptFixture(tmp)
+            run = fx.run(
+                "--ports", "both",
+                "--dev-lan10g-if", "lan2", "--dev-wan10g-if", "wan",
+                "--out-dir", str(Path(tmp) / "out"),
+                env_extra={"DEV_SYSFS": str(Path(tmp) / "does-not-exist")},
+            )
+            out = run.stdout + run.stderr
+            self.assertEqual(run.returncode, 0, out)
+            self.assertIn("SKIP: no 2.5G link", run.stdout)
+            for name in REPO_FILE_NAMES:
+                self.assertNotIn(name, out, out)
 
 
 if __name__ == "__main__":
