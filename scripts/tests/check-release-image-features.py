@@ -4,11 +4,18 @@
 
 The tests build small fixtures (patches, a fake kernel tree with a stub vmlinux,
 a synthetic FIT image and capture files) and run the real CLI against them.
-They need python3 and, for the build/image cases, a host C compiler.
+The first section pins the kernel-version resolution down: the patch queue and
+the ``linux-<ver>`` tree name the gate uses must follow the version declared in
+the subtarget, never a hardcoded 7.3.  They need python3 and, for the
+build/image cases, a host C compiler.
 
 Run with::
 
     python3 scripts/tests/check-release-image-features.py
+
+The kernel-version cases are also collected by unittest::
+
+    python3 -m unittest scripts/tests/check-release-image-features.py -v
 """
 
 from __future__ import annotations
@@ -20,6 +27,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import unittest
 from pathlib import Path
 
 TESTS = Path(__file__).resolve().parent
@@ -134,31 +142,40 @@ def write(path: Path, text: str | bytes) -> None:
         path.write_text(text)
 
 
-def make_repo(root: Path, patches: bool = True, bad_patches: bool = False) -> Path:
+def write_patch_queue(repo: Path, kver: str, bad: bool = False) -> None:
+    patch_dir = repo / f"target/linux/airoha/patches-{kver}"
+    patch_dir.mkdir(parents=True, exist_ok=True)
+    write(patch_dir / "968-net-airoha-pass-the-real-work-done.patch",
+          "not the expected hunk\n" if bad else PATCH_968)
+    write(patch_dir / "974-net-airoha-report-tx-completions.patch",
+          "not the expected hunk\n" if bad else PATCH_974)
+
+
+def make_repo(root: Path, patches: bool = True, bad_patches: bool = False,
+              kver: str = "7.3", patchver: str | None = None) -> Path:
+    """A repo whose subtarget declares ``patchver`` (default: ``kver``)."""
     repo = root / "repo"
-    patch_dir = repo / "target/linux/airoha/patches-7.3"
+    write(repo / "target/linux/airoha/an7581/target.mk",
+          f"KERNEL_PATCHVER:={patchver or kver}\n")
     if patches:
-        patch_dir.mkdir(parents=True, exist_ok=True)
-        write(patch_dir / "968-net-airoha-pass-the-real-work-done.patch",
-              "not the expected hunk\n" if bad_patches else PATCH_968)
-        write(patch_dir / "974-net-airoha-report-tx-completions.patch",
-              "not the expected hunk\n" if bad_patches else PATCH_974)
+        write_patch_queue(repo, kver, bad_patches)
     return repo
 
 
 def make_build(root: Path, source: str = SOURCE_968_974, header: str = HEADER_BQL,
                stale: bool = False, bql_symbols: bool = True,
                image_before_vmlinux: bool = False,
-               vmlinux_version: str | None = None) -> Path:
+               vmlinux_version: str | None = None,
+               kver: str = "7.3", dirname: str | None = None) -> Path:
     if CC is None:
         raise RuntimeError("a C compiler is needed for the build fixture")
     build = root / "build"
-    kernel = build / "linux-7.3"
+    kernel = build / (dirname or f"linux-{kver}")
     driver = kernel / "drivers/net/ethernet/airoha"
     write(driver / "airoha_eth.c", source)
     write(driver / "airoha_eth.h", header)
     write(kernel / ".config", "CONFIG_BQL=y\n")
-    stub = STUB_C if bql_symbols else STUB_NO_BQL
+    stub = (STUB_C if bql_symbols else STUB_NO_BQL).replace("7.3", kver)
     write(root / "stub.c", stub)
     # Compile the way the kernel does: -O2 -g.  The 974 helpers are `static`
     # with one caller each, so they are inlined and never reach .symtab; only
@@ -174,10 +191,10 @@ def make_build(root: Path, source: str = SOURCE_968_974, header: str = HEADER_BQ
     if vmlinux_version is not None:
         vmlinux_src = root / "stub-vmlinux.c"
         write(vmlinux_src, stub.replace(
-            "Linux version 7.3 test-build", f"Linux version 7.3 {vmlinux_version}"))
+            f"Linux version {kver} test-build", f"Linux version {kver} {vmlinux_version}"))
     subprocess.run([CC, "-O2", "-g", str(vmlinux_src), "-o", str(kernel / "vmlinux")],
                    check=True, capture_output=True)
-    write(build / "Image", b"Linux version 7.3 test-build\n" + b"K" * 64)
+    write(build / "Image", f"Linux version {kver} test-build\n".encode() + b"K" * 64)
     # A healthy build: source oldest, then object, vmlinux, Image.
     base = 1_700_000_000
     os.utime(driver / "airoha_eth.c", (base, base))
@@ -367,6 +384,91 @@ def test_image() -> None:
         check("FIT without kernel node fails", rc != 0, out[-300:])
 
 
+class KernelVersionResolution(unittest.TestCase):
+    """The gate must judge the image with its own version's patch queue.
+
+    PR #277 moved the an7581 testing kernel to 7.4 while the gate still said
+    linux-7.3 and patches-7.3, so a real 7.4 tree was rejected outright and a
+    7.4 image would have been judged by 7.3's 968/974.  The last case is the
+    dangerous half: it fails only if PATCHES_REL follows the resolved version.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def run_gate(self, *args: str) -> tuple[int, str]:
+        rc, out = run_gate(*args)
+        return rc, out
+
+    def test_74_target_mk_and_rc_tree_resolve_to_patches_74(self) -> None:
+        # The shape PR #277 produces: target.mk says 7.4, the build dir holds
+        # linux-7.4-rc3 only.  linux-7.40 is a decoy that must not be mistaken
+        # for 7.4 (it has no vmlinux, so picking it would fail loudly).
+        repo = make_repo(self.root, kver="7.4", patchver="7.4")
+        build = make_build(self.root, kver="7.4", dirname="linux-7.4-rc3")
+        write(build / "linux-7.40/drivers/net/ethernet/airoha/airoha_eth.c", SOURCE_968_974)
+        rc, out = self.run_gate("--repo", str(repo), "--build-dir", str(build), "--skip-image")
+        self.assertEqual(rc, 0, out[-500:])
+        self.assertIn("patches: patches-7.4", out)
+        self.assertIn("linux-7.4-rc3", out)
+        self.assertNotIn("linux-7.40", out)
+
+    def test_73_tree_still_resolves_to_patches_73(self) -> None:
+        repo = make_repo(self.root, kver="7.3", patchver="7.3")
+        build = make_build(self.root, kver="7.3")
+        rc, out = self.run_gate("--repo", str(repo), "--build-dir", str(build), "--skip-image")
+        self.assertEqual(rc, 0, out[-500:])
+        self.assertIn("patches: patches-7.3", out)
+        self.assertIn("kernel build: " + str(build / "linux-7.3"), out)
+
+    def test_missing_974_in_patches_74_is_a_failure(self) -> None:
+        # patches-7.3 keeps 974, so reading 7.3 instead would print PASS.
+        repo = make_repo(self.root, kver="7.4", patchver="7.4")
+        write_patch_queue(repo, "7.3")
+        (repo / "target/linux/airoha/patches-7.4/"
+                 "974-net-airoha-report-tx-completions.patch").unlink()
+        rc, out = self.run_gate("--repo", str(repo), "--skip-build", "--skip-image")
+        self.assertEqual(rc, 1, out[-500:])
+        self.assertIn("974: no patch in target/linux/airoha/patches-7.4", out)
+        self.assertNotIn("patches-7.3", out)
+
+    def test_explicit_kver_selects_the_old_queue(self) -> None:
+        repo = make_repo(self.root, kver="7.3", patchver="7.4")
+        rc, out = self.run_gate("--repo", str(repo), "--kver", "7.3",
+                                "--skip-build", "--skip-image")
+        self.assertEqual(rc, 0, out[-500:])
+        self.assertIn("patches: patches-7.3", out)
+
+
+def _flatten(suite) -> list:
+    flat = []
+    for item in suite:
+        if isinstance(item, unittest.TestSuite):
+            flat.extend(_flatten(item))
+        else:
+            flat.append(item)
+    return flat
+
+
+def test_kernel_version() -> None:
+    print("kernel version resolution")
+    if CC is None:
+        print("  SKIP: no C compiler")
+        return
+    tests = _flatten(unittest.defaultTestLoader.loadTestsFromTestCase(KernelVersionResolution))
+    result = unittest.TestResult()
+    unittest.TestSuite(tests).run(result)
+    broken = {test.id(): text for test, text in result.failures + result.errors}
+    for test in tests:
+        name = test.id().rsplit(".", 1)[-1]
+        detail = broken.get(test.id(), "")
+        if detail:
+            detail = detail.strip().splitlines()[-1]
+        check(name, test.id() not in broken, detail)
+
+
 def test_usage() -> None:
     print("usage checks")
     with tempfile.TemporaryDirectory() as tmp:
@@ -408,6 +510,7 @@ def main() -> int:
     test_source()
     test_build()
     test_image()
+    test_kernel_version()
     test_usage()
     test_capture()
     print()
