@@ -1,0 +1,40 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: enable the DRAM half of the PPE table
+
+airoha_ppe_hw_init() programs REG_PPE_TB_HASH_CFG with a mask that already
+names PPE_DRAM_TABLE_EN_MASK, but the value side only sets the SRAM enable
+and SRAM hash1 bits.  The read-modify-write therefore clears the DRAM
+table enable, and the same is true for PPE_DRAM_HASH1_EN_MASK, which is
+missing from the mask and so is never touched at all.
+
+The PPE entry count still advertises both halves --
+airoha_ppe_get_num_stats_entries() adds the DRAM share from
+PPE_DRAM_TB_NUM_ENTRY_MASK -- so the hash folds across 16384 DRAM entries
+that are guaranteed to miss, while airoha_ppe_foe_commit_entry() only
+handshakes the SRAM half (`if (hash < sram_num_entries)`).  Every flow
+that lands in the DRAM half is committed as if it were an SRAM entry, the
+PPE never sees it, and the traffic quietly falls back to the CPU path.
+
+Enable the DRAM table and its hash1 engine so the folded range the driver
+advertises is the range the hardware actually searches.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -214,12 +214,15 @@
+ 			      PPE_SRAM_TABLE_EN_MASK |
+ 			      PPE_SRAM_HASH1_EN_MASK |
+ 			      PPE_DRAM_TABLE_EN_MASK |
++			      PPE_DRAM_HASH1_EN_MASK |
+ 			      PPE_SRAM_HASH0_MODE_MASK |
+ 			      PPE_SRAM_HASH1_MODE_MASK |
+ 			      PPE_DRAM_HASH0_MODE_MASK |
+ 			      PPE_DRAM_HASH1_MODE_MASK,
+ 			      FIELD_PREP(PPE_SRAM_TABLE_EN_MASK, 1) |
+ 			      FIELD_PREP(PPE_SRAM_HASH1_EN_MASK, 1) |
++			      FIELD_PREP(PPE_DRAM_TABLE_EN_MASK, 1) |
++			      FIELD_PREP(PPE_DRAM_HASH1_EN_MASK, 1) |
+ 			      FIELD_PREP(PPE_SRAM_HASH1_MODE_MASK, 1) |
+ 			      FIELD_PREP(PPE_DRAM_HASH1_MODE_MASK, 3));
+ 
