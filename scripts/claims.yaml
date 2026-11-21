@@ -471,6 +471,25 @@ claims:
       - "text: target/linux/airoha/an7581/target.mk:10 uboot-envtools kmod-nft-bridge kmod-sched-act-police kmod-sched-flower"
       - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:9 Add a default-off module parameter, airoha_ppe_meter."
 
+  - id: matchall-police-mtu-gate
+    claim: "tc matchall police 在 7.3/7.4 上不再被 airoha_tc_matchall_act_validate() 的 mtu 项拒绝：act_police 对任何 police action 都会把 tcfp_mtu 填成 ~0 或 rate-table cell size（net/sched/act_police.c:168-172 → :465），旧守卫对 matchall police 恒真；flower 的 99991 报错串只有 avrate/overhead，matchall 仍拒绝 peakrate，所以 99992 的报错串保留 peakrate。"
+    source:
+      - target/linux/airoha/patches-7.4/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:10
+      - target/linux/airoha/patches-7.4/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:38
+      - target/linux/airoha/patches-7.4/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:39
+      - target/linux/airoha/patches-7.4/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:42
+      - target/linux/airoha/patches-7.4/99991-net-airoha-let-the-tc-police-flow-reach-the-PPE-meter.patch:54
+    evidence: 代码
+    date: "2026-11-22"
+    status: supported
+    notes: "代码与 f0 结论，未上设备：实机验收（matchall police rc=0 与 in_hw）仍需在 r38221 上补。6.18 队列没有 989/99991 的 PPE meter，en7523/an7583 也不打包 kmod-sched-act-police/kmod-sched-flower，故 6.18 不加这份 matchall 补丁；7.3 与 7.4 各加一份，互不混入 flower 的 99991 改动。"
+    verify:
+      - "text: target/linux/airoha/patches-7.4/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:10 net/sched/act_police.c:168-172"
+      - "text: target/linux/airoha/patches-7.4/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:38 act->police.overhead || act->police.mtu) {"
+      - "text: target/linux/airoha/patches-7.4/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:39 act->police.overhead) {"
+      - "text: target/linux/airoha/patches-7.4/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:42 peakrate/avrate/overhead police is not supported"
+      - "text: target/linux/airoha/patches-7.4/99991-net-airoha-let-the-tc-police-flow-reach-the-PPE-meter.patch:54 avrate/overhead police is not supported"
+
   - id: cve-2026-98822-backported
     claim: "CVE-2026-98822 的 AP_VLAN 单播绕过已封堵：mac80211 包补丁 018 把 ieee80211_lookup_ra_sta() 的非 control-port 查找从 sta_info_get_bss() 改成只查本接口的 sta_info_get()，同一 BSS 其它 VLAN 的 STA 不再被匹配；6.18 内核队列 947 同步同一修法，7.3/7.4 的内核树本身已带 bool bss 版本。"
     source:
