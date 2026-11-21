@@ -15,6 +15,11 @@
 #      literal +/- multiset can differ by that move while the content does
 #      not.  The delta is printed so the move is visible.
 #
+#      Do not turn that into "the +/- multiset must be identical": a blank
+#      line the move turns from added into context is the normal outcome, and
+#      assertion 2 below is the criterion that decides whether the refresh is
+#      faithful.
+#
 # <pre-tree> and <post-tree> hold the files the patch touches, at the paths
 # "patch -p1" expects.  Build them by replaying the queue up to the patch
 # (see scripts/tests/apply-queue-f0.sh --keep) and copying those paths.
@@ -22,7 +27,7 @@
 # Exit 0 when both assertions hold, 1 otherwise.
 set -u
 PROG=${0##*/}
-[ $# -eq 4 ] || { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+[ $# -eq 4 ] || { awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 orig=$1 pre=$2 post=$3 out=$4
 [ -d "$pre" ] && [ -d "$post" ] || { echo "$PROG: pre/post tree missing" >&2; exit 2; }
 
