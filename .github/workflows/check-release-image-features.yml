@@ -1,17 +1,30 @@
 name: Check release image features
 
-# 974 (BQL) and 968 (napi_complete_done) have to be in the XR1710G image,
-# not merely in target/linux/airoha/patches-7.3.  The self-test job proves the
-# gate itself works on every change; the release-branch audit fails when the
-# branch that publishes images does not carry the changes (the release build
-# must also run the full build+image check; the criteria are in the script's --help).
+# 974 (BQL) and 968 (napi_complete_done) have to be in the XR1710G image, not
+# merely in the patch directory (patches-7.4 today; the gate resolves <kver>
+# from KERNEL_PATCHVER, and the paths filter below follows patches-*).
+# Two tiers, because the two
+# questions need different evidence:
+#
+#   Source carries 968/974        do the patches in this tree hold both changes?
+#                                 Offline, seconds, every PR and push.
+#   Release image carries 968/974 is the change in the kernel and in the image
+#                                 that gets published?  This reads
+#                                 build_dir/linux-<kver>/{vmlinux,Image} and
+#                                 bin/targets/airoha/an7581/*.itb from the SAME
+#                                 build, so it can only run where that build
+#                                 happened.  See the comment on the job.
+#
+# The self-test job proves the gate itself works on every change; the wiring
+# test proves the two tiers stay wired (the image tier must not grow a
+# --skip-image, or it silently degrades back to the source tier).
 
 on:
   pull_request:
     paths:
       - 'scripts/check-release-image-features.py'
       - 'scripts/tests/check-release-image-features.py'
-      - 'scripts/check-release-image-features.py'
+      - 'scripts/tests/test_release_image_gate_workflow.py'
       - '.github/workflows/check-release-image-features.yml'
   push:
     branches:
@@ -19,9 +32,13 @@ on:
     paths:
       - 'scripts/check-release-image-features.py'
       - 'scripts/tests/check-release-image-features.py'
-      - 'scripts/check-release-image-features.py'
-      - 'target/linux/airoha/patches-7.3/**'
+      - 'scripts/tests/test_release_image_gate_workflow.py'
+      - 'target/linux/airoha/patches-*/**'
       - '.github/workflows/check-release-image-features.yml'
+  schedule:
+    # Weekly: the full tier only runs where a build tree exists, so this is the
+    # cron that gives it a chance to run once a builder is wired up.
+    - cron: '0 3 * * 1'
   workflow_dispatch:
 
 permissions:
@@ -42,9 +59,11 @@ jobs:
       - name: Run gate self-tests
         run: python3 scripts/tests/check-release-image-features.py
 
-  release-branch-audit:
-    name: Release branch carries 968/974
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+      - name: Check the two tiers are still wired
+        run: python3 scripts/tests/test_release_image_gate_workflow.py
+
+  source-audit:
+    name: Source carries 968/974
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -62,6 +81,77 @@ jobs:
             echo ""
             echo '```'
             cat audit.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+
+      # The image tier cannot run here (no build tree), so say in the summary
+      # whether it will run anywhere.  Skipping a check silently is how this
+      # file ended up only doing the cheap half; a line in the summary means
+      # "not checked" is visible instead of assumed.
+      - name: Report whether the image tier has a builder
+        env:
+          BUILD_RUNNER: ${{ vars.XR1710G_BUILD_RUNNER }}
+        run: |
+          {
+            echo "### Release image audit"
+            echo ""
+            if [ -n "$BUILD_RUNNER" ]; then
+              echo "Runs on \`$BUILD_RUNNER\` (schedule + workflow_dispatch) against that runner's build tree."
+            else
+              echo "**NOT RUN**: no runner with a build tree is wired up. Set the repository"
+              echo "variable \`XR1710G_BUILD_RUNNER\` to a builder whose checkout holds"
+              echo "\`build_dir/\` and \`bin/targets/airoha/an7581/\` from the build that"
+              echo "published the image; until then 968/974 are only proven in the source."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  image-audit:
+    name: Release image carries 968/974
+    # A full run reads vmlinux/Image from build_dir and the .itb from bin/, and
+    # it compares them against each other: both must come from the same build.
+    # ubuntu-latest has neither (this repo is a source tree; the image is built
+    # in genshanxinli/xr1710g-builds), so a full job here would be red on every
+    # run because bin/ is missing -- a permanently red gate, which is the
+    # defect this workflow is fixing, not a check.  Hence: run on the builder
+    # named by the repository variable, and skip (not fail) when there is none.
+    if: >-
+      vars.XR1710G_BUILD_RUNNER != '' &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ${{ vars.XR1710G_BUILD_RUNNER }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # The whole point is the artifacts next to this checkout: a clean
+          # checkout would `git clean -ffdx` and delete build_dir/ and bin/.
+          clean: false
+
+      - name: The full check needs a build tree
+        run: |
+          ok=0
+          for path in build_dir bin/targets/airoha/an7581; do
+            if [ ! -e "$path" ]; then
+              echo "::error::$path is missing on this runner; the image tier needs the tree of the build that produced the image (set XR1710G_BUILD_RUNNER to that builder, or unset it to skip the tier)"
+              ok=1
+            fi
+          done
+          exit "$ok"
+
+      - name: Image audit (build + image)
+        run: |
+          set +e
+          python3 scripts/check-release-image-features.py \
+            --repo . --build-dir build_dir \
+            --image-dir bin/targets/airoha/an7581 > image-audit.log 2>&1
+          rc=$?
+          cat image-audit.log
+          {
+            echo "### Release image audit"
+            echo ""
+            echo '```'
+            cat image-audit.log
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$rc"

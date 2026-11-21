@@ -1,0 +1,58 @@
+name: Shell syntax
+
+# `sh -n` on every *.sh is not a syntax check: dash rejects bash-only syntax
+# (`;&`, `declare -A`, `arr=(...)`) at parse time, so a repo-wide `sh -n` scan
+# can only be made green by whitelisting the bash scripts -- and a whitelist
+# hides the next real error in the file it names.  scripts/check-shell-syntax.py
+# dispatches on each file's own shebang instead:
+#
+#   #!/usr/bin/env bash, #!/bin/bash      -> bash -n
+#   #!/bin/sh, #!/bin/dash, #!/bin/ash    -> sh -n
+#   no shebang (sourced fragment)          -> sh -n
+#   any other interpreter (ucode, ...)    -> skipped, it is not a shell script
+#
+# There is no allowlist.  A script that will not parse under its own
+# interpreter is a bug in that script, not a line to add here.
+
+on:
+  pull_request:
+    paths:
+      - '**/*.sh'
+      - 'scripts/check-shell-syntax.py'
+      - 'scripts/tests/test_check_shell_syntax.py'
+      - '.github/workflows/shell-syntax.yml'
+  push:
+    branches:
+      - xr1710g
+    paths:
+      - '**/*.sh'
+      - 'scripts/check-shell-syntax.py'
+      - 'scripts/tests/test_check_shell_syntax.py'
+      - '.github/workflows/shell-syntax.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  syntax:
+    name: Parse each script with its own interpreter
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      # The dispatcher is the thing that decides which parser to run, so prove
+      # it on known-good and known-broken fixtures before trusting the sweep.
+      - name: Test the dispatcher
+        run: python3 scripts/tests/test_check_shell_syntax.py
+
+      - name: Parse every tracked *.sh
+        run: python3 scripts/check-shell-syntax.py
