@@ -17,6 +17,62 @@ is draining, which is what the release-image gate measures.
 
 Signed-off-by: OpenWrt <openwrt@example.org>
 
+diff --git a/drivers/net/ethernet/airoha/airoha_eth.c b/drivers/net/ethernet/airoha/airoha_eth.c
+index cbe101a08..da5009636 100644
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -1371,6 +1371,30 @@
+ 	e->dma_type = AIROHA_DMA_UNMAPPED;
+ }
+ 
++static void airoha_qdma_tx_bql_add(struct airoha_queue *q,
++				   struct sk_buff *skb)
++{
++	q->bql[0] += skb->len;
++	q->bql[1]++;
++	q->bql_dirty = true;
++}
++
++static void airoha_qdma_tx_bql_flush(struct airoha_queue *q,
++				     struct netdev_queue *txq)
++{
++	if (!q->bql_dirty)
++		return;
++
++	/* Several net_device TX queues can share one hw QDMA TX queue, so the
++	 * completion is reported for the queue that owns the skb.
++	 */
++	netdev_tx_completed_queue(txq, q->bql[1], q->bql[0]);
++
++	q->bql[0] = 0;
++	q->bql[1] = 0;
++	q->bql_dirty = false;
++}
++
+ static int airoha_qdma_tx_napi_poll(struct napi_struct *napi, int budget)
+ {
+ 	struct airoha_tx_irq_queue *irq_q;
+@@ -1447,8 +1471,9 @@
+ 
+ 			txq = skb_get_tx_queue(skb->dev, skb);
+ 
++			airoha_qdma_tx_bql_add(q, skb);
+ 			spin_lock_bh(&dev->txq_lock[qidx]);
+-			netdev_tx_completed_queue(txq, 1, skb->len);
++			airoha_qdma_tx_bql_flush(q, txq);
+ 			spin_unlock_bh(&dev->txq_lock[qidx]);
+ 
+ 			dev_kfree_skb_any(skb);
+@@ -1625,7 +1650,8 @@
+ 				struct netdev_queue *txq;
+ 
+ 				txq = skb_get_tx_queue(skb->dev, skb);
+-				netdev_tx_completed_queue(txq, 1, skb->len);
++				airoha_qdma_tx_bql_add(q, skb);
++				airoha_qdma_tx_bql_flush(q, txq);
+ 				dev_kfree_skb_any(skb);
+ 				e->skb = NULL;
+ 			}
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
 @@ -238,6 +238,9 @@
