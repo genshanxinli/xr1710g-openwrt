@@ -7,28 +7,45 @@ on:
   push:
     tags:
       - "v*"
+      - "distfeeds-*"
   workflow_dispatch:
 
+env:
+  # Every product this workflow talks about is built in genshanxinli/xr1710g-builds:
+  # this repo is a source tree, so `bin/` only exists on a builder that ran
+  # make.  Both repos are public, and an asset of a release there can be read
+  # anonymously -- hence the fetch below is a release asset and not an artifact
+  # from the build repo.  `actions/download-artifact` across repositories needs
+  # `actions:read` on the *other* repo, i.e. a fine-grained PAT or a deploy key
+  # kept as a long-lived secret, and an artifact expires (90 days by default)
+  # while a release asset stays readable for the tag that names it.
+  BUILDS_REPO: genshanxinli/xr1710g-builds
+
 jobs:
+  # Tier 1: a workspace that already holds the finished build.  Only a
+  # self-hosted builder has bin/ and the image bytes, so this tier is gated on
+  # the runner variable instead of running green-by-accident on a hosted runner
+  # (#6): the job that used to sit on ubuntu-latest could never find bin/, so
+  # the first tag pushed would have gone red on a step that never had a chance.
+  #
+  # The pack step never skips.  build-distfeeds.sh already refuses an empty
+  # bin/, and `test -s` plus fail_on_unmatched_files make a missing feed turn
+  # the job red; the old `else echo skipping` branch let the release publish
+  # without its feeds and say nothing.
   release:
-    runs-on: ubuntu-latest
+    if: vars.XR1710G_BUILD_RUNNER != ''
+    runs-on: ${{ vars.XR1710G_BUILD_RUNNER }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      # A checkout on its own carries no artifacts. When the job runs in a
-      # workspace that already has a finished build (self-hosted runner), pack
-      # the package feeds into one asset: a release asset cannot keep the
-      # targets/<board>/<subtarget>/packages layout that apk needs, a tarball
-      # can.
-      #
-      # This step never skips. build-distfeeds.sh already refuses an empty
-      # bin/, and `test -s` plus fail_on_unmatched_files make a missing feed
-      # turn the job red; the old `else echo skipping` branch let the release
-      # publish without its feeds and say nothing (#6).
       - name: Pack distfeeds
         run: |
+          if [ ! -d bin/packages ] && [ ! -d bin/targets ]; then
+            echo "::error::$PWD carries no bin/ from a finished build; tier 1 needs the builder named by the repository variable XR1710G_BUILD_RUNNER"
+            exit 1
+          fi
           ./scripts/build-distfeeds.sh distfeeds
           tar -czf distfeeds.tar.gz -C distfeeds .
           test -s distfeeds.tar.gz
@@ -46,3 +63,71 @@ jobs:
             bin/targets/**/*.manifest
             bin/targets/**/sha256sums
             bin/targets/**/profiles.json
+
+  # Tier 2: no bin/ at all (ubuntu-latest).  The release of the build repo
+  # carries the feed tree that build produced, next to the image.  Fetch it for
+  # the commit this tag names, put it where build-distfeeds.sh looks for a build
+  # tree, and re-derive the published tree from it so the script's own checks
+  # (index against the .apk files on disk) run against the *published* bytes.
+  # A tag with no matching build, a release whose feeds went missing, or a feed
+  # tree that no longer agrees with its index is red here, not on a device.
+  feed-source:
+    if: vars.XR1710G_BUILD_RUNNER == ''
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # Reads a public API and a public release asset, so it needs no token and
+      # no secret exists to leak or rotate.  One unauthenticated API call per
+      # run stays well inside the 60/hour that IP gets.
+      - name: Fetch the build's distfeeds for this commit
+        run: |
+          set -eu
+          fail() { printf '::error::%s\n' "$*"; exit 1; }
+
+          sha=$(git rev-parse --short HEAD)
+          echo "looking for distfeeds-$sha.tar.gz in $BUILDS_REPO's releases"
+          curl -fsSL --retry 3 \
+            "https://api.github.com/repos/$BUILDS_REPO/releases?per_page=100" \
+            -o "$RUNNER_TEMP/releases.json" ||
+            fail "cannot list the releases of $BUILDS_REPO: the build that produced $sha never published its feeds"
+
+          rc=0
+          python3 - "$sha" >"$RUNNER_TEMP/asset-url" <<'PY' || rc=$?
+          import json, os, sys
+
+          want = "distfeeds-%s.tar.gz" % sys.argv[1]
+          path = os.path.join(os.environ["RUNNER_TEMP"], "releases.json")
+          for rel in json.load(open(path)):
+              for asset in rel.get("assets") or ():
+                  if asset.get("name") == want:
+                      print(asset["browser_download_url"])
+                      sys.exit(0)
+          sys.exit("no asset named %s" % want)
+          PY
+          [ "$rc" -eq 0 ] ||
+            fail "$BUILDS_REPO has no release asset distfeeds-$sha.tar.gz: run its build workflow for this commit first"
+
+          url=$(cat "$RUNNER_TEMP/asset-url")
+          echo "asset: $url"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/distfeeds.tar.gz" "$url" ||
+            fail "cannot download $url"
+          test -s "$RUNNER_TEMP/distfeeds.tar.gz" ||
+            fail "$url downloaded empty"
+          sha256sum "$RUNNER_TEMP/distfeeds.tar.gz"
+
+          mkdir -p "$RUNNER_TEMP/build/bin"
+          tar -xzf "$RUNNER_TEMP/distfeeds.tar.gz" \
+            -C "$RUNNER_TEMP/build/bin" --strip-components=1 ||
+            fail "cannot unpack $RUNNER_TEMP/distfeeds.tar.gz"
+          test -f "$RUNNER_TEMP/build/bin/targets/airoha/an7581/packages/packages.adb" ||
+            fail "the fetched feed tree has no targets/airoha/an7581/packages/packages.adb"
+
+      - name: Re-derive the published tree from the build output
+        run: |
+          TOPDIR="$RUNNER_TEMP/build" ./scripts/build-distfeeds.sh distfeeds
+          tar -czf distfeeds.tar.gz -C distfeeds .
+          test -s distfeeds.tar.gz
+          ls -l distfeeds.tar.gz
