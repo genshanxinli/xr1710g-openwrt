@@ -22,8 +22,8 @@ from upstream's even where the subject lines match. It has since drifted away
 from a clean ancestry: measured on 2026-11-21, the fork parent's `kernel73`
 tip is **not** an ancestor of `xr1710g` — the merge-base is still
 `5192094fd6`, and the last real absorption of upstream work is `bc0b2ed82a`
-(2026-10-24), so `xr1710g` carries 511 commits upstream does not have while
-missing 880 of theirs. Check it instead of trusting this paragraph:
+(2026-10-24): `xr1710g` carried 511 commits upstream did not have and missed
+880 of theirs; both move with every commit — read them below, not here:
 
 ```sh
 scripts/track-upstream.sh                 # the table; exits 1 while it drifts
