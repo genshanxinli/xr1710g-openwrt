@@ -284,14 +284,14 @@ claims:
     evidence: 实测
     date: "2026-11-20"
     status: supported
-    notes: "实测只到编译产物：干净 defconfig 得到 CONFIG_KERNEL_FTRACE=y 与 CONFIG_KERNEL_ENABLE_DEFAULT_TRACERS=y，内核 .config 有 CONFIG_TRACEPOINTS=y，nm 目标文件有 15 个 nf_flow_pppoe 符号；未验证：现网镜像 r38162+27-b3e6b27587（7.4-rc3）已换成 7.4 内核，但本轮只在编译产物上验过、未采到运行期 tracepoint；本机没有 PPPoE 会话（wan proto=dhcp，/proc/net/pppoe 0 条），从未采到真实 PPPoE 入向事件，available_events 要等新镜像启动后才会有该事件。"
-
+    notes: "实测(2026-11-21)已到运行期：镜像 r38189+1-bc6ee752a1 / linux-7.4-rc3 的 .config 有 CONFIG_FTRACE=y(4568)/CONFIG_TRACING=y(4566)/CONFIG_TRACEPOINTS=y(292)，打包进 kmod-nf-flow 的 nf_flow_table.ko 有 6 个 nf_flow_pppoe 符号（含 __tracepoint_nf_flow_pppoe 与 __traceiter_nf_flow_pppoe），/proc/kallsyms 有 __traceiter_nf_flow_pppoe [nf_flow_table]，临时挂 tracefs 后 available_events 含 nf_flow_table:nf_flow_pppoe；vmlinux 与 mt7996e.ko 里为 0，因为 CONFIG_NF_FLOW_TABLE=m 且该 tracepoint 归 netfilter 不归无线，属预期。踩过的坑：build_dir/**/linux-7.4-rc3/.config 会同时命中 toolchain-* 下那份 kernel-headers 的 .config（CONFIG_TRACEPOINTS 未开），路径必须窄到 build_dir/target-*/；另 /sys/kernel/debug/tracing 在本镜像不存在、tracefs 未挂载，所以「available_events 里看不到」曾被误判成「没编进内核」。未验证：本机没有 PPPoE 会话（wan proto=dhcp，/proc/net/pppoe 0 条），从未采到真实 PPPoE 入向事件。"
     verify:
       - "text: config/Config-kernel.in:377 default y if TARGET_airoha_an7581"
       - "text: target/linux/airoha/patches-7.3/917-netfilter-flowtable-add-opt-in-pppoe-ingress-trace.patch:56 trace_nf_flow_pppoe(skb, tuple, NF_FLOW_PPPOE_HOOK_INGRESS);"
+      - "text: target/linux/airoha/patches-7.4/917-netfilter-flowtable-add-opt-in-pppoe-ingress-trace.patch:54 trace_nf_flow_pppoe(skb, tuple, NF_FLOW_PPPOE_HOOK_INGRESS);"
       - "kconfig: build_dir/target-*/linux-airoha_an7581/linux-7.4-rc3/.config CONFIG_TRACEPOINTS=y"
       - "symbol: build_dir/target-*/linux-airoha_an7581/linux-7.4-rc3/net/netfilter/nf_flow_table_ip.o __tracepoint_nf_flow_pppoe"
-      - "text: target/linux/airoha/patches-7.4/917-netfilter-flowtable-add-opt-in-pppoe-ingress-trace.patch:54 trace_nf_flow_pppoe(skb, tuple, NF_FLOW_PPPOE_HOOK_INGRESS);"
+      - "symbol: build_dir/target-*/root-airoha/lib/modules/7.4-rc3/nf_flow_table.ko __tracepoint_nf_flow_pppoe"
   - id: wifi-self-loopback-not-possible
     claim: "XR1710G（mt7996e，单 wiphy phy0）上无法建立单机 AP+STA 环回：同一 phy 的发射不上自己的接收路径，任何 VIF 都关联不到自己承载的 BSS。"
     source:
