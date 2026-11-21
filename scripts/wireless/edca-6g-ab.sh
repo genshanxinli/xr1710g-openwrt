@@ -298,6 +298,22 @@ skip_run() {
 # "no-client") and the command to run once it exists, so hw-gap-report.sh can
 # merge this harness with the others.
 skip_no_client() {
+	# No associated STA on an OWE-upgraded open 6 GHz AP is a configuration
+	# block, not a missing client (#347).  Prefer --iface, else the first
+	# 6 GHz AP the board exposes.
+	_owe_if=${IFACE:-}
+	if [ -z "$_owe_if" ]; then
+		for _owe_cand in $(list_ifaces); do
+			[ "$(iface_type "$_owe_cand")" = AP ] || continue
+			is_6g_freq "$(iface_freq "$_owe_cand")" || continue
+			_owe_if=$_owe_cand
+			break
+		done
+	fi
+	if [ -n "$_owe_if" ] && _mm=$(nc_owe_mismatch "$_owe_if"); then
+		nc_owe_mismatch_block "${RESULT_DIR:-}" 43 "$_mm"
+		exit 2
+	fi
 	_nc_run='sh scripts/wireless/edca-6g-ab.sh --target <STA_IP> --result-dir <DIR>'
 	_rec=$(no_client_record "${RESULT_DIR:-}" 43 6ghz-eht-client "$_nc_run" \
 		"${1:-no 6G STA}" \

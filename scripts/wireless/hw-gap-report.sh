@@ -4,8 +4,8 @@
 # hw-gap-report.sh - merge the wireless harnesses' "no-client" records into
 # one table, grouped by the hardware each record is missing.
 #
-# Every harness that cannot measure because the board has no client writes a
-# structured result.json (see scripts/wireless/lib/no-client.sh):
+# Every harness that cannot measure writes a structured result.json (see
+# scripts/wireless/lib/no-client.sh):
 #
 #   {"status": "no-client", "missing": "6ghz-eht-client",
 #    "ticket": "48", "command": "sh scripts/wireless/6g-rx.sh ...",
@@ -14,6 +14,13 @@
 # This report answers the only question that matters while the hardware is
 # missing: which single piece of hardware unblocks which tickets, and what
 # exactly to run once it arrives.
+#
+# "status": "blocked" records are configuration blocks, not missing hardware:
+# the board is there, the association cannot work until a setting changes.
+# They are reported in the same table so one run covers both, but the Class
+# column keeps a config fix off the purchase list.  "6ghz-owe-mismatch" is
+# the case that forced the split: hostapd upgrades an open band=6g AP to
+# OWE + PMF(2), so the harness saw "no client" while the client was fine.
 #
 # Read-only: it only reads result.json files, writes nothing to disk.
 #
@@ -36,9 +43,9 @@ usage() {
 Usage: $PROG [--dir DIR]... [DIR...]
 
 Scan DIR trees (default: scripts/perf-baselines /tmp) for result.json files
-whose "status" is "no-client" and print one Markdown table grouped by the
-"missing" hardware, with the tickets, the harnesses and the command to run
-once that hardware is available.
+whose "status" is "no-client" or "blocked" and print one Markdown table
+grouped by the "missing" item, with the tickets, the harnesses, the command
+that unblocks them and a Class column (hardware or configuration).
 
 Exit status: 0 report printed (also when nothing matched), 2 bad arguments.
 EOF
@@ -109,7 +116,8 @@ def records_in(dirs):
                         data = json.load(fh)
                 except (OSError, ValueError):
                     continue
-                if isinstance(data, dict) and data.get("status") == "no-client":
+                if isinstance(data, dict) and data.get("status") in (
+                        "no-client", "blocked"):
                     data["_path"] = path
                     yield data
 
@@ -124,6 +132,16 @@ def main(dirs):
     by_missing = {}
     for record in records:
         by_missing.setdefault(record.get("missing") or "unknown", []).append(record)
+
+    # Keys whose fix is a setting on this board, not a purchase.  A blocked
+    # record is always a configuration block.
+    CONFIG_KEYS = {"6ghz-owe-mismatch", "6ghz-only-bss"}
+
+    def klass(missing, items):
+        if missing in CONFIG_KEYS or any(
+                r.get("status") == "blocked" for r in items):
+            return "configuration"
+        return "hardware"
 
     def tickets(items):
         return sorted({str(r.get("ticket") or "-") for r in items},
@@ -142,20 +160,26 @@ def main(dirs):
     print()
     print("%d no-client record(s), %d missing hardware item(s), %d ticket(s) "
           "covered." % (len(records), len(order), len(all_tickets)))
+    config_keys = [m for m in order if klass(m, by_missing[m]) == "configuration"]
+    if config_keys:
+        print()
+        print("%d of them are configuration blocks, not missing hardware: %s."
+              % (len(config_keys), ", ".join("`%s`" % m for m in config_keys)))
     print()
-    print("| Missing hardware | Tickets | Harnesses | Command once acquired |")
-    print("|---|---|---|---|")
+    print("| Missing hardware | Tickets | Harnesses | Command once acquired | Class |")
+    print("|---|---|---|---|---|")
     for missing in order:
         items = by_missing[missing]
         ticket_cell = ", ".join("#" + t for t in tickets(items) if t != "-") or "-"
         commands = sorted({(r.get("command") or "").strip() for r in items
                            if (r.get("command") or "").strip()})
         command_cell = "<br>".join("`%s`" % c for c in commands) or "-"
-        print("| `%s` | %s | %s | %s |" % (
-            missing, ticket_cell, ", ".join(harnesses(items)), command_cell))
+        print("| `%s` | %s | %s | %s | %s |" % (
+            missing, ticket_cell, ", ".join(harnesses(items)), command_cell,
+            klass(missing, items)))
     print()
     for missing in order:
-        print("## `%s`" % missing)
+        print("## `%s` (%s)" % (missing, klass(missing, by_missing[missing])))
         print()
         items = sorted(by_missing[missing],
                        key=lambda r: (str(r.get("ticket") or ""), str(r.get("script") or "")))

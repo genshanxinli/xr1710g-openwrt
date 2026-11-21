@@ -1113,6 +1113,17 @@ EOF
 skip_no_client() {
 	_nc_missing=${1:-6ghz-eht320-client}
 	_nc_reason=${2:-no 320 client}
+	# A 320 MHz client that cannot associate to an OWE-upgraded open 6 GHz
+	# AP is a configuration block, not a missing client (#347).  Use the
+	# explicitly selected interface, else the first discovered candidate.
+	_owe_iface=${IFACE:-}
+	if [ -z "$_owe_iface" ] && [ -n "${CANDIDATES:-}" ]; then
+		_owe_iface=$(printf '%s\n' "$CANDIDATES" | awk -F'|' 'NF { print $1; exit }')
+	fi
+	if [ -n "$_owe_iface" ] && _mm=$(nc_owe_mismatch "$_owe_iface"); then
+		nc_owe_mismatch_block "$(dirname "${RESULT_JSON:-/tmp/x}")" 47 "$_mm"
+		exit 2
+	fi
 	_nc_run='sh scripts/wireless/6g320-matrix.sh --iface <6GHZ_320_AP_IFACE> --client-ssh <ROOT@HOST> --client-model <MODEL> --client-driver <DRIVER> --client-firmware <FIRMWARE> --result-json <DIR>/result.json'
 	_rec=$(no_client_record "$(dirname "${RESULT_JSON:-/tmp/x}")" 47 "$_nc_missing" \
 		"$_nc_run" "$_nc_reason" \

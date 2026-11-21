@@ -2772,6 +2772,12 @@ main() {
 		# on; the record lets hw-gap-report.sh merge it with the 6 GHz
 		# harnesses.  Tool-only gaps do not produce a no-client record.
 		if [ "$STATION_OK" -ne 1 ] && [ -n "${CLIENT:-}" ]; then
+			# Unassociated on an OWE-upgraded open 6 GHz AP is a
+			# configuration block, not missing hardware (#347).
+			if [ -n "${IFACE:-}" ] && _mm=$(nc_owe_mismatch "$IFACE"); then
+				nc_owe_mismatch_block "${OUT_DIR:-}" 66 "$_mm"
+				exit 1
+			fi
 			_nc_run='sh scripts/wireless/irq-napi-ab.sh --client <CLIENT_MAC> --client-ip <CLIENT_IP> --run --out-dir <DIR>'
 			_rec=$(no_client_record "${OUT_DIR:-}" 66 6ghz-eht-client \
 				"$_nc_run" \

@@ -324,6 +324,13 @@ need_cmd() {
 
 skip_no_sta() {
 	[ -n "${1:-}" ] && warn "$1"
+	# The temporary BSS above is SAE, but a hand-selected --iface may be an
+	# open 6 GHz AP that hostapd upgraded to OWE + PMF(2).  Say that instead
+	# of "no station": same live encryption, different fix (#347).
+	if [ -n "${SEL_IFACE:-}" ] && _mm=$(nc_owe_mismatch "$SEL_IFACE"); then
+		nc_owe_mismatch_block "${OUT_OPT:-}" 68 "$_mm"
+		exit 2
+	fi
 	# The exact "SKIP: no 6G STA" line is part of this harness's contract;
 	# the two lines after it name the missing hardware and the command to run
 	# once it exists, and result.json carries the same facts for
