@@ -229,6 +229,13 @@ NETWATCHDOG_GUARD=$(dirname "$0")/../lib/netwatchdog-guard.sh
 # shellcheck source=../lib/netwatchdog-guard.sh
 . "$NETWATCHDOG_GUARD"
 
+# Shared "no client" record (scripts/wireless/lib/no-client.sh).  Best effort:
+# a harness must still skip, and still exit 0, when the record cannot be
+# written.
+NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
+# shellcheck source=lib/no-client.sh
+[ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
+
 warn() {
 	printf '%s: warning: %s\n' "$PROG" "$1" >&2
 }
@@ -238,6 +245,26 @@ skip() {
 	RESULT_STATUS=skip
 	write_result_json 0
 	printf 'SKIP: %s\n' "$*"
+	exit 0
+}
+
+# A board without a 6 GHz client is not a failed measurement, and a bare
+# "SKIP" leaves nothing behind.  This path writes a structured no-client
+# record (status "no-client") naming the missing hardware and what would have
+# been measured, so scripts/wireless/hw-gap-report.sh can merge it with the
+# other harnesses.  $1 reason; $2 missing hardware; $3 command to run once it
+# exists.
+skip_no_client() {
+	cleanup_tmp
+	_rec=$(no_client_record "${OUT:-}" 48 "${2:-6ghz-eht-client}" "${3:-}" "${1:-}" \
+		"station rx bytes and rx bitrate on a 6 GHz BSS" \
+		"ethtool rx_ampdu_bytes_cnt / rx_mpdu_cnt delta" \
+		"PCIe0 vs hif2 IRQ attribution, idle-corrected" \
+		"mt76 band_bytes per-band A-MPDU delta" 2>/dev/null)
+	printf 'SKIP: %s\n' "${1:-no 6GHz client}"
+	printf '      missing %s; once it is available run: %s\n' \
+		"${2:-6ghz-eht-client}" "${3:-<see --help>}"
+	[ -n "$_rec" ] && printf '      no-client record: %s\n' "$_rec"
 	exit 0
 }
 
@@ -2305,10 +2332,10 @@ if [ "$_sel_rc" -eq 2 ]; then
 	if [ "$STA_WAIT" -gt 0 ]; then
 		choose_station || true
 		if ! wait_for_station "$STA_WAIT"; then
-			skip "no 6G STA $STA_MAC on $SEL_IFACE; pass --iface if another 6G BSS is selected"
+			skip_no_client "no 6G STA $STA_MAC on $SEL_IFACE; pass --iface if another 6G BSS is selected" 6ghz-eht-client "sh scripts/wireless/6g-rx.sh --iface <6GHZ_AP_IFACE> --sta <STA_MAC> --sta-ip <STA_IP>"
 		fi
 	else
-		skip "no 6G STA $STA_MAC on $SEL_IFACE; pass --iface if another 6G BSS is selected"
+		skip_no_client "no 6G STA $STA_MAC on $SEL_IFACE; pass --iface if another 6G BSS is selected" 6ghz-eht-client "sh scripts/wireless/6g-rx.sh --iface <6GHZ_AP_IFACE> --sta <STA_MAC> --sta-ip <STA_IP>"
 	fi
 	_sel_rc=0
 fi
@@ -2322,7 +2349,7 @@ fi
 
 if ! choose_station; then
 	if ! wait_for_station "$STA_WAIT"; then
-		skip "no 6G STA on $SEL_IFACE (SSID \"$SEL_SSID\"); pass --iface if another 6G BSS is selected"
+		skip_no_client "no 6G STA on $SEL_IFACE (SSID \"$SEL_SSID\"); pass --iface if another 6G BSS is selected" 6ghz-eht-client "sh scripts/wireless/6g-rx.sh --iface <6GHZ_AP_IFACE> --sta <STA_MAC> --sta-ip <STA_IP>"
 	fi
 fi
 
@@ -2341,7 +2368,7 @@ command -v ethtool >/dev/null 2>&1 ||
 # there is nothing to measure.  That is a clean SKIP (rc=0), not an error,
 # and it says why instead of dying on someone else's missing tool.
 if ! command -v iperf3 >/dev/null 2>&1; then
-	skip "no iperf3 on this host, so the 6G RX uplink cannot be measured; install iperf3 and rerun"
+	skip_no_client "no iperf3 on this host, so the 6G RX uplink cannot be measured; install iperf3 and rerun" iperf3 "install iperf3 on the AP, then: sh scripts/wireless/6g-rx.sh --iface <6GHZ_AP_IFACE> --sta <STA_MAC> --sta-ip <STA_IP>"
 fi
 
 make_out

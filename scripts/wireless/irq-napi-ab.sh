@@ -81,6 +81,13 @@ export LC_ALL
 
 PROG=${0##*/}
 
+# Shared no-client record: a refusal for missing hardware writes a
+# structured result.json (scripts/wireless/lib/no-client.sh) instead of a
+# bare "missing for a real run" note.
+NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
+# shellcheck source=lib/no-client.sh
+[ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
+
 # Defaults.  Every value can also be set from the environment; the command
 # line wins.  The window is kept in integer milliseconds (WINDOW_MS) because
 # every rate below divides by it; WINDOW is only the whole-second form handed
@@ -2761,6 +2768,19 @@ main() {
 
 	if [ "$MISSING_N" -gt 0 ]; then
 		note "missing for a real run: $(printf '%s' "$MISSING" | tr ',' ' ')"
+		# An unattached client is the hardware gap this harness is blocked
+		# on; the record lets hw-gap-report.sh merge it with the 6 GHz
+		# harnesses.  Tool-only gaps do not produce a no-client record.
+		if [ "$STATION_OK" -ne 1 ] && [ -n "${CLIENT:-}" ]; then
+			_nc_run='sh scripts/wireless/irq-napi-ab.sh --client <CLIENT_MAC> --client-ip <CLIENT_IP> --run --out-dir <DIR>'
+			_rec=$(no_client_record "${OUT_DIR:-}" 66 6ghz-eht-client \
+				"$_nc_run" \
+				"client ${CLIENT_MAC:-$CLIENT} is not associated to ${IFACE:-the AP}" \
+				"station tx-byte delta per arm" \
+				"napi_threaded / IRQ split A/B" 2>/dev/null)
+			note "missing 6ghz-eht-client; once it is available run: $_nc_run"
+			[ -n "$_rec" ] && note "no-client record: $_rec"
+		fi
 		note "refusing to run; nothing was changed"
 		exit 1
 	fi

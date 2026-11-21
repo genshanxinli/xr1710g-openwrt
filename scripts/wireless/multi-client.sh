@@ -186,6 +186,12 @@
 set -u
 
 PROG=${0##*/}
+
+# Shared no-client record: a skip for missing hardware writes a structured
+# result.json (scripts/wireless/lib/no-client.sh) instead of a bare SKIP.
+NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
+# shellcheck source=lib/no-client.sh
+[ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
 SCHEMA=multi-client-aggregation/v1
 
 CLIENT_COUNT=0
@@ -1883,8 +1889,16 @@ while [ "$_i" -le "$CLIENT_COUNT" ]; do
 done
 
 if [ "$ACTIVE_COUNT" -lt 2 ]; then
+	_rec=$(no_client_record "${OUT:-}" 50 second-associated-wifi-client \
+		"sh scripts/wireless/multi-client.sh --client <MAC_A> --client <MAC_B> --out <DIR>" \
+		"only $ACTIVE_COUNT of $CLIENT_COUNT requested client(s) associated; need at least 2" \
+		"aggregate tx/rx throughput across 2-3 concurrent clients" \
+		"per-client rate against the --min-mbit floor" \
+		"NPU token_info / hw-queues under concurrent traffic" 2>/dev/null)
 	say "SKIP: only $ACTIVE_COUNT of $CLIENT_COUNT requested client(s) associated; need at least 2"
+	say "      missing second-associated-wifi-client; once it is available run: sh scripts/wireless/multi-client.sh --client <MAC_A> --client <MAC_B> --out <DIR>"
 	say "      no traffic was sent and no config was changed"
+	[ -n "$_rec" ] && say "      no-client record: $_rec"
 	exit 0
 fi
 

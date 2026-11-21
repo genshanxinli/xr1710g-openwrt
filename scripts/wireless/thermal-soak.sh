@@ -103,6 +103,13 @@ set -u
 
 PROG=${0##*/}
 
+# Shared no-client record: a refusal for missing hardware writes a
+# structured result.json (scripts/wireless/lib/no-client.sh) instead of a
+# bare usage error.
+NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
+# shellcheck source=lib/no-client.sh
+[ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
+
 # ---------------------------------------------------------------------------
 # Defaults.  Every value can also come from the environment.
 # ---------------------------------------------------------------------------
@@ -687,6 +694,22 @@ validate() {
 			usage_error "--cpu-load is thermal-only"
 		fi
 		if [ "$DRY_RUN" -eq 0 ]; then
+			# Two concurrent legs need two clients; without them the run
+			# stops here.  Record which one is missing so the gap shows up
+			# in hw-gap-report.sh; the argument error and its exit code are
+			# unchanged.
+			if [ -z "$IP_A" ] || [ -z "$IP_B" ]; then
+				_nc_run='sh scripts/wireless/thermal-soak.sh --soak --client-ip-a <IP_A> --client-ip-b <IP_B> --duration 86400'
+				_missing_leg=''
+				[ -z "$IP_A" ] && _missing_leg='A'
+				[ -z "$IP_B" ] && _missing_leg="${_missing_leg}B"
+				_rec=$(no_client_record "${OUT:-}" 53 second-associated-wifi-client \
+					"$_nc_run" "no client for soak leg $_missing_leg" \
+					"two-leg concurrent soak throughput" \
+					"thermal / throughput curve over the soak window" 2>/dev/null)
+				note "missing second-associated-wifi-client (leg $_missing_leg); once it is available run: $_nc_run"
+				[ -n "$_rec" ] && note "no-client record: $_rec"
+			fi
 			[ -n "$IP_A" ] || usage_error "--soak needs --client-ip-a (leg A)"
 			[ -n "$IP_B" ] || usage_error "--soak needs --client-ip-b (leg B)"
 		fi

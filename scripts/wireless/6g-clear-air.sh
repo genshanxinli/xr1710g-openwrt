@@ -150,6 +150,12 @@ umask 077
 
 PROG=${0##*/}
 
+# Shared no-client record: a skip for missing hardware writes a structured
+# result.json (scripts/wireless/lib/no-client.sh) instead of a bare SKIP.
+NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
+# shellcheck source=lib/no-client.sh
+[ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
+
 # --- fixed protocol constants ----------------------------------------
 
 DEFAULT_CONFIG=/etc/config/wireless
@@ -318,7 +324,19 @@ need_cmd() {
 
 skip_no_sta() {
 	[ -n "${1:-}" ] && warn "$1"
+	# The exact "SKIP: no 6G STA" line is part of this harness's contract;
+	# the two lines after it name the missing hardware and the command to run
+	# once it exists, and result.json carries the same facts for
+	# hw-gap-report.sh.
+	_rec=$(no_client_record "${OUT_OPT:-}" 68 6ghz-eht-client \
+		"sh scripts/wireless/6g-clear-air.sh --interferer <2.4GHZ_AP_IP> --target <6GHZ_STA_IP> --create-bss" \
+		"${1:-no station on a 6 GHz AP BSS}" \
+		"6 GHz rx_ampdu_bytes_cnt delta, clear vs interferer" \
+		"CCA busy time and airtime share per arm" \
+		"mt76 token_info / WED token delta" 2>/dev/null)
 	printf 'SKIP: no 6G STA\n'
+	printf '      missing 6ghz-eht-client; once it is available run: sh scripts/wireless/6g-clear-air.sh --interferer <2.4GHZ_AP_IP> --target <6GHZ_STA_IP> --create-bss\n'
+	[ -n "$_rec" ] && printf '      no-client record: %s\n' "$_rec"
 	exit 0
 }
 
