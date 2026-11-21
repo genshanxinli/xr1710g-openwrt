@@ -88,6 +88,12 @@ export LC_ALL
 
 PROG=${0##*/}
 
+# Shared no-client record: a skip for missing hardware writes a structured
+# result.json (scripts/wireless/lib/no-client.sh) instead of a bare SKIP.
+NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
+# shellcheck source=lib/no-client.sh
+[ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
+
 # Fixed protocol constants.  These are the arms issue #43 asks for; do not
 # make them runtime-configurable, or two runs stop being comparable.
 # EDCA6G_ARMS is a test hook, not a flag: the offline self-check uses it to
@@ -284,6 +290,24 @@ skip_run() {
 	say "SKIP: $1"
 	log_line "SKIP: $1"
 	[ -n "${RESULT_DIR:-}" ] && write_skip_result "$RESULT_DIR" "$1"
+	exit 0
+}
+
+# skip_no_client REASON: no 6 GHz client, so there is no A/B to run.  Prints
+# the same "SKIP:" line but also records the missing hardware (status
+# "no-client") and the command to run once it exists, so hw-gap-report.sh can
+# merge this harness with the others.
+skip_no_client() {
+	_nc_run='sh scripts/wireless/edca-6g-ab.sh --target <STA_IP> --result-dir <DIR>'
+	_rec=$(no_client_record "${RESULT_DIR:-}" 43 6ghz-eht-client "$_nc_run" \
+		"${1:-no 6G STA}" \
+		"EDCA parameter A/B throughput delta per arm" \
+		"tx_burst / airtime restore verification" \
+		"per-arm station retries and failed frames" 2>/dev/null)
+	say "SKIP: $1"
+	say "      missing 6ghz-eht-client; once it is available run: $_nc_run"
+	[ -n "$_rec" ] && say "      no-client record: $_rec"
+	log_line "SKIP: $1"
 	exit 0
 }
 
@@ -1665,7 +1689,7 @@ fi
 command -v "$EDCA6G_IW" >/dev/null 2>&1 ||
 	die "'$EDCA6G_IW' not found; install iw"
 
-discover_6g_sta || skip_run 'no 6G STA'
+discover_6g_sta || skip_no_client 'no 6G STA'
 IFACE=$DISCOVERED_IFACE
 STATION=$DISCOVERED_STA
 validate_6g_only_iface "$IFACE" "$STATION"

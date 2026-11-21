@@ -153,10 +153,18 @@ class SkipPaths(Harness):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("SKIP", proc.stdout)
         self.assertIn("no 6G STA", proc.stdout)
+        # A skip caused by missing hardware leaves a machine-readable record,
+        # so scripts/wireless/hw-gap-report.sh can list it as a hardware gap.
+        self.assertIn("missing 6ghz-eht-client", proc.stdout)
+        self.assertIn("once it is available run: sh scripts/wireless/edca-6g-ab.sh",
+                      proc.stdout)
         data = self.result_json()
-        self.assertEqual(data["status"], "skip")
-        self.assertEqual(data["skip_reason"], "no 6G STA")
-        self.assertEqual(data["arms"], [])
+        self.assertEqual(data["status"], "no-client")
+        self.assertEqual(data["missing"], "6ghz-eht-client")
+        self.assertEqual(str(data["ticket"]), "43")
+        self.assertIn("no 6G STA", data["reason"])
+        self.assertTrue(data["command"])
+        self.assertTrue(data["criteria"])
 
     def test_missing_iperf3_skips_with_zero(self):
         # The iperf3 check must come after the STA gate: with a STA present a

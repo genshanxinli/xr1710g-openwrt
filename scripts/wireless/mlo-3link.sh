@@ -68,6 +68,12 @@ LC_ALL=C
 export LC_ALL
 
 PROG=${0##*/}
+
+# Shared no-client record: a skip for missing hardware writes a structured
+# result.json (scripts/wireless/lib/no-client.sh) instead of a bare SKIP.
+NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
+# shellcheck source=lib/no-client.sh
+[ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
 MAIN_PID=$$
 MARKER=mlo-3link
 SECTION=mlo3link
@@ -1779,7 +1785,15 @@ do_run() {
 	if [ "$_wrc" -ne 0 ]; then
 		RESULT=no-station
 		STOP="no station associated to $SSID within ${STATION_TIMEOUT}s"
+		_nc_run='sh scripts/wireless/mlo-3link.sh --peer <3LINK_CLIENT_IP> --local-ip <IPV4/PREFIX> --ssid <SSID>'
+		_rec=$(no_client_record "${CAPTURE:-}" 89 6ghz-mlo-3link-client \
+			"$_nc_run" "$STOP" \
+			"3-link MLO association (links=3 on the AP MLD)" \
+			"per-link station rates from iw station dump" \
+			"per-link throughput over the traffic window" 2>/dev/null)
 		say "result: $STOP; no traffic window and no retry"
+		say "      missing 6ghz-mlo-3link-client; once it is available run: $_nc_run"
+		[ -n "$_rec" ] && say "      no-client record: $_rec"
 		exit 4
 	fi
 

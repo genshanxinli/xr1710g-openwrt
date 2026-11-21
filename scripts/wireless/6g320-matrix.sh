@@ -163,6 +163,12 @@ LC_ALL=C
 export LC_ALL
 
 PROG=${0##*/}
+
+# Shared no-client record: a skip for missing hardware writes a structured
+# result.json (scripts/wireless/lib/no-client.sh) instead of a bare SKIP.
+NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
+# shellcheck source=lib/no-client.sh
+[ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
 SCHEMA_ID=6g320-matrix/v1
 
 IFACE=
@@ -1100,8 +1106,22 @@ EOF
 	AP_WIDTH=320
 }
 
+# skip_no_client [MISSING] [REASON]: no usable 320 MHz client, so the matrix
+# has nothing to measure.  The skip line stays "SKIP: no 320 client"; the two
+# lines after it name the missing hardware and the command to run once it
+# exists, and result.json carries the same facts for hw-gap-report.sh.
 skip_no_client() {
+	_nc_missing=${1:-6ghz-eht320-client}
+	_nc_reason=${2:-no 320 client}
+	_nc_run='sh scripts/wireless/6g320-matrix.sh --iface <6GHZ_320_AP_IFACE> --client-ssh <ROOT@HOST> --client-model <MODEL> --client-driver <DRIVER> --client-firmware <FIRMWARE> --result-json <DIR>/result.json'
+	_rec=$(no_client_record "$(dirname "${RESULT_JSON:-/tmp/x}")" 47 "$_nc_missing" \
+		"$_nc_run" "$_nc_reason" \
+		"per-arm TX/RX width (320 MHz) and NSS from iw station dump" \
+		"per-arm throughput, retries and failed frames" \
+		"width/NSS downgrade and re-association invalidation" 2>/dev/null)
 	printf 'SKIP: no 320 client\n'
+	printf '      missing %s; once it is available run: %s\n' "$_nc_missing" "$_nc_run"
+	[ -n "$_rec" ] && printf '      no-client record: %s\n' "$_rec"
 	exit 0
 }
 
@@ -1964,7 +1984,7 @@ if ! command -v iw >/dev/null 2>&1; then
 		die "iw is not installed; cannot validate --iface $IFACE"
 	fi
 	say "iw is not installed; no 6 GHz 320 MHz AP can be validated"
-	skip_no_client
+	skip_no_client iw "iw is not installed"
 fi
 
 CANDIDATES=$(discover_candidates)
@@ -1973,7 +1993,7 @@ if [ -z "$CANDIDATES" ]; then
 		die "$IFACE is not a 6 GHz (5945-7125 MHz) 320 MHz AP BSS"
 	fi
 	say "no 6 GHz 320 MHz AP BSS found"
-	skip_no_client
+	skip_no_client 6ghz-320mhz-ap-bss "no 6 GHz 320 MHz AP BSS found"
 fi
 
 if [ -n "$IFACE" ]; then
