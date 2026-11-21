@@ -2,11 +2,15 @@
 #
 # edca-6g-ab.sh - 6 GHz BE EDCA TXOP 0/63/171 A/B harness.
 #
-# Context: 6 GHz hostapd emits no tx_queue_data2_burst, so the 6 GHz BE TXOP
-# is 0.  Issue #18 changes that default to 2.0 ms (63 EDCA time units); the
-# mt76 "0019" edca_apply debugfs path is the runtime way to apply an arbitrary
-# BE TXOP without restarting hostapd.  This harness measures the effect of the
-# BE TXOP on AP-to-STA throughput with everything else held fixed.
+# Context: before #18 the 6 GHz hostapd config carried no
+# tx_queue_data2_burst, so the 6 GHz BE TXOP was 0.  #18 gives the 6 GHz band
+# the same 2.0 ms (63 EDCA time units) default as 5 GHz, so a rebuilt image
+# does emit the line and the hostapd mechanism below can set it; an older
+# image emits nothing and that mechanism stops with "hostapd did not emit
+# tx_queue_data2_burst".  The mt76 "0019" edca_apply debugfs path applies an
+# arbitrary BE TXOP without restarting hostapd, which is why auto prefers it.
+# This harness measures the effect of the BE TXOP on AP-to-STA throughput with
+# everything else held fixed.
 #
 # Units: the EDCA TXOP limit is in units of 32 us (the nl80211/ieee80211
 # txop unit).  The arms are therefore 0, 2016 us and 5472 us; 171 units is the
@@ -906,9 +910,12 @@ apply_arm_hostapd() {
 	_eff=$(sed -n 's/^tx_queue_data2_burst=//p' "$HOSTAPD_CONF" 2>/dev/null | tail -n 1)
 	case $_eff in
 	'')
-		# An absent line means hostapd's default burst of 0.
+		# An absent line means hostapd's default burst of 0.  On an image
+		# built before #18 the 6 GHz band never emitted the line at all, so
+		# this is that image, not a bad value: say so instead of blaming
+		# the request.
 		[ "$_tu" = 0 ] ||
-			die "hostapd did not emit tx_queue_data2_burst for requested $_tu TU"
+			die "hostapd did not emit tx_queue_data2_burst for requested $_tu TU; this image predates #18 (6 GHz band default) or the radio is not 6 GHz"
 		;;
 	*)
 		_applied=$(burst_to_tu "$_eff") ||
