@@ -1,0 +1,135 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Subject: [PATCH] netfilter: nft_flow_offload: apply the crossing guard to inet flowtables
+
+nft_flow_offload_eval() only records bridge crossings and only refuses
+connections that crossed the bridge more than once when the flowtable is
+of family bridge. A flowtable of family inet is reached by a bridged frame
+as well: bridge conntrack reinjects it into the inet forward hook after the
+bridge forward chain ran, and firmware like fw4 puts the LAN devices into
+both an inet flowtable (ft) and a bridge flowtable (fb). The bridge
+flowtable refuses the second crossing, but the same packet then reaches the
+inet flowtable rule, which - being of family inet - neither records
+crossings nor consults the record, and offloads the connection. Hardware
+flow tables are keyed by 5-tuple only, so the second crossing replaces the
+first crossing's L2 rewrite and the router is bypassed.
+
+Guard every flowtable, not only the bridge family one, and take the
+ingress port for the record from nf_bridge: for a bridged frame nft_in()
+is the bridge device on both crossings, while nf_bridge keeps the port it
+really came in on. A routed frame reports its real ingress port there too
+and keeps a single port per direction, so routed connections are unaffected.
+
+The GC hook that tears a flow down when a later crossing is seen is now
+installed for the inet and ip/ipv6 flowtables as well.
+
+Connections that were already confirmed when the flowtable rule started
+handling them (picked up mid-stream, e.g. after a firewall reload) have no
+record and are not offloaded until they close; that is what the earlier
+patch does for bridged connections already.
+
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/net/netfilter/nft_flow_offload.c
++++ b/net/netfilter/nft_flow_offload.c
+@@ -5,6 +5,7 @@
+ #include <linux/init.h>
+ #include <linux/netlink.h>
+ #include <linux/netfilter.h>
++#include <linux/netfilter_bridge.h>
+ #include <linux/workqueue.h>
+ #include <linux/spinlock.h>
+ #include <linux/netfilter/nf_conntrack_common.h>
+@@ -49,9 +50,26 @@
+ }
+ 
+ 
++/* Ingress port of the packet for the crossing record. A frame that came in
++ * through a bridge port reaches the inet forward hook with the bridge device
++ * as ingress (bridge conntrack reinjects it), so nft_in() reports the same
++ * interface for both crossings; the port it really came in on is kept in
++ * nf_bridge.
++ */
++static int nft_flow_offload_bridge_iif(const struct nft_pktinfo *pkt)
++{
++#if IS_ENABLED(CONFIG_BRIDGE_NETFILTER)
++	int iif = nf_bridge_get_physinif(pkt->skb);
++
++	if (iif)
++		return iif;
++#endif
++	return nft_in(pkt) ? nft_in(pkt)->ifindex : 0;
++}
++
+ /* Record the ingress port of each crossing of a bridged connection, see
+- * struct nf_conn_brxing. Runs for every packet that reaches the bridge
+- * forward chain, i.e. every packet not handled by the fast path.
++ * struct nf_conn_brxing. Runs for every packet that reaches a flowtable
++ * rule, i.e. every packet not handled by the fast path.
+  */
+ static void nft_flow_offload_bridge_record(const struct nft_pktinfo *pkt,
+ 					   struct nf_flowtable *flowtable,
+@@ -63,10 +81,12 @@
+ 	struct nf_conn_brxing *rec;
+ 	int iif, old;
+ 
+-	if ((proto != IPPROTO_TCP && proto != IPPROTO_UDP) || !nft_in(pkt))
++	if (proto != IPPROTO_TCP && proto != IPPROTO_UDP)
+ 		return;
+ 
+-	iif = nft_in(pkt)->ifindex;
++	iif = nft_flow_offload_bridge_iif(pkt);
++	if (!iif)
++		return;
+ 	rec = nf_conn_brxing_find(ct);
+ 	if (!rec) {
+ 		/* Extensions can only be added before confirmation. A
+@@ -123,7 +143,6 @@
+ {
+ 	struct nft_flow_offload *priv = nft_expr_priv(expr);
+ 	struct nf_flowtable *flowtable = &priv->flowtable->data;
+-	bool routing = flowtable->type->family != NFPROTO_BRIDGE;
+ 	struct tcphdr _tcph, *tcph = NULL;
+ 	struct nf_flow_route route = {};
+ 	enum ip_conntrack_info ctinfo;
+@@ -139,8 +158,7 @@
+ 	if (!ct)
+ 		goto out;
+ 
+-	if (!routing)
+-		nft_flow_offload_bridge_record(pkt, flowtable, ct, ctinfo);
++	nft_flow_offload_bridge_record(pkt, flowtable, ct, ctinfo);
+ 
+ 	switch (ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple.dst.protonum) {
+ 	case IPPROTO_TCP:
+@@ -176,7 +194,7 @@
+ 	if (!nf_ct_is_confirmed(ct))
+ 		goto out;
+ 
+-	if (!routing && !nft_flow_offload_bridge_ok(ct))
++	if (!nft_flow_offload_bridge_ok(ct))
+ 		goto out;
+ 
+ 	if (test_and_set_bit(IPS_OFFLOAD_BIT, &ct->status))
+--- a/net/netfilter/nf_flow_table_inet.c
++++ b/net/netfilter/nf_flow_table_inet.c
+@@ -77,8 +77,8 @@
+ };
+ 
+ 
+-/* Tear down a bridge flow once its connection turned out to cross the
+- * bridge more than once, see struct nf_conn_brxing.
++/* Tear down a flow once its connection turned out to cross the bridge
++ * more than once, see struct nf_conn_brxing.
+  */
+ static bool nf_flow_bridge_gc(const struct flow_offload *flow)
+ {
+@@ -113,6 +113,9 @@
+ {
+ 	flowtable_bridge = flowtable_inet; flowtable_bridge.family = NFPROTO_BRIDGE;
+ 	flowtable_bridge.gc = nf_flow_bridge_gc;
++	flowtable_inet.gc = nf_flow_bridge_gc;
++	flowtable_ipv4.gc = nf_flow_bridge_gc;
++	flowtable_ipv6.gc = nf_flow_bridge_gc;
+ 
+ 	nft_register_flowtable_type(&flowtable_ipv4);
+ 	nft_register_flowtable_type(&flowtable_ipv6);
