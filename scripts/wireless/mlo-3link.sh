@@ -145,7 +145,7 @@ GATE_SERIAL_MSG=
 NW_WHY=
 SERIAL_WHY=
 PICKED=
-PICKED_DISABLED=0
+PICKED_OFF=
 DEV24=
 DEV5=
 DEV6=
@@ -221,15 +221,44 @@ radio_index() {
 	uci_get "wireless.$1.radio"
 }
 
+radio_off_reason() {
+	# radio_off_reason SECTION LABEL -> prints why the band cannot carry a
+	# link and returns 0; returns 1 when the band is usable.  Two different
+	# faults with two different fixes:
+	#   * the wifi-device is disabled, so the radio never starts at all;
+	#   * the radio is enabled but every wifi-iface on it is disabled, so it
+	#     starts with no BSS.  Checking only wifi-device.disabled missed that
+	#     case: the 6 GHz band looked usable while its only VAP was off, and a
+	#     3-link MLD then had nothing to attach to (issue #89).
+	_sec=$1 _label=$2 _nif=0 _non=0 _if='' _first=''
+
+	if radio_is_disabled "$_sec"; then
+		printf '%s\n' "wireless.$_sec ($_label) is disabled; enable it for the experiment first: uci set wireless.$_sec.disabled=0; uci commit wireless; wifi reload"
+		return 0
+	fi
+	for _if in $(list_sections iface); do
+		[ -n "$_if" ] || continue
+		[ "$(uci_get "wireless.$_if.device")" = "$_sec" ] || continue
+		_nif=$((_nif + 1))
+		[ -n "$_first" ] || _first=$_if
+		radio_is_disabled "$_if" || _non=$((_non + 1))
+	done
+	if [ "$_nif" -gt 0 ] && [ "$_non" -eq 0 ]; then
+		printf '%s\n' "wireless.$_sec ($_label) is enabled but all $_nif wifi-iface section(s) on it are disabled, so the band starts with no BSS and a 3-link MLD cannot use it: uci set wireless.$_first.disabled=0; uci commit wireless; wifi reload"
+		return 0
+	fi
+	return 1
+}
+
 find_radio() {
 	# find_radio BAND -> sets PICKED to the first wifi-device of that band.
 	PICKED=
-	PICKED_DISABLED=0
+	PICKED_OFF=
 	for _sec in $(list_sections device); do
 		[ -n "$_sec" ] || continue
 		[ "$(radio_band "$_sec")" = "$1" ] || continue
 		PICKED=$_sec
-		radio_is_disabled "$_sec" && PICKED_DISABLED=1
+		PICKED_OFF=$(radio_off_reason "$_sec" "$1") || :
 		return 0
 	done
 	return 1
@@ -243,18 +272,15 @@ select_radios() {
 
 	find_radio 2.4 || die "no 2.4 GHz wifi-device in $CONFIG"
 	DEV24=$PICKED
-	[ "$PICKED_DISABLED" = 0 ] ||
-		die "wireless.$DEV24 (2.4 GHz) is disabled; enable it for the experiment first: uci set wireless.$DEV24.disabled=0; uci commit wireless; wifi reload"
+	[ -z "$PICKED_OFF" ] || die "$PICKED_OFF"
 
 	find_radio 5g || die "no 5 GHz wifi-device in $CONFIG"
 	DEV5=$PICKED
-	[ "$PICKED_DISABLED" = 0 ] ||
-		die "wireless.$DEV5 (5 GHz) is disabled; enable it for the experiment first: uci set wireless.$DEV5.disabled=0; uci commit wireless; wifi reload"
+	[ -z "$PICKED_OFF" ] || die "$PICKED_OFF"
 
 	find_radio 6g || die "no 6 GHz wifi-device in $CONFIG"
 	DEV6=$PICKED
-	[ "$PICKED_DISABLED" = 0 ] ||
-		die "wireless.$DEV6 (6 GHz) is disabled; enable it for the experiment first: uci set wireless.$DEV6.disabled=0; uci commit wireless; wifi reload"
+	[ -z "$PICKED_OFF" ] || die "$PICKED_OFF"
 
 	[ "$DEV24" != "$DEV5" ] && [ "$DEV24" != "$DEV6" ] && [ "$DEV5" != "$DEV6" ] ||
 		die "the 2.4/5/6 GHz bands do not resolve to three distinct wifi-device sections"
@@ -280,11 +306,11 @@ plan_radios() {
 	DEV6=
 	LINK_MAP=
 	find_radio 2.4 && DEV24=$PICKED
-	[ -n "$DEV24" ] && [ "$PICKED_DISABLED" = 1 ] && say "dry-run: wireless.$DEV24 (2.4 GHz) is disabled; a real run would refuse"
+	[ -n "$DEV24" ] && [ -n "$PICKED_OFF" ] && say "dry-run: $PICKED_OFF; a real run would refuse"
 	find_radio 5g && DEV5=$PICKED
-	[ -n "$DEV5" ] && [ "$PICKED_DISABLED" = 1 ] && say "dry-run: wireless.$DEV5 (5 GHz) is disabled; a real run would refuse"
+	[ -n "$DEV5" ] && [ -n "$PICKED_OFF" ] && say "dry-run: $PICKED_OFF; a real run would refuse"
 	find_radio 6g && DEV6=$PICKED
-	[ -n "$DEV6" ] && [ "$PICKED_DISABLED" = 1 ] && say "dry-run: wireless.$DEV6 (6 GHz) is disabled; a real run would refuse"
+	[ -n "$DEV6" ] && [ -n "$PICKED_OFF" ] && say "dry-run: $PICKED_OFF; a real run would refuse"
 	[ -n "$DEV24" ] || DEV24=radio24
 	[ -n "$DEV5" ] || DEV5=radio5
 	[ -n "$DEV6" ] || DEV6=radio6
@@ -715,6 +741,29 @@ print_links() {
 	rm -f "$_f"
 }
 
+station_gate() {
+	# station_gate -> 0 when the dump proves three links, 4 (with RESULT and
+	# STOP set) otherwise.  Both 0 and >3 must be handled: the predicate used to
+	# reject only 1 and 2, so "no per-link data" walked on into the traffic
+	# window and the run then reported a result for a station whose link count
+	# was never known.
+	case "$STATION_LINKS" in
+	3)
+		return 0
+		;;
+	0)
+		RESULT=station-no-perlink
+		STOP="iw station dump reports no per-link data for $STATION; the 3-link precondition cannot be verified"
+		return 4
+		;;
+	*)
+		RESULT=station-not-3link
+		STOP="the station reports ${STATION_LINKS} link(s); a 3-link station is required for this negative test"
+		return 4
+		;;
+	esac
+}
+
 station_fields() {
 	# station_fields DUMP_FILE [MAC] -> kind<TAB>link<TAB>field<TAB>value
 	awk -v want="$2" '
@@ -1035,6 +1084,14 @@ resolve_traffic_tool() {
 	return 0
 }
 
+traffic_loss_ok() {
+	# traffic_loss_ok RC LOSS RX -> 0 only when the window actually carried
+	# traffic.  A 90 % loss burst is a black-hole symptom, so the bound is
+	# TRAFFIC_MAX_LOSS (10 %) and a zero receive count fails too.
+	[ "${1:-1}" -eq 0 ] && [ "${2:-100}" -le "$TRAFFIC_MAX_LOSS" ] &&
+		[ "${3:-0}" -gt 0 ]
+}
+
 traffic_window() {
 	TRAFFIC_OK=0
 	TRAFFIC_TIMEOUT=0
@@ -1079,8 +1136,7 @@ traffic_window() {
 		[ -n "$TRAFFIC_LOSS" ] || TRAFFIC_LOSS=100
 		[ -n "$TRAFFIC_TX" ] || TRAFFIC_TX=$DURATION
 		[ -n "$TRAFFIC_RX" ] || TRAFFIC_RX=0
-		if [ "$_rc" -eq 0 ] && [ "$TRAFFIC_LOSS" -le "$TRAFFIC_MAX_LOSS" ] &&
-			[ "$TRAFFIC_RX" -gt 0 ]; then
+		if traffic_loss_ok "$_rc" "$TRAFFIC_LOSS" "$TRAFFIC_RX"; then
 			TRAFFIC_OK=1
 		fi
 	fi
@@ -1731,24 +1787,10 @@ do_run() {
 	STATION_LINKS=$(station_link_count "$CAPTURE/station-before-traffic.txt" "$STATION")
 	case "$STATION_LINKS" in ''|*[!0-9]*) STATION_LINKS=0 ;; esac
 	say "station: $STATION; per-link data: ${STATION_LINKS} link(s)"
-	# Both 0 and 3 must be handled: the predicate used to reject only 1 and
-	# 2, so "no per-link data" walked on into the traffic window and the run
-	# then reported a result for a station whose link count was never known.
-	case "$STATION_LINKS" in
-	3) ;;
-	0)
-		RESULT=station-no-perlink
-		STOP="iw station dump reports no per-link data for $STATION; the 3-link precondition cannot be verified"
+	if ! station_gate; then
 		say "result: $STOP; no traffic window and no retry"
 		exit 4
-		;;
-	*)
-		RESULT=station-not-3link
-		STOP="the station reports ${STATION_LINKS} link(s); a 3-link station is required for this negative test"
-		say "result: $STOP; no traffic window and no retry"
-		exit 4
-		;;
-	esac
+	fi
 	if ! print_station_rates "$CAPTURE/station-before-traffic.txt" "$STATION"; then
 		warn "per-link station rates are unavailable in iw station dump"
 	fi

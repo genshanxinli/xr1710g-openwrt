@@ -133,10 +133,9 @@ if [ "$DRY_RUN" = 1 ]; then
 fi
 
 [ -d "$SYSFS/class/net/$IFACE" ] || die "local NIC $IFACE does not exist" 2
-command -v iperf3 >/dev/null 2>&1 || die "iperf3 is not installed locally" 2
-command -v ssh >/dev/null 2>&1 || die "ssh is not installed locally" 2
-command -v python3 >/dev/null 2>&1 || die "python3 is not installed locally" 2
 mkdir -p "$OUTDIR" || die "cannot create $OUTDIR" 2
+# The tool gates run after the link gate, further down: on a host whose NIC is
+# 1G the operator needs that verdict, not a package-install hint.
 
 local_speed() {
 	cat "$SYSFS/class/net/$IFACE/speed" 2>/dev/null || printf 'unknown'
@@ -289,11 +288,18 @@ RX_S=nan RX_R=nan RX_RETR=nan RX_CPU=nan RX_VALID=0 RX_NOTE=
 say "wan-bench/2.5g: local=$IFACE peer=$PEER port=$PORT ${DURATION}s P$PARALLEL"
 started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-# Preconditions: both link speeds must be 2500 when the peer NIC is named.  The
-# pre snapshot is taken first so a refused run still carries its own evidence.
-snap_all pre
+# Preconditions: both link speeds must be 2500 when the peer NIC is named.
+# Order matters: the local link verdict (and its snapshot, so a refused run
+# still carries its own evidence) comes before the tool gates, and the tool
+# gates come before the peer check -- a missing iperf3 is only worth reporting
+# once there is a 2.5G link to measure (issue #70).
+snap_nic pre local "$IFACE"
 lspeed=$(local_speed)
 [ "$lspeed" = 2500 ] || die "local link speed is $lspeed Mb/s, expected 2500 (see $(snap_path pre "$IFACE"))" 1
+command -v iperf3 >/dev/null 2>&1 || die "iperf3 is not installed locally" 2
+command -v ssh >/dev/null 2>&1 || die "ssh is not installed locally" 2
+command -v python3 >/dev/null 2>&1 || die "python3 is not installed locally" 2
+snap_all pre
 pspeed=$(peer_speed)
 if [ -n "$PEER_IF" ] && [ "$pspeed" != 2500 ]; then
 	die "peer link speed is $pspeed Mb/s, expected 2500 (see $(snap_path pre "$PEER_IF"))" 1

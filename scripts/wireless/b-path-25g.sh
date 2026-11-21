@@ -486,20 +486,30 @@ parse_args() {
 	fi
 }
 
-check_commands() {
+check_tools() {
 	local mode="$1" c missing=
 
-	for c in ssh iperf3 ethtool ip awk sed grep tr cut; do
+	shift
+	for c in "$@"; do
 		command -v "$c" >/dev/null 2>&1 || missing="$missing $c"
 	done
-	if [ -z "$missing" ]; then
-		return 0
-	fi
+	[ -n "$missing" ] || return 0
 	if [ "$mode" = "dry-run" ]; then
 		note "missing local command(s):$missing (dry-run continues)"
 		return 0
 	fi
 	die "missing local command(s):$missing"
+}
+
+# Two phases, link first: what it takes to read a link, then what it takes to
+# move bytes over it.  A bench host without iperf3 must still get the "SKIP: no
+# 2.5G feeder" verdict instead of a tool error (issue #70).
+check_link_tools() {
+	check_tools "$1" ip awk sed grep tr cut
+}
+
+check_traffic_tools() {
+	check_tools "$1" ssh iperf3 ethtool
 }
 
 resolve_feeder_iface() {
@@ -1618,7 +1628,8 @@ dry_run() {
 	local count udp
 
 	note "dry-run: no SSH, no traffic, no address/route change, no directory created"
-	check_commands dry-run
+	check_link_tools dry-run
+	check_traffic_tools dry-run
 
 	# Resolve and validate the local side only; the AP side is unchecked
 	# by design in a dry run.  This is what turns an absent or 1G feeder
@@ -1675,8 +1686,12 @@ main() {
 
 	[ "$DRY_RUN" -eq 1 ] && dry_run
 
-	check_commands run
+	# The feeder verdict comes first: on a host without iperf3 an absent (or
+	# 1G) feeder must still print "SKIP: no 2.5G feeder", so the traffic tools
+	# are only demanded once a 2.5G feeder exists (issue #70).
+	check_link_tools run
 	resolve_feeder_iface
+	check_traffic_tools run
 	check_device
 	if [ "$(id -u 2>/dev/null || echo 1)" -ne 0 ]; then
 		die "run as root on the feeder host: temporary ip addr/route need CAP_NET_ADMIN"

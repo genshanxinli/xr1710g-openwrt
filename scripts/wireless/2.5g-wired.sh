@@ -474,20 +474,30 @@ dev_driver() {
 	'
 }
 
-check_commands() {
+check_tools() {
 	local mode="$1" c missing=
 
-	for c in ssh iperf3 ethtool ip awk sed grep tr cut date; do
+	shift
+	for c in "$@"; do
 		command -v "$c" >/dev/null 2>&1 || missing="$missing $c"
 	done
-	if [ -z "$missing" ]; then
-		return 0
-	fi
+	[ -n "$missing" ] || return 0
 	if [ "$mode" = "dry-run" ]; then
 		note "missing local command(s):$missing (dry-run continues)"
 		return 0
 	fi
 	die "missing local command(s):$missing"
+}
+
+# Two phases, link first: what it takes to read a link, then what it takes to
+# move bytes over it.  A bench host without iperf3 must still be told that its
+# NIC is not at 2.5G instead of that a tool is missing (issue #70).
+check_link_tools() {
+	check_tools "$1" ip awk sed grep tr cut date
+}
+
+check_traffic_tools() {
+	check_tools "$1" ssh iperf3 ethtool
 }
 
 host_2_5g_candidates() {
@@ -1400,7 +1410,8 @@ dry_run() {
 	*) plan_proto=$PROTO ;;
 	esac
 
-	check_commands dry-run
+	check_link_tools dry-run
+	check_traffic_tools dry-run
 	HOST_MGMT_IF=$(route_dev "$DEVICE_IP")
 	HOST_DEFAULT_IF=$(default_route_dev)
 
@@ -1627,18 +1638,20 @@ main() {
 
 	[ "$DRY_RUN" -eq 1 ] && dry_run
 
-	check_commands run
-	# The device port is resolved before the host NICs: "no 2.5G data port
-	# on the device" is a precondition no host NIC can fix, and it must not
-	# be reported as a missing host link.
+	# Check order matters here: the link tools have to be present before
+	# anything can be read, the device port is resolved before the host NICs
+	# ("no 2.5G data port on the device" is a precondition no host NIC can
+	# fix), and the traffic tools are demanded only after the link verdict so
+	# an absent 2.5G NIC still prints "SKIP: no 2.5G link" on a host without
+	# iperf3 (issue #70).  A bridged device port is reported, not fatal.
+	check_link_tools run
 	resolve_device_ports
 	[ "$DETACH_FROM_BRIDGE" -eq 1 ] && detach_plan
 
 	[ "$(id -u 2>/dev/null || printf '1')" = "0" ] ||
 		die "run as root on the bench host: temporary ip addr/route need CAP_NET_ADMIN"
 
-	# Device preconditions before host NICs: a bridged or absent data port
-	# cannot be fixed by any host NIC, and must not be reported as one.
+	check_traffic_tools run
 	check_device
 	resolve_host_nics
 
