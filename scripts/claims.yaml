@@ -136,8 +136,8 @@ claims:
   - id: cpu-top-opp-1200
     claim: "当前树的 CPU OPP 表最高 1.2 GHz（an7581.dtsi 的 opp-1200000000），不是 issue #1 验收里写的 1.35 GHz。"
     source:
-      - target/linux/airoha/dts/an7581.dtsi:231
       - target/linux/airoha/dts/an7581.dtsi:242
+      - target/linux/airoha/dts/an7581.dtsi:243
     evidence: 代码
     date: "2026-11-15"
     status: supported
@@ -146,13 +146,19 @@ claims:
     verify:
       - "text: target/linux/airoha/dts/an7581.dtsi:243 opp-hz = /bits/ 64 <1200000000>;"
   - id: 5g-half-offload
-    claim: "5G（band1）是半卸载：band1 没有独立 NPU TX buffer window，WAN→5G 只能走 host 注入（约 1 核/G），2.4G/6G 有自有窗口。"
+    claim: "5G（band1）默认仍是半卸载：树内 mt76 0016 只提供 opt-in 的 npu_band1_tx 窗口（默认关闭，要设 module param 才建），关着时 band1 没有独立的 NPU TX buffer window，WAN→5G 只能走 host 注入（约 1 核/G）；2.4G/6G 有自有窗口。"
     source:
+      - package/kernel/mt76/patches/0016-wifi-mt76-mt7996-give-band1-its-own-NPU-TX-buffer-space.patch:7
+      - package/kernel/mt76/patches/0016-wifi-mt76-mt7996-give-band1-its-own-NPU-TX-buffer-space.patch:11
       - https://github.com/genshanxinli/xr1710g-openwrt/issues/98
     evidence: 推断
-    date: "2026-11-15"
+    date: "2026-11-21"
     status: unverified
-    notes: "来自 issue #98 的背景约束，未在本树核对相关窗口代码；band1 窗口实验默认关闭且硬件未验。"
+    notes: "0016 在树里但默认不建窗口：The NPU TX window setup ... 只给 band0/band2 装了 band、band+5、band+10 三块；band1 要 npu_band1_tx=1 才装同样的三块，失败或固件拒绝就退回 host 注入。约 1 核/G 与 2.4G/6G 有窗口仍是 issue #98 的背景推断，未在本树测；窗口是否被固件接受、开窗后吞吐多少未验，issue #98 仍 open。"
+
+    verify:
+      - "text: package/kernel/mt76/patches/0016-wifi-mt76-mt7996-give-band1-its-own-NPU-TX-buffer-space.patch:7 buffer spaces for band0 and band2.  Band1 (5 GHz) has no window"
+      - "text: package/kernel/mt76/patches/0016-wifi-mt76-mt7996-give-band1-its-own-NPU-TX-buffer-space.patch:11 Add an opt-in npu_band1_tx module parameter (default off)"
 
   - id: 10g-unidirectional-baseline
     claim: "10G 上限工作只把单向 iperf3 结果当基线：TX 与 RX 分开跑，禁止同时双向；本仓库尚未提交同构建的双向/全双工基线。"
@@ -187,14 +193,20 @@ claims:
       - "text: scripts/perf-baselines/lan4-1g-2026-11-20/result.json:22 \"gbps\":0.704"
       - "text: scripts/perf-baselines/lan4-1g-2026-11-20/result.json:24 \"gbps\":0.887"
   - id: pppoe-decap-bit23
-    claim: "PPPoE 入向硬件 decap 依赖 IB1 bit23（BIND_TUNNEL_DECAP）：decap=0 时没有 bit23、没有硬件 decap，decap=1 才有；入向最小集是 5T/route 键 + STATE=2 + TTL + IB1 bit23，etype=8864/bit22/pppoe_id 不是必需。"
+    claim: "PPPoE 入向硬件 decap 靠 IB1 bit23（BIND_TUNNEL_DECAP）的推断未在树内确立：decap 实验里 decap=0 的 entry 不带 bit23、decap=1 才带；9907 把编码做成 0/1/2/3 四档（bit22|bit23、bit23、bit22 单独、bit22），并写明 bit22/bit23 谁都不是已证实的 strip 位。入向最小集（5T/route 键 + STATE=2 + TTL + IB1 bit23，etype=8864/bit22/pppoe_id 非必需）仍只是 b12 的推断，原始记录未入库。"
     source:
+      - target/linux/airoha/patches-7.3/9907-net-airoha-selectable-pppoe-decap-encoding.patch:12
+      - target/linux/airoha/patches-7.3/9907-net-airoha-selectable-pppoe-decap-encoding.patch:127
       - https://github.com/genshanxinli/xr1710g-openwrt/issues/31
       - https://github.com/genshanxinli/xr1710g-openwrt/issues/81
     evidence: 推断
-    date: "2026-11-15"
+    date: "2026-11-21"
     status: unverified
-    notes: "来自 issue #31 的已验证事实清单；b12 三臂实验原始记录未入库。issue #81 才把 decap 语义做成可选档。"
+    notes: "9907 的原话是 bit23 只有 DS-Lite/6rd 在推方向用过、PPPoE 入向从未设过 bit22/bit23，所以它把四档摆出来给真机 PPPoE WAN 逐档量（scripts/pppoe-decap-hw-bench.sh），默认 0 = 完全保持旧行为。本机 wan proto=dhcp，没有 PPPoE 会话，四档都未测；b12 的原始记录也不在库内。etype=8864/pppoe_id 不作为必需项这一点与 9907 的‘每档强制写 ETH_P_PPP_SES、pppoe_id 恒 0’一致。"
+
+    verify:
+      - "text: target/linux/airoha/patches-7.3/9907-net-airoha-selectable-pppoe-decap-encoding.patch:12 bind the push direction sets, bit23 (BIND_TUNNEL_DECAP, the vendor's"
+      - "text: target/linux/airoha/patches-7.3/9907-net-airoha-selectable-pppoe-decap-encoding.patch:127 Every arm forces the L2 match word to ETH_P_PPP_SES and leaves pppoe_id at"
 
   - id: pbus-csr-0x18-reads-7
     claim: "XR1710G 上 pbus_csr（0x1fbe3400）的 0x18 偏移即 0x1fbe3418，开机后读 0x00000007。"
@@ -227,7 +239,7 @@ claims:
   - id: reg-arbitrate-us-agree
     claim: "美规 XR1710G 出厂 radio1.country=radio2.country=US，运行 60_xr1710g-reg-arbitrate 只记一行 reg=US 日志、rc=0、不改 /etc/config/wireless。"
     source:
-      - target/linux/airoha/an7581/base-files/etc/uci-defaults/60_xr1710g-reg-arbitrate:175
+      - target/linux/airoha/an7581/base-files/etc/uci-defaults/60_xr1710g-reg-arbitrate:180
     evidence: 实测
     date: "2026-11-20"
     status: supported
@@ -248,10 +260,10 @@ claims:
       - "text: scripts/check-npu-firmware.sh:28 CVE_MAX_VERSION=TLB7.8.0.0_v006"
       - "symbol: package/firmware/linux-firmware/files/airoha/en7581_MT7996_npu_rv32.bin TLB7.7.0.0_v08"
   - id: flowtable-ft-missing-wlan-vifs
-    claim: "运行时已加载的 inet fw4 flowtable ft 的设备集合是 {lan2,lan3,lan4,wan}，不含 br-lan 里的 wlan vif；同一时刻 fw4 print 按当前状态会给出含 phy0.0-ap0/phy0.1-ap0 的集合，即已加载的 ft 是重载旧快照，缺口是重载竞争而不是 fw4 过滤。"
+    claim: "2026-11-20 04:38 UTC（f2a62be998 之前）的一次快照里，运行时已加载的 inet fw4 flowtable ft 的设备集合是 {lan2,lan3,lan4,wan}，不含 br-lan 里的 wlan vif；同一时刻 fw4 print 按当前状态给出含 phy0.0-ap0/phy0.1-ap0 的集合，即已加载的 ft 是重载旧快照，缺口是重载竞争而不是 fw4 过滤。HEAD 已把重载排队上限从 10 s 提到 200 s，修后的行为未复测。"
     source:
       - target/linux/airoha/an7581/base-files/etc/hotplug.d/iface/51-bridge-hw-offload:17
-      - target/linux/airoha/an7581/base-files/etc/hotplug.d/net/50-bridge-hw-offload:40
+      - target/linux/airoha/an7581/base-files/etc/hotplug.d/net/50-bridge-hw-offload:44
     evidence: 实测
     date: "2026-11-20"
     status: supported
@@ -259,6 +271,9 @@ claims:
 
     manual: true
     verified_at: 78486b870b
+
+    verify:
+      - "text: target/linux/airoha/an7581/base-files/etc/hotplug.d/net/50-bridge-hw-offload:58 [ \"$waits\" -lt 200 ]"
   - id: nf-flow-pppoe-trace-compiled
     claim: "airoha/an7581 的默认 7.3 内核现在会编入 nf_flow_pppoe tracepoint：config/Config-kernel.in 给 KERNEL_FTRACE 和 KERNEL_ENABLE_DEFAULT_TRACERS 加了 default y if TARGET_airoha_an7581，生成的 linux-7.3/.config 有 CONFIG_TRACEPOINTS=y，net/netfilter/nf_flow_table_ip.o 里有 __tracepoint_nf_flow_pppoe；同一份源码在改之前的 tracing-off 配置下该符号为 0。"
     source:
@@ -299,7 +314,7 @@ claims:
     manual: true
     verified_at: af31c794de
   - id: wifi-managed-set-channel-rejected
-    claim: "mac80211 上 managed VIF 不允许显式设置信道，iw set freq / set channel 一律返回 Resource busy (-16)；先锁信道再 connect 的规避手段在 mt7996e 上没有可行性。"
+    claim: "本仓 backports 7.2 + mt7996e 上 managed VIF 不允许显式设置信道，iw set freq / set channel 一律返回 Resource busy (-16)；r37994/r38034/r38047 三版固件都复现，三个 AP VIF 全 disabled 时仍复现，先锁信道再 connect 的规避手段没有可行性。库内没有 -16 的 cfg80211/mac80211 file:line（源码在 dl/backports-7.2，不在 repo）。"
     source:
       - package/kernel/mac80211/Makefile:13
     evidence: 实测
@@ -313,7 +328,7 @@ claims:
     claim: "990/970 的 SOE 只读探针在 an7581/config-7.3 里显式关掉（config-7.3:281 写 `# CONFIG_NET_AIROHA_SOE is not set`，Kconfig 里 `default n`），所以默认镜像里不编 `airoha_soe_probe.o`；在 7.3 树上 `yes \"\" | make ARCH=arm64 syncconfig` 只剩 0 个 `(NEW)` 符号。"
     source:
       - target/linux/airoha/an7581/config-7.3:281
-      - target/linux/airoha/patches-7.3/970-net-airoha-soe-readonly-probe.patch:37
+      - target/linux/airoha/patches-7.3/970-net-airoha-soe-readonly-probe.patch:36
     evidence: 实测
     date: "2026-11-20"
     status: supported
