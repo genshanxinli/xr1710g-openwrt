@@ -310,10 +310,37 @@ skip_no_link() {
 	exit 0
 }
 
+blocked_record() {
+	# blocked_record MISSING REASON: best effort status "blocked" record
+	# (issue #70).  MISSING is the gap hw-gap-report.sh groups by: 2.5g-peer
+	# is missing hardware, port-in-bridge is a setting on this board.
+	# note() writes to stderr, so the caller's stdout stays the BLOCKED line.
+	case $1 in
+	2.5g-peer)
+		_cmd=$NC_2G5_RUN
+		_crit='both ends report >= 2500 Mb/s (ethtool) and are link-up (/sys/class/net/*/carrier); iperf3 TCP both directions >= 2.2 Gbit/s at --parallel 4 --duration 10'
+		;;
+	port-in-bridge)
+		_cmd='ip link set <DEV_IF> down; ip link set <DEV_IF> nomaster; ip link set <DEV_IF> up'
+		_crit='the selected device port has no master in /sys/class/net/*/master'
+		;;
+	*)
+		_cmd=
+		_crit=
+		;;
+	esac
+	_rec=$(NC_RECORD_STATUS=blocked no_client_record "${OUT_DIR_OPT:-}" 70 \
+		"$1" "$_cmd" "${2:-blocked}" "$_crit" 2>/dev/null)
+	[ -z "$_rec" ] || note "blocked record: $_rec"
+}
+
 blocked() {
-	# blocked MESSAGE [DETAIL]
+	# blocked MESSAGE [DETAIL] [MISSING]
 	# A precondition that is missing, rather than a link that is slow.
 	# Nothing was measured, so nothing failed: still exit 0.
+	# MISSING names the gap for hw-gap-report.sh: without it a block left no
+	# record at all, so the 2.5G gap never appeared in that table.
+	[ -z "${3:-}" ] || blocked_record "$3" "${2:-$1}"
 	[ $# -lt 2 ] || note "$2"
 	printf 'BLOCKED: %s\n' "$1"
 	exit 0
@@ -807,7 +834,8 @@ resolve_device_ports() {
 		[ -n "$(label_dev_if "$label")" ] || no_port="$no_port $label"
 	done
 	[ -z "$no_port" ] || blocked "no device port advertises 2500baseT" \
-		"nothing on $DEVICE reports 2500baseT in its ethtool link modes (candidates:${DEV_CANDIDATES:+ $(printf '%s' "$DEV_CANDIDATES" | tr '\n' ' ')}); pass --dev-lan10g-if/--dev-wan10g-if for port(s)$no_port"
+		"nothing on $DEVICE reports 2500baseT in its ethtool link modes (candidates:${DEV_CANDIDATES:+ $(printf '%s' "$DEV_CANDIDATES" | tr '\n' ' ')}); pass --dev-lan10g-if/--dev-wan10g-if for port(s)$no_port" \
+		2.5g-peer
 }
 
 check_device() {
@@ -829,7 +857,8 @@ check_device() {
 		if [ -n "$master" ]; then
 			print_bridge_plan "$dev_if" "$master"
 			blocked "$dev_if is in $master" \
-				"$dev_if is a member of $master; detach it first (see the commands above), then run this test again"
+				"$dev_if is a member of $master; detach it first (see the commands above), then run this test again" \
+				port-in-bridge
 		fi
 		speed=$(dev_speed "$dev_if") ||
 			die "cannot run ethtool on $DEVICE:$dev_if"
