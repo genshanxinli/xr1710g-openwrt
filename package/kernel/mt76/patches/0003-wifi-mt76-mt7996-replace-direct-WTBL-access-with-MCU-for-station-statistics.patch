@@ -460,7 +460,7 @@ diff --git a/mt7996/mt7996.h b/mt7996/mt7996.h
 --- a/mt7996/mt7996.h
 +++ b/mt7996/mt7996.h
 @@ -293,7 +293,6 @@
- 	struct mt7996_sta *sta;
+ 	bool connected;
  
  	struct list_head rc_list;
 -	u32 airtime_ac[8];

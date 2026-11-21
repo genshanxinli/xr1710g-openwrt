@@ -569,9 +569,8 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
 --- a/mt7996/debugfs.c
 +++ b/mt7996/debugfs.c
-@@ -1483,6 +1483,93 @@
- }
- DEFINE_SHOW_ATTRIBUTE(mt7996_msix);
+@@ -1483,5 +1483,92 @@
+ DEFINE_SHOW_ATTRIBUTE(mt7996_npu_band1_tx);
  
 +static ssize_t
 +mt7996_token_quota_read(struct file *file, char __user *user_buf,
