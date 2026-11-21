@@ -16,7 +16,7 @@ row.
   | 4 | lab tooling not in the image | LabToolingTest: no reference under target/ or package/ |
   | 5 | guard is adopted, not idle   | GuardTest: every adopter propagates the status  |
   | 6 | DTS quirks stay local-only   | DtsTest: they are present and named `local only` |
-  | 7 | kernel baseline              | KernelTest: 6.18 mainline, 7.3/7.4 testing       |
+  | 7 | kernel baseline              | KernelTest: 6.18 mainline, 7.4 testing           |
   | 8 | 10G series placement         | KernelTest: 744 pending, 745/747/748/749 airoha  |
   | 9 | `998` is not upstreamable    | KernelTest: still hides the pinctrl error       |
   |10 | NPU blobs are the local v0.8 | FirmwareTest: size + sha256 of both blobs       |
@@ -257,10 +257,14 @@ class DtsTest(unittest.TestCase):
 class KernelTest(unittest.TestCase):
     """Rows 7, 8 and 9: baselines and where the 10G/998 patches live."""
 
-    def test_baseline_is_618_with_73_and_74_testing(self):
+    def test_baseline_is_618_with_74_testing(self):
         body = read(AIROHA / "Makefile")
         self.assertIn("KERNEL_PATCHVER:=6.18", body)
-        self.assertIn("KERNEL_TESTING_PATCHVER:=7.3", body)
+        # The testing slot is pinned to one version on purpose: PR #277
+        # (edefd0f0cc) moved it from 7.3 to 7.4, and 7.3 is now only a
+        # historical value. A future bump must fail this row once so the
+        # checklist gets refreshed, instead of drifting silently.
+        self.assertRegex(body, r"KERNEL_TESTING_PATCHVER:=7\.4")
 
     def test_10g_series_is_where_the_row_says(self):
         # 744 is a generic net-phy fix, 745/747/748/749 are airoha net-pcs ones.
