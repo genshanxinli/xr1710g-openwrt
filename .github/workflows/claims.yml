@@ -30,7 +30,9 @@ jobs:
       # One extra step: re-check the CONTENT of the rows that carry a verify:
       # assertion.  A cited line must still say what the row claims and a
       # Kconfig key must still hold its value; the self-test guards the verifier
-      # itself.  --skip device is deliberate: this runner is an ephemeral
+      # itself, and a row's cited path:line must still exist and hold evidence
+      # even when the row carries no verify: hook (the skipped rows otherwise
+      # never look at their own sources).  --skip device is deliberate: this runner is an ephemeral
       # ubuntu-latest with no XR1710G attached, so a device: assertion could
       # only fail on ssh or pass on a stale host.  Those rows carry
       # manual: true + verified_at and are re-read by hand.  Without a build_dir
@@ -39,7 +41,8 @@ jobs:
       - name: Re-check claim content (static layer, no device)
         run: |
           python3 scripts/claims-verify.py --strict --skip device
-          python3 -m unittest scripts/tests/test_claims_verify.py
+          python3 -m unittest scripts/tests/test_claims_verify.py \
+            scripts/tests/test_claims_sources_exist.py
 
       # scripts/check-claims.py --strict --max-unverified N is available for
       # release checks; the PR job only enforces the ledger's own invariants.
