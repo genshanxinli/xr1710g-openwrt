@@ -295,13 +295,27 @@ skip_no_client() {
 # A 6 GHz AP that advertises OWE while a band=6g wifi-iface is still open
 # cannot carry an open-only client: hostapd forces OWE + PMF(2) on 6 GHz.
 # Filed as "no client" this puts a configuration fix on the purchase list
-# (#347), so the gate runs before any STA skip and exits non-zero.
+# (#347), so the gate runs before any skip and exits non-zero.
+#
+# $1 is the interface to probe.  Without one - the pre-select call, where no
+# 6G-only BSS may exist yet - every 6 GHz AP VAP from the iw table is probed.
+# That ordering matters on this board: all three bands share one SSID, so
+# select_bss finds no 6G-only BSS and the run would otherwise be filed as
+# missing hardware (6ghz-only-bss) while the real block is the open profile.
 block_on_owe_mismatch() {
-	[ -n "${1:-}" ] || return 0
-	_mm=$(nc_owe_mismatch "$1") || return 0
-	cleanup_tmp
-	nc_owe_mismatch_block "${OUT:-}" 48 "$_mm"
-	exit 2
+	_probe=${1:-}
+	if [ -z "$_probe" ]; then
+		_probe=$(awk -F"$(printf '\t')" '
+			$3 + 0 >= 5955 && $3 + 0 <= 7125 { print $1 }
+		' "$TMP_TABLE" 2>/dev/null)
+		[ -n "$_probe" ] || return 0
+	fi
+	for _mm_if in $_probe; do
+		_mm=$(nc_owe_mismatch "$_mm_if") || continue
+		cleanup_tmp
+		nc_owe_mismatch_block "${OUT:-}" 48 "$_mm"
+		exit 2
+	done
 }
 
 cleanup_tmp() {
@@ -2374,6 +2388,11 @@ print_report() {
 # --- main -------------------------------------------------------------
 
 bss_table >/dev/null 2>&1
+
+# Before BSS selection: "every band uses the same SSID" is a configuration
+# fact, not a missing radio, so an OWE/open mismatch must be reported as
+# blocked instead of letting the "no 6G-only BSS" skip below swallow it.
+block_on_owe_mismatch
 
 select_bss
 _sel_rc=$?
