@@ -275,7 +275,7 @@ claims:
     verify:
       - "text: target/linux/airoha/an7581/base-files/etc/hotplug.d/net/50-bridge-hw-offload:58 [ \"$waits\" -lt 200 ]"
   - id: nf-flow-pppoe-trace-compiled
-    claim: "airoha/an7581 的默认 7.3 内核现在会编入 nf_flow_pppoe tracepoint：config/Config-kernel.in 给 KERNEL_FTRACE 和 KERNEL_ENABLE_DEFAULT_TRACERS 加了 default y if TARGET_airoha_an7581，生成的 linux-7.3/.config 有 CONFIG_TRACEPOINTS=y，net/netfilter/nf_flow_table_ip.o 里有 __tracepoint_nf_flow_pppoe；同一份源码在改之前的 tracing-off 配置下该符号为 0。"
+    claim: "airoha/an7581 的默认 7.3 内核（7.4 测试内核同理）现在会编入 nf_flow_pppoe tracepoint：config/Config-kernel.in 给 KERNEL_FTRACE 和 KERNEL_ENABLE_DEFAULT_TRACERS 加了 default y if TARGET_airoha_an7581，生成的 linux-7.3/.config 有 CONFIG_TRACEPOINTS=y，net/netfilter/nf_flow_table_ip.o 里有 __tracepoint_nf_flow_pppoe；同一份源码在改之前的 tracing-off 配置下该符号为 0。"
     source:
       - config/Config-kernel.in:377
       - config/Config-kernel.in:400
@@ -284,13 +284,13 @@ claims:
     evidence: 实测
     date: "2026-11-20"
     status: supported
-    notes: "实测只到编译产物：干净 defconfig 得到 CONFIG_KERNEL_FTRACE=y 与 CONFIG_KERNEL_ENABLE_DEFAULT_TRACERS=y，内核 .config 有 CONFIG_TRACEPOINTS=y，nm 目标文件有 15 个 nf_flow_pppoe 符号；未验证：现网 r38047 镜像仍是 tracing-off，本机没有 PPPoE 会话（wan proto=dhcp，/proc/net/pppoe 0 条），从未采到真实 PPPoE 入向事件，available_events 要等新镜像启动后才会有该事件。"
+    notes: "实测只到编译产物：干净 defconfig 得到 CONFIG_KERNEL_FTRACE=y 与 CONFIG_KERNEL_ENABLE_DEFAULT_TRACERS=y，内核 .config 有 CONFIG_TRACEPOINTS=y，nm 目标文件有 15 个 nf_flow_pppoe 符号；未验证：现网 r38047 镜像仍是 tracing-off，本机没有 PPPoE 会话（wan proto=dhcp，/proc/net/pppoe 0 条），从未采到真实 PPPoE 入向事件，available_events 要等新镜像启动后才会有该事件。 追加(2026-11-21)：7.4 镜像 r38162+2-b3e6b27587 已实测到运行时——linux-7.4-rc3/.config 的 CONFIG_FTRACE=y/CONFIG_TRACING=y/CONFIG_TRACEPOINTS=y，打包进 kmod-nf-flow 的 nf_flow_table.ko 有 6 个 nf_flow_pppoe 符号（含 __tracepoint_nf_flow_pppoe 与 __traceiter_nf_flow_pppoe），设备 /proc/kallsyms 有 __traceiter_nf_flow_pppoe [nf_flow_table]，临时挂 tracefs 后 available_events 里有 nf_flow_table:nf_flow_pppoe；vmlinux 与 mt7996e.ko 里该符号为 0，因为 CONFIG_NF_FLOW_TABLE=m 且它归 netfilter 不归无线，属预期。另：build_dir/**/linux-7.4-rc3/.config 会同时命中 toolchain-* 下那份 headers 用的 .config（CONFIG_TRACEPOINTS 未开），路径必须写 build_dir/target-*/… 才唯一。"
 
     verify:
       - "text: config/Config-kernel.in:377 default y if TARGET_airoha_an7581"
       - "text: target/linux/airoha/patches-7.3/917-netfilter-flowtable-add-opt-in-pppoe-ingress-trace.patch:56 trace_nf_flow_pppoe(skb, tuple, NF_FLOW_PPPOE_HOOK_INGRESS);"
-      - "kconfig: build_dir/**/linux-7.4-rc3/.config CONFIG_TRACEPOINTS=y"
-      - "symbol: build_dir/**/linux-7.4-rc3/net/netfilter/nf_flow_table_ip.o nf_flow_pppoe"
+      - "kconfig: build_dir/target-*/linux-airoha_an7581/linux-7.4-rc3/.config CONFIG_TRACEPOINTS=y"
+      - "symbol: build_dir/target-*/root-airoha/lib/modules/7.4-rc3/nf_flow_table.ko __tracepoint_nf_flow_pppoe"
   - id: wifi-self-loopback-not-possible
     claim: "XR1710G（mt7996e，单 wiphy phy0）上无法建立单机 AP+STA 环回：同一 phy 的发射不上自己的接收路径，任何 VIF 都关联不到自己承载的 BSS。"
     source:
