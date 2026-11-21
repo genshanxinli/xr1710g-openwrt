@@ -28,17 +28,23 @@ DEFAULT_PACKAGES += \
 # path fails silently while a PPE flow is BIND-active, which is exactly the
 # stale-filter black hole the current path avoids.
 #
-# The route this target actually uses is neither bridger nor a bridge-family
-# flowtable: bridged traffic is fed through NF_INET_FORWARD by br_netfilter
-# (nf_call_iptables on br-lan) and lands in the ordinary "table inet fw4"
-# flowtable, where the PPE encodes it as a 5-tuple IPV4_HNAPT/IPV6_ROUTE
-# entry, exactly like routed traffic.  Measured: it binds, and a 3.5M-packet
-# run spent 0.46 CPU-seconds against 34.3 for the same traffic unbound.
+# Bridged traffic takes two routes here, and both matter.  br-lan carries
+# nf_call_iptables=1 (50-nf-bridge-call), so bridged IPv4/IPv6 also reaches
+# NF_INET_FORWARD and the ordinary "table inet fw4" flowtable, where the PPE
+# encodes it as a 5-tuple IPV4_HNAPT/IPV6_ROUTE entry, exactly like routed
+# traffic.  Measured: it binds, and a 3.5M-packet run spent 0.46 CPU-seconds
+# against 34.3 for the same traffic unbound.
 #
 # generic/pending-7.3/675-01..675-05 are what a *bridge-family* flowtable
-# needed.  Nothing here creates one any more (firewall4 has no
-# flow_offloading_bridge option), so those patches are retained rather than
-# used; removing them is a separate change that needs its own build test.
+# needs, and firewall4/patches/001-add-bridge-flowtable-support.patch does
+# create one: "table bridge fw4" with flowtable fb over the bridge ports of
+# the same device list, no flow_offloading_bridge option involved.  Those
+# patches are live, not retained.  The bridge chain registers after
+# br_netfilter's NF_BR_FORWARD hook at the same priority and
+# net/netfilter/core.c inserts a new equal-priority hook ahead of the old
+# ones, so fb sees a bridged tcp/udp connection first; 675-05's
+# crossing-twice record/refuse then runs on it, and the inet flowtable only
+# gets connections the bridge chain declined (IPS_OFFLOAD_BIT is set once).
 
 # Two facts about /sys/kernel/debug/ppe/usage that read as bugs but are not:
 #
@@ -56,17 +62,16 @@ DEFAULT_PACKAGES += \
 #                  entries have no byte/packet counts.  Use the ib1/ib2 decode
 #                  plus the interface counters instead.
 
-# A flow binds once its sustained *rate* clears REG_PPE_BIND_RATE, which this
-# driver sets to 0x1e (30) in both the L3 and the L2B half.  Measured on
-# hardware: at or above the threshold the UNB record becomes BIND after about
-# 1.1-1.8 seconds regardless of how fast you go (30/40/60/80 pps all bind in
-# ~1.3 s); well below it the flow either takes tens of seconds or never binds.
+# A flow binds once its sustained *rate* clears REG_PPE_BIND_RATE.  Patch 964
+# sets AIROHA_PPE_DEFAULT_BIND_RATE to 10 packets/s for both the L3 and the
+# L2B half (patches-7.3/964:76, patches-7.4/964:45); the 30 pps figures
+# measured before that patch lowered the default no longer describe this tree.
 # It is not a packet count -- an earlier reading of "31 packets" came from
 # tests that all ran about one second, which made count and time collinear.
-# Consequence for benchmarking: a short burst never binds, and DNS lookups,
-# single HTTP requests and other low-rate flows stay on the CPU, so a
-# throughput test built out of short requests will report "offload does not
-# work".  Drive one long, sustained flow instead, or raise the rate.
+# Consequence for benchmarking: a short burst under 10 pps never binds, and
+# DNS lookups, single HTTP requests and other low-rate flows stay on the CPU,
+# so a throughput test built out of short requests will report "offload does
+# not work".  Drive one long, sustained flow instead, or raise the rate.
 # The threshold is runtime adjustable through /sys/kernel/debug/ppe/bind_rate
 # ("l3 [l2b]") when CONFIG_DEBUG_FS is on; see patch 964.
 
