@@ -33,6 +33,11 @@ matrix script:
     SIXG_RX_UNDER_TEST=/tmp/copy/6g-rx.sh \\
         python3 -m unittest scripts.tests.test_record_paths_absolute
 
+The record path is printed by the script under test, so it is untrusted
+input: CleanupGuardProof feeds the cleanup the exact string the old code
+printed (/tmp/result.json) and requires that no deletion is registered, which
+is what keeps a red-half run from deleting /tmp.
+
 Run from the repository root:
 
     python3 scripts/tests/test_record_paths_absolute.py
@@ -143,23 +148,103 @@ def assert_absolute_record(test: unittest.TestCase, path: Path) -> None:
     test.assertNotIn("/tmp/result.json", text)
 
 
-def add_run_dir_cleanup(test: unittest.TestCase, record: Path) -> None:
+# The run directory one of the two scripts makes when it falls back to a
+# no-client record: no_client_default_dir gives <script>-no-client.<stamp>.<pid>.
+NO_CLIENT_RUN_DIR = re.compile(r"6g(?:320-matrix|g-rx)-no-client\.[0-9]{8}T[0-9]{6}\.[0-9]+")
+
+
+def add_run_dir_cleanup(test, record: Path, started: float = None) -> None:
     """Remove the per-run directory a record sits in, and nothing else.
 
-    A pre-fix script returns /tmp/result.json, whose run directory would be
-    / by the naive parents[1] rule; only a direct child of /tmp named
-    *-no-client.* is ever removed.
+    The path is printed by the script under test, so it is untrusted input: a
+    pre-fix script prints /tmp/result.json, whose "record directory" by the
+    naive parents[1] rule is /tmp, and an unguarded rmtree there is an rmtree
+    of /tmp.  A directory qualifies only when it is a direct child of /tmp,
+    carries the no-client run-directory name, and is not older than the test
+    that found it; otherwise nothing is registered and the directory stays.
     """
-    for parent in record.parents:
-        if parent.parent == Path("/tmp") and "-no-client." in parent.name:
-            test.addCleanup(shutil.rmtree, parent, ignore_errors=True)
+    parents = list(record.parents)
+    run_dir = parents[1] if len(parents) > 1 else None
+    if run_dir is None or run_dir.parent != Path("/tmp"):
+        return
+    if not NO_CLIENT_RUN_DIR.fullmatch(run_dir.name):
+        return
+    if started is not None:
+        try:
+            if run_dir.stat().st_ctime < started - 1:
+                return
+        except OSError:
             return
+    test.addCleanup(shutil.rmtree, run_dir, ignore_errors=True)
+
+
+class _CleanupRecorder:
+    """Just enough of a TestCase to see whether addCleanup was called."""
+
+    def __init__(self):
+        self.registered = []
+
+    def addCleanup(self, fn, *args, **kwargs):
+        self.registered.append((fn, args, kwargs))
+
+
+class CleanupGuardProof(unittest.TestCase):
+    """Proof that the cleanup refuses a path the script printed as /tmp.
+
+    The record path comes from the script under test, so the guard is what
+    stands between a red-half run and an rmtree of /tmp.  This feeds the guard
+    the exact string the old code produced -- /tmp/result.json -- and requires
+    that nothing is registered.  The bad copy below writes that shared file on
+    purpose; it is removed again unless it was already there.
+    """
+
+    def test_shared_tmp_record_registers_no_deletion(self):
+        tmp = Path(tempfile.mkdtemp(prefix="dirfix-guard."))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        scripts = tmp / "scripts"
+        shutil.copytree(REPO_ROOT / "scripts" / "wireless", scripts / "wireless")
+        (scripts / "lib").symlink_to(REPO_ROOT / "scripts" / "lib")
+        bad_copy = scripts / "wireless" / "6g320-matrix.sh"
+        src = bad_copy.read_text()
+        old = '$(dirname "${RESULT_JSON:-/tmp/x}")'
+        bad = src.replace("$(record_dir blocked)", old).replace(
+            "$(record_dir no-client)", old)
+        self.assertNotEqual(bad, src, "the old default is gone: update this copy")
+        bad_copy.write_text(bad)
+
+        bin_dir = tmp / "bin"
+        bin_dir.mkdir()
+        install(bin_dir, "iw", "#!/bin/sh\nexit 0\n")
+        env = os.environ.copy()
+        env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '/usr/bin:/bin')}"
+
+        shared = Path("/tmp/result.json")
+        if not shared.exists():
+            self.addCleanup(lambda: shared.exists() and shared.unlink())
+
+        started = time.time()
+        proc = subprocess.run(
+            [SH, str(bad_copy)], capture_output=True, text=True, timeout=120,
+            env=env, cwd=str(tmp))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        printed = NO_CLIENT_RECORD.search(proc.stdout)
+        self.assertIsNotNone(printed, proc.stdout + proc.stderr)
+        record = Path(printed.group(1))
+        self.assertEqual(str(record), "/tmp/result.json",
+                         "the bad copy no longer reproduces the shared path")
+
+        recorder = _CleanupRecorder()
+        add_run_dir_cleanup(recorder, record, started)
+        self.assertEqual(recorder.registered, [],
+                         "cleanup armed a deletion for a shared /tmp path")
+        self.assertTrue(Path("/tmp").is_dir(), "/tmp is gone")
 
 
 class MatrixRecordPaths(unittest.TestCase):
     """6g320-matrix.sh records: no --result-json must not mean /tmp."""
 
     def setUp(self):
+        self.started = time.time()
         self.tmp = Path(tempfile.mkdtemp(prefix="6g320-record-paths."))
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.bin = self.tmp / "bin"
@@ -183,7 +268,7 @@ class MatrixRecordPaths(unittest.TestCase):
             match, "no %s record was printed\n%s%s" % (label, proc.stdout, proc.stderr)
         )
         path = Path(match.group(1))
-        add_run_dir_cleanup(self, path)
+        add_run_dir_cleanup(self, path, self.started)
         return path
 
     def test_no_client_record_is_absolute_and_per_run(self):
@@ -290,6 +375,7 @@ class RxSkipRecord(unittest.TestCase):
     """A 6g-rx no-BSS skip record path is absolute too."""
 
     def setUp(self):
+        self.started = time.time()
         self.tmp = Path(tempfile.mkdtemp(prefix="6g-rx-skip-paths."))
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.bin = self.tmp / "bin"
@@ -327,8 +413,8 @@ class RxSkipRecord(unittest.TestCase):
         self.assertIsNotNone(match, first.stdout + first.stderr)
         one = Path(match.group(1))
         two = Path(NO_CLIENT_RECORD.search(second.stdout).group(1))
-        add_run_dir_cleanup(self, one)
-        add_run_dir_cleanup(self, two)
+        add_run_dir_cleanup(self, one, self.started)
+        add_run_dir_cleanup(self, two, self.started)
         assert_absolute_record(self, one)
         assert_absolute_record(self, two)
         self.assertEqual(one.parent.parent, Path("/tmp"))
