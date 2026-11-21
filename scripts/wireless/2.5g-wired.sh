@@ -266,10 +266,34 @@ note() {
 	printf '%s: %s\n' "$PROG" "$1" >&2
 }
 
+# Shared "no client" record (scripts/wireless/lib/no-client.sh).  Best effort:
+# a harness must still skip, and still exit 0, when the record cannot be
+# written.
+NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
+# shellcheck source=lib/no-client.sh
+[ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
+
+# The one command that measures both 2.5G ports once the peer hardware exists.
+NC_2G5_RUN='sudo sh scripts/wireless/2.5g-wired.sh --device <USER@DEVICE_IP> --ports both --host-lan10g-if <HOST_LAN_IF> --host-wan10g-if <HOST_WAN_IF>'
+
 skip_no_link() {
-	# Keep this line exact: the issue and callers grep it.
+	# Keep this line exact: the issue and callers grep it.  The record and the
+	# two hints go to stderr so stdout stays the single SKIP line.
 	[ $# -eq 0 ] || note "$1"
+	# No 2.5G peer (or only a 1G link) is missing hardware, not a failed
+	# measurement, so it is recorded instead of printed and forgotten: the
+	# record is what puts this gap in hw-gap-report.sh (issue #70).
+	_rec=$(no_client_record "${OUT_DIR_OPT:-}" 70 2.5g-peer "$NC_2G5_RUN" \
+		"${1:-no 2.5G link}" \
+		"both ends report 2500baseT/Full (ethtool) and speed=2500 (/sys/class/net/*/speed)" \
+		"iperf3 TCP both directions >= 2.2 Gbit/s at --parallel 4 --duration 10" \
+		"UDP arm loses < 0.1% at the offered 2500 Mbit/s" \
+		"ppe/usage bound entries grow across the arm (the 2.5G path is offloaded)" 2>/dev/null)
 	printf 'SKIP: no 2.5G link\n'
+	if [ -n "$_rec" ]; then
+		note "missing 2.5g-peer #70; once it is available run: $NC_2G5_RUN"
+		note "no-client record: $_rec"
+	fi
 	exit 0
 }
 

@@ -7,7 +7,7 @@ the hardware each one is missing, so a board without a 6 GHz client still
 leaves a machine-readable "buy/borrow this next" list behind instead of a
 scatter of SKIP lines.
 
-Three things are guarded here, none of them needs a radio:
+Four things are guarded here, none of them needs a radio:
 
   * Grouping.  Four fixture result.json files (three no-client, one normal)
     and two distinct "missing" values must come out as exactly two table rows,
@@ -18,6 +18,9 @@ Three things are guarded here, none of them needs a radio:
   * The convention really landed.  At least five harness sources call the
     shared no_client_record helper and the helper writes
     status "no-client"; a report alone would prove nothing.
+  * The last five gaps land too.  The 2.5G pair (2.5g-wired.sh and
+    b-path-25g.sh) shares one "2.5g-peer" key, so issue #70 is listed once,
+    and the three client-gap harnesses keep one row each.
 
 Run from the repository root:
 
@@ -178,6 +181,72 @@ class HwGapReportTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("# Wireless hardware gap report", proc.stdout)
         self.assertIn("No", proc.stdout)
+
+    def test_last_five_hardware_gaps_merge_under_shared_keys(self):
+        """The five harnesses that used to print a bare SKIP now leave records.
+
+        Both 2.5G harnesses name the same missing hardware ("2.5g-peer"), so
+        the two of them merge into one row and issue #70 is listed once, not
+        twice.  The other three keep one row each.
+        """
+        scan = self.tmp / "scan-five"
+        records = [
+            ("2.5g-wired", "2.5g-wired.sh", "70", "2.5g-peer",
+             "sh scripts/wireless/2.5g-wired.sh --device <USER@DEVICE_IP>"),
+            ("b-path-25g", "b-path-25g.sh", "70", "2.5g-peer",
+             "sh scripts/wireless/b-path-25g.sh --client <STA_IP>"),
+            ("ab-80-160", "ab-80-160.sh", "43", "5ghz-eht-client",
+             "sh scripts/wireless/ab-80-160.sh --client <STA_MAC>"),
+            ("4ss-lab", "4ss-lab.sh", "4", "4ss-client",
+             "sh scripts/wireless/4ss-lab.sh --run --client <STA_MAC>"),
+            ("wifi7-supply-bench", "wifi7-supply-bench.sh", "4", "eht-client",
+             "sh scripts/wifi7-supply-bench.sh --host-if <HOST_IF>"),
+        ]
+        for subdir, script, ticket, missing, command in records:
+            write_record(
+                scan / subdir,
+                script=script,
+                ticket=ticket,
+                missing=missing,
+                reason="no %s" % missing,
+                command=command,
+                criteria=["fixture criterion"],
+            )
+
+        proc = run_report(SCRIPT, scan)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        rows = table_rows(proc.stdout)
+        by_missing = {r[0].strip("`"): r for r in rows}
+        # Five records, four rows: the 2.5G pair shares a key.
+        self.assertEqual(len(rows), 4, proc.stdout)
+        self.assertEqual(set(by_missing), {"2.5g-peer", "5ghz-eht-client",
+                                           "4ss-client", "eht-client"})
+        peer = by_missing["2.5g-peer"]
+        self.assertIn("#70", peer[1])
+        self.assertEqual(peer[1], "#70", "issue #70 must appear once")
+        self.assertIn("2.5g-wired.sh", peer[2])
+        self.assertIn("b-path-25g.sh", peer[2])
+        self.assertEqual(peer[1].count("#70"), 1)
+        self.assertIn("#43", by_missing["5ghz-eht-client"][1])
+        self.assertIn("#4", by_missing["4ss-client"][1])
+        self.assertIn("#4", by_missing["eht-client"][1])
+        self.assertIn("5 no-client record(s)", proc.stdout)
+        self.assertIn("4 missing hardware item(s)", proc.stdout)
+
+        # The fixtures are only worth something if the harnesses really name
+        # these keys; guard the five sources so the two cannot drift apart.
+        for script, ticket, missing in (
+            ("scripts/wireless/2.5g-wired.sh", "70", "2.5g-peer"),
+            ("scripts/wireless/b-path-25g.sh", "70", "2.5g-peer"),
+            ("scripts/wireless/ab-80-160.sh", "43", "5ghz-eht-client"),
+            ("scripts/wireless/4ss-lab.sh", "4", "4ss-client"),
+            ("scripts/wifi7-supply-bench.sh", "4", "eht-client"),
+        ):
+            text = (REPO_ROOT / script).read_text(encoding="utf-8")
+            self.assertIn("no_client_record", text, script)
+            self.assertIn("%s %s" % (ticket, missing), text,
+                          "%s must record ticket %s / missing %s"
+                          % (script, ticket, missing))
 
 
 if __name__ == "__main__":

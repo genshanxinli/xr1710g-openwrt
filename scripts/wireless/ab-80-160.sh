@@ -205,6 +205,16 @@ NETWATCHDOG_GUARD=$(dirname "$0")/../lib/netwatchdog-guard.sh
 # shellcheck source=../lib/netwatchdog-guard.sh
 . "$NETWATCHDOG_GUARD"
 
+# Shared "no client" record (scripts/wireless/lib/no-client.sh).  Best effort:
+# a harness must still skip, and still exit 0, when the record cannot be
+# written.
+NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
+# shellcheck source=lib/no-client.sh
+[ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
+
+# The one command that runs the A/B once a 5 GHz STA is associated.
+NC_5GHZ_RUN='sudo sh scripts/wireless/ab-80-160.sh --client <STA_MAC> --client-ip <STA_IP> --iface <5GHZ_AP_IFACE> --ch80 <CH> --ch160 36 --run'
+
 warn() {
 	printf '%s: %s\n' "$PROG" "$1" >&2
 }
@@ -1143,7 +1153,19 @@ if [ -z "$SOURCE" ]; then
 fi
 
 if ! station_has "$IFACE" "$CLIENT"; then
+	# No associated 5 GHz STA: the widths cannot be compared at all, so this
+	# is missing hardware.  The record names it for hw-gap-report.sh (issue
+	# #43); the SKIP line on stdout stays the contract.
+	_rec=$(no_client_record "${OUT:-}" 43 5ghz-eht-client "$NC_5GHZ_RUN" \
+		"no 5 GHz STA $CLIENT associated on $IFACE" \
+		"both arms come out VERDICT: COMPARABLE (same NSS, 80/160 MHz, signal within --signal-tol)" \
+		"the 160 MHz arm reports 160 MHz width and EHT160 in iw station dump" \
+		"result.tsv carries one row per arm with Gbit/s, retries and status" 2>/dev/null)
 	say "SKIP: no 5 GHz STA $CLIENT associated on $IFACE; nothing changed"
+	if [ -n "$_rec" ]; then
+		warn "missing 5ghz-eht-client #43; once it is available run: $NC_5GHZ_RUN"
+		warn "no-client record: $_rec"
+	fi
 	exit 0
 fi
 

@@ -114,6 +114,13 @@ OUT=
 DRY_RUN=0
 SCHEMA=wifi7-supply-bench/v1
 
+# Shared "no client" record (scripts/wireless/lib/no-client.sh).  Best effort:
+# a harness must still skip, and still exit 0, when the record cannot be
+# written.
+NO_CLIENT_LIB=$(dirname "$0")/wireless/lib/no-client.sh
+# shellcheck source=wireless/lib/no-client.sh
+[ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
+
 # Populated during the run.
 STA_DUMP=
 STA_MACS=
@@ -530,7 +537,20 @@ STA_MACS=$(printf '%s\n' "$STA_DUMP" |
 	awk '!seen[$0]++')
 
 if [ -z "$STA_MACS" ]; then
+	# No associated station: the feed/air split cannot be measured.  The
+	# record names the missing client so hw-gap-report.sh lists it under #4;
+	# the SKIP line stays the only thing on stdout.
+	_rec=$(no_client_record "" 4 eht-client \
+		'sh scripts/wifi7-supply-bench.sh --device <USER@DEVICE_IP> --host-if <HOST_IF> --sta <AP_STA_IFACE> --duration 60 --out <OUT.tsv>' \
+		"no station associated on $STA" \
+		"iw dev <sta> station dump lists one associated EHT station with an IPv4" \
+		"supply classification row is SUPPLY-OK (>=2500 Mb/s) or SUPPLY-WIFI" \
+		"iperf3 throughput and the AP tx/A-MPDU deltas land in the TSV" 2>/dev/null)
 	note "SKIP: no station associated on $STA (empty station dump); nothing changed"
+	if [ -n "$_rec" ]; then
+		warn "missing eht-client #4; once it is available run: sh scripts/wifi7-supply-bench.sh --device <USER@DEVICE_IP> --host-if <HOST_IF> --sta <AP_STA_IFACE> --duration 60 --out <OUT.tsv>"
+		warn "no-client record: $_rec"
+	fi
 	exit 0
 fi
 

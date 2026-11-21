@@ -190,9 +190,33 @@ note() {
 	printf '%s: %s\n' "$PROG" "$1" >&2
 }
 
+# Shared "no client" record (scripts/wireless/lib/no-client.sh).  Best effort:
+# a harness must still skip, and still exit 0, when the record cannot be
+# written.
+NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
+# shellcheck source=lib/no-client.sh
+[ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
+
+# The one command that measures the B path once the 2.5G feeder exists.
+NC_2G5_RUN='sudo sh scripts/wireless/b-path-25g.sh --device <USER@DEVICE_IP> --client <STA_IP> --feeder-iface <HOST_FEEDER_IF> --run'
+
 skip_no_feeder() {
-	# Keep this line exact: callers and the issue acceptance grep it.
+	# Keep this line exact: callers and the issue acceptance grep it.  The
+	# record and the two hints go to stderr so stdout stays the single SKIP
+	# line (scripts/tests/test_2g5_preflight_order.py asserts it exactly).
 	printf 'SKIP: no 2.5G feeder\n'
+	# Same missing hardware and the same "2.5g-peer" key as 2.5g-wired.sh, so
+	# hw-gap-report.sh merges both harnesses into one row for issue #70.
+	_rec=$(no_client_record "${OUT_DIR_OPT:-}" 70 2.5g-peer "$NC_2G5_RUN" \
+		'no 2.5G feeder' \
+		"feeder NIC reports 2500 Mb/s and the AP data port reports 2500baseT/Full" \
+		"feeder arm arrived >= 2.2 Gbit/s over 20 s at --parallel 4" \
+		"token_info peak stays below the pool and hw-queues PLE pages do not pin" \
+		"ppe/usage bound entries grow across the arm (the 2.5G ingress is offloaded)" 2>/dev/null)
+	if [ -n "$_rec" ]; then
+		note "missing 2.5g-peer #70; once it is available run: $NC_2G5_RUN"
+		note "no-client record: $_rec"
+	fi
 	exit 0
 }
 

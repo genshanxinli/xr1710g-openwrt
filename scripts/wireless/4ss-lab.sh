@@ -530,9 +530,32 @@ EOF
 	return 1
 }
 
+# Shared "no client" record (scripts/wireless/lib/no-client.sh).  Best effort:
+# a harness must still skip, and still exit 0, when the record cannot be
+# written.
+NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
+# shellcheck source=lib/no-client.sh
+[ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
+
+# The one command that runs the two arms once a 4SS client exists.
+NC_4SS_RUN='sudo sh scripts/wireless/4ss-lab.sh --run --band <5g|6g> --client <STA_MAC> --client-ip <STA_IP> --window 10 --warmup 15 --procs 4'
+
 skip_no_client() {
+	# A board with no 4SS client has nothing to measure, so the skip is
+	# recorded instead of dropped: hw-gap-report.sh merges it under #4.  The
+	# stdout lines stay the documented contract; the hints go to stderr.
+	_rec=$(no_client_record "${OUT:-}" 4 4ss-client "$NC_4SS_RUN" \
+		"$1" \
+		"iw station dump reports tx/rx NSS 4 for one station on the 5/6 GHz AP" \
+		"result.tsv holds both arm rows with gbit_s, retries and status ok" \
+		"no arm is refused for a 2SS association or a mid-run width/NSS change" \
+		"cpu_busy_pct, npu token peak and PCIe0 IRQ delta recorded for both arms" 2>/dev/null)
 	say "SKIP: no 4SS client ($1)"
-	say "  nothing was sent and no file was written"
+	say "  nothing was sent and no traffic was generated"
+	if [ -n "$_rec" ]; then
+		warn "missing 4ss-client #4; once it is available run: $NC_4SS_RUN"
+		warn "no-client record: $_rec"
+	fi
 	exit 0
 }
 
