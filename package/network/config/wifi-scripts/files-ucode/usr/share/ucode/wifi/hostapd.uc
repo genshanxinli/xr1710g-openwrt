@@ -393,14 +393,20 @@ function device_htmode_append(config) {
 		append_vars(config, [ 'op_class' ]);
 	}
 
+	/* tx_queue_data2_burst is a band default, not a VHT one: 6 GHz clears
+	 * ieee80211ac above and so never enters the 802.11ac block, while its BE
+	 * TXOP burst needs the same 2.0 default as 5 GHz.  hw_mode is 'a' on
+	 * both bands, so key off band; 2.4 GHz and 60 GHz stay unset. */
+	if ((config.band == '5g' && config.ieee80211ac && config.hw_mode == 'a') ||
+	    config.band == '6g')
+		set_default(config, 'tx_queue_data2_burst', '2.0');
+
 	if (config.ieee80211ac && config.hw_mode == 'a') {
 		/* VHT capab */
 		if (config.vht_oper_chwidth < 2) {
 			config.vht160 = 0;
 			config.short_gi_160 = 0;
 		}
-
-		set_default(config, 'tx_queue_data2_burst', '2.0');
 
 		let vht_capab = phy_capabilities.vht_capa;
 
