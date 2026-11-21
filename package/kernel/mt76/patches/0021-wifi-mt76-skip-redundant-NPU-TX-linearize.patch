@@ -1,34 +1,37 @@
 From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
-Subject: [PATCH] wifi: mt76: skip the redundant NPU TX linearize (opt-in)
+Subject: [PATCH] wifi: mt76: count the NPU TX linearize instead of guessing
 
 The NPU TX descriptor (struct airoha_npu_tx_dma_desc, airoha_offload.h)
 carries one u32 address and one length field (NPU_TX_DMA_DESC_LEN_MASK,
 GENMASK(30, 18), 13 bits).  It has no fragment list, no "last buffer" bit
 and no chain pointer, unlike the RX descriptor, which has both
 NPU_RX_DMA_DESC_LAST_MASK and NPU_RX_DMA_PKT_COUNT_MASK to describe a
-frame spread over several descriptors.  The descriptor cannot gather.
+frame spread over several descriptors.  The descriptor cannot gather, so
+dma.c has to keep the frame contiguous before it reaches the NPU and a
+nonlinear skb still needs skb_linearize().
 
-So dma.c has to keep the frame contiguous before it reaches the NPU and
-a nonlinear skb still needs skb_linearize().  What is left is the call
-itself: skb_linearize() is a no-op for an already linear skb, and it is
-the only thing this patch removes from that path, behind an opt-in
-npu_tx_sg module parameter (default 0, which keeps the current call).
+The call itself is a no-op for an already linear skb, and mt7996 only
+advertises NETIF_F_RXCSUM, so net/core/dev.c linearizes the skb before
+ndo_start_xmit() and the NPU path never receives a frame that needs the
+copy.  The previous opt-in npu_tx_sg knob could not show that: skipping
+the call and calling the frame "passthrough" measures a branch, not a
+copy, and the frame never reaches the copy branch either way.
 
-Add per-device NPU TX accounting, readable through a new read-only
-"npu-tx" debugfs file, so the actual linearize rate of a live system can
-be measured before any descriptor or firmware change is attempted:
-passthrough (already linear, no copy), linearized (frags copied),
-linearize_failed (ENOMEM, frame dropped) and oversize (skb->len above
-the descriptor length field, which FIELD_PREP() truncates today).
-
-npu_tx_sg=0 runs the same skb_linearize() call as before; the only added
-work in that mode is the counting.
+Replace the knob with accounting that looks at the skb itself: linear
+frames increment passthrough (no copy needed), nonlinear frames are
+linearized and increment linearized, ENOMEM increments linearize_failed,
+and a frame above the 13-bit descriptor length increments oversize.  The
+behaviour is unchanged -- a linear skb never took the copy branch -- and
+the read-only "npu-tx" debugfs file now answers the question the knob was
+meant to answer: does the driver ever see a frame that needs the copy at
+all.  Any future multi-buffer TX descriptor or firmware change has to
+start from that answer.
 
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/dma.c
 +++ b/dma.c
-@@ -8,6 +8,37 @@
+@@ -8,6 +8,39 @@
  #include "dma.h"
  #include "mt76_connac.h"
  
@@ -37,26 +40,28 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 + */
 +#define NPU_TX_MAX_FRAME_LEN	0x1fff
 +
-+bool npu_tx_sg;
-+module_param(npu_tx_sg, bool, 0644);
-+MODULE_PARM_DESC(npu_tx_sg,
-+		 "Skip the redundant skb_linearize() call on already linear NPU TX frames (default: off)");
-+
 +/* The NPU TX descriptor (struct airoha_npu_tx_dma_desc) carries one address
 + * plus one length field, so the NPU cannot gather fragments: a nonlinear skb
-+ * still has to be copied into a single contiguous buffer. npu_tx_sg only
-+ * avoids the linearize call when there is nothing to copy.
++ * still has to be copied into a single contiguous buffer.  A linear skb,
++ * which is what the stack hands over as long as the driver does not advertise
++ * NETIF_F_SG, needs no copy at all, so count the frames that actually needed
++ * one instead of calling skb_linearize() and calling it a linearize.
 + */
 +static int mt76_npu_tx_prepare(struct mt76_dev *dev, struct sk_buff *skb)
 +{
-+	if (npu_tx_sg && !skb_is_nonlinear(skb))
-+		atomic64_inc(&dev->npu_tx.passthrough);
-+	else if (skb_linearize(skb)) {
-+		atomic64_inc(&dev->npu_tx.linearize_failed);
-+		return -ENOMEM;
-+	} else
++	if (skb_is_nonlinear(skb)) {
++		if (skb_linearize(skb)) {
++			atomic64_inc(&dev->npu_tx.linearize_failed);
++			return -ENOMEM;
++		}
 +		atomic64_inc(&dev->npu_tx.linearized);
++	} else {
++		atomic64_inc(&dev->npu_tx.passthrough);
++	}
 +
++	/* FIELD_PREP() on the 13-bit descriptor length silently truncates a
++	 * longer frame, so count those too.
++	 */
 +	if (skb->len > NPU_TX_MAX_FRAME_LEN)
 +		atomic64_inc(&dev->npu_tx.oversize);
 +
@@ -66,7 +71,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  static struct mt76_txwi_cache *
  mt76_alloc_txwi(struct mt76_dev *dev)
  {
-@@ -685,8 +716,10 @@
+@@ -685,8 +718,10 @@
  	if (test_bit(MT76_RESET, &phy->state))
  		goto free_skb;
  
@@ -81,7 +86,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	t = mt76_get_txwi(dev);
 --- a/debugfs.c
 +++ b/debugfs.c
-@@ -160,6 +160,23 @@
+@@ -160,6 +160,22 @@
  DEFINE_DEBUGFS_ATTRIBUTE(fops_non_aql_limit, mt76_non_aql_limit_get,
  			 mt76_non_aql_limit_set, "%llu\n");
  
@@ -89,7 +94,6 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +{
 +	struct mt76_dev *dev = dev_get_drvdata(s->private);
 +
-+	seq_printf(s, "npu_tx_sg: %d\n", npu_tx_sg);
 +	seq_printf(s, "passthrough: %llu\n",
 +		   (unsigned long long)atomic64_read(&dev->npu_tx.passthrough));
 +	seq_printf(s, "linearized: %llu\n",
@@ -105,7 +109,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  struct dentry *
  mt76_register_debugfs_fops(struct mt76_phy *phy,
  			   const struct file_operations *ops)
-@@ -182,6 +199,8 @@
+@@ -182,6 +198,8 @@
  				    mt76_rx_queues_read);
  	debugfs_create_devm_seqfile(dev->dev, "tx_burst", dir,
  				    mt76_tx_burst_read);
@@ -134,7 +138,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  struct mt76_rx_status {
  	union {
  		struct mt76_wcid *wcid;
-@@ -1095,6 +1106,8 @@
+@@ -1097,6 +1108,8 @@
  	};
  
  	atomic_t bus_hung;
@@ -143,11 +147,10 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  };
  
  static inline unsigned int
-@@ -1728,6 +1741,8 @@
+@@ -1730,6 +1743,7 @@
  int mt76_testmode_set_state(struct mt76_phy *phy, enum mt76_testmode_state state);
  int mt76_testmode_alloc_skb(struct mt76_phy *phy, u32 len);
  
-+extern bool npu_tx_sg;
 +
  #ifdef CONFIG_MT76_NPU
  void mt76_npu_check_ppe(struct mt76_dev *dev, struct sk_buff *skb,
