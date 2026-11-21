@@ -266,7 +266,9 @@ Options:
   --interval SEC        station/NPU sample interval (default 1, <= window)
   --procs N             copies of each client's source (default 1)
   --min-mbit MBIT       per-client floor: a row whose rate (max of tx and rx)
-                        is below this is reported idle, not ok (default 1.0)
+                        is below this is reported idle (BELOW_FLOOR in the
+                        arm summary), not ok (default 1.0); --min-mbps is the
+                        same flag
   --out DIR             output directory (default /tmp/multi-client-<UTC>);
                         an existing directory is never reused
   --dry-run             print the plan and every command; do not send traffic,
@@ -666,6 +668,19 @@ while [ "$#" -gt 0 ]; do
 	--min-mbit=*)
 		MIN_MBIT=${1#*=}
 		shift
+		;;
+	--min-mbps|--min-mbps=*)
+		case $1 in
+		--min-mbps)
+			[ "$#" -ge 2 ] || usage_error "--min-mbps needs a rate in Mbit/s"
+			MIN_MBIT=$2
+			shift 2
+			;;
+		*)
+			MIN_MBIT=${1#*=}
+			shift
+			;;
+		esac
 		;;
 	--out)
 		[ "$#" -ge 2 ] || usage_error "--out needs a directory"
@@ -1499,6 +1514,19 @@ print_arm_table() {
 	printf '%s\tAGGREGATE(%s)\t-\t-\t-\t-\t-\t%s\t%s\t%s\t%s\t%s\t%s\t-\t%s\t%s\n' \
 		"$ARM" "$ACTIVE_COUNT" "$_atx" "$_arx" "$WINDOW_SECS" \
 		"$_atxg" "$_arxg" "$_aret" "$ARM_STATUS" "$MIN_MBIT" >>"$ARM_DIR/result.tsv"
+
+	# A per-client floor that is only visible row by row still reads as
+	# "everything passed": count the statuses here so an arm that lost a
+	# client to the floor says so in one line, in the terminal and run.log.
+	_counts=$(awk -F'\t' '
+		$2 ~ /^AGGREGATE/ { next }
+		NF < 15 { next }
+		$15 == "ok" { ok++ }
+		$15 == "invalid" || $15 == "" { invalid++ }
+		$15 != "ok" && $15 != "invalid" && $15 != "" { floor++ }
+		END { printf "ok=%d below_floor=%d invalid=%d", ok + 0, floor + 0, invalid + 0 }
+	' "$ARM_DIR/result.tsv")
+	say "per-client status (floor ${MIN_MBIT} Mbit/s): $_counts"
 }
 
 print_npu_summary() {
