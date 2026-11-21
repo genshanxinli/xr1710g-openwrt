@@ -121,6 +121,9 @@ IMAGE="$WORK/image.itb"
 printf '\320\015\376\355' >"$IMAGE"
 head -c 4096 /dev/zero >>"$IMAGE"
 printf '{"supported_devices":["gemtek,xr1710g-ubi"]}' >>"$IMAGE"
+# The digest the gate compares against: the file the build writes beside every
+# image, in the same shape (digest, star, basename).
+( cd "$WORK" && sha256sum image.itb >sha256sums )
 
 UBICLASS="$WORK/ubi"
 mkdir -p "$UBICLASS/ubi0" "$UBICLASS/ubi0_0"

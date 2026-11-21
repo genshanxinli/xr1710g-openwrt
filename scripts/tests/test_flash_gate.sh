@@ -133,6 +133,13 @@ FAKE_IMAGE_OTHER="$WORK/image-other.itb"
 printf '\320\015\376\355' >"$FAKE_IMAGE_OTHER"
 head -c 4096 /dev/zero >>"$FAKE_IMAGE_OTHER"
 
+# Same bytes, no metadata trailer: case 6 needs an image the device row cannot
+# settle from JSON.
+cp "$FAKE_IMAGE_OTHER" "$WORK/image-nometa.itb"
+
+# The expected digests, in the shape bin/targets/.../sha256sums has.
+( cd "$WORK" && sha256sum image.itb image-other.itb image-nometa.itb >sha256sums )
+
 UBICLASS="$WORK/ubi"
 mkdir -p "$UBICLASS/ubi0" "$UBICLASS/ubi0_0"
 printf '2\n' >"$UBICLASS/ubi0/mtd_num"
@@ -245,7 +252,6 @@ expect_no_out 'GATE PASS'
 # --- 6: no metadata, foreign FDT description --------------------------------
 
 reset_env
-cp "$FAKE_IMAGE_OTHER" "$WORK/image-nometa.itb"
 FAKE_META="$WORK/does-not-exist.json"
 FAKE_DESC=gemtek_w1700k_ubi
 run_gate no-metadata --image "$WORK/image-nometa.itb" --backup-dir "$BK"
