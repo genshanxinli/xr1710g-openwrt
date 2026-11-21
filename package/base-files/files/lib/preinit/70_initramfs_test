@@ -1,6 +1,16 @@
 # Copyright (C) 2006 OpenWrt.org
 # Copyright (C) 2010 Vertical Communications
 
+# A bootloader command line can start /sbin/init directly (`rdinit=/sbin/init`)
+# and skip the /init shim, which is the only thing that exports INITRAMFS=1.
+# Without the flag the recovery boot falls through to the on-flash rootfs.
+# While preinit runs, "/" is still the kernel rootfs (ramfs) on an initramfs
+# boot and a real filesystem otherwise, so recover the flag here: this file is
+# sourced before 80_mount_root, which decides whether to register do_mount_root.
+if [ -z "$INITRAMFS" ] && grep -q '^rootfs / rootfs ' /proc/mounts 2>/dev/null; then
+	export INITRAMFS=1
+fi
+
 initramfs_test() {
 	if [ -n "$INITRAMFS" ]; then
 		boot_run_hook initramfs
