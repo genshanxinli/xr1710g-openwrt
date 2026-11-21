@@ -202,6 +202,38 @@ class SplitTargets(unittest.TestCase):
         self.assertEqual(targets, "2 1 0")
 
 
+class PerCpuInterruptTotals(unittest.TestCase):
+    """/proc/interrupts parsing keeps CPU0 and does not shift the columns.
+
+    The header has no label column, so $1 is CPU0 while a data row has the
+    IRQ number in $1.  The old loop started at $2 and read every CPU one
+    column to the left, dropping the last CPU; the idle/rate sample that
+    picks the split target then named the wrong CPUs (and could hand the
+    boot CPU's hot line to another core).
+    """
+
+    def setUp(self):
+        self.body = extract_function("irq_cpu_totals")
+
+    def test_cpu0_is_first_and_nothing_is_dropped(self):
+        out = run_sh(
+            self.body
+            + "f=$(mktemp)\ncat >\"$f\" <<'EOF'\n"
+            + INTERRUPTS
+            + "EOF\nirq_cpu_totals \"$f\" t\nrm -f \"$f\"\n",
+        )
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(
+            out.stdout.strip().splitlines(),
+            [
+                "irq t 0 1",       # IRQ 49 has 0, IRQ 50 has 1 on CPU0
+                "irq t 1 2",
+                "irq t 2 3",
+                "irq t 3 987654",
+            ],
+        )
+
+
 class ReadOnlyIrqMap(unittest.TestCase):
     """A read-only --irq-map is a report, not a failure."""
 

@@ -882,7 +882,10 @@ fi
 
 # --- real-run setup ---------------------------------------------------
 
-for _cmd in iw ethtool iperf3 awk cat sed grep sleep mkdir cp rm mv cut head tr ip date; do
+# Discovery needs only iw and the text tools.  The measurement tools are
+# checked after the hardware gate, so a board with no 6G STA is a clean skip
+# even when iperf3 is not installed (same preflight order as edca-6g-ab.sh).
+for _cmd in iw awk cat sed grep sleep mkdir cp rm mv cut head tr ip date; do
 	command -v "$_cmd" >/dev/null 2>&1 ||
 		die "required command not found: $_cmd"
 done
@@ -2188,6 +2191,13 @@ if [ -z "$STA_IP" ] &&
 	! command -v netstat >/dev/null 2>&1; then
 	die "listen mode needs ss or netstat to detect the STA source; install ip-full/net-tools or use --sta-ip"
 fi
+
+# A 6G STA exists from here on, so the measurement tools are now required.
+# Checking them earlier made a no-STA board exit 1 instead of skipping.
+for _cmd in ethtool iperf3; do
+	command -v "$_cmd" >/dev/null 2>&1 ||
+		die "required command not found: $_cmd"
+done
 
 make_out
 
