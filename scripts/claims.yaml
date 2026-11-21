@@ -417,31 +417,45 @@ claims:
       - "text: scripts/wireless/irq-napi-ab.sh:1668 npu_beacon_rate \"$before\" \"$after\" \"${IRQ_SAMPLE_S:-1}\""
       - "text: package/kernel/mt76/patches/0021-wifi-mt76-skip-redundant-NPU-TX-linearize.patch:97 passthrough: %llu"
   - id: nft-bridged-guard-inet-only
-    claim: "With 675-05 alone applied, the nft flowtable offload guard that records the per-direction ingress port and refuses to offload once a second port appears only runs on table bridge flowtables.  The 675-05 pending patch computes \"bool routing = flowtable->type->family != NFPROTO_BRIDGE;\" so the family split happens before the guard, and this firmware feeds br-lan bridged packets into the inet fw4 flowtable instead (50-nf-bridge-call sets nf_call_iptables=1), where that guard never executes.  At the tip 675-06 has deleted the split, so the 'never executes' half holds for 675-05 in isolation only; see nft-bridged-guard-applied-to-inet."
+    claim: "With 675-05 alone applied, the nft flowtable offload guard that records the per-direction ingress and egress port and refuses to offload once a new ingress port equals the peer direction's egress port only runs on table bridge flowtables.  The 675-05 pending patch computes \"bool routing = flowtable->type->family != NFPROTO_BRIDGE;\" so the family split happens before the guard, and this firmware feeds br-lan bridged packets into the inet fw4 flowtable instead (50-nf-bridge-call sets nf_call_iptables=1), where that guard never executes.  At the tip 675-06 has deleted the split, so the 'never executes' half holds for 675-05 in isolation only; see nft-bridged-guard-applied-to-inet."
     source:
-      - target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:241
+      - target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:284
       - target/linux/airoha/an7581/base-files/etc/hotplug.d/net/50-nf-bridge-call:28
     evidence: 代码
     date: 2026-11-21
     status: supported
     verify:
-      - "text: target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:241 bool routing = flowtable->type->family != NFPROTO_BRIDGE;"
+      - "text: target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:284 bool routing = flowtable->type->family != NFPROTO_BRIDGE;"
       - "text: package/network/config/firewall4/patches/001-add-bridge-flowtable-support.patch:39 flowtable bridge fw4 fb"
     notes: "Consequence for #2: the guard does not cover the GDM4/GDM1 shape on the default fw4 inet flowtable.  Verified by bypass2 against the applied 7.4 tree.  This describes 675-05 on its own; 675-06 applies the same guard to every family, see nft-bridged-guard-applied-to-inet."
 
-  - id: nft-bridged-guard-applied-to-inet
-    claim: "675-06 把 675-05 的过桥护栏从 table bridge 扩到所有 family：nft_flow_offload_eval() 不再算 routing = flowtable->type->family != NFPROTO_BRIDGE，记录用的 ingress 口改从 nf_bridge_get_physinif() 取（br_netfilter 把桥帧重注入 inet forward hook 时 nft_in() 恒为 br-lan，physinif 才是真实桥口），nf_flow_bridge_gc 也装到 inet/ipv4/ipv6 三种 flowtable 上，于是第二条穿越是拒绝卸载，而不是落进只按 5-tuple 建项的 PPE 表。"
+  - id: nft-bridged-guard-roam-not-a-crossing
+    claim: "675-05/675-06 的跨桥判据不止看入口口：每个方向同时记首个入口口和首个桥出口（nf_bridge_get_physoutif()），只有新入口口等于对向方向记下的出口口时才置 multi。5 GHz↔6 GHz 漫游（同一 BSS，换桥口不换方向）因此不再被判成第二次穿越，流不被 gc 拆掉、该 conntrack 继续可卸载；经桥后路由器的真实二次穿越仍被拆流并拒绝卸载。scripts/tests/test_bridged_crossing_roam.py 在 netns 里把两种形状的 hook 入参跑出来，再分别喂给新旧两种判据做断言。"
     source:
-      - target/linux/generic/pending-7.4/675-06-netfilter-nft_flow_offload-apply-crossing-guard-to-inet-flowtables.patch:52
-      - target/linux/generic/pending-7.4/675-06-netfilter-nft_flow_offload-apply-crossing-guard-to-inet-flowtables.patch:130
+      - target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:242
+      - scripts/tests/bridged-crossing-roam.sh:58
+      - scripts/tests/test_bridged_crossing_roam.py:140
     evidence: 代码
     date: "2026-11-21"
     status: supported
     verify:
-      - "text: target/linux/generic/pending-7.4/675-06-netfilter-nft_flow_offload-apply-crossing-guard-to-inet-flowtables.patch:52 static int nft_flow_offload_bridge_iif(const struct nft_pktinfo *pkt)"
-      - "text: target/linux/generic/pending-7.4/675-06-netfilter-nft_flow_offload-apply-crossing-guard-to-inet-flowtables.patch:100 nft_flow_offload_bridge_record(pkt, flowtable, ct, ctinfo);"
-      - "text: target/linux/generic/pending-7.4/675-06-netfilter-nft_flow_offload-apply-crossing-guard-to-inet-flowtables.patch:130 flowtable_inet.gc = nf_flow_bridge_gc;"
-    notes: "判据只到代码与同机 netns 语义实测：inet forward hook 里 meta iifname 两次穿越都给 br0，iptables -m physdev --physdev-in 分别给 a1 和 s1（见 /home/l1n/projects/.scratch/reports/bridge2/report.md）。没有在 XR1710G 上跑双主机穿越，PPE 侧未实测；f0 队列 7.4 449/0、7.3 344/0、6.18 690/0。"
+      - "text: target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:242 if (iif != READ_ONCE(rec->outif[peer]))"
+      - "text: scripts/tests/test_bridged_crossing_roam.py:140 self.assertFalse("
+    notes: "判据只到代码与同机 netns 的 hook 入参实测：iptables -m physdev 读的正是 nf_bridge 的 physinif/physoutdev 这一对字段，脚本把换入口的 5 元组跑两遍并打印每次穿越的入/出口口。没有在 XR1710G 上做双主机漫游实测，PPE 侧未实测；CI 未跑。"
+
+  - id: nft-bridged-guard-applied-to-inet
+    claim: "675-06 把 675-05 的过桥护栏从 table bridge 扩到所有 family：nft_flow_offload_eval() 不再算 routing = flowtable->type->family != NFPROTO_BRIDGE，记录用的 ingress 口改从 nf_bridge_get_physinif() 取、egress 口从 nf_bridge_get_physoutif() 取（br_netfilter 把桥帧重注入 inet forward hook 时 nft_in() 恒为 br-lan，physinif 才是真实桥口，physoutif 是真实出桥口），nf_flow_bridge_gc 也装到 inet/ipv4/ipv6 三种 flowtable 上，于是第二条穿越是拒绝卸载，而不是落进只按 5-tuple 建项的 PPE 表。"
+    source:
+      - target/linux/generic/pending-7.4/675-06-netfilter-nft_flow_offload-apply-crossing-guard-to-inet-flowtables.patch:45
+      - target/linux/generic/pending-7.4/675-06-netfilter-nft_flow_offload-apply-crossing-guard-to-inet-flowtables.patch:129
+    evidence: 代码
+    date: "2026-11-21"
+    status: supported
+    verify:
+      - "text: target/linux/generic/pending-7.4/675-06-netfilter-nft_flow_offload-apply-crossing-guard-to-inet-flowtables.patch:45 static int nft_flow_offload_bridge_iif(const struct nft_pktinfo *pkt)"
+      - "text: target/linux/generic/pending-7.4/675-06-netfilter-nft_flow_offload-apply-crossing-guard-to-inet-flowtables.patch:99 nft_flow_offload_bridge_record(pkt, flowtable, ct, ctinfo);"
+      - "text: target/linux/generic/pending-7.4/675-06-netfilter-nft_flow_offload-apply-crossing-guard-to-inet-flowtables.patch:129 flowtable_inet.gc = nf_flow_bridge_gc;"
+    notes: "判据只到代码与同机 netns 语义实测：inet forward hook 里 meta iifname 两次穿越都给 br0，iptables -m physdev --physdev-in 分别给 a1 和 s1（见 /home/l1n/projects/.scratch/reports/bridge2/report.md）。没有在 XR1710G 上跑双主机穿越，PPE 侧未实测；f0 队列 7.4 449/0、7.3 344/0、6.18 691/0。"
 
   - id: flower-packaged-for-per-flow-meter
     claim: "kmod-sched-flower 进了 an7581 的默认镜像，tc flower 才能在设备上构造出来；patch 989 只在 flower 过滤器上接受 police action 并分配每流 PPE meter 组，缺了 cls_flower 这条每流 meter 路径在实机上无法验证。"
