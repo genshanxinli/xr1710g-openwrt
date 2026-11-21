@@ -16,13 +16,63 @@
 # index turns out to carry no kernel package.
 #
 # Usage: scripts/build-distfeeds.sh [OUTDIR]   (default: <topdir>/distfeeds)
+#        scripts/build-distfeeds.sh --emit-build-patch [PATCHFILE]
+#
+# --emit-build-patch prints the one-hunk patch that adds the "Collect
+# distfeeds" step to genshanxinli/xr1710g-builds' .github/workflows/build.yml,
+# or writes it to PATCHFILE.  The patch belongs to the build repo, not to this
+# tree: stored here as a file it would silently rot against a workflow this
+# repo cannot see, and the build repo cannot merge it without burning a
+# 350-minute image build.  Generating it from the script that produces the
+# feeds keeps the inserted command and the patch in the same file, so anyone
+# holding this branch can regenerate the handoff against the current script.
 
 set -eu
+
+# The patch is emitted verbatim: context lines are what `git apply` matches on,
+# so this heredoc is the artifact and editing it means re-checking it against
+# build.yml in the build repo (git apply --check).
+emit_build_patch() {
+	cat <<'PATCH'
+--- a/.github/workflows/build.yml
++++ b/.github/workflows/build.yml
+@@ -73,6 +73,13 @@
+             -exec cp {} ../out/ \;
+           ls -la ../out
+ 
++      - name: Collect distfeeds
++        run: |
++          cd openwrt
++          ./scripts/build-distfeeds.sh ../distfeeds
++          tar -czf ../out/distfeeds-${{ env.source }}.tar.gz -C .. distfeeds
++          ls -la ../out
++
+       - name: Upload artifacts
+         uses: actions/upload-artifact@v4
+         with:
+PATCH
+}
+
+emit_build_patch_to() {
+	mkdir -p "$(dirname -- "$1")"
+	emit_build_patch >"$1"
+	printf 'build patch written to %s\n' "$1" >&2
+	printf 'handoff: in the xr1710g-builds checkout run\n' >&2
+	printf '  git apply --check %s && git apply %s\n' "$1" "$1" >&2
+}
 
 # -h/--help must not fall through to OUTDIR: `rm -rf --help` treats it as an
 # option, prints rm's usage and aborts with exit 1 instead of showing the
 # usage text above.
 case ${1:-} in
+--emit-build-patch)
+	if [ -n "${2:-}" ]; then
+		emit_build_patch_to "$2"
+	else
+		emit_build_patch
+	fi
+	exit 0
+	;;
 -h | --help)
 	sed -n '4,/^$/p' "$0" | sed -e 's/^#\s*//'
 	exit 0

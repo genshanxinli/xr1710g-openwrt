@@ -337,3 +337,51 @@ claims:
       - "text: target/linux/airoha/an7581/config-7.3:281 # CONFIG_NET_AIROHA_SOE is not set"
       - "kconfig: target/linux/airoha/an7581/config-7.3 CONFIG_NET_AIROHA_SOE=n"
       - "text: target/linux/airoha/patches-7.3/970-net-airoha-soe-readonly-probe.patch:56 obj-$(CONFIG_NET_AIROHA_SOE) += airoha_soe_probe.o"
+
+  - id: mt76-pin-drift
+    claim: "本树 mt76 pin 是 package/kernel/mt76/Makefile 的 2026-10-08 / 639e1287（OpenWRT-fanboy/mt76-firmware 的 261008 分支尖），它不是上游 main 的祖先：main 走另一条 firmware 线（0936617d，2026-10-28），跨线计数 83 个 commit。scripts/check-mt76-pin.sh 把升不升判成 keep|bump|blocked 并返回 0|1|2；本树当前判定是 blocked（换线不是追平）。"
+    source:
+      - package/kernel/mt76/Makefile:11
+      - package/kernel/mt76/Makefile:12
+      - scripts/check-mt76-pin.sh:41
+      - scripts/tests/test_check_mt76_pin.sh:179
+    evidence: 实测
+    date: "2026-11-21"
+    status: supported
+    notes: "2026-11-21 在 git-common-dir 的 mt76-upstream.git（ghfast 镜像克隆，3.2 MB）上实测：main=0936617d、261008=639e1287、git merge-base main 261008 = 467ae2e3、639e1287 不是 main 的祖先、rev-list --count 639e1287..main = 83。数字会随时间漂移，所以判据只认脚本输出；pin 本身未改（升 pin 要重锚 21 个补丁）。同一份缓存不参与构建，克隆失败时脚本判 blocked 而不是 keep。"
+    verify:
+      - "text: package/kernel/mt76/Makefile:11 PKG_SOURCE_DATE:=2026-10-08"
+      - "text: package/kernel/mt76/Makefile:12 PKG_SOURCE_VERSION:=639e128702780b398c1c36782b77899ce6bcb1fa"
+      - "text: scripts/check-mt76-pin.sh:41 blocked    not decidable / not actionable"
+      - "text: scripts/tests/test_check_mt76_pin.sh:179 run_case pin-on-side-branch 2 blocked"
+
+  - id: wan-defaults-gate
+    claim: "#90 的 WAN 产品化默认值可以逐行判定：scripts/wan-defaults-check.sh 输出 20 行（19 PASS + 1 SKIP），scripts/tests/test_wan_defaults_rollback.sh 对每个默认值做「基线 → 改坏 → FAIL → 回滚 → PASS」矩阵，并断言检查脚本不重写任何配置。唯一 SKIP 是 ppe/pppoe_decap，因为那个 debugfs 档只存在于 patches-7.3/9907 之后的镜像。"
+    source:
+      - scripts/wan-defaults-check.sh:238
+      - scripts/wan-defaults-check.sh:240
+      - scripts/tests/test_wan_defaults_rollback.sh:140
+      - target/linux/airoha/patches-7.3/9907-net-airoha-selectable-pppoe-decap-encoding.patch:30
+    evidence: 实测
+    date: "2026-11-21"
+    status: supported
+    notes: "实测范围是离线 fixture（合成 /etc/config/network、firewall、nft、ethtool、/sys 与 debugfs 目录），跑的是脚本自身；设备上的 r38047 镜像没跑过这 20 行，那次只读核查停在没有 nanddump / 没有 ppe/debugfs 档上。19+1 里的 SKIP 不是失败：缺少 knob 时 report 判 SKIP，--strict 才把它当 FAIL。"
+    verify:
+      - "text: scripts/wan-defaults-check.sh:238 report ppe.pppoe_decap 0"
+      - "text: scripts/wan-defaults-check.sh:240 report ppe.pppoe_decap 0 SKIP"
+      - "text: scripts/tests/test_wan_defaults_rollback.sh:140 assert_state baseline 0 ppe.pppoe_decap SKIP"
+
+  - id: flash-gate-exit-table
+    claim: "G0 门禁的「不行」是 6 个值的封闭表：0 通过、2 用法缺失、3 无 -i-know 的 -F、4 布局或镜像不匹配、5 备份失败、6 sysupgrade -T 拒收。scripts/tests/test_flash_gate_exitcodes.sh 给每个码跑一个情境，并把 EXIT_* 常量、--help 里的表、实测退出码三者交叉核对；renumber 或漏进 help 都会让它红。"
+    source:
+      - scripts/flash-gate.sh:72
+      - scripts/flash-gate.sh:76
+      - scripts/tests/test_flash_gate_exitcodes.sh:93
+    evidence: 实测
+    date: "2026-11-21"
+    status: supported
+    notes: "6 个情境都是离线 fixture（stub dd/sysupgrade/fwtool，合成 /proc/mtd 与分区块），不碰真机；-F 之后 code 74 是否仍存活由别处验证，这里只证明退出码可枚举。sysupgrade -T 的 rc=1 由 stub 注入，真机的 rc=1 未在本轮复现。"
+    verify:
+      - "text: scripts/flash-gate.sh:72 EXIT_USAGE=2"
+      - "text: scripts/flash-gate.sh:76 EXIT_IMAGE=6"
+      - "text: scripts/tests/test_flash_gate_exitcodes.sh:93 TABLE_CONST=$(printf '0"
