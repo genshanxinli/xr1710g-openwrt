@@ -298,8 +298,8 @@ say ' 0. restore point on this host, not tmpfs:'
 say "      mkdir -p $DIR"
 say "      ssh $HOST 'dd if=/dev/ubi0_0 bs=1M' > $DIR/fit-slot.bin   # sha256 $SLOT_SHA, $SLOT_LEN bytes"
 say "      ssh $HOST 'cat /proc/cmdline; cat /proc/mtd; ubinfo /dev/ubi0 -a; fw_printenv bootargs bootcmd' > $DIR/device.txt"
-say ' 1. push the image (device /tmp is tmpfs; 14 MiB fits):'
-say "      scp $IMAGE $HOST:/tmp/$NAME"
+say ' 1. push the image (device /tmp is tmpfs; 14 MiB fits; the box has no sftp-server):'
+say "      tar -C $IMG_DIR -cf - $IMG_NAME | ssh $HOST 'tar -C /tmp -xf - && mv -f /tmp/$IMG_NAME /tmp/$NAME'"
 say " 2. prove the pushed bytes: sha256sum /tmp/$NAME == $WANT"
 say ' 3. the image is checkable but not acceptable (no fwtool metadata), so -F is required:'
 say "      ssh $HOST 'sysupgrade -T /tmp/$NAME'   # expect 'Image check failed.'"
@@ -348,10 +348,30 @@ else
 fi
 say "restore point: $DIR/fit-slot.bin + device.txt"
 
-scp -q "$IMAGE" "$HOST:/tmp/$NAME" || { row push.image "scp ok" "scp failed" FAIL; exit $EXIT_IMAGE; }
-GOT_REMOTE=$(ssh "$HOST" "sha256sum /tmp/$NAME" | awk '{ print $1 }')
+# The device runs dropbear and has no /usr/libexec/sftp-server, so OpenSSH's
+# default scp mode dies at "subsystem request failed"; `scp -O` falls back to
+# the legacy protocol, which needs an `scp` binary on the device that busybox
+# does not ship either.  busybox tar does exist, so the image goes through ssh:
+# nothing has to be installed on either side.  The name sysupgrade will read is
+# only created by the `mv` after the remote tar exits 0, so a broken session
+# cannot leave half an image there; the digest below decides, and a mismatch
+# removes both names.
+push_image() {
+	tar -C "$IMG_DIR" -cf - "$IMG_NAME" |
+		ssh "$HOST" "tar -C /tmp -xf - && mv -f /tmp/$IMG_NAME /tmp/$NAME"
+}
+
+push_image || {
+	ssh "$HOST" "rm -f /tmp/$IMG_NAME /tmp/$NAME" 2>/dev/null || true
+	row push.image "tar|ssh ok" "transfer failed" FAIL
+	exit $EXIT_IMAGE
+}
+GOT_REMOTE=$(ssh "$HOST" "sha256sum /tmp/$NAME" 2>/dev/null | awk '{ print $1 }')
 row pushed.sha256 "$WANT" "${GOT_REMOTE:-missing}" $([ "$GOT_REMOTE" = "$WANT" ] && echo PASS || echo FAIL)
-[ "$CHECK_FAILED" = 0 ] || exit $EXIT_IMAGE
+if [ "$CHECK_FAILED" != 0 ]; then
+	ssh "$HOST" "rm -f /tmp/$NAME" 2>/dev/null || true
+	exit $EXIT_IMAGE
+fi
 
 say ''
 say 'flashing: sysupgrade -F -n (the box reboots into the recovery image)'
