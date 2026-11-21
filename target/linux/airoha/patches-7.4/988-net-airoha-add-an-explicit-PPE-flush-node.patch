@@ -1,23 +1,27 @@
+ drivers/net/ethernet/airoha/airoha_ppe.c | 66 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_ppe_debugfs.c | 55 +++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 121 insertions(+), 0 deletions(-)
+ drivers/net/ethernet/airoha/airoha_ppe.c | 66 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_ppe_debugfs.c | 55 +++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 121 insertions(+), 0 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -19,6 +19,11 @@
- 
+@@ -20,6 +20,11 @@
  #include "airoha_regs.h"
  #include "airoha_eth.h"
-+
+ 
 +/* The write-only debugfs "flush" node in airoha_ppe_debugfs.c is the only
 + * caller, so the prototype stays here instead of moving to airoha_eth.h.
 + */
 +int airoha_ppe_flush_tables(struct airoha_ppe *ppe);
- 
++
  /* Serialize airoha_gdm_dev flags, QDMA pointer and PPE CPU port
   * configuration.
-@@ -2092,6 +2097,67 @@
- 	}
- 
+  */
+@@ -2095,6 +2100,67 @@ static int airoha_ppe_flush_sram_entries
  	return 0;
-+}
-+
+ }
+ 
 +/* Clear both PPE tables on behalf of the write-only "flush" debugfs node, so
 + * a repeated fill experiment can start from bound 0 instead of inheriting
 + * the previous round's entries.  The range follows the live geometry: when
@@ -77,24 +81,26 @@
 +	mutex_unlock(&flow_offload_mutex);
 +
 +	return err ? -EIO : 0;
- }
- 
++}
++
  static struct airoha_npu *airoha_ppe_npu_get(struct airoha_eth *eth)
+ {
+ 	struct airoha_npu *npu = airoha_npu_get(eth->dev);
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -6,6 +6,11 @@
- 
+@@ -7,6 +7,11 @@
  #include "airoha_eth.h"
  #include "airoha_regs.h"
-+
+ 
 +/* Defined in airoha_ppe.c, which owns the table geometry and the SRAM
 + * control-register handshake; this file only exposes the write trigger.
 + */
 +int airoha_ppe_flush_tables(struct airoha_ppe *ppe);
- 
++
  static void airoha_debugfs_ppe_print_tuple(struct seq_file *m,
  					   void *src_addr, void *dest_addr,
-@@ -418,6 +423,53 @@
+ 					   u16 *src_port, u16 *dest_port,
+@@ -418,6 +423,53 @@ static int airoha_ppe_debugfs_l2b_show(s
  }
  DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_l2b);
  
@@ -148,14 +154,12 @@
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  {
  	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-@@ -436,5 +488,8 @@
+@@ -436,5 +488,8 @@ int airoha_ppe_debugfs_init(struct airoh
  	debugfs_create_file("l2b", 0444, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_l2b_fops);
  
--	return 0;
--}
 +	debugfs_create_file("flush", 0200, ppe->debugfs_dir, ppe,
 +			    &airoha_ppe_debugfs_flush_fops);
 +
-+	return 0;
-+}
+ 	return 0;
+ }

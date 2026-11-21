@@ -19,9 +19,13 @@ matches what the hardware is doing.
 
 Signed-off-by: OpenWrt <openwrt@example.org>
 ---
+ drivers/net/ethernet/airoha/airoha_eth.c | 19 +++++++++++++++++++
+ 1 files changed, 16 insertions(+), 3 deletions(-)
+ drivers/net/ethernet/airoha/airoha_eth.c | 19 +++++++++++++++++++
+ 1 files changed, 16 insertions(+), 3 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -3711,10 +3711,23 @@ static int airoha_enable_qos_for_gdm34(s
+@@ -3743,10 +3743,23 @@ static int airoha_enable_qos_for_gdm34(s
  
  	wan_dev = airoha_get_wan_gdm_dev(eth);
  	if (wan_dev) {

@@ -5,6 +5,20 @@ Subject: [PATCH] netfilter: add xt_FLOWOFFLOAD target
 
 Signed-off-by: Felix Fietkau <nbd@nbd.name>
 ---
+ include/net/netfilter/nf_flow_table.h | 10 ++++++++++
+ include/uapi/linux/netfilter/xt_FLOWOFFLOAD.h | 34 ++++++++++++++++++++++++++++++++++
+ net/netfilter/Kconfig | 19 +++++++++++++++++++
+ net/netfilter/Makefile | 1 +
+ net/netfilter/nf_flow_table_core.c | 4 ++++
+ net/netfilter/xt_FLOWOFFLOAD.c | 734 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 6 files changed, 799 insertions(+), 3 deletions(-)
+ include/net/netfilter/nf_flow_table.h | 10 ++++++++++
+ include/uapi/linux/netfilter/xt_FLOWOFFLOAD.h | 34 ++++++++++++++++++++++++++++++++++
+ net/netfilter/Kconfig | 19 +++++++++++++++++++
+ net/netfilter/Makefile | 1 +
+ net/netfilter/nf_flow_table_core.c | 4 ++++
+ net/netfilter/xt_FLOWOFFLOAD.c | 734 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 6 files changed, 799 insertions(+), 3 deletions(-)
 --- a/include/net/netfilter/nf_flow_table.h
 +++ b/include/net/netfilter/nf_flow_table.h
 @@ -348,6 +348,16 @@ void nf_flow_table_free(struct nf_flowta
@@ -24,7 +38,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  void nf_flow_snat_port(const struct flow_offload *flow,
  		       struct sk_buff *skb, unsigned int thoff,
  		       u8 protocol, enum flow_offload_tuple_dir dir);
---- /dev/null
+--- a/include/uapi/linux/netfilter/xt_FLOWOFFLOAD.h
 +++ b/include/uapi/linux/netfilter/xt_FLOWOFFLOAD.h
 @@ -0,0 +1,34 @@
 +/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
@@ -108,7 +122,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  obj-$(CONFIG_NETFILTER_XT_TARGET_LED) += xt_LED.o
 --- a/net/netfilter/nf_flow_table_core.c
 +++ b/net/netfilter/nf_flow_table_core.c
-@@ -462,8 +462,7 @@ flow_offload_lookup(struct nf_flowtable
+@@ -463,8 +463,7 @@ flow_offload_lookup(struct nf_flowtable
  }
  EXPORT_SYMBOL_GPL(flow_offload_lookup);
  
@@ -118,7 +132,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  		      void (*iter)(struct nf_flowtable *flowtable,
  				   struct flow_offload *flow, void *data),
  		      void *data)
-@@ -681,6 +680,7 @@ static void nf_flow_offload_gc_step(stru
+@@ -682,6 +681,7 @@ static void nf_flow_offload_gc_step(stru
  		nf_flow_offload_stats(flow_table, flow);
  	}
  }
@@ -126,7 +140,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
  
  void nf_flow_table_gc_run(struct nf_flowtable *flow_table)
  {
---- /dev/null
+--- a/net/netfilter/xt_FLOWOFFLOAD.c
 +++ b/net/netfilter/xt_FLOWOFFLOAD.c
 @@ -0,0 +1,734 @@
 +/*

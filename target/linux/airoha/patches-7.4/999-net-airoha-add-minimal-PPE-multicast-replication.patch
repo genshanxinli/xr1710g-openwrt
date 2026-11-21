@@ -1,6 +1,48 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Sun, 15 Nov 2026 07:10:00 +0800
+Subject: [PATCH] net: airoha: add minimal PPE multicast replication
+
+A multicast flow never reached an offloaded entry: its destination is a
+multicast MAC, and the unicast is_valid_ether_addr() check rejected it
+before the entry was built.  The IB2.MULTICAST branch that exists in
+prepare was therefore dead code.  Even if it were reached, the entry kept
+the single destination port computed for the redirect action, so only one
+bridge member would have received the stream.
+
+Accept a multicast destination only when the redirect target is a DSA
+user port and at least two switch-facing members of its bridge can be
+replicated.  Replication uses the DSA/switch destination bitmap in the L2
+etype word that the unicast path already writes as BIT(dsa_port), now
+with every member port set.  The force-QoS bit the LAN entries already
+carry selects the QDMA1 hardware path behind that word, and multicast
+entries are kept off the SRAM fast path as the vendor SDK does.
+IB2.MULTICAST stays set so the CPU also gets a copy for any member that
+is not behind the switch (WLAN).  Flows that cannot be replicated that
+way are refused, leaving the full fan-out to software; this includes
+bridges with fewer than two switch-facing members.
+
+The vendor SDK also defines PPE2_MCAST_PPSE (FE + 0x284), but on AN7581
+that address reads back as 0xdeadbeef and the SDK never writes it.  This
+change does not write it, because the issue forbids writing unknown
+registers.  /sys/kernel/debug/ppe/mcast prints the raw register once per
+PPE and lists every bound multicast entry with its PSE port, switch port
+mask, NBQ/channel and L2 etype.
+
+Only multicast flows are affected; unicast entries keep every field they
+had before.  Table geometry, BND_AGE, PPPoE, L2B and the QoS groups are
+untouched.  The switch bitmap semantics are taken from the vendor SDK and
+are not measured on hardware here.
+
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+ drivers/net/ethernet/airoha/airoha_eth.h | 14 ++++++++++++++
+ drivers/net/ethernet/airoha/airoha_ppe.c | 121 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_ppe_debugfs.c | 105 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_regs.h | 8 ++++++++
+ 4 files changed, 246 insertions(+), 2 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -563,6 +563,14 @@
+@@ -563,6 +563,14 @@ struct airoha_ppe_6rd {
  	u16 tunnel_mtu;		/* maximum inner packet size */
  };
  
@@ -15,7 +57,7 @@
  struct airoha_flow_data {
  	struct ethhdr eth;
  
-@@ -629,6 +637,12 @@
+@@ -629,6 +637,12 @@ struct airoha_flow_data {
  	} dslite;
  
  	struct airoha_ppe_6rd sixrd;
@@ -30,7 +72,7 @@
  enum airoha_flow_entry_type {
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -900,6 +900,97 @@
+@@ -899,6 +899,97 @@ static int airoha_get_dsa_port(struct ne
  #endif
  }
  
@@ -128,7 +170,7 @@
  static void airoha_ppe_foe_set_bridge_addrs(struct airoha_foe_bridge *br,
  					    struct ethhdr *eh)
  {
-@@ -1196,6 +1287,14 @@
+@@ -1195,6 +1286,14 @@ static int airoha_ppe_foe_entry_prepare(
  		}
  	}
  
@@ -143,7 +185,7 @@
  	if (is_multicast_ether_addr(data->eth.h_dest))
  		val |= AIROHA_FOE_IB2_MULTICAST;
  
-@@ -1278,7 +1377,8 @@
+@@ -1277,7 +1376,8 @@ static int airoha_ppe_foe_entry_prepare(
  	if (wlan_etype >= 0) {
  		l2->etype = wlan_etype;
  	} else if (dsa_port >= 0) {
@@ -153,7 +195,7 @@
  		l2->etype |= !data->vlan.num ? BIT(15) : 0;
  	} else if (data->pppoe.num) {
  		l2->etype = ETH_P_PPP_SES;
-@@ -2552,9 +2652,26 @@
+@@ -2551,9 +2651,26 @@ static int airoha_ppe_flow_offload_repla
  		return -EOPNOTSUPP;
  
  	if (!is_valid_ether_addr(data.eth.h_source) ||
@@ -183,7 +225,7 @@
  	 * allocation-free, and from here on put_smac is the single
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -782,6 +782,109 @@
+@@ -792,6 +792,109 @@ static int airoha_ppe_debugfs_6rd_show(s
  }
  DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_6rd);
  
@@ -293,7 +335,7 @@
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  {
  	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-@@ -801,6 +904,8 @@
+@@ -811,6 +914,8 @@ int airoha_ppe_debugfs_init(struct airoh
  			    &airoha_ppe_debugfs_bind_rate_fops);
  	debugfs_create_file("tb_regs", 0444, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_tb_regs_fops);

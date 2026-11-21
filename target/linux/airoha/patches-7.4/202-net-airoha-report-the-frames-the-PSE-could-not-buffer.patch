@@ -1,6 +1,12 @@
+ drivers/net/ethernet/airoha/airoha_eth.c | 72 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_eth.h | 5 +++++
+ 2 files changed, 76 insertions(+), 1 deletions(-)
+ drivers/net/ethernet/airoha/airoha_eth.c | 72 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_eth.h | 5 +++++
+ 2 files changed, 76 insertions(+), 1 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -2109,6 +2109,14 @@ static void airoha_update_hw_stats(struc
+@@ -2141,6 +2141,14 @@ static void airoha_update_hw_stats(struc
  	dev->stats.rx_over_errors += (u32)(val - dev->stats.mib_prev.rx_over_errors);
  	dev->stats.mib_prev.rx_over_errors = val;
  
@@ -15,7 +21,7 @@
  	val = airoha_fe_rr(eth, REG_FE_GDM_RX_ETH_FRAG_CNT(port->id));
  	dev->stats.rx_fragment += (u32)(val - dev->stats.mib_prev.rx_fragment);
  	dev->stats.mib_prev.rx_fragment = val;
-@@ -2823,6 +2831,65 @@ static const struct ethtool_rmon_hist_ra
+@@ -2855,6 +2863,65 @@ static const struct ethtool_rmon_hist_ra
  	{},
  };
  
@@ -81,7 +87,7 @@
  static void
  airoha_ethtool_get_rmon_stats(struct net_device *netdev,
  			      struct ethtool_rmon_stats *stats,
-@@ -3740,9 +3807,12 @@ static const struct net_device_ops airoh
+@@ -3772,9 +3839,12 @@ static const struct net_device_ops airoh
  
  static const struct ethtool_ops airoha_ethtool_ops = {
  	.get_drvinfo		= airoha_ethtool_get_drvinfo,
@@ -97,7 +103,7 @@
  
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -269,6 +269,10 @@
+@@ -269,6 +269,10 @@ struct airoha_hw_stats {
  	u64 tx_drops;
  	u64 rx_crc_error;
  	u64 rx_over_errors;
@@ -108,7 +114,7 @@
  	/* ethtool stats */
  	u64 tx_broadcast;
  	u64 tx_multicast;
-@@ -298,6 +302,7 @@
+@@ -298,6 +302,7 @@ struct airoha_hw_stats {
  		u32 rx_errors;
  		u32 rx_crc_error;
  		u32 rx_over_errors;

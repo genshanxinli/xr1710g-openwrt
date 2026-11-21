@@ -1,3 +1,13 @@
+ include/net/netfilter/nf_flow_table.h | 2 ++
+ net/netfilter/nf_flow_table_ip.c | 14 ++++++++++++++
+ net/netfilter/nft_flow_offload.c | 25 +++++++++++++++++++++++++
+ net/netfilter/nf_flow_table_offload.c | 5 +++++
+ 4 files changed, 46 insertions(+), 0 deletions(-)
+ include/net/netfilter/nf_flow_table.h | 2 ++
+ net/netfilter/nf_flow_table_ip.c | 14 ++++++++++++++
+ net/netfilter/nft_flow_offload.c | 25 +++++++++++++++++++++++++
+ net/netfilter/nf_flow_table_offload.c | 5 +++++
+ 4 files changed, 46 insertions(+), 0 deletions(-)
 --- a/include/net/netfilter/nf_flow_table.h
 +++ b/include/net/netfilter/nf_flow_table.h
 @@ -29,6 +29,7 @@ struct nf_flow_key {
@@ -110,7 +120,7 @@
  		flow_offload_ct_tcp(ct);
 --- a/net/netfilter/nf_flow_table_offload.c
 +++ b/net/netfilter/nf_flow_table_offload.c
-@@ -105,6 +105,7 @@
+@@ -105,6 +105,7 @@ static int nf_flow_rule_match(struct nf_
  	NF_FLOW_DISSECTOR(match, FLOW_DISSECTOR_KEY_BASIC, basic);
  	NF_FLOW_DISSECTOR(match, FLOW_DISSECTOR_KEY_IPV4_ADDRS, ipv4);
  	NF_FLOW_DISSECTOR(match, FLOW_DISSECTOR_KEY_IPV6_ADDRS, ipv6);
@@ -118,14 +128,14 @@
  	NF_FLOW_DISSECTOR(match, FLOW_DISSECTOR_KEY_TCP, tcp);
  	NF_FLOW_DISSECTOR(match, FLOW_DISSECTOR_KEY_PORTS, tp);
  
-@@ -169,6 +170,10 @@
- 	mask->control.addr_type = 0xffff;
+@@ -175,6 +176,10 @@ static int nf_flow_rule_match(struct nf_
  	match->dissector.used_keys |= BIT_ULL(key->control.addr_type);
  	mask->basic.n_proto = 0xffff;
-+
+ 
 +	key->ip.tos = FIELD_PREP(INET_DSCP_MASK, tuple->dscp);
 +	mask->ip.tos = 0xff;
 +	match->dissector.used_keys |= BIT_ULL(FLOW_DISSECTOR_KEY_IP);
- 
++
  	switch (tuple->l4proto) {
  	case IPPROTO_TCP:
+ 		key->tcp.flags = 0;

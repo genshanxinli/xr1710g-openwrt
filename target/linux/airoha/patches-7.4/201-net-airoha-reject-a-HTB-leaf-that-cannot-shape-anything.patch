@@ -25,9 +25,11 @@ so a single user port has no one channel to compare against.
 
 Signed-off-by: OpenWrt <openwrt@example.org>
 ---
+ drivers/net/ethernet/airoha/airoha_eth.c | 22 ++++++++++++++++++++++
+ 1 files changed, 22 insertions(+), 0 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -3286,6 +3286,28 @@ static int airoha_tc_htb_alloc_leaf_queu
+@@ -3318,6 +3318,28 @@ static int airoha_tc_htb_alloc_leaf_queu
  	struct airoha_gdm_dev *dev = netdev_priv(netdev);
  	struct airoha_qdma *qdma;
  

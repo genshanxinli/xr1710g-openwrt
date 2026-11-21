@@ -1,11 +1,13 @@
+ drivers/net/ethernet/airoha/airoha_ppe.c | 60 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 files changed, 49 insertions(+), 11 deletions(-)
+ drivers/net/ethernet/airoha/airoha_ppe.c | 60 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 files changed, 49 insertions(+), 11 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -73,6 +73,32 @@
- 		return PPE_SRAM_NUM_ENTRIES - num_stats;
- 
+@@ -75,6 +75,32 @@ static u32 airoha_ppe_get_sram_num_entri
  	return PPE_SRAM_NUM_ENTRIES;
-+}
-+
+ }
+ 
 +/* The table is not a power of two once flow counters carve their slots out
 + * of the SRAM: 8192 - 4096 entries per PPE over two PPEs, plus the DRAM
 + * region, gives 24576.  Folding with "& (entries - 1)" would then only ever
@@ -30,10 +32,12 @@
 +		       (hash & (PPE_SRAM_NUM_ENTRIES - 1));
 +
 +	return hash % num_entries;
- }
- 
++}
++
  static u32 airoha_ppe_get_total_sram_num_entries(struct airoha_ppe *ppe)
-@@ -613,13 +639,7 @@
+ {
+ 	struct airoha_eth *eth = ppe->eth;
+@@ -613,13 +639,7 @@ static u32 airoha_ppe_foe_get_entry_hash
  	hash ^= hv1 ^ hv2 ^ hv3;
  	hash ^= hash >> 16;
  
@@ -48,7 +52,7 @@
  }
  
  static int airoha_ppe_foe_get_flow_stats_index(struct airoha_ppe *ppe,
-@@ -738,13 +758,21 @@
+@@ -738,13 +758,21 @@ airoha_ppe_foe_get_entry_locked(struct a
  
  	if (hash < sram_num_entries) {
  		u32 *hwe = ppe->foe + hash * sizeof(struct airoha_foe_entry);
@@ -72,7 +76,7 @@
  			     PPE_SRAM_CTRL_REQ_MASK);
  		if (read_poll_timeout_atomic(airoha_fe_rr, val,
  					     val & PPE_SRAM_CTRL_ACK_MASK,
-@@ -793,9 +821,19 @@
+@@ -793,10 +821,20 @@ static bool airoha_ppe_foe_compare_entry
  static int airoha_ppe_foe_commit_sram_entry(struct airoha_ppe *ppe, u32 hash)
  {
  	struct airoha_foe_entry *hwe = ppe->foe + hash * sizeof(*hwe);
@@ -81,7 +85,7 @@
 +	bool ppe2 = hash >= base;
  	u32 *ptr = (u32 *)hwe, val;
  	int i;
-+
+ 
 +	/* Address the entry relative to the PPE that owns it.  Writing the
 +	 * raw hash worked only as long as the hardware wrapped it to its own
 +	 * table size, and stopped working entirely once flow counters halved
@@ -90,10 +94,11 @@
 +	 */
 +	if (ppe2)
 +		hash -= base;
- 
++
  	for (i = 0; i < sizeof(*hwe) / sizeof(*ptr); i++)
  		airoha_fe_wr(ppe->eth, REG_PPE_RAM_ENTRY(ppe2, i), ptr[i]);
-@@ -1572,7 +1610,7 @@
+ 
+@@ -1573,7 +1611,7 @@ void airoha_ppe_check_skb(struct airoha_
  	u16 now, diff;
  
  	if (hash >= num_entries)

@@ -45,9 +45,15 @@ accounted, and is only filled while the knob is on.
 Signed-off-by: OpenWrt <openwrt@example.org>
 ---
 
+ drivers/net/ethernet/airoha/airoha_eth.c | 132 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_eth.h | 15 +++++++++++++++
+ 2 files changed, 144 insertions(+), 3 deletions(-)
+ drivers/net/ethernet/airoha/airoha_eth.c | 132 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_eth.h | 15 +++++++++++++++
+ 2 files changed, 144 insertions(+), 3 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -98,6 +98,28 @@
+@@ -98,6 +98,28 @@ module_param_cb(napi_weight, &airoha_nap
  		0644);
  MODULE_PARM_DESC(napi_weight, "QDMA RX/TX NAPI weight (16-512, default 64)");
  
@@ -76,7 +82,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  u32 airoha_rr(void __iomem *base, u32 offset)
  {
  	return readl(base + offset);
-@@ -809,11 +831,44 @@
+@@ -853,11 +875,44 @@ static int airoha_qdma_debugfs_napi_weig
  }
  DEFINE_SHOW_ATTRIBUTE(airoha_qdma_debugfs_napi_weight);
  
@@ -121,7 +127,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  }
  #else
  static void airoha_pse_debugfs_init(struct airoha_eth *eth) {}
-@@ -2181,6 +2236,12 @@
+@@ -2251,6 +2306,12 @@ static int airoha_hw_init(struct platfor
  	airoha_pse_debugfs_init(eth);
  	airoha_qdma_debugfs_init(eth);
  
@@ -134,7 +140,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	set_bit(DEV_STATE_INITIALIZED, &eth->state);
  
  	return 0;
-@@ -2817,6 +2878,60 @@
+@@ -2898,6 +2959,60 @@ static int airoha_dev_change_mtu(struct
  	return 0;
  }
  
@@ -195,7 +201,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static u16 airoha_dev_select_queue(struct net_device *netdev,
  				   struct sk_buff *skb,
  				   struct net_device *sb_dev)
-@@ -2826,10 +2941,16 @@
+@@ -2907,10 +3022,16 @@ static u16 airoha_dev_select_queue(struc
  	int queue, channel;
  
  	/* For dsa device select QoS channel according to the dsa user port
@@ -215,7 +221,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	channel = channel % AIROHA_NUM_QOS_CHANNELS;
  	queue = skb->priority % AIROHA_NUM_QOS_QUEUES;
  	queue = channel * AIROHA_NUM_QOS_QUEUES + queue;
-@@ -3028,6 +3149,11 @@
+@@ -3109,6 +3230,11 @@ static netdev_tx_t airoha_dev_xmit(struc
  	}
  	q->queued += i;
  
@@ -229,7 +235,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	if (q->ndesc - q->queued < q->free_thr) {
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -660,6 +660,21 @@
+@@ -660,6 +660,21 @@ struct airoha_qdma {
  	struct airoha_queue q_rx[AIROHA_NUM_RX_RING];
  
  	DECLARE_BITMAP(qos_channel_map, AIROHA_NUM_QOS_CHANNELS);

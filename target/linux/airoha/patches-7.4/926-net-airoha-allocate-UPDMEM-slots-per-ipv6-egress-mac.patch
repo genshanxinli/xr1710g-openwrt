@@ -1,6 +1,12 @@
+ drivers/net/ethernet/airoha/airoha_eth.h | 18 ++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_ppe.c | 203 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 202 insertions(+), 19 deletions(-)
+ drivers/net/ethernet/airoha/airoha_eth.h | 18 ++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_ppe.c | 203 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 202 insertions(+), 19 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -655,6 +655,9 @@
+@@ -655,6 +655,9 @@ struct airoha_gdm_port {
  	int id;
  	int users;
  
@@ -10,7 +16,7 @@
  	/* protect concurrent hw_stats and frag register accesses */
  	spinlock_t lock;
  
-@@ -740,8 +743,23 @@
+@@ -740,9 +743,24 @@ struct airoha_eth {
  	struct airoha_qdma qdma[AIROHA_MAX_NUM_QDMA];
  	struct airoha_gdm_port *ports[AIROHA_MAX_NUM_GDM_PORTS];
  
@@ -28,15 +34,16 @@
 +
  	struct dentry *debugfs_dir;
  };
-+
+ 
 +/* Slot 0xf tells the hardware to keep the frame's own source address. */
 +#define AIROHA_UPDMEM_SMAC_ID_KEEP	0xf
- 
++
  u32 airoha_rr(void __iomem *base, u32 offset);
  void airoha_wr(void __iomem *base, u32 offset, u32 val);
+ u32 airoha_rmw(void __iomem *base, u32 offset, u32 mask, u32 val);
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -464,6 +464,123 @@
+@@ -464,6 +464,123 @@ static void airoha_ppe_foe_set_bridge_ad
  	br->src_mac_lo = get_unaligned_be32(eh->h_source + 2);
  }
  
@@ -160,7 +167,7 @@
  static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
  					struct airoha_foe_entry *hwe,
  					struct net_device *netdev, int type,
-@@ -541,6 +658,15 @@
+@@ -541,6 +658,15 @@ static int airoha_ppe_foe_entry_prepare(
  						  dsa_port);
  
  			smac_id = port->id;
@@ -176,7 +183,7 @@
  		}
  	}
  
-@@ -1086,6 +1212,13 @@
+@@ -1086,6 +1212,13 @@ static void airoha_ppe_foe_remove_l2_flo
  static void airoha_ppe_foe_flow_remove_entry(struct airoha_ppe *ppe,
  					     struct airoha_flow_table_entry *e)
  {
@@ -190,7 +197,7 @@
  	spin_lock_bh(&ppe_lock);
  
  	if (e->type == FLOW_TYPE_L2)
-@@ -1094,6 +1227,9 @@
+@@ -1094,6 +1227,9 @@ static void airoha_ppe_foe_flow_remove_e
  		airoha_ppe_foe_remove_flow(ppe, e);
  
  	spin_unlock_bh(&ppe_lock);
@@ -200,7 +207,7 @@
  }
  
  static int
-@@ -1451,14 +1587,17 @@
+@@ -1452,14 +1588,17 @@ static int airoha_ppe_flow_offload_repla
  	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_PORTS)) {
  		struct flow_match_ports ports;
  
@@ -221,7 +228,7 @@
  	}
  
  	if (addr_type == FLOW_DISSECTOR_KEY_IPV4_ADDRS) {
-@@ -1484,8 +1623,10 @@
+@@ -1485,8 +1624,10 @@ static int airoha_ppe_flow_offload_repla
  		if (act->id != FLOW_ACTION_MANGLE)
  			continue;
  
@@ -234,7 +241,7 @@
  
  		switch (act->mangle.htype) {
  		case FLOW_ACT_MANGLE_HDR_TYPE_TCP:
-@@ -1499,22 +1640,25 @@
+@@ -1500,22 +1641,25 @@ static int airoha_ppe_flow_offload_repla
  			/* handled earlier */
  			break;
  		default:
@@ -265,7 +272,7 @@
  
  	e->cookie = f->cookie;
  	memcpy(&e->data, &hwe, sizeof(e->data));
-@@ -1525,15 +1669,19 @@
+@@ -1526,15 +1670,19 @@ static int airoha_ppe_flow_offload_repla
  
  	err = rhashtable_insert_fast(&eth->flow_table, &e->node,
  				     airoha_flow_table_params);
@@ -289,21 +296,20 @@
  
  	return err;
  }
-@@ -1792,24 +1940,39 @@
+@@ -1793,24 +1941,39 @@ void airoha_ppe_check_skb(struct airoha_
  	airoha_ppe_foe_insert_entry(ppe, skb, hash, rx_wlan);
  }
  
 -void airoha_ppe_init_upd_mem(struct airoha_gdm_dev *dev, const u8 *addr)
--{
--	struct airoha_gdm_port *port = dev->port;
--	struct airoha_eth *eth = dev->eth;
 +static void airoha_ppe_write_upd_mem(struct airoha_eth *eth, u8 slot,
 +				     const u8 *addr)
-+{
+ {
+-	struct airoha_gdm_port *port = dev->port;
+-	struct airoha_eth *eth = dev->eth;
  	u32 val;
-+
-+	lockdep_assert_held(&eth->updmem_lock);
  
++	lockdep_assert_held(&eth->updmem_lock);
++
  	val = (addr[2] << 24) | (addr[3] << 16) | (addr[4] << 8) | addr[5];
  	airoha_fe_wr(eth, REG_UPDMEM_DATA(0), val);
  	airoha_fe_wr(eth, REG_UPDMEM_CTRL(0),
@@ -335,7 +341,7 @@
  }
  
  struct airoha_ppe_dev *airoha_ppe_get_dev(struct device *dev)
-@@ -1923,6 +2086,8 @@
+@@ -1924,6 +2087,8 @@ int airoha_ppe_init(struct airoha_eth *e
  	if (err)
  		return err;
  
