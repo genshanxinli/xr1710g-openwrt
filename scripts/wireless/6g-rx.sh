@@ -256,6 +256,15 @@ skip() {
 # exists.
 skip_no_client() {
 	cleanup_tmp
+	# A skip can fire before make_out() ran - "no 6G-only BSS to select" is
+	# decided earlier than the output directory - and then there is no place
+	# for the record.  Fall back to the shared /tmp location so a skip never
+	# leaves the board indistinguishable from "the harness was never run".
+	# hw-gap-report.sh scans /tmp by default for exactly this case.
+	if [ "${OUT_CREATED:-0}" != 1 ] || [ -z "${OUT:-}" ]; then
+		OUT=$(no_client_default_dir "$PROG")
+		mkdir -p "$OUT" 2>/dev/null || OUT=
+	fi
 	_rec=$(no_client_record "${OUT:-}" 48 "${2:-6ghz-eht-client}" "${3:-}" "${1:-}" \
 		"station rx bytes and rx bitrate on a 6 GHz BSS" \
 		"ethtool rx_ampdu_bytes_cnt / rx_mpdu_cnt delta" \
@@ -2340,10 +2349,15 @@ if [ "$_sel_rc" -eq 2 ]; then
 	_sel_rc=0
 fi
 if [ "$_sel_rc" -ne 0 ]; then
+	# No 6G-only BSS is a missing configuration switch, not a missing
+	# client: a 6 GHz client would still be unmeasurable until --add-bss (or
+	# a hand-written 6 GHz-only AP BSS) exists.  It gets its own "missing"
+	# key so hw-gap-report.sh keeps "buy a 6 GHz client" and "create a 6
+	# GHz-only BSS" apart.
 	if [ "$ADD_BSS" = 1 ]; then
-		skip "no 6G-only BSS after --add-bss (SSID ${SSID:-unknown})"
+		skip_no_client "no 6G-only BSS after --add-bss (SSID ${SSID:-unknown})" 6ghz-only-bss "sh scripts/wireless/6g-rx.sh --iface <6GHZ_AP_IFACE> --sta <STA_MAC> --sta-ip <STA_IP>"
 	else
-		skip "no 6G-only BSS; pass --add-bss to create a temporary one"
+		skip_no_client "no 6G-only BSS; pass --add-bss to create a temporary one" 6ghz-only-bss "sh scripts/wireless/6g-rx.sh --add-bss --sta <STA_MAC> --sta-ip <STA_IP>"
 	fi
 fi
 
