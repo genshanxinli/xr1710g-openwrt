@@ -161,7 +161,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 + * AIROHA_PPE_METER_NONE and no meter register is ever written.
 + */
 +static bool airoha_ppe_meter;
-+module_param(airoha_ppe_meter, bool, 0444);
++module_param(airoha_ppe_meter, bool, 0644);
 +MODULE_PARM_DESC(airoha_ppe_meter,
 +		 "Offload tc police flows onto the PPE/QDMA meter groups");
 +
