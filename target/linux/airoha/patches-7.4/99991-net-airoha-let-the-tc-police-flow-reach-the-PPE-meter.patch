@@ -1,0 +1,91 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Fri, 21 Nov 2026 13:25:00 +0800
+Subject: [PATCH] net: airoha: let the tc police flow reach the PPE meter
+
+With airoha_ppe_meter=1 no tc police action is accepted, whatever the
+rate, burst or conform/exceed actions are.  Two separate checks stand in
+the way, and the first of them fires before the meter is even looked at.
+
+1. airoha_ppe_meter_validate() refuses a non-zero police->mtu.  That
+   field is never zero here: tc leaves the limit unset and act_police
+   fills it in itself (either ~0 or the rate-table cell size, whichever
+   applies) before the action is stored, so the test rejects every
+   police action tc can build.  tc even reports the value it handed
+   over: "police ... rate 10Mbit burst 32Kb mtu 2Kb action drop".  The
+   meter group sizes its bucket from rate and burst only, so an mtu has
+   nothing to land on; stop using it as a gate and keep the avrate and
+   overhead refusals.
+
+2. data.eth was filled from the ETH_ADDRS dissector key inside
+   "case 0:" only, i.e. only for addr_type 0 (a plain L2 flow).  For an
+   IPv4/IPv6 tuple the MACs stayed zero even when the user matched
+   src_mac/dst_mac, and the validity test further down then refused the
+   flow with -EINVAL.  Every FOE entry this driver writes carries the
+   address pair of the frame the PPE has to build, so an IP flow needs
+   those MACs just as much as an L2 one: read the key whenever
+   cls_flower registered it, and keep the "L2 needs it" test in case 0.
+
+Nothing else changes: with airoha_ppe_meter=0 police is still refused
+in the POLICE arm, and a flow without src_mac/dst_mac is still refused.
+
+Tested on XR1710G (AN7581, 7.4-rc3): before this, every combination of
+src_mac/dst_mac, conform-exceed and action returned EOPNOTSUPP; the
+mtu value handed over by tc was read back with "tc -s -d action show".
+
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -379,9 +379,15 @@
+ 				   "packet-rate police is not supported");
+ 		return -EOPNOTSUPP;
+ 	}
+-	if (police->avrate || police->overhead || police->mtu) {
++	/* tcfp_mtu is never zero: act_police replaces an unset limit with the
++	 * rate-table cell size before the action is stored, so testing it here
++	 * says nothing about what the user asked for and refuses every police
++	 * action tc can build.  The meter group sizes its bucket from rate and
++	 * burst alone, so there is nothing an mtu could change either.
++	 */
++	if (police->avrate || police->overhead) {
+ 		NL_SET_ERR_MSG_MOD(extack,
+-				   "avrate/overhead/mtu police is not supported");
++				   "avrate/overhead police is not supported");
+ 		return -EOPNOTSUPP;
+ 	}
+ 	/* The PPE group carries one token rate and the probe leaves the
+@@ -2550,18 +2556,25 @@
+ 	has_ports = flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_PORTS);
+ 	use_3t = !has_ports && airoha_ppe_3t;
+ 
++	/* Every entry this driver writes carries the address pair of the frame
++	 * the PPE has to build, so the rule has to hand the MACs over whatever
++	 * the tuple is.  cls_flower registers the eth-addrs key only when the
++	 * user matched src_mac/dst_mac, hence the key test rather than
++	 * addr_type; a plain L2 flow still cannot do without them.
++	 */
++	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_ETH_ADDRS)) {
++		struct flow_match_eth_addrs match;
++
++		flow_rule_match_eth_addrs(rule, &match);
++		memcpy(data.eth.h_dest, match.key->dst, ETH_ALEN);
++		memcpy(data.eth.h_source, match.key->src, ETH_ALEN);
++	}
++
+ 	switch (addr_type) {
+ 	case 0:
+ 		offload_type = PPE_PKT_TYPE_BRIDGE;
+-		if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_ETH_ADDRS)) {
+-			struct flow_match_eth_addrs match;
+-
+-			flow_rule_match_eth_addrs(rule, &match);
+-			memcpy(data.eth.h_dest, match.key->dst, ETH_ALEN);
+-			memcpy(data.eth.h_source, match.key->src, ETH_ALEN);
+-		} else {
++		if (!flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_ETH_ADDRS))
+ 			return -EOPNOTSUPP;
+-		}
+ 		break;
+ 	case FLOW_DISSECTOR_KEY_IPV4_ADDRS:
+ 		offload_type = use_3t ? PPE_PKT_TYPE_IPV4_ROUTE :
