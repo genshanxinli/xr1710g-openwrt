@@ -3,8 +3,8 @@
 """Check that the 974 (BQL) and 968 (napi_complete_done) changes are really in
 the XR1710G release image.
 
-A patch file living in ``target/linux/airoha/patches-7.3`` proves nothing about
-the image that is published: the release builder may use another branch, the
+A patch file living in ``target/linux/airoha/patches-<kver>`` proves nothing
+about the image that is published: the release builder may use another branch, the
 kernel may not have been rebuilt after the patch was added, or the image may
 have been assembled from an older ``Image`` than the one in ``build_dir``.
 This script reads the build tree and the image and says which of those is the
@@ -14,7 +14,13 @@ anything or writes to the tree.
 Checks, in order:
 
   source   the kernel build source carries both changes; if no build tree is
-           given, the patch files in ``patches-7.3`` are checked instead.
+           given, the patch files in ``patches-<kver>`` are checked instead.
+
+  <kver> is resolved, never hardcoded: ``--kver`` wins, then the subtarget's
+  ``KERNEL_PATCHVER``, then ``KERNEL_TESTING_PATCHVER``, then the kernel tree
+  that is actually in ``build_dir``.  The patch directory and the kernel tree
+  name follow the resolved version, so a 7.4 image is judged by
+  ``patches-7.4`` and a 7.3 image by ``patches-7.3``.
   build    the kernel was compiled after the source changed (mtime chain:
            source -> object -> vmlinux only), ``CONFIG_BQL=y`` is set, and the
            974 accumulator functions are in ``airoha_eth.o``/``vmlinux``.
@@ -62,6 +68,7 @@ import shutil
 import struct
 import subprocess
 import sys
+from collections import namedtuple
 from pathlib import Path
 
 # The 968 change is two hunks in airoha_eth.c: the RX poll and the TX poll.
@@ -73,12 +80,16 @@ SIG_974_ADD = "airoha_qdma_tx_bql_add"
 SIG_974_FLUSH = "airoha_qdma_tx_bql_flush"
 SIG_974_CALL = "netdev_tx_completed_queue"
 
-PATCHES_REL = Path("target/linux/airoha/patches-7.3")
-KERNEL_DIR = "linux-7.3"
-KERNEL_KDIR_GLOB = "build_dir/target-*/linux-airoha_an7581/linux-7.3"
+PATCHES_PARENT_REL = Path("target/linux/airoha")
+SUBTARGET_MK_REL = PATCHES_PARENT_REL / "an7581/target.mk"
+TARGET_MAKEFILE_REL = PATCHES_PARENT_REL / "Makefile"
+BUILD_DIR_REL = Path("build_dir")
 IMAGE_DIR_REL = Path("bin/targets/airoha/an7581")
 MIN_INFLIGHT_DEFAULT = 64 * 1024
 MTIME_TOLERANCE = 2.0
+
+KVER_RE = re.compile(r"(\d+\.\d+)")
+MAKE_PATCHVER_RE = re.compile(r"(?m)^\s*KERNEL(?:_TESTING)?_PATCHVER\s*:?=\s*(\d+\.\d+)")
 
 VERSION_RE = re.compile(rb"Linux version [^\x00\n\r]{1,200}")
 INFLIGHT_RE = re.compile(r"(?i)\b(?:max_)?inflight\b\s*[:=]?\s*(\d+)")
@@ -277,6 +288,113 @@ def fdt_string(node: dict, name: str) -> str:
 
 
 # --------------------------------------------------------------------------
+# Kernel version resolution
+
+KernelTree = namedtuple("KernelTree", "kver patches_rel")
+
+
+def kernel_dir_globs(kver: str) -> tuple[str, str, str]:
+    """Glob names for a kernel tree of ``kver``.
+
+    ``linux-7.4`` and ``linux-7.4-rc3`` both belong to 7.4; ``linux-7.40`` does
+    not, so the separator is spelled out instead of a bare ``linux-7.4*``.
+    """
+    return (f"linux-{kver}", f"linux-{kver}-*", f"linux-{kver}.*")
+
+
+def iter_kernel_dirs(root: Path, kver: str) -> list[Path]:
+    return [path for pattern in kernel_dir_globs(kver) for path in sorted(root.glob(pattern))]
+
+
+def normalize_kver(value: str) -> str:
+    match = KVER_RE.search(value)
+    if match is None:
+        raise GateError(f"cannot read a kernel version (major.minor) from {value!r}", 2)
+    return match.group(1)
+
+
+def read_make_patchver(path: Path) -> str | None:
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return None
+    match = MAKE_PATCHVER_RE.search(text)
+    return match.group(1) if match else None
+
+
+def kver_from_build_dir(build: Path) -> str | None:
+    """Read the version off the kernel tree that is actually in ``build``."""
+    roots = [build, build.parent] + sorted(build.glob("target-*/linux-airoha_an7581"))
+    candidates = [build]
+    for root in roots:
+        candidates.extend(sorted(root.glob("linux-*")))
+    found: set[str] = set()
+    for candidate in candidates:
+        if not (candidate / "drivers/net/ethernet/airoha/airoha_eth.c").is_file():
+            continue
+        match = KVER_RE.search(candidate.name)
+        if match is not None:
+            found.add(match.group(1))
+    if not found:
+        return None
+    return max(found, key=lambda ver: tuple(int(part) for part in ver.split(".")))
+
+
+def kver_from_patches(repo: Path) -> str | None:
+    """Last resort: the newest ``patches-<kver>`` the branch carries."""
+    versions = []
+    for path in (repo / PATCHES_PARENT_REL).glob("patches-*"):
+        match = KVER_RE.fullmatch(path.name.removeprefix("patches-"))
+        if match is not None and path.is_dir():
+            versions.append(match.group(1))
+    if not versions:
+        return None
+    return max(versions, key=lambda ver: tuple(int(part) for part in ver.split(".")))
+
+
+def detect_kernel_tree(
+    repo: Path, build: Path | None, explicit: str | None, report: Report
+) -> KernelTree:
+    """Resolve the kernel version this gate is judging.
+
+    Order: --kver, the subtarget's KERNEL_PATCHVER, the target's
+    KERNEL_TESTING_PATCHVER, the tree in build_dir, the newest patch queue.
+    The patch directory is derived from that one value, so the source check
+    can never read one version's patches while the image was built from
+    another.
+    """
+    if explicit:
+        kver = normalize_kver(explicit)
+        report.note(f"kernel version {kver} (from --kver)")
+    else:
+        kver = read_make_patchver(repo / SUBTARGET_MK_REL)
+        if kver is not None:
+            report.note(f"kernel version {kver} (from {SUBTARGET_MK_REL}: KERNEL_PATCHVER)")
+        else:
+            kver = read_make_patchver(repo / TARGET_MAKEFILE_REL)
+            if kver is not None:
+                report.note(
+                    f"kernel version {kver} (from {TARGET_MAKEFILE_REL}: KERNEL_TESTING_PATCHVER)"
+                )
+    if kver is None and build is not None:
+        kver = kver_from_build_dir(build)
+        if kver is not None:
+            report.note(f"kernel version {kver} (from the kernel tree in {build})")
+    if kver is None:
+        kver = kver_from_patches(repo)
+        if kver is not None:
+            report.note(f"kernel version {kver} (from {PATCHES_PARENT_REL}/patches-{kver})")
+    if kver is None:
+        raise GateError(
+            f"cannot resolve the kernel version: no --kver, no KERNEL_PATCHVER in "
+            f"{SUBTARGET_MK_REL}, no kernel tree in build_dir and no patches-<ver> in "
+            f"{PATCHES_PARENT_REL}",
+            2,
+        )
+    return KernelTree(kver, PATCHES_PARENT_REL / f"patches-{kver}")
+
+
+# --------------------------------------------------------------------------
 # Source / patch checks
 
 
@@ -311,8 +429,8 @@ def find_patch(patch_dir: Path, number: str, predicate) -> tuple[Path | None, bo
     return None, False
 
 
-def scan_patches(repo: Path) -> dict[str, tuple[Path | None, bool]]:
-    patch_dir = repo / PATCHES_REL
+def scan_patches(repo: Path, patches_rel: Path) -> dict[str, tuple[Path | None, bool]]:
+    patch_dir = repo / patches_rel
     if not patch_dir.is_dir():
         return {"968": (None, False), "974": (None, False)}
     return {
@@ -360,7 +478,9 @@ def check_kernel_source(kernel_dir: Path, report: Report) -> bool:
     return ok
 
 
-def check_source_stage(repo: Path, kernel_dir: Path | None, report: Report) -> bool:
+def check_source_stage(
+    repo: Path, kernel_dir: Path | None, patches_rel: Path, report: Report
+) -> bool:
     """Check where the image's kernel comes from.
 
     With a build tree, the applied kernel source is authoritative (a patch may
@@ -369,7 +489,7 @@ def check_source_stage(repo: Path, kernel_dir: Path | None, report: Report) -> b
     reported as a warning, not a failure: the question is what the image was
     built from.
     """
-    patches = scan_patches(repo)
+    patches = scan_patches(repo, patches_rel)
 
     if kernel_dir is not None:
         ok = check_kernel_source(kernel_dir, report)
@@ -378,12 +498,12 @@ def check_source_stage(repo: Path, kernel_dir: Path | None, report: Report) -> b
             report.warn(
                 "patch file(s) "
                 + ", ".join(missing)
-                + f" not found in {repo / PATCHES_REL}; the kernel build tree has the "
+                + f" not found in {repo / patches_rel}; the kernel build tree has the "
                 "code, so this is only a warning"
             )
         return ok
 
-    patch_dir = repo / PATCHES_REL
+    patch_dir = repo / patches_rel
     if not patch_dir.is_dir():
         report.fail(
             f"{patch_dir} does not exist; this branch does not carry the 968/974 changes"
@@ -398,7 +518,7 @@ def check_source_stage(repo: Path, kernel_dir: Path | None, report: Report) -> b
             report.fail(f"{number}: {path.name} exists but does not carry the expected change")
             ok = False
         else:
-            report.fail(f"{number}: no patch in {PATCHES_REL} carries the expected change")
+            report.fail(f"{number}: no patch in {patches_rel} carries the expected change")
             ok = False
     return ok
 
@@ -407,27 +527,23 @@ def check_source_stage(repo: Path, kernel_dir: Path | None, report: Report) -> b
 # Build checks
 
 
-def resolve_kernel_dir(build: Path) -> tuple[Path, Path] | None:
+def resolve_kernel_dir(build: Path, kver: str) -> tuple[Path, Path] | None:
     """Return (kernel source dir, KDIR) for a build tree or one of its parents."""
     build = build.resolve()
-    candidates = []
-    if (build / "drivers/net/ethernet/airoha/airoha_eth.c").is_file():
-        candidates.append(build)
-    candidates.append(build / KERNEL_DIR)
-    candidates.extend(sorted(build.glob("target-*/linux-airoha_an7581/linux-7.3")))
-    candidates.extend(sorted(build.glob("linux-7.3")))
+    candidates = [build]
+    for root in [build] + sorted(build.glob("target-*/linux-airoha_an7581")):
+        candidates.extend(iter_kernel_dirs(root, kver))
     for cand in candidates:
         if (cand / "drivers/net/ethernet/airoha/airoha_eth.c").is_file():
             return cand, cand.parent
     return None
 
 
-def find_kernel_image(kdir: Path) -> Path | None:
-    for name in ("Image", "Image-initramfs"):
-        candidate = kdir / name
+def find_kernel_image(kdir: Path, kernel_dir: Path) -> Path | None:
+    for candidate in (kdir / "Image", kdir / "Image-initramfs"):
         if candidate.is_file():
             return candidate
-    candidate = kdir / "linux-7.3/arch/arm64/boot/Image"
+    candidate = kernel_dir / "arch/arm64/boot/Image"
     return candidate if candidate.is_file() else None
 
 
@@ -479,7 +595,7 @@ def check_build_stage(kdir: Path, kernel_dir: Path, report: Report) -> bool:
     header = kernel_dir / "drivers/net/ethernet/airoha/airoha_eth.h"
     obj = kernel_dir / "drivers/net/ethernet/airoha/airoha_eth.o"
     vmlinux = kernel_dir / "vmlinux"
-    image = find_kernel_image(kdir)
+    image = find_kernel_image(kdir, kernel_dir)
 
     if obj.is_file():
         if not newer_or_equal(obj, source) or (header.is_file() and not newer_or_equal(obj, header)):
@@ -617,10 +733,9 @@ def extract_fit_kernel(image: Path, report: Report) -> bytes:
     raise GateError(f"unsupported FIT kernel compression: {compression}")
 
 
-def check_image_stage(image_dir: Path, kdir: Path, report: Report) -> bool:
+def check_image_stage(image_dir: Path, kdir: Path, kernel_dir: Path, report: Report) -> bool:
     image = select_release_image(image_dir)
     report.note(f"release image: {image}")
-    kernel_dir = kdir / KERNEL_DIR
     vmlinux = kernel_dir / "vmlinux"
     if not vmlinux.is_file():
         raise GateError(f"kernel build tree not found at {kernel_dir}; cannot verify the image", 3)
@@ -749,7 +864,8 @@ def print_guidance() -> None:
     print("The gate is read-only: it did not flash, reboot or change anything.")
     print("To get an image that passes:")
     print("  1. Build from a tree that carries both changes (968 first, then 974).")
-    print("     If the branch has no 968/974 in patches-7.3, it will never be in the image.")
+    print("     If the branch has no 968/974 in the patches dir the gate reported, it")
+    print("     will never be in the image; pass --kver if the version looks wrong.")
     print("  2. Rebuild the kernel and the image in one run, for example:")
     print("       make target/linux/clean")
     print("       make target/linux/compile")
@@ -764,23 +880,33 @@ def print_guidance() -> None:
     print("See --help for the criteria; the test file holds a worked example of every case.")
 
 
-def autodetect_build_dir(repo: Path) -> Path | None:
-    matches = sorted(repo.glob(KERNEL_KDIR_GLOB))
+def autodetect_build_dir(repo: Path, kver: str) -> Path | None:
+    build = repo / BUILD_DIR_REL
+    matches = [
+        path
+        for sub in sorted(build.glob("target-*/linux-airoha_an7581"))
+        for path in iter_kernel_dirs(sub, kver)
+        if (path / "drivers/net/ethernet/airoha/airoha_eth.c").is_file()
+    ]
     if len(matches) == 1:
         return matches[0]
     return None
 
 
-def resolve_build_dir(args, repo: Path, report: Report) -> Path | None:
+def resolve_build_dir(args, repo: Path, kernel: KernelTree, report: Report) -> Path | None:
     if args.skip_build:
         return None
     if args.build_dir:
         path = Path(args.build_dir).resolve()
-        resolved = resolve_kernel_dir(path)
-        if resolved is None:
-            raise GateError(f"{path} is not a linux-7.3 kernel build tree", 2)
+        if resolve_kernel_dir(path, kernel.kver) is None:
+            raise GateError(
+                f"{path} is not a linux-{kernel.kver} kernel build tree (no "
+                f"linux-{kernel.kver}* with drivers/net/ethernet/airoha/airoha_eth.c); "
+                "pass --kver if this tree really is another kernel version",
+                2,
+            )
         return path
-    auto = autodetect_build_dir(repo)
+    auto = autodetect_build_dir(repo, kernel.kver)
     if auto is not None:
         report.note(f"auto-detected kernel build tree: {auto}")
         return auto
@@ -811,7 +937,13 @@ def parse_args(argv):
         "Exit codes: 0 pass, 1 gate failure, 2 usage/input error, 3 cannot verify.",
     )
     parser.add_argument("--repo", default=None, help="repository root (default: parent of this script)")
-    parser.add_argument("--build-dir", default=None, help="OpenWrt build_dir or the linux-7.3 tree")
+    parser.add_argument("--build-dir", default=None, help="OpenWrt build_dir or the linux-<kver> tree")
+    parser.add_argument(
+        "--kver",
+        default=None,
+        help="kernel version to judge, e.g. 7.3 (default: resolved from KERNEL_PATCHVER, "
+        "then KERNEL_TESTING_PATCHVER, then the tree in build_dir)",
+    )
     parser.add_argument("--image-dir", default=None, help="directory with the built images")
     parser.add_argument("--capture", default=None, help="offline capture file or directory")
     parser.add_argument(
@@ -838,13 +970,20 @@ def main(argv=None) -> int:
     print(f"repository: {repo}")
 
     try:
-        build_dir = resolve_build_dir(args, repo, report)
+        hinted = Path(args.build_dir).resolve() if args.build_dir else repo / BUILD_DIR_REL
+        kernel = detect_kernel_tree(
+            repo, hinted if hinted.exists() else None, args.kver, report
+        )
+        print(f"kernel version: {kernel.kver} (patches: {kernel.patches_rel.name})")
+        build_dir = resolve_build_dir(args, repo, kernel, report)
         kernel_dir = None
         kdir = None
         if build_dir is not None:
-            resolved = resolve_kernel_dir(build_dir)
+            resolved = resolve_kernel_dir(build_dir, kernel.kver)
             if resolved is None:
-                raise GateError(f"{build_dir} has no linux-7.3 kernel source", 3)
+                raise GateError(
+                    f"{build_dir} has no linux-{kernel.kver} kernel source", 3
+                )
             kernel_dir, kdir = resolved
             print(f"kernel build: {kernel_dir}")
         image_dir = resolve_image_dir(args, repo, report)
@@ -854,7 +993,7 @@ def main(argv=None) -> int:
         if not args.skip_source:
             print()
             print("source:")
-            check_source_stage(repo, kernel_dir, report)
+            check_source_stage(repo, kernel_dir, kernel.patches_rel, report)
 
         if kernel_dir is not None and not args.skip_build:
             print()
@@ -866,7 +1005,7 @@ def main(argv=None) -> int:
             print("image:")
             if kdir is None:
                 raise GateError("the image check needs --build-dir to locate $(KDIR)/Image", 3)
-            check_image_stage(image_dir, kdir, report)
+            check_image_stage(image_dir, kdir, kernel_dir, report)
 
         if args.capture is not None:
             print()
