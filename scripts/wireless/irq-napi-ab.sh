@@ -116,6 +116,14 @@ ARMS=${ARMS:-baseline,split,threaded,combined}
 OUT_DIR_OPT=${OUT_DIR:-}
 PROC_ROOT=${PROC_ROOT:-/proc}
 DEBUGFS_ROOT=${DEBUGFS_ROOT:-/sys/kernel/debug}
+SYS_CLASS_NET=${SYS_CLASS_NET:-/sys/class/net}
+# RPS, not the mt76-npu IRQ affinity, decides which CPU runs the TASKLET and
+# NET_RX softirq (issue #315): with every rps_cpus mask at f the hotspot sat
+# on cpu1, and moving irq23 from cpu0 to cpu3 left it on cpu2.  A split arm
+# that moves IRQs while the masks still steer the softirq measures nothing,
+# so it is skipped unless --with-rps moves the masks too.
+WITH_RPS=${WITH_RPS:-0}
+RPS_SKIP_REASON='SKIP: softirq hotspot is decided by rps_cpus, not by mt76-npu irq affinity'
 RUN=${RUN:-0}
 
 # Internal state.
@@ -173,8 +181,17 @@ THREADED_SOURCE=
 SPLIT_TARGETS=
 SPLIT_BASIS=
 SPLIT_CHOSEN_CPU=
+SPLIT_RESERVED=
 IRQ_MAP_REQUEST=
 IRQ_MAP_READONLY=0
+RPS_DEV=
+RPS_CPUS=
+RPS_NONZERO_QUEUES=0
+RPS_PROBE=unavailable
+RPS_SAVED=
+SPLIT_RPS_BLOCKS=0
+NPU_IRQ_RATES=not-sampled
+NPU_BEACON_LIKE=not-sampled
 
 note() {
 	printf '%s: %s\n' "$PROG" "$*" >&2
@@ -327,6 +344,12 @@ Options:
                         "mt76-npu mt7996e-hif mt7996e")
   --cpus LIST           CPU pool for the automatic split, e.g. 0-3
                         (default: online CPUs)
+  --with-rps            also move the per-queue rps_cpus masks in the split
+                        arm (default off; RPS decides the softirq hotspot,
+                        so an IRQ-only split is skipped when the masks are
+                        not all zero)
+  --sys-class-net DIR   alternate /sys/class/net (default /sys/class/net;
+                        for tests)
   --irq-map IRQ:CPU,..  explicit split mapping; only the listed IRQs are
                         moved.  Example: --irq-map 50:2,51:3
   --threaded-value N    value written by the threaded arm, 0 or 1
@@ -396,7 +419,9 @@ parse_args() {
 		--arms)			[ $# -ge 2 ] || die "$1 needs a value"; ARMS=$2; shift 2 ;;
 		--out-dir)		[ $# -ge 2 ] || die "$1 needs a value"; OUT_DIR_OPT=$2; shift 2 ;;
 		--proc-root)		[ $# -ge 2 ] || die "$1 needs a value"; PROC_ROOT=$2; shift 2 ;;
+		--sys-class-net)	[ $# -ge 2 ] || die "$1 needs a value"; SYS_CLASS_NET=$2; shift 2 ;;
 		--debugfs-root)		[ $# -ge 2 ] || die "$1 needs a value"; DEBUGFS_ROOT=$2; shift 2 ;;
+		--with-rps)		WITH_RPS=1; shift ;;
 		--run)			RUN=1; shift ;;
 		--dry-run)		RUN=0; shift ;;
 		--help|-h)		usage; exit 0 ;;
@@ -702,20 +727,70 @@ cpu_sample() {
 	irq_cpu_totals "$PROC_ROOT/interrupts" "$tag" || return 1
 }
 
+# CPUs that carry arch_timer or irq55 on this boot: pinning a Wi-Fi line
+# there cannot show a difference even when the generic interrupt rate over a
+# one-second sample is below IRQ_BUSY_PER_S.  Printed one CPU per line.
+timer_cpus() {
+	[ -r "$PROC_ROOT/interrupts" ] || return 1
+	awk '
+		NR == 1 {
+			for (i = 1; i <= NF; i++) {
+				c = $i
+				sub(/^CPU/, "", c)
+				if (c ~ /^[0-9]+$/)
+					cpu[i + 1] = c
+			}
+			next
+		}
+		$1 ~ /^[0-9]+:/ {
+			reserved = ($1 == "55:")
+			line = tolower($0)
+			if (!reserved && line ~ /arch_timer/)
+				reserved = 1
+			if (!reserved)
+				next
+			for (i = 2; i <= NF; i++) {
+				if (!(i in cpu))
+					continue
+				if ($i ~ /^[0-9]+/ && $i + 0 > 0)
+					seen[cpu[i]] = 1
+			}
+		}
+		END {
+			for (c in seen)
+				print c
+		}
+	' "$PROC_ROOT/interrupts"
+}
+
 # Selection over "cpu N idle_pct P irq_per_s R" metrics on stdin: prints
 # "basis ..." and "targets CPU...", most idle first, never a CPU that already
-# carries IRQ_BUSY_PER_S interrupts/s.
+# carries IRQ_BUSY_PER_S interrupts/s or one that carries the timer/irq55.
 split_targets_from_metrics() {
-	awk -v busy="${1:-50000}" -v sample="${2:-1}" '
+	awk -v busy="${1:-50000}" -v sample="${2:-1}" -v hard="${3:-}" '
+		BEGIN {
+			hn = split(hard, hc, " ")
+			for (j = 1; j <= hn; j++)
+				if (hc[j] != "")
+					hardcpu[hc[j]] = 1
+		}
 		NF >= 6 { n++; id[n] = $2; idle[n] = $4 + 0; rate[n] = $6 + 0 }
 		END {
 			if (n == 0)
 				exit 1
-			for (i = 1; i <= n; i++)
+			for (i = 1; i <= n; i++) {
 				if (rate[i] >= busy) {
 					excluded[i] = 1
 					ex = ex sprintf("cpu%s(%d/s) ", id[i], rate[i])
 				}
+				if (id[i] in hardcpu) {
+					tag = "timer"
+					if (excluded[i])
+						tag = "timer+busy"
+					excluded[i] = 1
+					hx = hx sprintf("cpu%s(%s) ", id[i], tag)
+				}
+			}
 			for (k = 1; k <= n; k++) {
 				bi = 0
 				bidle = -1
@@ -732,6 +807,8 @@ split_targets_from_metrics() {
 					reason = sprintf("idlest=cpu%s(%.1f%% idle, %d irq/s)", \
 						id[bi], bidle, rate[bi])
 			}
+			if (hx != "")
+				reason = reason "; reserved=" substr(hx, 1, length(hx) - 1)
 			if (ex != "")
 				reason = reason "; excluded=" substr(ex, 1, length(ex) - 1)
 			printf "basis %s sample=%ss\n", reason, sample
@@ -741,15 +818,101 @@ split_targets_from_metrics() {
 
 # Sample once, then pick: see split_targets_from_metrics for the rule.
 pick_split_targets() {
-	local first second metrics
+	local first second metrics hard
 
+	hard=$(timer_cpus 2>/dev/null | tr '\n' ' ' || :)
 	first=$(cpu_sample a) || return 1
 	sample_sleep "${IRQ_SAMPLE_S:-1}"
 	second=$(cpu_sample b) || return 1
 	metrics=$(printf '%s\n%s\n' "$first" "$second" | cpu_metrics) || return 1
 	[ -n "$metrics" ] || return 1
 	printf '%s\n' "$metrics" |
-		split_targets_from_metrics "${IRQ_BUSY_PER_S:-50000}" "${IRQ_SAMPLE_S:-1}"
+		split_targets_from_metrics "${IRQ_BUSY_PER_S:-50000}" "${IRQ_SAMPLE_S:-1}" "$hard"
+}
+
+# Per-queue RPS masks.  /sys/class/net/cpu is the usual conduit name on the
+# XR1710G; when it is absent the conduit is the device behind a bridge port's
+# lower_* link.  Unreadable masks are reported as "unavailable", not guessed.
+rps_probe() {
+	local dev base f v values='' all_zero=1 nonzero=0 lower
+
+	base=$SYS_CLASS_NET
+	dev=cpu
+	if [ ! -d "$base/$dev/queues" ]; then
+		lower=$(readlink -f "$base/lan4/lower_"* 2>/dev/null | head -n 1)
+		[ -n "$lower" ] && dev=$(basename "$lower")
+	fi
+	if [ ! -d "$base/$dev/queues" ]; then
+		RPS_PROBE=unavailable
+		return 1
+	fi
+	RPS_DEV=$dev
+	for f in "$base/$dev/queues/rx-"*/rps_cpus; do
+		[ -r "$f" ] || continue
+		v=$(tr -d ' \t\r\n' < "$f")
+		[ -n "$v" ] || v=0
+		[ "$v" = 0 ] || {
+			all_zero=0
+			nonzero=$((nonzero + 1))
+		}
+		values="${values:+$values,}\"$v\""
+	done
+	[ -n "$values" ] || {
+		RPS_PROBE=unavailable
+		return 1
+	}
+	RPS_CPUS="[$values]"
+	RPS_NONZERO_QUEUES=$nonzero
+	RPS_PROBE=ok
+	[ "$all_zero" -eq 1 ] || SPLIT_RPS_BLOCKS=1
+	return 0
+}
+
+# Save and restore the masks so --with-rps can be undone like the affinities.
+rps_save() {
+	local f v
+
+	[ -n "$RPS_DEV" ] || return 0
+	RPS_SAVED=
+	for f in "$SYS_CLASS_NET/$RPS_DEV/queues/rx-"*/rps_cpus; do
+		[ -r "$f" ] || continue
+		v=$(tr -d ' \t\r\n' < "$f")
+		RPS_SAVED="$RPS_SAVED $f:$v"
+	done
+}
+
+rps_set_cpu() {
+	local cpu="$1" mask f
+
+	mask=$(awk -v c="$cpu" 'BEGIN { printf "%x", 2 ^ c }')
+	[ -n "$mask" ] || return 1
+	for f in "$SYS_CLASS_NET/$RPS_DEV/queues/rx-"*/rps_cpus; do
+		[ -w "$f" ] || continue
+		if printf '%s\n' "$mask" > "$f" 2>/dev/null; then
+			WRITE_COUNT=$((WRITE_COUNT + 1))
+		else
+			return 1
+		fi
+	done
+	return 0
+}
+
+rps_restore() {
+	local rec f v cur rc=0
+
+	for rec in $RPS_SAVED; do
+		f=${rec%%:*}
+		v=${rec#*:}
+		cur=$(tr -d ' \t\r\n' < "$f" 2>/dev/null || :)
+		[ "$cur" = "$v" ] && continue
+		if printf '%s\n' "$v" > "$f" 2>/dev/null; then
+			WRITE_COUNT=$((WRITE_COUNT + 1))
+		else
+			note "failed to restore $f to $v"
+			rc=1
+		fi
+	done
+	return $rc
 }
 
 # Candidate IRQ lines: "irq|matched-name|action" for every /proc/interrupts
@@ -915,6 +1078,36 @@ irq_total_delta() {
 			exit
 		}
 	' "$1" "$2"
+}
+
+irq_line_exists() {
+	awk -v n="$1" '$1 == n ":" { found = 1 } END { exit !found }' \
+		"$PROC_ROOT/interrupts" 2>/dev/null
+}
+
+# With no associated STA the NPU lines irq40/irq41 still tick at the beacon
+# interval (20.0/s and 6.9/s over a 13 s sample, issue #316).  A rate outside
+# 10..40/s and 2..15/s means the sample says nothing about the NPU, so the
+# harness warns instead of failing.  The rates go into result.json.
+npu_beacon_rate() {
+	local before="$1" after="$2" secs="${3:-1}" r40 r41 p40 p41 like=yes
+
+	[ "$secs" -ge 1 ] 2>/dev/null || secs=1
+	r40=$(irq_total_delta "$before" "$after" 40)
+	r41=$(irq_total_delta "$before" "$after" 41)
+	p40=$(awk -v n="$r40" -v s="$secs" 'BEGIN { printf "%.1f", n / s }')
+	p41=$(awk -v n="$r41" -v s="$secs" 'BEGIN { printf "%.1f", n / s }')
+	awk -v a="$p40" -v b="$p41" \
+		'BEGIN { exit !(a >= 10 && a <= 40 && b >= 2 && b <= 15) }' ||
+		like=no
+	NPU_IRQ_RATES="irq40=$p40/s irq41=$p41/s"
+	NPU_BEACON_LIKE=$like
+	if [ "$like" = no ]; then
+		say "WARN: npu irq rate is not beacon-like"
+		note "irq40=$p40/s irq41=$p41/s outside beacon band 10..40/s and 2..15/s"
+	fi
+	printf 'npu_irq irq40=%s/s irq41=%s/s beacon_like=%s\n' \
+		"$p40" "$p41" "$like"
 }
 
 softirq_label_percpu() {
@@ -1455,6 +1648,26 @@ EOF
 
 	resolve_source_bind
 
+	# RPS decides the softirq hotspot (issue #315); read the masks before the
+	# split map so the plan can say whether an IRQ-only split is meaningful.
+	rps_probe || :
+	if [ "$WITH_RPS" -eq 1 ] && [ "$RUN" -eq 1 ] && [ "$RPS_PROBE" = ok ]; then
+		rps_save
+	fi
+
+	# No associated STA: the NPU IRQs should still tick at beacon rate.  This
+	# is a baseline sanity check, not a pass/fail condition (issue #316).
+	if [ "$STATION_OK" -ne 1 ] && irq_line_exists 40 && irq_line_exists 41; then
+		local before after
+		before=${TMPDIR:-/tmp}/irq-napi-ab.$$.irq-before
+		after=${TMPDIR:-/tmp}/irq-napi-ab.$$.irq-after
+		TMP_FILES="$TMP_FILES $before $after"
+		cp "$PROC_ROOT/interrupts" "$before" 2>/dev/null || :
+		sample_sleep "${IRQ_SAMPLE_S:-1}"
+		cp "$PROC_ROOT/interrupts" "$after" 2>/dev/null || :
+		npu_beacon_rate "$before" "$after" "${IRQ_SAMPLE_S:-1}" || :
+	fi
+
 	# Build or validate the split map.  An explicit map is used as-is (only
 	# those IRQs move).  When it names an IRQ this kernel exposes as
 	# read-only (-r--r--r--, typical for the mt7996e-managed lines 49..57 on
@@ -1491,13 +1704,19 @@ EOF
 			awk '$1 == "basis" { sub(/^basis /, ""); print; exit }')
 		[ -n "$SPLIT_TARGETS" ] || {
 			# No /proc/stat sample (a fixture run): keep the old rule
-			# of "any online CPU but the boot CPU".
+			# of "any online CPU but the boot CPU", still skipping a
+			# CPU reserved for arch_timer or irq55.
+			SPLIT_RESERVED=$(timer_cpus 2>/dev/null | tr '\n' ' ' || :)
 			for cpu in $CPUS; do
-				[ "$cpu" -eq 0 ] || targets="$targets $cpu"
+				[ "$cpu" -eq 0 ] && continue
+				case " $SPLIT_RESERVED " in
+				*" $cpu "*) continue ;;
+				esac
+				targets="$targets $cpu"
 			done
 			SPLIT_TARGETS=${targets# }
 			[ -n "$SPLIT_TARGETS" ] || SPLIT_TARGETS=$CPUS
-			SPLIT_BASIS="no /proc/stat sample; online CPUs except cpu0"
+			SPLIT_BASIS="no /proc/stat sample; online CPUs except cpu0 (reserved: ${SPLIT_RESERVED:-none})"
 			note "no CPU idle sample; split targets: $SPLIT_TARGETS"
 		}
 		SPLIT_CHOSEN_CPU=${SPLIT_TARGETS%% *}
@@ -1603,6 +1822,22 @@ EOF
 	if [ -n "$SPLIT_TARGETS" ]; then
 		say "$PROG: split targets: $(printf '%s' "$SPLIT_TARGETS" | tr ' ' ',')"
 		say "$PROG: split basis: ${SPLIT_BASIS:-unavailable}"
+	fi
+	if [ "$RPS_PROBE" = ok ]; then
+		say "$PROG: rps_cpus: dev=$RPS_DEV queues=$(printf '%s' "$RPS_CPUS" | awk -F, '{print NF}') nonzero=$RPS_NONZERO_QUEUES masks=$RPS_CPUS"
+		if [ "$SPLIT_RPS_BLOCKS" -eq 1 ]; then
+			if [ "$WITH_RPS" -eq 1 ]; then
+				say "$PROG: --with-rps: the split arm also writes rps_cpus to cpu${SPLIT_CHOSEN_CPU:-?}"
+			else
+				say "$RPS_SKIP_REASON"
+				say "$PROG: split arm will be skipped; pass --with-rps to move the masks with the IRQs"
+			fi
+		fi
+	else
+		say "$PROG: rps_cpus: unavailable under $SYS_CLASS_NET/$RPS_DEV (cannot prove what steers the softirq)"
+	fi
+	if [ "$NPU_IRQ_RATES" != not-sampled ]; then
+		say "$PROG: npu irq rate: $NPU_IRQ_RATES beacon_like=$NPU_BEACON_LIKE"
 	fi
 	if [ "$IRQ_MAP_READONLY" -eq 1 ]; then
 		say "$PROG: requested --irq-map is read-only here: the run degrades to a read-only report"
@@ -1749,6 +1984,8 @@ restore_state() {
 			[ "$cur" = "$NAPI_SAVED" ] || rc=1
 		fi
 	fi
+
+	rps_restore || rc=1
 
 	RESTORE_FAILED=$rc
 	return $rc
@@ -1929,6 +2166,12 @@ measure_arm() {
 
 	case $arm in
 	split|combined)
+		if [ "$SPLIT_RPS_BLOCKS" -eq 1 ] && [ "$WITH_RPS" -ne 1 ]; then
+			say "$RPS_SKIP_REASON"
+			ARM_STATUS=skipped
+			ARM_REASON=rps-decides-hotspot
+			return 2
+		fi
 		if [ -z "$SPLIT_MAP" ]; then
 			ARM_STATUS=skipped
 			ARM_REASON=no-writable-irq
@@ -1947,6 +2190,16 @@ measure_arm() {
 			APPLIED_SPLIT="$APPLIED_SPLIT $irq:$cpu"
 		done
 		APPLIED_SPLIT=${APPLIED_SPLIT# }
+		if [ "$WITH_RPS" -eq 1 ]; then
+			if ! rps_set_cpu "$SPLIT_CHOSEN_CPU"; then
+				note "$arm: failed to write rps_cpus to cpu$SPLIT_CHOSEN_CPU"
+				restore_state >/dev/null 2>&1 || :
+				ARM_STATUS=fail
+				ARM_REASON='rps-write'
+				return 1
+			fi
+			APPLIED_SPLIT="$APPLIED_SPLIT rps:$SPLIT_CHOSEN_CPU"
+		fi
 		[ "$WRITE_COUNT" -gt "$split_writes_start" ] && split_changed=1
 		;;
 	esac
@@ -2318,6 +2571,14 @@ write_result_json() {
 		printf '  "split_map": "%s",\n' "${SPLIT_MAP:-none}"
 		printf '  "irq_map_request": "%s",\n' "${IRQ_MAP_REQUEST:-none}"
 		printf '  "irq_map_readonly": %s,\n' "$IRQ_MAP_READONLY"
+		printf '  "rps_dev": "%s",\n' "$(json_str "${RPS_DEV:-}")"
+		printf '  "rps_cpus": %s,\n' "${RPS_CPUS:-[]}"
+		printf '  "rps_nonzero_queues": %s,\n' "$RPS_NONZERO_QUEUES"
+		printf '  "rps_probe": "%s",\n' "$RPS_PROBE"
+		printf '  "rps_blocks_split": %s,\n' "$SPLIT_RPS_BLOCKS"
+		printf '  "with_rps": %s,\n' "$WITH_RPS"
+		printf '  "npu_irq_rates": "%s",\n' "$(json_str "$NPU_IRQ_RATES")"
+		printf '  "npu_irq_beacon_like": "%s",\n' "$NPU_BEACON_LIKE"
 		printf '  "irq_excluded": "%s",\n' "$(json_str "${IRQ_EXCLUDED# }")"
 		printf '  "napi_path": "%s",\n' "$(json_str "${NAPI_PATH:-}")"
 		printf '  "napi_param": "%s",\n' "$(json_str "${NAPI_PARAM:-}")"

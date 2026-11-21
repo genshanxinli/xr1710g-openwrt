@@ -387,3 +387,31 @@ claims:
       - "text: scripts/flash-gate.sh:75 EXIT_FORCE=3"
       - "text: scripts/flash-gate.sh:78 EXIT_IMAGE=6"
       - "text: scripts/tests/test_flash_gate_exitcodes.sh:93 TABLE_CONST=$(printf '0"
+
+  - id: softirq-hotspot-follows-rps
+    claim: "%soft 的 TASKLET/NET_RX 落点由每队列的 RPS 掩码 /sys/class/net/cpu/queues/rx-*/rps_cpus 决定，不由 mt76-npu 的 IRQ affinity 决定：32 个掩码全 f 时 NET_RX 99.0% 在 cpu1，全写 0 后迁到 cpu2（86.5%），再把 irq23 从 cpu0 挪到 cpu3，NET_RX 仍留 cpu2（91.6%）。"
+    source:
+      - scripts/wireless/irq-napi-ab.sh:850
+      - scripts/wireless/irq-napi-ab.sh:126
+      - https://github.com/genshanxinli/xr1710g-openwrt/issues/66#issuecomment-7056263260
+    evidence: 实测
+    date: "2026-11-21"
+    status: supported
+    notes: "四臂读数来自设备上的实测（issue #66 评论 7056263260、issue #315），不进断言：CI 没有设备。verify 只证明 harness 会读 rps_cpus，并在掩码非零时拒绝把 IRQ-only split 当成 hotspot 的归因（除非 --with-rps）。"
+    verify:
+      - "text: scripts/wireless/irq-napi-ab.sh:850 for f in \"$base/$dev/queues/rx-\"*/rps_cpus; do"
+      - "text: scripts/wireless/irq-napi-ab.sh:126 RPS_SKIP_REASON='SKIP: softirq hotspot is decided by rps_cpus"
+
+  - id: npu-irq-beacon-rate-no-sta
+    claim: "无关联 STA 时 mt76-npu 的 irq40/irq41 仍按信标节拍触发：13 s delta 得 irq40 20.0/s、irq41 6.9/s；同期 mt76 debugfs npu-tx 的 passthrough 为 670、linearized 为 0。"
+    source:
+      - scripts/wireless/irq-napi-ab.sh:1668
+      - package/kernel/mt76/patches/0021-wifi-mt76-skip-redundant-NPU-TX-linearize.patch:97
+      - https://github.com/genshanxinli/xr1710g-openwrt/issues/316
+    evidence: 实测
+    date: "2026-11-21"
+    status: supported
+    notes: "20.0/s 与 6.9/s、passthrough 670 都是设备读数（issue #316），不进断言。harness 在无 STA 时以 1 s delta 做 baseline sanity check，区间外只 WARN；verify 断言这条代码路径与 npu-tx passthrough 计数器存在。"
+    verify:
+      - "text: scripts/wireless/irq-napi-ab.sh:1668 npu_beacon_rate \"$before\" \"$after\" \"${IRQ_SAMPLE_S:-1}\""
+      - "text: package/kernel/mt76/patches/0021-wifi-mt76-skip-redundant-NPU-TX-linearize.patch:97 passthrough: %llu"

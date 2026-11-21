@@ -50,6 +50,15 @@ cpu2 100 0 100 950 0 0 0 0 0 0
 cpu3 100 0 100 900 0 0 0 0 0 0
 """
 
+# The board's boot CPU carries the timer and the NPU line; neither is a
+# usable split target even when its generic interrupt rate is below the
+# IRQ_BUSY_PER_S threshold.
+TIMER_INTERRUPTS = """ 40:        100          0          0          0  mt76-npu   0 Edge      wifi0
+ 41:         50          0          0          0  mt76-npu   1 Edge      wifi0
+ 55:       4000          0          0          0  mt76-npu  55 Edge      wifi0
+ 56:      30000          0          0          0  arch_timer  56 Edge      arch_timer
+"""
+
 
 def extract_function(name):
     """Copy one top-level shell function out of the script."""
@@ -83,13 +92,16 @@ def run_script(args, env=None):
 class Fixture:
     """A fake /proc with the two managed, read-only mt7996e IRQ lines."""
 
-    def __init__(self):
+    def __init__(self, rps_values=None, timer_on_cpu0=False):
         self.dir = tempfile.TemporaryDirectory()
         self.root = Path(self.dir.name)
         proc = self.root / "proc"
         (proc / "irq" / "49").mkdir(parents=True)
         (proc / "irq" / "50").mkdir(parents=True)
-        (proc / "interrupts").write_text(INTERRUPTS)
+        interrupts = INTERRUPTS
+        if timer_on_cpu0:
+            interrupts += TIMER_INTERRUPTS
+        (proc / "interrupts").write_text(interrupts)
         (proc / "stat").write_text(STAT)
         (proc / "softirqs").write_text("NET_TX 1 2 3 4\n")
         (proc / "uptime").write_text("1234.56 1234.00\n")
@@ -98,6 +110,14 @@ class Fixture:
         for irq in ("49", "50"):
             (proc / "irq" / irq / "smp_affinity").chmod(0o444)
         self.proc = proc
+        self.sys_class_net = None
+        if rps_values is not None:
+            self.sys_class_net = self.root / "sys" / "class" / "net"
+            queues = self.sys_class_net / "cpu" / "queues"
+            for index, value in enumerate(rps_values):
+                rx = queues / f"rx-{index}"
+                rx.mkdir(parents=True)
+                (rx / "rps_cpus").write_text(value + "\n")
 
     def cleanup(self):
         self.dir.cleanup()
@@ -316,6 +336,78 @@ class ThreadedDefault(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn("baseline_threaded=unavailable", out.stdout)
         self.assertIn("arm_value=1", out.stdout)
+
+
+class RpsAndBeacon(unittest.TestCase):
+    """RPS decides the softirq hotspot; the npu IRQs tick at beacon rate."""
+
+    def run_fixture(self, fixture, extra=()):
+        args = [
+            "--proc-root", str(fixture.proc),
+            "--iface", "phy0.1-ap0",
+            "--client", "192.168.1.236",
+            "--out-dir", str(fixture.root / "out"),
+        ]
+        if fixture.sys_class_net is not None:
+            args += ["--sys-class-net", str(fixture.sys_class_net)]
+        return run_script(args + list(extra))
+
+    def test_split_arm_skips_when_rps_nonzero(self):
+        fixture = Fixture(rps_values=["f"] * 32)
+        self.addCleanup(fixture.cleanup)
+        out = self.run_fixture(fixture)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn(
+            "SKIP: softirq hotspot is decided by rps_cpus, not by mt76-npu irq affinity",
+            out.stdout,
+        )
+
+    def test_rps_cpus_is_reported(self):
+        fixture = Fixture(rps_values=["f"] * 32)
+        self.addCleanup(fixture.cleanup)
+        # The read-only --irq-map path writes result.json without needing root.
+        out = self.run_fixture(fixture, ["--run", "--irq-map", "49:2"])
+        self.assertEqual(out.returncode, 0, out.stderr)
+        json_line = [l for l in out.stdout.splitlines() if l.startswith("result:")]
+        self.assertEqual(len(json_line), 1, out.stdout)
+        data = json.loads(Path(json_line[0].split("result:", 1)[1].strip()).read_text())
+        self.assertEqual(len(data["rps_cpus"]), 32, data.get("rps_cpus"))
+        self.assertEqual(data["rps_nonzero_queues"], 32)
+
+    def test_target_cpu_excludes_timer_core(self):
+        fixture = Fixture(rps_values=["0"] * 32, timer_on_cpu0=True)
+        self.addCleanup(fixture.cleanup)
+        out = self.run_fixture(fixture)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        line = [l for l in out.stdout.splitlines() if "split targets:" in l]
+        self.assertEqual(len(line), 1, out.stdout)
+        chosen = line[0].split(":", 1)[1].strip().split(",")[0]
+        self.assertNotEqual(chosen, "0", out.stdout)
+
+    def test_beacon_rate_warn(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        before = Path(tmp.name) / "before"
+        after = Path(tmp.name) / "after"
+        before.write_text(
+            " 40: 0 0 0 0 mt76-npu 0 Edge wifi0\n"
+            " 41: 0 0 0 0 mt76-npu 1 Edge wifi0\n"
+        )
+        # 500 interrupts in one second, far above the 10..40/s beacon band.
+        after.write_text(
+            " 40: 500 0 0 0 mt76-npu 0 Edge wifi0\n"
+            " 41: 7 0 0 0 mt76-npu 1 Edge wifi0\n"
+        )
+        body = (
+            "say() { printf '%s\n' \"$*\"; }\n"
+            + extract_function("irq_total_delta")
+            + extract_function("npu_beacon_rate")
+        )
+        out = run_sh(
+            body + f'npu_beacon_rate "{before}" "{after}" 1\n',
+        )
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("WARN: npu irq rate is not beacon-like", out.stdout)
 
 
 if __name__ == "__main__":
