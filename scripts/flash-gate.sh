@@ -41,6 +41,13 @@
 #       mtd2 1b700000 00020000 "ubi"
 #       mtd3 04200000 00020000 "reserved_bmt"
 #
+#   * the image is one specific file.  Every other check here is a shape test:
+#     d00dfeed, a JSON device list and a compatibility probe all pass on a copy
+#     whose bytes were rewritten.  The gate therefore compares the file against
+#     the digest the build wrote beside it (sha256sums), and refuses when there
+#     is no digest to compare -- not because a digest proves the image is good,
+#     but because its absence means nothing does.
+#
 # Usage:
 #   flash-gate.sh --image IMAGE [options]        full gate, then print/exec
 #   flash-gate.sh --probe                        read-only: layout + dd + sha256,
@@ -65,9 +72,31 @@
 #   2  usage / image missing       4  image or layout mismatch, unverifiable
 #   5  backup failed               6  sysupgrade -T rejected the image
 #
-# Environment overrides exist for the self-test only (scripts/tests/
-# test_flash_gate.sh): FG_BOARD_NAME, FG_PROC_MTD, FG_MTD_DEV_DIR, FG_UBI_DIR,
-# FG_BACKUP_DIR.  On the box none of them are set and the defaults are used.
+# Environment overrides exist so that every verdict can be reproduced on a
+# machine with no board attached: the box was once left in U-Boot with a serial
+# port that enumerated and then read zero bytes, and the only remaining proof
+# that the gate says no is offline.  One knob per guard, each default is what
+# the box itself uses.  They are seams, not features; the list follows.
+#
+#   FG_BOARD_NAME     board name instead of /tmp/sysinfo/board_name
+#                     (default: read that file)
+#   FG_PROC_MTD       partition table instead of /proc/mtd
+#                     (default: /proc/mtd)
+#   FG_MTD_DEV_DIR    char devices to dd from instead of /dev
+#                     (default: /dev)
+#   FG_UBI_DIR        UBI class directory instead of /sys/class/ubi
+#                     (default: /sys/class/ubi)
+#   FG_BACKUP_DIR     backup root, same as -d   (default: /tmp/flash-gate)
+#   FG_IMAGE_SHA256   digest --image must have, instead of looking for it beside
+#                     the image.  Needed because no other row can see a single
+#                     changed byte: FIT magic, the metadata device list and
+#                     sysupgrade -T all still pass on a rewritten image.
+#                     (default: unset, then <image dir>/sha256sums -- the file
+#                     bin/targets/... emits next to every image.)
+#   FG_SYSUPGRADE     sysupgrade binary to run instead of the one on PATH.
+#                     Needed because an offline proof has no /sbin/sysupgrade and
+#                     must still exercise the -T row.
+#                     (default: sysupgrade)
 
 set -u
 
@@ -91,6 +120,8 @@ BOARD_NAME=${FG_BOARD_NAME:-}
 PROC_MTD=${FG_PROC_MTD:-/proc/mtd}
 MTD_DEV_DIR=${FG_MTD_DEV_DIR:-/dev}
 UBI_DIR=${FG_UBI_DIR:-/sys/class/ubi}
+DIGEST=${FG_IMAGE_SHA256:-}
+SYSUPGRADE=${FG_SYSUPGRADE:-sysupgrade}
 
 WORK=''
 
@@ -338,6 +369,47 @@ if [ "$PROBE" = 0 ]; then
 		die "$EXIT_COMPAT" "$IMAGE is not a FIT image"
 	fi
 
+	# The FIT header's totalsize (big endian at offset 4) is the length of the
+	# tree the file claims to hold.  A copy that was cut short still starts with
+	# d00dfeed, so the row above passes on it; this one does not.
+	FSIZE=$(wc -c <"$IMAGE" | tr -d ' ')
+	FIT_TOTAL=$(od -An -tu1 -j4 -N4 "$IMAGE" 2>/dev/null |
+		awk 'NF == 4 { printf "%d", ($1 * 16777216) + ($2 * 65536) + ($3 * 256) + $4 }')
+	if [ -n "$FIT_TOTAL" ] && [ "$FIT_TOTAL" -gt 0 ] && [ "$FSIZE" -lt "$FIT_TOTAL" ]; then
+		row image.size "$FIT_TOTAL" "$FSIZE" FAIL
+		die "$EXIT_COMPAT" "$IMAGE is truncated: its FIT header declares $FIT_TOTAL bytes and the file holds $FSIZE"
+	fi
+	row image.size ">= FIT tree" "$FSIZE bytes" PASS
+	# ponytail: totalsize only covers the tree, while OpenWrt positions the
+	# kernel/rootfs payloads after it (this board's itb: tree 4096 B inside a
+	# 16 MiB file), so a cut that lands inside a payload is caught by the digest
+	# row below, not here.  A structural walk of data-position/data-size would
+	# need an FDT parser in shell; add one the day the digest source is untrusted.
+
+	# Outer digest.  Everything upstream of this row is a shape test: magic,
+	# a JSON list and a compatibility check all pass on an image whose bytes
+	# were edited in place.  This row is the only one that binds the file to a
+	# value recorded outside it, which is why it is compared before the image is
+	# even parsed further.
+	if [ -z "$DIGEST" ]; then
+		SUMS="$(dirname -- "$IMAGE")/sha256sums"
+		if [ -r "$SUMS" ]; then
+			DIGEST=$(awk -v n="$(basename -- "$IMAGE")" \
+				'($2 == n || $2 == "*" n) { print $1; exit }' "$SUMS")
+		fi
+	fi
+	if [ -z "$DIGEST" ]; then
+		row image.sha256 "a digest to compare" "none available" FAIL
+		die "$EXIT_COMPAT" "no expected sha256 for $IMAGE (no FG_IMAGE_SHA256, no sha256sums beside it); refusing an image whose bytes cannot be accounted for"
+	fi
+	GOT_SHA=$(sha256sum "$IMAGE" | awk '{ print $1 }')
+	if [ "$GOT_SHA" = "$DIGEST" ]; then
+		row image.sha256 "$DIGEST" "$GOT_SHA" PASS
+	else
+		row image.sha256 "$DIGEST" "$GOT_SHA" FAIL
+		die "$EXIT_COMPAT" "sha256 mismatch for $IMAGE: expected $DIGEST, got $GOT_SHA -- one changed byte is enough to make the box unflashable"
+	fi
+
 	META=$(extract_metadata "$IMAGE")
 	# supported_devices entries can carry a " - <reason>" suffix: that is how
 	# fwtool spells a compat_version mismatch inside the list (the bench image
@@ -378,8 +450,9 @@ if [ "$PROBE" = 0 ]; then
 	# check -F bypasses, so its verdict is reported separately from the gate's
 	# own one.
 	if [ "$DO_SYSUPGRADE" = 1 ]; then
-		if command -v sysupgrade >/dev/null 2>&1; then
-			sysupgrade -T "$IMAGE" >"$WORK/sysupgrade-T.log" 2>&1
+		SUP=$(command -v "$SYSUPGRADE" 2>/dev/null || true)
+		if [ -n "$SUP" ]; then
+			"$SUP" -T "$IMAGE" >"$WORK/sysupgrade-T.log" 2>&1
 			SRC=$?
 			# Never assume that a rejected image is forceable: with --force,
 			# ask the validator again with -F and let it decide.  A major
@@ -388,7 +461,7 @@ if [ "$PROBE" = 0 ]; then
 			# row fails (issue #7).  -T never writes to flash.
 			SRC_FORCED=1
 			[ "$FORCE" = 1 ] && {
-				sysupgrade -T -F "$IMAGE" >"$WORK/sysupgrade-TF.log" 2>&1
+				"$SUP" -T -F "$IMAGE" >"$WORK/sysupgrade-TF.log" 2>&1
 				SRC_FORCED=$?
 			}
 			if [ "$SRC" = 0 ]; then
@@ -521,8 +594,8 @@ else
 fi
 if [ "$RUN" = 1 ]; then
 	if [ "$FORCE" = 1 ]; then
-		exec sysupgrade -F "$IMAGE"
+		exec "$SYSUPGRADE" -F "$IMAGE"
 	fi
-	exec sysupgrade "$IMAGE"
+	exec "$SYSUPGRADE" "$IMAGE"
 fi
 exit 0
