@@ -53,6 +53,9 @@ SHOW_END = "DEFINE_SHOW_ATTRIBUTE(airoha_qdma_debugfs_rx_meter);"
 FIELDS = (("meter_en", "TRTCM_METER_MODE"),
           ("pps", "TRTCM_PKT_MODE"),
           ("tick_sel", "TRTCM_TICK_SEL"))
+RATE_LINE = re.compile(r'qdma %d requested rate %u (\w+) burst %u unit %s\\n')
+RATE_UNIT = "kbps"
+TRUNCATION = ("div_u64(rate_bytes_ps, 1000)", "8 kbit/s", "rate_pkt_ps")
 
 
 def post_image(text):
@@ -149,6 +152,40 @@ class MatchallMeterObservability(unittest.TestCase):
                 f"{ver}: a failed readback must be reported, not printed "
                 "as a zero",
             )
+
+    def test_requested_rate_unit_is_kbps(self):
+        """The recorded rate is Kbps, not bps; the label must say so.
+
+        A device run showed "requested rate 1248 bps" for tc's
+        "rate 1250000bit": airoha_eth.c divides rate_bytes_ps by 1000 and
+        shifts left 3 before calling airoha_qdma_set_rx_meter(), so the
+        number is Kbps.  The packet-unit branch passes rate_pkt_ps
+        unchanged, so a bare "bps" is wrong there too.
+        """
+        for ver, post in self.each_patch():
+            body = show_body(post)
+            match = RATE_LINE.search(body)
+            self.assertIsNotNone(
+                match,
+                f"{ver}: the request line must print rate, burst and unit as "
+                "'qdma %d requested rate %u <unit> burst %u unit %s\\n'",
+            )
+            self.assertEqual(
+                match.group(1), RATE_UNIT,
+                f"{ver}: the recorded rate is Kbps, so the label must be "
+                "'kbps'; 'bps' reads as 1/1000 of the real value",
+            )
+            self.assertNotIn(
+                "requested rate %u bps", body,
+                f"{ver}: a bare 'bps' label must not survive anywhere",
+            )
+            for text in TRUNCATION:
+                self.assertIn(
+                    text, body,
+                    f"{ver}: the comment beside the line must say the byte "
+                    f"branch truncates at {text!r} and that packet units "
+                    "are pps, so the number is what the driver received",
+                )
 
     def test_field_order_matches_masks(self):
         for ver, post in self.each_patch():

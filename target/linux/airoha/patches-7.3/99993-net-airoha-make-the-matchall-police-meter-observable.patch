@@ -43,14 +43,14 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static int airoha_pse_debugfs_show(struct seq_file *m, void *private)
  {
  	struct airoha_eth *eth = m->private;
-@@ -906,6 +914,63 @@
+@@ -906,6 +914,71 @@
  }
  DEFINE_SHOW_ATTRIBUTE(airoha_qdma_debugfs_tx_ring_hist);
  
 +/* The tc matchall police leaves no ppe/meter row: it arms the RX TRTCM of
-+ * this block instead (see airoha_qdma_set_rx_meter()).  The requested rate
-+ * and burst are the software record of the last request -- tc's own
-+ * parameters, not a register -- and the per-ring arming is read back through
++ * this block instead (see airoha_qdma_set_rx_meter()).  The rate and burst
++ * are the software record of the last request -- what that function
++ * received, not a register -- and the per-ring arming is read back through
 + * TRTCM_MISC_MODE, the parameter the driver reads before every write.  The
 + * token rate and bucket shift are not printed: they go through the TRTCM
 + * parameter window and nothing in this driver reads them back, so a value
@@ -69,7 +69,15 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +		if (qdma->rx_meter_unit <= TRTCM_PACKET_UNIT)
 +			unit = units[qdma->rx_meter_unit];
 +
-+		seq_printf(m, "qdma %d requested rate %u bps burst %u unit %s\n",
++		/* What airoha_qdma_set_rx_meter() received, not tc's request:
++		 * in byte units the rate is Kbps (div_u64(rate_bytes_ps, 1000)
++		 * << 3), in packet units it is pps (rate_pkt_ps), so one "bps"
++		 * label cannot cover both -- the unit column says which one this
++		 * is.  The byte-unit rate can sit up to 8 kbit/s below tc's
++		 * request because that division truncates; the node shows what
++		 * the driver got, not what was asked for.
++		 */
++		seq_printf(m, "qdma %d requested rate %u kbps burst %u unit %s\n",
 +			   i, qdma->rx_meter_rate, qdma->rx_meter_burst,
 +			   unit);
 +
@@ -107,7 +115,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static void airoha_qdma_debugfs_init(struct airoha_eth *eth)
  {
  	eth->qdma_debugfs_dir = debugfs_create_dir("qdma", NULL);
-@@ -913,6 +978,8 @@
+@@ -913,6 +986,8 @@
  			    &airoha_qdma_debugfs_napi_weight_fops);
  	debugfs_create_file("tx_ring_hist", 0444, eth->qdma_debugfs_dir, eth,
  			    &airoha_qdma_debugfs_tx_ring_hist_fops);
@@ -116,7 +124,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  }
  #else
  static void airoha_pse_debugfs_init(struct airoha_eth *eth) {}
-@@ -3911,6 +3978,19 @@
+@@ -3911,6 +3986,19 @@
  	return err;
  }
  
@@ -136,7 +144,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static int airoha_qdma_set_rx_meter(struct airoha_gdm_dev *dev,
  				    u32 rate, u32 bucket_size,
  				    enum trtcm_unit_type unit_type)
-@@ -3934,6 +4014,14 @@
+@@ -3934,6 +4022,14 @@
  			return err;
  	}
  
