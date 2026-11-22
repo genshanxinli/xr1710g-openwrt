@@ -267,10 +267,16 @@ die() {
 	exit 1
 }
 
-# write_skip_result REASON: the preflight skip record.  Written only when
-# --result-dir named a directory: a skip must not create an output tree on
-# its own, and the caller's explicit directory is where a wrapper looks for
+# write_skip_result DIR REASON: the harness-level skip record.  Written only
+# when --result-dir named a directory: a skip must not create an output tree
+# on its own, and the caller's explicit directory is where a wrapper looks for
 # it.  Nothing here is a configuration write.
+#
+# "status": "skip" is deliberate: this is the harness's own result.json, and
+# hw-gap-report.sh collects "no-client"/"blocked" records only, so a skip has
+# to leave the gap in the no-client/ sibling next to it (see skip_no_tool and
+# skip_run).  Do not make skip_run write this file again: that was the bug
+# where an edca skip never reached the gap table.
 write_skip_result() {
 	local _dir _reason
 	_dir=$1
@@ -293,13 +299,31 @@ write_skip_result() {
 	return 0
 }
 
-# skip_run REASON: a clean hardware/tool skip.  Prints one SKIP line, records
-# the reason next to the results when a directory was named, and exits 0.
-# Nothing has been written to the device at this point.
+# skip_run REASON [MISSING]: a clean hardware/tool skip.  Prints one SKIP
+# line, records the missing item as a wireless-no-client/v1 record (status
+# "no-client") and exits 0.  Nothing has been written to the device at this
+# point.
+#
+# The record is the point: hw-gap-report.sh collects only "no-client" and
+# "blocked", so the old "status": "skip" write_skip_result left behind was a
+# record no report could ever see, which made this skip indistinguishable
+# from a harness that was never run.  MISSING names the item (default
+# "6ghz-eht-client", the one this harness fundamentally needs).
 skip_run() {
+	local _missing=${2:-6ghz-eht-client} _dir _run _rec
+	_dir=${RESULT_DIR:-}
+	# Same subdirectory as skip_no_tool: the harness keeps its own
+	# result.json, and the gap record never overwrites it.
+	[ -n "$_dir" ] && _dir=$_dir/no-client
+	_run='sh scripts/wireless/edca-6g-ab.sh --target <STA_IP> --result-dir <DIR>'
+	_rec=$(no_client_record "$_dir" 43 "$_missing" "$_run" "$1" \
+		"EDCA parameter A/B throughput delta per arm" \
+		"tx_burst / airtime restore verification" \
+		"per-arm station retries and failed frames" 2>/dev/null)
 	say "SKIP: $1"
+	say "      missing $_missing; once it is available run: $_run"
+	[ -n "$_rec" ] && say "      no-client record: $_rec"
 	log_line "SKIP: $1"
-	[ -n "${RESULT_DIR:-}" ] && write_skip_result "$RESULT_DIR" "$1"
 	exit 0
 }
 
@@ -1578,6 +1602,11 @@ EOF
 
 # ---------------------------------------------------------------------------
 # main
+
+# Sourced by scripts/tests/test_edca_6g_ab.py to exercise the skip records
+# (skip_run, skip_no_tool) without a 6 GHz radio: every function above is
+# defined, and nothing below this line runs.
+[ "${EDCA6G_LIB_ONLY:-0}" = 1 ] && return 0
 
 while [ "$#" -gt 0 ]; do
 	case $1 in

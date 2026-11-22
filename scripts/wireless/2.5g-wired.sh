@@ -47,10 +47,13 @@
 #   BLOCKED: cannot reach <USER@DEVICE> (<first ssh error line>)
 #
 # The second one is the common case on a base tree: lan2 is a br-lan member
-# by default, and a bridged port is not a usable 2.5G data port.  This
-# script never edits a bridge, a UCI file or a firewall: it prints the
-# exact commands an operator has to run, and --detach-from-bridge prints
-# that plan without attempting the measurement.
+# by default, and a bridged port is not a usable 2.5G data port.  Without
+# --detach-port this script edits no bridge, no UCI file and no firewall: it
+# prints the exact commands an operator has to run, and --detach-from-bridge
+# prints that plan without attempting the measurement.  --detach-port is the
+# one opt-in that changes device state: it runs the same two "ip link set"
+# commands itself, keeps the port out of the bridge only for that port's
+# arms, and puts it back from the EXIT trap (see lib/port-detach.sh).
 
 set -u
 
@@ -71,6 +74,11 @@ DEV_CANDIDATES=
 # image mounted for inspection) can point it elsewhere.  Read only.
 DEV_SYSFS=${DEV_SYSFS:-/sys}
 DETACH_FROM_BRIDGE=0
+# 1 = run the detach/restore ourselves (lib/port-detach.sh); 0 keeps the
+# printed-only plan that this script has always used.
+DETACH_PORT=0
+DETACH_PENDING=
+BRIDGE_RESTORE_FAILED=0
 PORTS=both
 SEL_PORTS=
 HOST_LAN_IF=
@@ -168,6 +176,16 @@ Device selection:
                              move the detected port out of br-lan, and the
                              ones that put it back, then exit 0.  This
                              script never runs them.
+  --detach-port              let this script run those commands itself.  The
+                             port's current master is read from sysfs (not
+                             assumed to be br-lan), the port is taken out
+                             with "ip link set <port> nomaster" only for
+                             that port's arms, and the EXIT/INT/TERM/HUP
+                             path puts it back into the recorded master.  A
+                             restore that cannot be verified is an error
+                             (exit 1), never a silent detach.  Refused when
+                             the SSH session is the port being detached.
+                             Without this flag nothing on the device changes.
 
 Bench-host NICs (one per selected device port):
   --host-lan10g-if NAME      host 2.5G NIC cabled to lan10g
@@ -200,8 +218,10 @@ Output and safety:
                              /tmp/2.5g-wired.YYYYmmdd-HHMMSS)
   --dry-run                  print the selected-arm plan and exact commands;
                              no SSH, no traffic, no address/route change,
-                             no directory created.  Does not require 2.5G
-                             hardware.
+                             no directory created.  With --detach-port it
+                             also prints the detach and the restore
+                             "ip link set" lines and runs neither.  Does
+                             not require 2.5G hardware.
   -h, --help                 this text
 
 A real run requires at least 2500 Mb/s on the device port and on the host
@@ -223,17 +243,21 @@ of reporting a missing port:
 
   BLOCKED: cannot reach <USER@DEVICE> (<first ssh error line>)
 
-The "<port> is in br-lan" line prints the commands that clear it; this script
-changes no bridge, no UCI and no firewall, so the operator runs them (or
-asks for the plan with --detach-from-bridge).
+The "<port> is in br-lan" line prints the commands that clear it; without
+--detach-port this script changes no bridge, no UCI and no firewall, so the
+operator runs them (or asks for the plan with --detach-from-bridge).  With
+--detach-port the script runs the detach and the restore itself and still
+touches no UCI file, so a reboot or "ifup <netif>" returns the port to the
+bridge even if the restore could not be verified.
 
 Missing ssh, ethtool, ip or awk is an error, not a skip; iperf3 is
 required once a 2.5G link is present.  The bench host must accept inbound
 traffic to the temporary /32 addresses on its data NICs; no host or
 device firewall is changed.  The script never installs packages and
-never changes a firewall, bridge, UCI, module or firmware image.  The
-EXIT trap removes both temporary addresses and peer routes on both sides
-and stops the iperf3 streams.
+never changes a firewall, UCI, module or firmware image, and the only
+bridge change it can make is the opt-in --detach-port detach plus its
+restore.  The EXIT trap removes both temporary addresses and peer routes
+on both sides, stops the iperf3 streams and puts a detached port back.
 
 What is recorded:
   link speed and duplex on both ends, the device-side ethtool -S and
@@ -285,6 +309,24 @@ note() {
 NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
 # shellcheck source=lib/no-client.sh
 [ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
+
+# Opt-in bridge detach/restore (scripts/wireless/lib/port-detach.sh).  Every
+# read and write goes through ssh_dev, so the library edits the device, not
+# the bench host; the netns test points PD_EXEC at a local runner instead.
+PORT_DETACH_LIB=$(dirname "$0")/lib/port-detach.sh
+if [ -r "$PORT_DETACH_LIB" ]; then
+	# Read by the library, not here: same file, different call site.
+	# shellcheck disable=SC2034
+	PD_EXEC=ssh_dev
+	# shellcheck disable=SC2034
+	PD_SYSFS=$DEV_SYSFS
+	# shellcheck source=lib/port-detach.sh
+	. "$PORT_DETACH_LIB"
+else
+	no_port_detach_lib() {
+		die "shared library not found: $PORT_DETACH_LIB (needed by --detach-port)"
+	}
+fi
 
 # The one command that measures both 2.5G ports once the peer hardware exists.
 NC_2G5_RUN='sudo sh scripts/wireless/2.5g-wired.sh --device <USER@DEVICE_IP> --ports both --host-lan10g-if <HOST_LAN_IF> --host-wan10g-if <HOST_WAN_IF>'
@@ -804,8 +846,10 @@ detach_plan() {
 
 print_bridge_plan() {
 	# print_bridge_plan DEV_IF BRIDGE
-	# Printed, never executed: this script does not edit a bridge, a UCI
-	# file or a firewall, so the operator runs these.
+	# Printed by --detach-from-bridge and by the default bridged-port block.
+	# Without --detach-port this script edits no bridge, UCI file or firewall,
+	# so the operator runs these; --detach-port runs the library's own
+	# nomaster/master pair instead (no link bounce, see lib/port-detach.sh).
 	local dev_if="$1" bridge="$2" netif
 
 	netif=${bridge#br-}
@@ -870,6 +914,56 @@ resolve_device_ports() {
 		2.5g-peer
 }
 
+refuse_detach_if_ssh_ingress() {
+	# refuse_detach_if_ssh_ingress DEV_IF BRIDGE: --detach-port changes the
+	# port the SSH session may be riding, so prove it does not first
+	# (pd_ssh_ingress_port reads the bridge fdb through ssh_dev).
+	local dev_if=$1 master=$2 ingress
+	ingress=$(pd_ssh_ingress_port "$master")
+	if [ -n "$ingress" ] && [ "$ingress" = "$dev_if" ]; then
+		die "SSH arrives on $dev_if ($master fdb says so); detaching it would cut the management path - move the SSH cable to lan3 and retry"
+	fi
+	if [ -z "$ingress" ]; then
+		note "cannot resolve which $master port carries SSH (no mac in ip neigh, or no bridge tool on the device); --detach-port was asked for, so detaching anyway - if this session drops, a reboot or 'ifup ${master#br-}' re-attaches the port"
+	fi
+}
+
+detach_pending_port() {
+	# detach_pending_port LABEL: detach the port check_device queued for this
+	# label, then re-read its link.  The link is not bounced, so a speed below
+	# 2500 here means the port really is not a 2.5G data port.
+	local label=$1 entry rest dev_if master speed
+	for entry in $DETACH_PENDING; do
+		case $entry in
+		"$label":*) ;;
+		*) continue ;;
+		esac
+		rest=${entry#*:}
+		dev_if=${rest%%:*}
+		master=${rest#*:}
+		pd_detach "$dev_if" ||
+			die "could not detach $dev_if from $master; see the message above - the port is not measured on while it is still bridged"
+		speed=$(dev_speed "$dev_if") ||
+			die "cannot run ethtool on $DEVICE:$dev_if after detaching it from $master"
+		require_2g5_speed device "$dev_if" "$speed" ||
+			skip_no_link "device $dev_if link is '${speed:-unknown}' Mb/s after leaving $master, need >= 2500"
+		store_dev_link "$label" "$speed" "$(dev_duplex "$dev_if")" \
+			"$(dev_driver "$dev_if")"
+	done
+	return 0
+}
+
+restore_bridge() {
+	# Last step of every cleanup path, and never skipped because an earlier
+	# step failed: the port must go back into its recorded master.
+	if pd_restore; then
+		return 0
+	fi
+	BRIDGE_RESTORE_FAILED=1
+	note "cleanup: bridge restore failed; $PD_PORT is still out of $PD_MASTER"
+	return 1
+}
+
 check_device() {
 	local label dev_if speed duplex master ssh_client_ip mgmt_dev
 
@@ -886,11 +980,19 @@ check_device() {
 		dev_iface_exists "$dev_if" ||
 			skip_no_link "device interface $dev_if is absent"
 		master=$(dev_master "$dev_if")
-		if [ -n "$master" ]; then
+		if [ -n "$master" ] && [ "$DETACH_PORT" -eq 0 ]; then
 			print_bridge_plan "$dev_if" "$master"
 			blocked "$dev_if is in $master" \
 				"$dev_if is a member of $master; detach it first (see the commands above), then run this test again" \
 				port-in-bridge
+		fi
+		if [ -n "$master" ]; then
+			# --detach-port: the detach itself waits until main() has armed
+			# the EXIT trap (see detach_pending_ports), so an interrupt at
+			# any later point can still put the port back.
+			refuse_detach_if_ssh_ingress "$dev_if" "$master"
+			DETACH_PENDING="$DETACH_PENDING $label:$dev_if:$master"
+			note "port $dev_if is a member of $master; --detach-port will detach it for this port's arms and restore it on exit"
 		fi
 		speed=$(dev_speed "$dev_if") ||
 			die "cannot run ethtool on $DEVICE:$dev_if"
@@ -1086,7 +1188,21 @@ cleanup_all() {
 	stop_streams
 	cleanup_pair lan10g
 	cleanup_pair wan10g
+	# Order is deliberate: the traffic and the temporary addressing go first
+	# (so the port rejoins the bridge with nothing of ours on it), and every
+	# step above is non-fatal, so a failed address removal cannot skip this.
+	restore_bridge || :
 	note "cleanup: streams stopped, temporary addresses/routes removed"
+}
+
+on_exit() {
+	# EXIT trap: cleanup_all already ran on the normal path, and a restore
+	# that could not be verified must still decide the exit status here,
+	# because the failure happens after main() picked one.
+	cleanup_all
+	if [ "$BRIDGE_RESTORE_FAILED" = "1" ]; then
+		exit 1
+	fi
 }
 
 ipp_stats() {
@@ -1546,6 +1662,9 @@ dry_run() {
 	printf 'device: %s (SSH checked at run time; the port must be >= 2500Mb/s)\n' \
 		"$DEVICE"
 	printf 'safety: no SSH, no traffic, no address/route change, no directory created\n'
+	if [ "$DETACH_PORT" -eq 1 ]; then
+		printf 'detach: --detach-port is planned, not run; its two "ip link set" lines are printed below\n'
+	fi
 	printf 'topology: host 2.5G NIC <-> LAN 2.5G port; host 2.5G NIC <-> WAN 2.5G port; SSH on lan3/management; no port<->port cable\n'
 	printf 'skip: a real run prints exactly "SKIP: no 2.5G link" and exits 0 unless both ends are >= 2500Mb/s\n'
 	printf 'blocked: BLOCKED: no device port advertises 2500baseT, or BLOCKED: <port> is in br-lan\n'
@@ -1590,6 +1709,21 @@ dry_run() {
 
 	printf 'commands (per selected port, run time):\n'
 	printf '  ssh ... "ethtool DEV_IF"          # require Speed: >= 2500Mb/s\n'
+	if [ "$DETACH_PORT" -eq 1 ]; then
+		# Printed, not run: --dry-run does no SSH, so the recorded master is
+		# whichever one the device reports; the two lines are the whole
+		# device-state change this flag makes.
+		for label in $SEL_PORTS; do
+			dev_if=$(label_dev_if "$label")
+			[ -n "$dev_if" ] || dev_if=DEV_IF
+			printf '  ssh ... "ip link set %s nomaster"        # only for its arms\n' \
+				"$dev_if"
+			printf '  ssh ... "ip link set %s master ORIG_MASTER"   # restore, from the EXIT trap\n' \
+				"$dev_if"
+		done
+		printf '  # ORIG_MASTER is read from %s/class/net/DEV_IF/master before the detach\n' \
+			"$DEV_SYSFS"
+	fi
 	printf '  ip addr add HOST_IP/32 dev HOST_IF\n'
 	printf '  ip route add DEV_IP/32 dev HOST_IF\n'
 	printf '  ssh ... "ip addr add DEV_IP/32 dev DEV_IF"\n'
@@ -1619,6 +1753,11 @@ parse_args() {
 			;;
 		--detach-from-bridge)
 			DETACH_FROM_BRIDGE=1
+			shift
+			continue
+			;;
+		--detach-port)
+			DETACH_PORT=1
 			shift
 			continue
 			;;
@@ -1678,6 +1817,13 @@ parse_args() {
 		esac
 	done
 	[ $# -eq 0 ] || usage_error "unexpected argument: $1"
+
+	if [ "$DETACH_PORT" -eq 1 ] && [ "$DETACH_FROM_BRIDGE" -eq 1 ]; then
+		usage_error "--detach-port and --detach-from-bridge both want the bridge: one acts, one prints"
+	fi
+	if [ "$DETACH_PORT" -eq 1 ] && ! command -v pd_detach >/dev/null 2>&1; then
+		no_port_detach_lib
+	fi
 
 	case $PORTS in
 	both) SEL_PORTS="lan10g wan10g" ;;
@@ -1791,7 +1937,10 @@ main() {
 	mkdir -p "$OUT_DIR" || die "cannot create $OUT_DIR"
 	RUN_ID=$(date +%s)-$$
 
-	trap 'cleanup_all' EXIT
+	# EXIT runs cleanup_all, which restores the bridge; the detach itself
+	# only ever happens below, i.e. after these two traps exist.  INT/TERM/HUP
+	# turn into exit 130, which fires the same EXIT trap.
+	trap 'on_exit' EXIT
 	trap 'exit 130' INT TERM HUP
 
 	printf '%s\n' "$PROG: device=$DEVICE ports=$PORTS proto=$PROTO" \
@@ -1818,8 +1967,16 @@ main() {
 			host_speed=$HOST_WAN_SPEED
 			;;
 		esac
+		detach_pending_port "$label"
 		run_port "$label" "$dev_if" "$host_if" "$dev_ip" "$host_ip" \
 			"$dev_speed" "$host_speed"
+		if ! pd_restore; then
+			# Do not measure on the other port while this one is out of its
+			# bridge: stop here and let the EXIT trap report the status.
+			BRIDGE_RESTORE_FAILED=1
+			printf 'status: blocked\n'
+			exit 1
+		fi
 	done
 
 	cleanup_all

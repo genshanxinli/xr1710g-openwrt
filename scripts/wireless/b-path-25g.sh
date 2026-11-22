@@ -7,8 +7,11 @@
 # Runs on the bench host that owns the 2.5G USB feeder and reaches the AP
 # over a management link (lan3 by convention).  The data port, lan10g, is
 # used only for one temporary /32 address and one /32 route per side; both
-# are removed by the EXIT trap.  The script never touches the bridge, the
-# firewall, UCI, a module or a firmware image.
+# are removed by the EXIT trap.  The script never touches the firewall, UCI,
+# a module or a firmware image, and the bridge only with --detach-port: that
+# flag takes the data port out of whatever bridge holds it for that port's
+# arms and puts it back from the EXIT trap (lib/port-detach.sh).  Without it
+# the script behaves exactly as before and does not look at the bridge at all.
 #
 # Topology this harness assumes:
 #
@@ -62,6 +65,13 @@ FEEDER_IP=10.99.0.2
 OUT_DIR_OPT=
 DRY_RUN=0
 RUN_EXPLICIT=0
+# 1 = detach the data port from its bridge for the arms and restore it on
+# exit (lib/port-detach.sh).  Off by default: this harness never used to
+# look at the bridge, and a bridged lan10g is a configuration problem the
+# operator may prefer to fix himself.
+DETACH_PORT=0
+DETACH_PENDING=
+BRIDGE_RESTORE_FAILED=0
 
 # Set by the checks below; initialised so `set -u` reports a real bug
 # instead of every unset field.  FEEDER_IFACE_OPT keeps an env override.
@@ -100,6 +110,14 @@ Device and link selection:
   --feeder-iface NAME     local 2.5G feeder NIC (default: auto-detect,
                           env FEEDER_IFACE).  Auto-detection ignores the
                           management and default-route interfaces.
+  --detach-port           take the data port out of whichever bridge holds
+                          it for the two arms and put it back on exit.  The
+                          master is read from sysfs, not assumed to be
+                          br-lan; the detach and the restore are the only
+                          bridge changes this script can make, and a restore
+                          that cannot be verified exits 1.  Refused when the
+                          SSH session is the port being detached.  Without
+                          this flag the bridge is not touched or probed.
 
 Measurement options:
   --client-ip ADDR        explicit STA IPv4 when --client is a MAC
@@ -196,6 +214,24 @@ note() {
 NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
 # shellcheck source=lib/no-client.sh
 [ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
+
+# Opt-in bridge detach/restore (scripts/wireless/lib/port-detach.sh).  Every
+# read and write goes through ssh_dev, so the library edits the AP, not the
+# bench host; the netns test points PD_EXEC at a local runner instead.
+PORT_DETACH_LIB=$(dirname "$0")/lib/port-detach.sh
+if [ -r "$PORT_DETACH_LIB" ]; then
+	# Read by the library, not here: same file, different call site.
+	# shellcheck disable=SC2034
+	PD_EXEC=ssh_dev
+	# shellcheck disable=SC2034
+	PD_SYSFS=/sys
+	# shellcheck source=lib/port-detach.sh
+	. "$PORT_DETACH_LIB"
+else
+	no_port_detach_lib() {
+		die "shared library not found: $PORT_DETACH_LIB (needed by --detach-port)"
+	}
+fi
 
 # The one command that measures the B path once the 2.5G feeder exists.
 NC_2G5_RUN='sudo sh scripts/wireless/b-path-25g.sh --device <USER@DEVICE_IP> --client <STA_IP> --feeder-iface <HOST_FEEDER_IF> --run'
@@ -405,6 +441,11 @@ parse_args() {
 			shift
 			continue
 			;;
+		--detach-port)
+			DETACH_PORT=1
+			shift
+			continue
+			;;
 		--)
 			shift
 			break
@@ -467,6 +508,9 @@ parse_args() {
 
 	if [ "$DRY_RUN" -eq 1 ] && [ "$RUN_EXPLICIT" -eq 1 ]; then
 		usage_error "--run and --dry-run are mutually exclusive"
+	fi
+	if [ "$DETACH_PORT" -eq 1 ] && ! command -v pd_detach >/dev/null 2>&1; then
+		no_port_detach_lib
 	fi
 
 	is_uint "$DURATION" || usage_error "--duration must be an integer"
@@ -634,6 +678,24 @@ check_device() {
 	if ! ssh_dev "test -e /sys/class/net/$DEV_IFACE"; then
 		note "device interface $DEV_IFACE is absent"
 		skip_no_feeder
+	fi
+
+	# A bridged data port cannot be a 2.5G feeder port, but this harness has
+	# never looked at the bridge and the default must stay that way.  With
+	# --detach-port the master is read here and acted on after main() has
+	# armed the EXIT trap (see detach_data_port).
+	if [ "$DETACH_PORT" -eq 1 ]; then
+		_dp_master=$(pd_field master "$(pd_probe "$DEV_IFACE")")
+		if [ -n "$_dp_master" ]; then
+			_dp_ingress=$(pd_ssh_ingress_port "$_dp_master")
+			if [ -n "$_dp_ingress" ] && [ "$_dp_ingress" = "$DEV_IFACE" ]; then
+				die "SSH arrives on $DEV_IFACE ($_dp_master fdb says so); detaching it would cut the management path - move the SSH cable to lan3 and retry"
+			fi
+			[ -n "$_dp_ingress" ] ||
+				note "cannot resolve which $_dp_master port carries SSH (no mac in ip neigh, or no bridge tool on the AP); --detach-port was asked for, so detaching anyway - if this session drops, a reboot or 'ifup ${_dp_master#br-}' re-attaches the port"
+			DETACH_PENDING=$DEV_IFACE:$_dp_master
+			note "$DEV_IFACE is a member of $_dp_master; --detach-port will detach it for the two arms and restore it on exit"
+		fi
 	fi
 
 	if ! DEV_SPEED=$(dev_speed); then
@@ -880,6 +942,27 @@ setup_addressing() {
 	fi
 }
 
+detach_data_port() {
+	# Runs after main() armed the EXIT trap, never before: an interrupt at
+	# any point from here on puts the port back.  The link is not bounced,
+	# so a speed below 2500 after the detach means the port really is not a
+	# 2.5G data port and the run skips (which restores it through the trap).
+	local master=${DETACH_PENDING#*:}
+
+	[ -n "$DETACH_PENDING" ] || return 0
+	pd_detach "$DEV_IFACE" ||
+		die "could not detach $DEV_IFACE from $master; see the message above"
+	if ! DEV_SPEED=$(dev_speed); then
+		die "cannot run ethtool on $DEVICE:$DEV_IFACE after detaching it from $master"
+	fi
+	if [ "$DEV_SPEED" != "2500" ]; then
+		note "device $DEV_IFACE link is '${DEV_SPEED:-unknown}' Mb/s after leaving $master, need 2500"
+		skip_no_feeder
+	fi
+	DEV_DUPLEX=$(dev_duplex)
+	return 0
+}
+
 cleanup() {
 	if [ "${CLEANED-0}" = "1" ]; then
 		return 0
@@ -927,7 +1010,23 @@ cleanup() {
 		HOST_ADDR_ADDED=0
 	fi
 
+	# Last, and never skipped because a step above failed (they all use
+	# "|| note"): the data port goes back into the bridge it came from.
+	if ! pd_restore; then
+		BRIDGE_RESTORE_FAILED=1
+		note "cleanup: bridge restore failed; $PD_PORT is still out of $PD_MASTER"
+	fi
+
 	note "cleanup: streams stopped, temporary address/route removed"
+}
+
+on_exit() {
+	# EXIT trap: a restore that could not be verified decides the status here,
+	# because it fails after main() picked one.
+	cleanup
+	if [ "${BRIDGE_RESTORE_FAILED-0}" = "1" ]; then
+		exit 1
+	fi
 }
 
 start_sampler() {
@@ -1675,6 +1774,8 @@ dry_run() {
 	local count udp
 
 	note "dry-run: no SSH, no traffic, no address/route change, no directory created"
+	[ "$DETACH_PORT" -eq 1 ] &&
+		note "dry-run: --detach-port is planned, not run"
 	check_link_tools dry-run
 	check_traffic_tools dry-run
 
@@ -1703,6 +1804,17 @@ dry_run() {
 	printf '  ssh %s %s true\n' "$SSH_OPTS" "$DEVICE"
 	printf '  ssh %s %s "ethtool %s  # require Speed: 2500Mb/s"\n' \
 		"$SSH_OPTS" "$DEVICE" "$DEV_IFACE"
+	if [ "$DETACH_PORT" -eq 1 ]; then
+		# Printed, not run: a dry run does no SSH, so the master is whatever
+		# the AP reports at run time.  These two lines are the whole
+		# device-state change --detach-port makes.
+		printf '  ssh %s %s "ip link set %s nomaster"        # only for the two arms\n' \
+			"$SSH_OPTS" "$DEVICE" "$DEV_IFACE"
+		printf '  ssh %s %s "ip link set %s master ORIG_MASTER"   # restore, from the EXIT trap\n' \
+			"$SSH_OPTS" "$DEVICE" "$DEV_IFACE"
+		printf '  # ORIG_MASTER is read from /sys/class/net/%s/master before the detach\n' \
+			"$DEV_IFACE"
+	fi
 	printf '  ip addr add %s/32 dev %s\n' "$FEEDER_IP" "$FEEDER_IFACE"
 	printf '  ip route add %s/32 dev %s\n' "$DEV_IP" "$FEEDER_IFACE"
 	printf '  ssh %s %s "ip addr add %s/32 dev %s"\n' \
@@ -1723,7 +1835,8 @@ dry_run() {
 		"$SSH_OPTS" "$DEVICE"
 	printf '  ssh %s %s "cat /sys/kernel/debug/ieee80211/phy*/mt76/hw-queues"\n' \
 		"$SSH_OPTS" "$DEVICE"
-	printf '  cleanup: kill iperf3, ip route del, ip addr del on both sides\n'
+	printf '  cleanup: kill iperf3, ip route del, ip addr del on both sides%s\n' \
+		"$( [ "$DETACH_PORT" -eq 1 ] && printf ', bridge restore' )"
 	printf 'result: link speed, offered, arrived, token count, queue depth, NPU-WALL verdict\n'
 	exit 0
 }
@@ -1765,11 +1878,16 @@ main() {
 	ARM1_OK=0
 	ARM2_OK=0
 
-	trap 'cleanup' EXIT
+	# EXIT runs cleanup, which restores the bridge; the detach only happens
+	# after these traps exist.  INT/TERM/HUP exit 130, which fires the same
+	# EXIT trap.
+	trap 'on_exit' EXIT
 	trap 'exit 130' INT TERM HUP
 
 	printf '%s\n' "$PROG: device=$DEVICE iface=$DEV_IFACE speed=${DEV_SPEED}Mb/s feeder=$FEEDER_IFACE speed=${FEEDER_SPEED}Mb/s client=$CLIENT_IP/$CLIENT_MAC" \
 		>"$OUT_DIR/cmdline.txt"
+
+	detach_data_port
 
 	setup_addressing
 	run_feeder_arm
@@ -1786,6 +1904,10 @@ main() {
 	cat "$OUT_DIR/summary.txt"
 
 	cleanup
+	if [ "$BRIDGE_RESTORE_FAILED" = "1" ]; then
+		printf 'status: blocked\n'
+		exit 1
+	fi
 	if [ "$status" = "ok" ]; then
 		exit 0
 	fi

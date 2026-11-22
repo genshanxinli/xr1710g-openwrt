@@ -300,5 +300,67 @@ class SourceSlot(Harness):
         self.assertFalse((self.out / "no-client").exists(), combined)
 
 
+class SkipRunReachesTheGapReport(unittest.TestCase):
+    """skip_run must leave a record hw-gap-report.sh actually collects.
+
+    Red half: at 5d8660fce9 skip_run called write_skip_result, whose
+    "status": "skip" is one of the two values hw-gap-report.sh drops
+    (scripts/wireless/hw-gap-report.sh:120-122 collects "no-client" and
+    "blocked" only), so an edca skip read exactly like "this harness was
+    never run".  This case drives skip_run through EDCA6G_LIB_ONLY=1 and
+    then asks the real report, so it fails on a copy that still writes
+    "skip" and on a copy without the library hook (the source would execute
+    the whole harness and exit 2).
+    """
+
+    def test_skip_run_writes_a_record_the_gap_report_collects(self):
+        tmp = Path(tempfile.mkdtemp(prefix="edca-skip-run."))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        out = tmp / "res"
+        env = os.environ.copy()
+        env.update({"EDCA6G_LIB_ONLY": "1", "RESULT_DIR": str(out)})
+        proc = subprocess.run(
+            [
+                "sh",
+                "-c",
+                # $0 is the script path, so the script's
+                # "$(dirname "$0")/../lib/*" lookups resolve as usual.
+                '. "$0" || exit 9; '
+                'skip_run "no 2.5G feeder on the bench host" iperf3',
+                str(SCRIPT),
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        combined = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0, combined)
+        self.assertIn("SKIP: no 2.5G feeder on the bench host", proc.stdout)
+
+        # The record first: a skip that leaves nothing collectable is the bug.
+        record = out / "no-client" / "result.json"
+        self.assertTrue(
+            record.is_file(),
+            "no gap record under %s: %s"
+            % (out, sorted(p.as_posix() for p in out.rglob("*"))),
+        )
+        data = json.loads(record.read_text())
+        self.assertEqual(data["schema"], "wireless-no-client/v1")
+        self.assertEqual(data["status"], "no-client")
+        self.assertEqual(data["missing"], "iperf3")
+        self.assertEqual(str(data["ticket"]), "43")
+        self.assertIn("missing iperf3", proc.stdout)
+
+        report = subprocess.run(
+            ["sh", str(REPO_ROOT / "scripts/wireless/hw-gap-report.sh"), str(out)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        self.assertEqual(report.returncode, 0, report.stderr)
+        self.assertIn("| `iperf3` | #43 |", report.stdout)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
