@@ -590,6 +590,46 @@ iface_ssid() {
 CH_BAND_LO=5945
 CH_BAND_HI=7125
 
+# 320 MHz blocks are not free-running in 6 GHz.  hostapd derives
+# eht_oper_centr_freq_seg0_idx from the primary channel with the table in
+# package/network/config/wifi-scripts/files-ucode/usr/share/ucode/wifi/hostapd.uc
+# (eht_center_seg0_map, the 6 GHz branch of the EHT320 case):
+#
+#	primary channel <=  61 -> centre index  31
+#	primary channel <= 125 -> centre index  95
+#	primary channel <= 189 -> centre index 159
+#	primary channel <= 221 -> centre index 191
+#
+# The index is a 5 MHz step from 5950 MHz, so those four centres are
+# 6105/6425/6745/6905 MHz, and a primary channel above 221 has no 320 MHz
+# block at all (the loop falls through and leaves the 160 MHz value in
+# place).  A 320 MHz row whose center1 is not the centre this table picks
+# for its primary channel is not a block this tree can bring up.  Widths
+# below 320 MHz are not tied to the table.
+EHT320_PRIMARY_MAX_CH=221
+EHT320_CH_BASE_MHZ=5950
+EHT320_CH_STEP_MHZ=5
+
+# eht320_centre_mhz PRIMARY_CH: the 320 MHz block centre the table above
+# picks for a primary channel, or nothing (status 1) when that channel has
+# no 320 MHz block.
+eht320_centre_mhz() {
+	case ${1-} in
+	'' | *[!0-9]*) return 1 ;;
+	esac
+	if [ "$1" -le 61 ]; then
+		echo 6105
+	elif [ "$1" -le 125 ]; then
+		echo 6425
+	elif [ "$1" -le 189 ]; then
+		echo 6745
+	elif [ "$1" -le "$EHT320_PRIMARY_MAX_CH" ]; then
+		echo 6905
+	else
+		return 1
+	fi
+}
+
 # channel_block_reason CENTRE WIDTH [CENTER1 [CENTER2]]
 #
 # Prints the reason the block is not a legal 6 GHz channel block, one line,
@@ -597,7 +637,9 @@ CH_BAND_HI=7125
 # (channel1 of a 320 MHz block, i.e. center1, when the caller knows it; the
 # primary channel frequency otherwise).  Every frequency that is given must
 # lie inside the band, and the block extent CENTRE +/- WIDTH/2 must lie
-# inside the band as well.
+# inside the band as well.  A 320 MHz block is additionally checked against
+# the EHT320 table above: band geometry alone accepts a centre no hostapd in
+# this tree would configure.
 channel_block_reason() {
 	_cbr_centre=$1
 	_cbr_width=$2
@@ -635,6 +677,31 @@ channel_block_reason() {
 		printf '%s MHz + %s MHz = %s MHz is above the 6 GHz band edge %s MHz' \
 			"$_cbr_centre" "$_cbr_half" "$((_cbr_centre + _cbr_half))" "$CH_BAND_HI"
 		return 0
+	fi
+	if [ "$_cbr_width" -eq 320 ]; then
+		if [ -z "$_cbr_c1" ] || [ "$_cbr_centre" = "$_cbr_c1" ]; then
+			printf '320 MHz row gives only one of center1 and the primary channel; the block cannot be checked against the EHT320 table'
+			return 0
+		fi
+		_cbr_ch=$(((_cbr_c1 - EHT320_CH_BASE_MHZ) / EHT320_CH_STEP_MHZ))
+		if [ "$_cbr_ch" -lt 1 ] || [ "$_cbr_ch" -gt 233 ] ||
+			[ $((EHT320_CH_BASE_MHZ + _cbr_ch * EHT320_CH_STEP_MHZ)) -ne "$_cbr_c1" ]; then
+			printf 'primary %s MHz is not on the 6 GHz channel raster (%s + %s*n MHz)' \
+				"$_cbr_c1" "$EHT320_CH_BASE_MHZ" "$EHT320_CH_STEP_MHZ"
+			return 0
+		fi
+		_cbr_want=$(eht320_centre_mhz "$_cbr_ch")
+		if [ -z "$_cbr_want" ]; then
+			printf 'primary channel %s (%s MHz) has no 320 MHz block: the EHT320 table stops at channel %s' \
+				"$_cbr_ch" "$_cbr_c1" "$EHT320_PRIMARY_MAX_CH"
+			return 0
+		fi
+		if [ "$_cbr_want" != "$_cbr_centre" ]; then
+			printf 'center1 %s MHz does not match the EHT320 table: primary channel %s (%s MHz) takes centre %s MHz, %s MHz off' \
+				"$_cbr_centre" "$_cbr_ch" "$_cbr_c1" "$_cbr_want" \
+				"$((_cbr_centre - _cbr_want))"
+			return 0
+		fi
 	fi
 	return 0
 }

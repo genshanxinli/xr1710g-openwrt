@@ -1648,6 +1648,17 @@ json_bps() {
 	' "$file"
 }
 
+# json_bps prints "%.3f", so a zero-bit run is the string "0.000".  Comparing
+# that with "!= 0" is true: the zero used to be taken as an iperf measurement
+# (throughput 0.000, src=iperf) and the AP-counter fallback below was skipped.
+# A bps value is usable when it carries a non-zero digit.
+bps_is_zero() {
+	case ${1-} in
+	*[!0.]*) return 1 ;;
+	esac
+	return 0
+}
+
 leg_loop() {
 	# Run in a subshell; never let the main shell's EXIT trap run here.
 	trap - EXIT INT TERM HUP
@@ -1721,7 +1732,7 @@ leg_loop() {
 		fi
 		throughput=na
 		src=na
-		if [ -n "$bps" ] && [ "$bps" != 0 ]; then
+		if [ -n "$bps" ] && ! bps_is_zero "$bps"; then
 			throughput=$(awk -v b="$bps" 'BEGIN { printf "%.3f", b / 1000000 }')
 			src=iperf
 		fi

@@ -57,7 +57,8 @@
 #   0  all requested arms ran and the saved state was restored, or a clean
 #      dry run (even when prerequisites are missing)
 #   1  setup/run/rollback failure (the trap has still tried to restore)
-#   2  invalid arguments
+#   2  invalid arguments, or a missing prerequisite / blocked association
+#      (nothing was written and the saved state was not touched)
 #
 # Examples:
 #   # read-only plan, safe on a build host (always exits 0)
@@ -734,13 +735,33 @@ cpu_sample() {
 	irq_cpu_totals "$PROC_ROOT/interrupts" "$tag" || return 1
 }
 
-# CPUs that carry arch_timer or irq55 on this boot: pinning a Wi-Fi line
-# there cannot show a difference even when the generic interrupt rate over a
-# one-second sample is below IRQ_BUSY_PER_S.  Printed one CPU per line.
+# CPUs that are taking arch_timer or irq55 interrupts right now: pinning a
+# Wi-Fi line there cannot show a difference even when the generic interrupt
+# rate over a one-second sample is below IRQ_BUSY_PER_S.  Printed one CPU per
+# line.
+#
+# The test is an increment between two samples, not the column value.  Both
+# counts are cumulative since boot, so on a gateway that has been up for a
+# while every CPU carries a non-zero arch_timer total and the column test
+# marked all four CPUs reserved -- which emptied the split target list and
+# let the fallback pin to cpu0, the one thing #66 exists to avoid.
+#
+# timer_cpus [SNAPSHOT]: SNAPSHOT is an earlier copy of the table; without it
+# a second sample is taken IRQ_SAMPLE_S later.
 timer_cpus() {
 	[ -r "$PROC_ROOT/interrupts" ] || return 1
-	awk '
-		NR == 1 {
+	{
+		if [ -n "${1:-}" ] && [ -r "${1:-}" ]; then
+			cat "$1"
+		else
+			cat "$PROC_ROOT/interrupts"
+			sample_sleep "${IRQ_SAMPLE_S:-1}"
+		fi
+		echo "===== irq-napi-ab second sample ====="
+		cat "$PROC_ROOT/interrupts"
+	} | awk '
+		$0 == "===== irq-napi-ab second sample =====" { second = 1; next }
+		!second && NR == 1 {
 			for (i = 1; i <= NF; i++) {
 				c = $i
 				sub(/^CPU/, "", c)
@@ -757,17 +778,20 @@ timer_cpus() {
 			if (!reserved)
 				next
 			for (i = 2; i <= NF; i++) {
-				if (!(i in cpu))
+				if (!(i in cpu) || $i !~ /^[0-9]+/)
 					continue
-				if ($i ~ /^[0-9]+/ && $i + 0 > 0)
-					seen[cpu[i]] = 1
+				if (second)
+					now[cpu[i]] = $i + 0
+				else
+					was[cpu[i]] = $i + 0
 			}
 		}
 		END {
-			for (c in seen)
-				print c
+			for (c in now)
+				if (now[c] - was[c] > 0)
+					print c
 		}
-	' "$PROC_ROOT/interrupts"
+	'
 }
 
 # Selection over "cpu N idle_pct P irq_per_s R" metrics on stdin: prints
@@ -858,10 +882,17 @@ rps_probe() {
 		[ -r "$f" ] || continue
 		v=$(tr -d ' \t\r\n' < "$f")
 		[ -n "$v" ] || v=0
-		[ "$v" = 0 ] || {
+		# A zero mask is a value, not the string "0".  The kernel prints a
+		# bitmap ("f", "0", and on some kernels/backports "00000000" or
+		# "0,0"), so a string compare against "0" reads a zero-padded mask
+		# as non-zero, reports rps_nonzero_queues=N and then skips the
+		# split arm as "decided by rps_cpus" when no queue has a mask.
+		case $v in
+		*[!0,]*)
 			all_zero=0
 			nonzero=$((nonzero + 1))
-		}
+			;;
+		esac
 		values="${values:+$values,}\"$v\""
 	done
 	[ -n "$values" ] || {
@@ -2748,6 +2779,11 @@ cleanup_temps() {
 
 main() {
 	parse_args "$@"
+	# Preflight already writes temp files (station dump, the irq-before/after
+	# beacon pair).  The EXIT trap used to be installed only past the refusal
+	# paths, so every refused --run left its files in TMPDIR; run_all replaces
+	# this trap with on_exit, which removes them as well.
+	trap cleanup_temps EXIT
 	preflight
 	resolve_threaded_value
 
@@ -2761,7 +2797,6 @@ main() {
 	fi
 
 	if [ "$RUN" -ne 1 ]; then
-		trap cleanup_temps EXIT
 		report_plan
 		exit 0
 	fi
@@ -2776,7 +2811,7 @@ main() {
 			# configuration block, not missing hardware (#347).
 			if [ -n "${IFACE:-}" ] && _mm=$(nc_owe_mismatch "$IFACE"); then
 				nc_owe_mismatch_block "${OUT_DIR:-}" 66 "$_mm"
-				exit 1
+				exit 2
 			fi
 			_nc_run='sh scripts/wireless/irq-napi-ab.sh --client <CLIENT_MAC> --client-ip <CLIENT_IP> --run --out-dir <DIR>'
 			_rec=$(no_client_record "${OUT_DIR:-}" 66 6ghz-eht-client \
@@ -2788,7 +2823,11 @@ main() {
 			[ -n "$_rec" ] && note "no-client record: $_rec"
 		fi
 		note "refusing to run; nothing was changed"
-		exit 1
+		# A missing prerequisite is a blocked run, not a crash: 6g-rx.sh,
+		# 6g-clear-air.sh, 6g320-matrix.sh, edca-6g-ab.sh and
+		# multi-client.sh all exit 2 here, and rc=1 is documented above as
+		# setup/run/rollback failure.
+		exit 2
 	fi
 
 	run_all
