@@ -193,3 +193,8 @@ make -j$(nproc)
 warning and exits 0; the build will still fail.
 
 Output is under `bin/targets/airoha/an7581/`.
+
+This tree publishes no package feed. Each release in that build repo carries a
+`distfeeds-<sha>.tar.gz` holding the packages and kernel modules of that exact image; its
+README section *Installing packages (distfeeds)* has the four repository lines for
+`/etc/apk/repositories.d/customfeeds.list` and the key check that makes them installable.
