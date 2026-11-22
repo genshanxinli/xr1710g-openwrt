@@ -530,3 +530,36 @@ claims:
       - "text: package/base-files/Makefile:142 $(CP) $(BUILD_KEY_APK_PUB) $(1)/etc/apk/keys/"
       - "text: scripts/build-distfeeds.sh:131 cp \"$topdir/public-key.pem\" \"$out/public-key.pem\""
       - "text: scripts/build-distfeeds.sh:253 manifest[\"public_key_sha256\"] = public_key_sha256"
+
+  - id: matchall-police-takes-no-ppe-meter-group
+    claim: "tc matchall police 在 7.3/7.4 上刻意不分配 ppe->meter[] 组，这不是漏分配：ppe->meter[] 是 63 个按 FOE 表项（AIROHA_FOE_SHAPER_ID）命名的每流组，而 airoha_qdma_set_rx_meter() 一次编程该 QDMA 的全部 RX ring，是整口语义；matchall 规则没有 flow key，占掉一个组只会挤掉可单独整形的流。两条路径落在不同块：组寄存器在 frame-engine 窗口（0x200c + 16 * group），这个 TRTCM 在 QDMA 窗口，所以 matchall 之后 ppe/meter 空是设计，不是缺口；matchall 要看的量由 qdma/rx_meter 给出。"
+    source:
+      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:125
+      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:127
+      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:131
+      - target/linux/airoha/patches-7.3/99993-net-airoha-make-the-matchall-police-meter-observable.patch:125
+    evidence: 代码
+    date: "2026-11-22"
+    status: supported
+    notes: "判据是补丁 post-image 与内核源码：airoha_eth.c 里 airoha_qdma_set_rx_meter() 循环 eth->qdma 的每个 q_rx[i] 调 airoha_qdma_init_rl_config()/airoha_qdma_set_rl_token_bucket()（整块），airoha_dev_tc_matchall() 只把 act->police.rate_pkt_ps/burst 传进去，没有 flow key；airoha_ppe.c:1205 用 FIELD_PREP(AIROHA_FOE_SHAPER_ID, data->meter) 把组号写进 FOE 表项，:419 的 find_first_zero_bit(..., 63) 说明组就是 63 个限额资源。没有在实机上验证「不占组会更快分配成功」——这一点只从代码推。"
+    verify:
+      - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:125 + * all traffic arriving on the port.  It deliberately takes no ppe->meter[]"
+      - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:127 + * and there are only AIROHA_PPE_METER_NUM (63) of them, so a group is a"
+      - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:131 + * blocks -- the group register is frame-engine space at 0x200c + 16 *"
+      - "text: target/linux/airoha/patches-7.3/99993-net-airoha-make-the-matchall-police-meter-observable.patch:125 + * all traffic arriving on the port.  It deliberately takes no ppe->meter[]"
+
+  - id: matchall-meter-readback-boundary
+    claim: "qdma/rx_meter（7.3/7.4 的 99993）把 matchall police 变成可观测，但只报两类东西：软件记录的请求（rate/burst/unit，DESTROY 时归零）和每 ring 经 TRTCM_MISC_MODE 读回的 arming（meter_en/pps/tick_sel）。token rate 与 bucket shift 不打印——驱动只经 TRTCM 参数窗写它们、从不回读，从写入值反推一个数只会把软件记录伪装成寄存器值（与 ppe/meter 的 reg deadbeef 同一类错误）。"
+    source:
+      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:114
+      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:147
+      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:54
+      - target/linux/airoha/patches-7.3/99993-net-airoha-make-the-matchall-police-meter-observable.patch:114
+    evidence: 代码
+    date: "2026-11-22"
+    status: supported
+    notes: "选 qdma/ 而不是 ppe/ 是因为落点不同块：ppe/ 的 16 个节点都读 frame-engine 侧，QDMA TRTCM 在 QDMA 窗口，塞进 ppe/ 只会让读者以为它和组表同源。可回读性依据：airoha_qdma_set_rl_config() 在写之前先用 airoha_qdma_get_rl_param(..., TRTCM_MISC_MODE, ...) 做读-改-写，所以该参数确实可读；TRTCM_TOKEN_RATE_MODE / TRTCM_BUCKETSIZE_SHIFT_MODE 在整棵树里只有 set 路径、没有 get 调用点。未在实机读回：rx_meter 的输出还没在 r38242+ 上抓过，逐 ring 的 mode 值与 matchall+police 之后 ppe/meter 仍为空这两点都待设备验证。"
+    verify:
+      - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:114 +\tdebugfs_create_file(\"rx_meter\", 0444, eth->qdma_debugfs_dir, eth,"
+      - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:54 + * TRTCM_MISC_MODE, the parameter the driver reads before every write.  The"
+      - "text: target/linux/airoha/patches-7.3/99993-net-airoha-make-the-matchall-police-meter-observable.patch:114 +\tdebugfs_create_file(\"rx_meter\", 0444, eth->qdma_debugfs_dir, eth,"
