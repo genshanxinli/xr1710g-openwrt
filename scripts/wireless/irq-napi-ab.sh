@@ -117,32 +117,28 @@ NAPI_PATH_OPT=${NAPI_PATH:-}
 NAPI_PARAM=${NAPI_PARAM:-/sys/module/mt76/parameters/napi_threaded}
 # CPU sampling for the automatic split target: one short /proc/stat and
 # /proc/interrupts delta, and the per-second IRQ rate above which a CPU
-# counts as already busy.  The boot CPU carries the timer (215 arch_timer
-# interrupts/s on the board) and IRQ55 on kernels that have it.
+# counts as already busy.  The boot CPU carries the timer (44.5% of the
+# arch_timer counts since boot on the board) and IRQ55 where the kernel has it.
 IRQ_SAMPLE_S=${IRQ_SAMPLE_S:-1}
 IRQ_BUSY_PER_S=${IRQ_BUSY_PER_S:-50000}
-# The arch_timer/irq55 test is a rate, not "did the counter move".  GICv3
-# broadcasts every timer tick to all CPUs, so on the board every column grows
-# on every tick (7.4-rc3 deltas per tick: +429/+171/+193/+84) and an
-# increment test reserves all four CPUs.  Over one second the columns grow
-# cpu0 215, cpu1 86, cpu2 97, cpu3 42 -- the ratio, not the direction, is the
-# signal.  150/s = sqrt(215*104.3), the geometric mean of the slowest boot
-# and fastest from-CPU rate: 1.43x/1.44x; 100 would reserve the 104.3/s CPU.
-IRQ_TIMER_PER_S=${IRQ_TIMER_PER_S:-150}
-# The window must span several ticks.  The board's cadence is ~2 s per tick
-# (429 per tick against 215/s), so a 1 s window holds 0 or 1 tick and the
-# same data reads 0/s or 429/s: at 429/s cpu2 (193/s) would be reserved too
-# and at 0/s neither would be.  6 s holds at least 3 ticks, leaving <=33%
-# quantisation: cpu2 stays at or below 129/s and cpu0 at or above 143/s.
-# The 143/s low end is under the threshold, so a window that lands there is
-# caught by the share clause below, not by the rate.
-IRQ_TIMER_SAMPLE_S=${IRQ_TIMER_SAMPLE_S:-6}
-# Backstop for a window that saw no tick at all (tickless idle, or a table
-# that cannot be re-read between the two samples): the CPU that absorbed this
-# share of the timer interrupts since boot is the timer's home CPU.  Board
-# shares of 16,005,708 are cpu0 44.5%, cpu1 18.7%, cpu2 19.7%, cpu3 17.2%;
-# 30% is the geometric mean of 19.7 and 44.5 (sqrt = 29.6), and an evenly
-# spread 4-CPU board sits at 25% each, so a healthy board reserves nobody.
+# The arch_timer/irq55 test is the since-boot share of the timer counts, not
+# a rate.  GICv3 broadcasts every timer tick to all CPUs, so every column
+# grows on every tick (7.4-rc3 deltas per tick: +429/+171/+193/+84) and an
+# increment test reserves all four CPUs; what separates them is how much of
+# the accumulated count each CPU holds.  Board totals of 16,005,708 read
+# cpu0 44.5%, cpu1 18.7%, cpu2 19.7%, cpu3 17.2% on one run and
+# 45.0/18.5/19.8/16.7% on another -- half a point apart.  30% is the
+# geometric mean of 19.7 and 44.5 (sqrt = 29.6), and an evenly spread
+# 4-CPU board sits at 25% each, so a healthy board reserves nobody.
+#
+# A windowed rate cannot make that call: the tick is ~2 s apart, so a 6 s
+# window holds 0-3 ticks and cpu0's rate read anywhere from 55/s to 184/s on
+# the same board under the same load (139.0/s and 143.7/s among the runs).
+# Any cut near its true ~215/s therefore drops the boot CPU out on some
+# runs, and the split arm then pins to cpu0 -- the one CPU this test exists
+# to keep out.  The timer's home CPU is fixed when the GIC is programmed at
+# boot and does not migrate, so the since-boot share is both the stable and
+# the correct statistic, and timer_cpus reads the table once.
 IRQ_TIMER_SHARE_PCT=${IRQ_TIMER_SHARE_PCT:-30}
 ARMS=${ARMS:-baseline,split,threaded,combined}
 OUT_DIR_OPT=${OUT_DIR:-}
@@ -492,11 +488,6 @@ parse_args() {
 		die "IRQ_SAMPLE_S must be 1..60"
 	is_uint "$IRQ_BUSY_PER_S" && [ "$IRQ_BUSY_PER_S" -ge 1 ] ||
 		die "IRQ_BUSY_PER_S must be a positive integer"
-	is_uint "$IRQ_TIMER_PER_S" && [ "$IRQ_TIMER_PER_S" -ge 1 ] ||
-		die "IRQ_TIMER_PER_S must be a positive integer"
-	is_uint "$IRQ_TIMER_SAMPLE_S" && [ "$IRQ_TIMER_SAMPLE_S" -ge 1 ] &&
-		[ "$IRQ_TIMER_SAMPLE_S" -le 60 ] ||
-		die "IRQ_TIMER_SAMPLE_S must be 1..60"
 	is_uint "$IRQ_TIMER_SHARE_PCT" && [ "$IRQ_TIMER_SHARE_PCT" -ge 1 ] &&
 		[ "$IRQ_TIMER_SHARE_PCT" -le 100 ] ||
 		die "IRQ_TIMER_SHARE_PCT must be 1..100"
@@ -668,9 +659,9 @@ interrupt_cpus() {
 #
 # The automatic split used to pin every candidate IRQ to cpu0 and later to
 # whatever non-cpu0 CPUs existed, in /proc/interrupts order.  On the board
-# cpu0 already carries most of the arch_timer tick (215/s of the 440/s the
-# four columns take; the counters since boot read 7.1 M against 3.0 M on
-# cpu1, which is a total, not a rate) and IRQ55 where the kernel has one, so
+# cpu0 already carries most of the arch_timer tick (44.5% of the counts since
+# boot, against 18.7/19.7/17.2% on the other three; the counters read 7.1 M
+# against 3.0 M on cpu1) and IRQ55 where the kernel has one, so
 # moving a Wi-Fi line there cannot show a difference and an
 # idle A53 is the target that says something.  The target is now chosen from
 # a short sample: idle share from /proc/stat and interrupt rate per CPU from
@@ -773,15 +764,24 @@ cpu_sample() {
 # difference even when the generic interrupt rate over a one-second sample is
 # below IRQ_BUSY_PER_S.  Printed one CPU per line, ascending.
 #
-# The test is a rate, not "the counter grew".  On the board GICv3 hands every
-# arch_timer tick to all four CPUs -- 7.4-rc3 deltas per tick were
-# +429/+171/+193/+84 -- so every column moves on every tick, an increment
-# test reserves all four CPUs and the split target list came out empty.  What
-# separates them is how much of the tick each CPU receives: 215/s on cpu0
-# against 97/s on cpu2 and 42/s on cpu3.  A CPU is reserved when the rate
-# over the window reaches IRQ_TIMER_PER_S, or -- for a window that saw no
-# tick at all -- when it holds IRQ_TIMER_SHARE_PCT of the since-boot timer
-# interrupts.
+# The test is the since-boot share of the timer counts, not a windowed rate.
+# On the board GICv3 hands every arch_timer tick to all four CPUs -- 7.4-rc3
+# deltas per tick were +429/+171/+193/+84 -- so every column moves on every
+# tick, an increment test reserves all four CPUs and the split target list
+# came out empty.  What separates them is how much of the accumulated count
+# each CPU holds: 7,118,352 / 2,996,988 / 3,145,460 / 2,744,908 out of
+# 16,005,708, i.e. 44.5/18.7/19.7/17.2%, and a second run of the same board
+# read 45.0/18.5/19.8/16.7%.  IRQ_TIMER_SHARE_PCT=30 sits between the boot
+# CPU and the rest; an evenly spread 4-CPU board (25% each) reserves nobody.
+#
+# Why the rate is gone: the tick is ~2 s apart, so a 6 s window holds 0-3
+# ticks and cpu0's measured rate ranged 55/s..184/s on the same board under
+# the same load, including 139.0/s and 143.7/s -- below any cut near its
+# true ~215/s.  A rate cut therefore drops cpu0 out of the reserved set on
+# some runs, and the split arm then pins to cpu0, the one CPU this test
+# exists to keep out.  The timer's home CPU is fixed when the GIC is
+# programmed at boot and never migrates, so the since-boot share is the
+# stable and the correct statistic; the table is read once, no window.
 #
 # IRQ 55 is the vendor kernel's numbered timer line; the 6.18 harness was
 # written against it.  This kernel has no 55 line (grep '^ *55:' is empty, so
@@ -790,39 +790,14 @@ cpu_sample() {
 # the numeric match is kept only because it is inert here and still right on
 # the kernel that has it.  Do not extend it with more numbers; a name match
 # is the portable form.
-#
-# timer_cpus [SNAPSHOT [WINDOW_S]]: SNAPSHOT is an earlier copy of the table
-# and WINDOW_S how many seconds old it is (default 1).  Without SNAPSHOT the
-# second sample is taken IRQ_TIMER_SAMPLE_S later.
 timer_cpus() {
-	local snap=${1:-} window
-
 	[ -r "$PROC_ROOT/interrupts" ] || return 1
-	if [ -n "$snap" ] && [ -r "$snap" ]; then
-		window=${2:-1}
-	else
-		snap=
-		window=${IRQ_TIMER_SAMPLE_S:-6}
-	fi
-	is_uint "$window" && [ "$window" -ge 1 ] || window=1
-	# No timer line in the table: nothing to reserve, and no reason to pay
-	# for the window.
+	# No timer line in the table: nothing to reserve.
 	awk '$1 == "55:" || tolower($0) ~ /arch_timer/ { found = 1; exit }
-		END { exit !found }' "${snap:-$PROC_ROOT/interrupts}" 2>/dev/null ||
+		END { exit !found }' "$PROC_ROOT/interrupts" 2>/dev/null ||
 		return 0
-	{
-		if [ -n "$snap" ]; then
-			cat "$snap"
-		else
-			cat "$PROC_ROOT/interrupts"
-			sample_sleep "$window"
-		fi
-		echo "===== irq-napi-ab second sample ====="
-		cat "$PROC_ROOT/interrupts"
-	} | awk -v window="$window" -v rate_min="${IRQ_TIMER_PER_S:-150}" \
-		-v share_min="${IRQ_TIMER_SHARE_PCT:-30}" '
-		$0 == "===== irq-napi-ab second sample =====" { second = 1; next }
-		!second && NR == 1 {
+	awk -v share_min="${IRQ_TIMER_SHARE_PCT:-30}" '
+		NR == 1 {
 			for (i = 1; i <= NF; i++) {
 				c = $i
 				sub(/^CPU/, "", c)
@@ -841,11 +816,7 @@ timer_cpus() {
 				i = col[k]
 				if (i > NF || $i !~ /^[0-9]+$/)
 					continue
-				c = cname[k]
-				if (second)
-					now[c] += $i + 0
-				else
-					was[c] += $i + 0
+				now[cname[k]] += $i + 0
 			}
 		}
 		END {
@@ -853,12 +824,8 @@ timer_cpus() {
 				total += now[cname[k]]
 			for (k = 1; k <= ncpu; k++) {
 				c = cname[k]
-				d = now[c] - was[c]
-				if (d < 0)
-					d = 0
-				rate = d / window
 				share = total > 0 ? 100 * now[c] / total : 0
-				if (rate >= rate_min || share >= share_min) {
+				if (share >= share_min) {
 					n++
 					out[n] = c + 0
 				}
@@ -875,7 +842,7 @@ timer_cpus() {
 			for (i = 1; i <= n; i++)
 				print out[i]
 		}
-	'
+	' "$PROC_ROOT/interrupts"
 }
 
 # Selection over "cpu N idle_pct P irq_per_s R" metrics on stdin: prints
@@ -1054,6 +1021,10 @@ rps_save() {
 rps_set_cpu() {
 	local cpu="$1" mask f
 
+	# An empty or non-numeric CPU used to fall through to 2^"" = 1, i.e.
+	# mask 1, and wrote every queue to cpu0 without a word.
+	is_uint "$cpu" || return 1
+	[ -n "$RPS_DEV" ] || return 1
 	mask=$(awk -v c="$cpu" 'BEGIN { printf "%x", 2 ^ c }')
 	[ -n "$mask" ] || return 1
 	for f in "$SYS_CLASS_NET/$RPS_DEV/queues/rx-"*/rps_cpus; do
@@ -1860,11 +1831,18 @@ EOF
 			map_ok="$map_ok $rec"
 		done
 		SPLIT_MAP=${map_ok# }
+		# --with-rps needs a CPU to write the masks for.  The explicit
+		# map names one per IRQ; the first surviving record is where the
+		# split arm starts.  Empty here used to reach rps_set_cpu as
+		# 2^"" = mask 1, which wrote all 32 queues to cpu0 (board log:
+		# t16 rps0=f, t17 rps0=1).
+		SPLIT_CHOSEN_CPU=${SPLIT_MAP%% *}
+		SPLIT_CHOSEN_CPU=${SPLIT_CHOSEN_CPU#*:}
 	else
 		# The automatic map goes to the most idle CPUs, never to a CPU
 		# that already carries a hot line.  cpu0 on the board takes the
-		# largest share of the arch_timer tick (215/s against 97/s on
-		# cpu2, 42/s on cpu3) and IRQ55 where the kernel has one, so a
+		# largest share of the arch_timer counts (44.5% against
+		# 18.7/19.7/17.2%) and IRQ55 where the kernel has one, so a
 		# candidate pinned there cannot show a difference: the split arm
 		# reads as a no-op and the A/B measures nothing.
 		local ncpu=0 cpu c k i=0
@@ -2342,7 +2320,7 @@ measure_arm() {
 		APPLIED_SPLIT=${APPLIED_SPLIT# }
 		if [ "$WITH_RPS" -eq 1 ]; then
 			if ! rps_set_cpu "$SPLIT_CHOSEN_CPU"; then
-				note "$arm: failed to write rps_cpus to cpu$SPLIT_CHOSEN_CPU"
+				note "$arm: failed to write rps_cpus to cpu${SPLIT_CHOSEN_CPU:-none}"
 				restore_state >/dev/null 2>&1 || :
 				ARM_STATUS=fail
 				ARM_REASON='rps-write'

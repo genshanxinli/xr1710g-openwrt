@@ -13,9 +13,11 @@ Three things the device run of 2026-11-22 showed:
      CPUs on this board: GICv3 hands every arch_timer tick to all four CPUs,
      so the increment version (the first fix) reserved all four as well --
      7.4-rc3 deltas per tick were +429/+171/+193/+84 -- and the split target
-     list came out empty again.  The test is now a rate, IRQ_TIMER_PER_S
-     interrupts/s, over a window long enough to hold several ticks, with the
-     since-boot share as the backstop for a window that saw no tick.
+     list came out empty again.  The second fix (a windowed rate) does not
+     hold either: the tick is ~2 s apart, so a 6 s window holds 0-3 ticks and
+     cpu0 read anywhere from 55/s to 184/s on the same board under the same
+     load.  The test is now the since-boot share of the timer counts, which
+     two independent runs put at 44.5/18.7/19.7/17.2% and 45.0/18.5/19.8/16.7%.
   3. The refusal path ran before the EXIT trap that removes TMP_FILES was
      installed, so every refused --run left irq-napi-ab.$$.irq-before/after
      behind.
@@ -25,7 +27,6 @@ Point IRQ_NAPI_AB_UNDER_TEST at a copy to test that copy instead.
 """
 
 import os
-import re
 import subprocess
 import tempfile
 import time
@@ -40,17 +41,33 @@ SCRIPT = Path(
 
 HEADER = "           CPU0       CPU1       CPU2       CPU3\n"
 
-# The board's own arch_timer rows, 7.4-rc3 at f3a119a90b, one tick apart.
-# Every CPU's column grows (+429/+171/+193/+84): this is the shape the
-# increment test could not classify, and the shape the rate test has to
-# narrow down to the boot CPU.  Over the tick's ~2 s the rates are 215/86/97/42
-# per second, which is where IRQ_TIMER_PER_S=150 comes from.
+# The board's own arch_timer row, 7.4-rc3 at f3a119a90b, two samples one tick
+# apart.  Every CPU's column grows (+429/+171/+193/+84): this is the shape the
+# increment test could not classify.  The since-boot split of 16,005,708 is
+# 44.5/18.7/19.7/17.2%, which is what IRQ_TIMER_SHARE_PCT=30 cuts.
 BOARD_BEFORE = HEADER + (
     "  11:    7118352    2996988    3145460    2744908  GICv3   30 Level      arch_timer\n"
 )
 BOARD_AFTER = HEADER + (
     "  11:    7118781    2997159    3145653    2744992  GICv3   30 Level      arch_timer\n"
 )
+
+# The same row as a device read it on six --dry-run runs.  The since-boot
+# counts never move (they are the same run of the same board, only the second
+# sample differs), while the per-CPU deltas the old rate test divided by the
+# window are exactly the 55/s..184/s spread the board showed, 139.0/s and
+# 143.7/s included.  One tuple per run: (cpu0, cpu1, cpu2, cpu3) delta.
+DRY_RUN_DELTAS = [
+    (330, 132, 149, 65),    # cpu0 55.0/s
+    (429, 171, 193, 84),    # cpu0 71.5/s -- one tick
+    (660, 263, 297, 129),   # cpu0 110.0/s
+    (834, 333, 376, 163),   # cpu0 139.0/s -- below the old 150/s cut
+    (862, 344, 389, 169),   # cpu0 143.7/s -- below the old 150/s cut
+    (1104, 441, 497, 215),  # cpu0 184.0/s
+]
+
+# Counts in BOARD_AFTER, per CPU.
+BOARD_COUNTS = [7118781, 2997159, 3145653, 2744992]
 
 # No station, but the two NPU lines exist: preflight then writes the
 # irq-before/after pair for the beacon-rate sanity check.
@@ -86,6 +103,12 @@ def run_script(args, env=None):
         text=True,
         env=full_env,
         check=False,
+    )
+
+
+def timer_row(counts):
+    return HEADER + (
+        "  11:    " + "    ".join(str(c) for c in counts) + "  GICv3   30 Level      arch_timer\n"
     )
 
 
@@ -177,11 +200,13 @@ class TempFiles(unittest.TestCase):
 
 
 class TimerCpus(unittest.TestCase):
-    """Reserved CPUs are the timer CPUs, picked by rate, not by movement."""
+    """Reserved CPUs are the timer CPUs, picked by since-boot share."""
 
     def setUp(self):
         self.fixture = ProcFixture()
         self.addCleanup(self.fixture.cleanup)
+        # is_uint is only needed by the old rate version's window guard; it
+        # is kept in the body so the red proof calls that version fairly.
         self.body = (
             extract_function("is_uint")
             + extract_function("sample_sleep")
@@ -193,54 +218,48 @@ class TimerCpus(unittest.TestCase):
         path.write_text(text)
         return path
 
-    def timer_cpus(self, after, before, window=1, env=""):
-        """Reserve against a SNAPSHOT that is `window` seconds old."""
+    def timer_cpus(self, after, before=None, window=1, env=""):
+        """Reserve from `after`; pass `before` to feed the old rate test."""
         (self.fixture.proc / "interrupts").write_text(after)
+        call = "timer_cpus"
+        if before is not None:
+            call += f" {self.before(before)} {window}"
         out = run_sh(
-            self.body
-            + env
-            + f'PROC_ROOT={self.fixture.proc}\n'
-            + f"timer_cpus {self.before(before)} {window}\n"
+            self.body + env + f'PROC_ROOT={self.fixture.proc}\n' + call + "\n"
         )
         self.assertEqual(out.returncode, 0, out.stderr)
         return out.stdout.split()
 
     def test_cumulative_counts_alone_reserve_nobody(self):
-        # Both columns are since-boot totals: equal numbers are no interrupt.
         # Four equal columns are 25% each, under IRQ_TIMER_SHARE_PCT=30.
         line = " 56:     %s  arch_timer  56 Edge      arch_timer\n"
         after = HEADER + (line % " 987654  987654  987654  987654")
-        self.assertEqual(self.timer_cpus(after, after), [])
+        self.assertEqual(self.timer_cpus(after), [])
 
-    def test_a_timer_increment_reserves_that_cpu(self):
-        # 600 interrupts in the one-second window is 600/s, over the 150/s
-        # threshold; the share stays under 30% so the rate clause is what
-        # fires here.
+    def test_the_cpu_holding_the_share_is_reserved(self):
+        # 6000 of 10000 timer interrupts since boot is 60%: the boot CPU's
+        # shape, even though nothing ticks between the two samples.
         line = " 56:     %s  arch_timer  56 Edge      arch_timer\n"
-        before = HEADER + (line % " 10000  10000  10000  10000")
-        after = HEADER + (line % " 10000  10000  10600  10000")
-        self.assertEqual(self.timer_cpus(after, before, window=1), ["2"])
+        after = HEADER + (line % " 1000  1000  6000  1000")
+        self.assertEqual(self.timer_cpus(after), ["2"])
 
-    def test_an_increment_below_the_rate_is_not_reserved(self):
-        # The old increment test reserved cpu2 for this; 42 interrupts in a
-        # second is 42/s, an idle CPU's trickle, not the timer CPU.
+    def test_a_one_tick_blip_does_not_carry_the_share(self):
+        # 42 interrupts over one second is an idle CPU's trickle, and the
+        # since-boot split stays at 25%: not the timer CPU.
         line = " 56:     %s  arch_timer  56 Edge      arch_timer\n"
         before = HEADER + (line % " 10000  10000  10000  10000")
         after = HEADER + (line % " 10000  10000  10042  10000")
         self.assertEqual(self.timer_cpus(after, before, window=1), [])
 
-    def test_an_irq55_increment_reserves_that_cpu(self):
+    def test_an_irq55_line_is_a_timer_row(self):
         # IRQ 55 is the vendor kernel's numbered timer line; inert on
         # 7.4-rc3 (no 55 row) but still matched where the kernel has it.
         line = " 55:     %s  mt76-npu  55 Edge      wifi0\n"
-        before = HEADER + (line % " 20000  20000  20000  20000")
-        after = HEADER + (line % " 20000  20000  20000  20400")
-        self.assertEqual(self.timer_cpus(after, before, window=1), ["3"])
+        after = HEADER + (line % " 1000  1000  1000  6000")
+        self.assertEqual(self.timer_cpus(after), ["3"])
 
     def test_the_board_shape_reserves_the_boot_cpu_only(self):
-        # The failing shape: all four columns grow, +429/+171/+193/+84 per
-        # tick.  The tick is ~2 s old, so the rates are 215/86/97/42 per
-        # second and only cpu0 clears 150/s.
+        # 44.5/18.7/19.7/17.2% of 16,005,708: only cpu0 clears 30%.
         self.assertEqual(self.timer_cpus(BOARD_AFTER, BOARD_BEFORE, window=2), ["0"])
 
     def test_the_board_shape_is_not_four_reserved_cpus(self):
@@ -250,59 +269,148 @@ class TimerCpus(unittest.TestCase):
         self.assertNotEqual(got, ["0", "1", "2", "3"], got)
         self.assertEqual(len(got), 1, got)
 
-    def test_a_one_second_window_on_the_board_shape_misclassifies(self):
-        # Why IRQ_TIMER_SAMPLE_S defaults to 6 s and not to IRQ_SAMPLE_S: at
-        # 1 s the per-tick deltas are read as per-second rates, cpu1 (171/s)
-        # and cpu2 (193/s) clear a 150/s threshold as well, and the split
-        # loses two targets.  The default has to hold several ticks.
-        got = self.timer_cpus(BOARD_AFTER, BOARD_BEFORE, window=1)
-        self.assertEqual(got, ["0", "1", "2"], got)
-        text = SCRIPT.read_text()
-        m = re.search(
-            r"^IRQ_TIMER_SAMPLE_S=\$\{IRQ_TIMER_SAMPLE_S:-(\d+)\}", text, re.M
+    def test_six_device_runs_read_the_same_share_the_same_way(self):
+        # The core fix: six runs of the same board, same since-boot counts,
+        # deltas from 55/s to 184/s (139.0 and 143.7 among them).  Whatever
+        # the rate columns say, the reserved set is the share set: cpu0.
+        # Against the rate-first version five of the six read [] here.
+        for delta in DRY_RUN_DELTAS:
+            before = timer_row([c - d for c, d in zip(BOARD_COUNTS, delta)])
+            got = self.timer_cpus(BOARD_AFTER, before, window=6)
+            self.assertEqual(
+                got,
+                ["0"],
+                f"delta {delta} moved the reserved set to {got}",
+            )
+
+    def test_cpu0_at_139_per_second_is_still_reserved(self):
+        # The device read cpu0 at 139.0/s, under the old 150/s cut, while it
+        # held 44.5% of the timer.  A reserved set without cpu0 lets the
+        # split arm pin to cpu0, the one CPU this test exists to keep out.
+        delta = DRY_RUN_DELTAS[3]
+        before = timer_row([c - d for c, d in zip(BOARD_COUNTS, delta)])
+        self.assertEqual(self.timer_cpus(BOARD_AFTER, before, window=6), ["0"])
+        self.assertAlmostEqual(delta[0] / 6, 139.0, places=1)
+
+    def test_the_share_cut_is_overridable_from_the_environment(self):
+        # IRQ_TIMER_SHARE_PCT is the tuning knob: a board with a different
+        # tick distribution needs a different cut and no edit to the script.
+        self.assertEqual(
+            self.timer_cpus(BOARD_AFTER, env="IRQ_TIMER_SHARE_PCT=100\n"), []
         )
-        self.assertIsNotNone(m, "IRQ_TIMER_SAMPLE_S default is not in the script")
-        self.assertGreaterEqual(
-            int(m.group(1)),
-            3,
-            "the default window must hold 3+ ticks; at 1 s the board shape "
-            "misclassifies cpu1 and cpu2",
+        self.assertEqual(
+            self.timer_cpus(BOARD_AFTER, env="IRQ_TIMER_SHARE_PCT=40\n"), ["0"]
+        )
+        self.assertEqual(
+            self.timer_cpus(BOARD_AFTER, env="IRQ_TIMER_SHARE_PCT=10\n"),
+            ["0", "1", "2", "3"],
         )
 
-    def test_a_silent_window_still_reserves_the_boot_cpu(self):
-        # Tickless idle: no column moves at all, so the rate clause says
-        # nothing.  The since-boot share still names cpu0 (44.5% of
-        # 16,005,708 against 18.7/19.7/17.2).
-        self.assertEqual(self.timer_cpus(BOARD_AFTER, BOARD_AFTER, window=6), ["0"])
-
-    def test_both_thresholds_are_overridable_from_the_environment(self):
-        # IRQ_TIMER_PER_S and IRQ_TIMER_SHARE_PCT are the tuning knobs: a
-        # board with a different tick cadence needs a different cut, and
-        # neither needs an edit to the script.  Both set above the board's
-        # own numbers, so nothing is reserved.
-        got = self.timer_cpus(
-            BOARD_AFTER,
-            BOARD_BEFORE,
-            window=2,
-            env="IRQ_TIMER_PER_S=1000\nIRQ_TIMER_SHARE_PCT=100\n",
-        )
-        self.assertEqual(got, [], got)
-
-    def test_a_table_without_timer_rows_does_not_pay_the_window(self):
+    def test_a_table_without_timer_rows_does_not_wait_for_a_sample(self):
         # No arch_timer and no 55 row: nothing to reserve, and no reason to
-        # sleep IRQ_TIMER_SAMPLE_S inside a dry run.
+        # sleep inside a dry run.
         (self.fixture.proc / "interrupts").write_text(INTERRUPTS)
         started = time.monotonic()
-        out = run_sh(
-            self.body
-            + "IRQ_TIMER_SAMPLE_S=6\n"
-            + f'PROC_ROOT={self.fixture.proc}\n'
-            + "timer_cpus\n"
-        )
+        out = run_sh(self.body + f'PROC_ROOT={self.fixture.proc}\ntimer_cpus\n')
         elapsed = time.monotonic() - started
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(out.stdout.split(), [])
-        self.assertLess(elapsed, 3.0, f"timer_cpus slept {elapsed:.1f}s for nothing")
+        self.assertLess(elapsed, 3.0, f"timer_cpus waited {elapsed:.1f}s for nothing")
+
+
+class RpsMasks(unittest.TestCase):
+    """--with-rps writes the mask of a real CPU, never 2^"" = 1."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.root = Path(self.dir.name)
+        self.net = self.root / "net"
+        self.queues = self.net / "cpu" / "queues"
+        self.files = []
+        for q in ("rx-0", "rx-1"):
+            f = self.queues / q / "rps_cpus"
+            f.parent.mkdir(parents=True)
+            f.write_text("f\n")
+            self.files.append(f)
+        self.body = extract_function("is_uint") + extract_function("rps_set_cpu")
+
+    def run_set(self, cpu):
+        return run_sh(
+            self.body
+            + f"SYS_CLASS_NET={self.net}\nRPS_DEV=cpu\nWRITE_COUNT=0\n"
+            + f'rps_set_cpu {cpu!r}\n'
+            + 'printf "rc=%s writes=%s\\n" "$?" "$WRITE_COUNT"\n'
+        )
+
+    def test_cpu2_writes_the_cpu2_mask(self):
+        out = self.run_set("2")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("rc=0 writes=2", out.stdout)
+        for f in self.files:
+            self.assertEqual(f.read_text().strip(), "4", f"{f} mask")
+
+    def test_a_blank_cpu_is_refused_and_writes_nothing(self):
+        # SPLIT_CHOSEN_CPU empty used to reach 2^"" = 1 and put all 32
+        # queues on cpu0.
+        out = self.run_set("")
+        self.assertIn("rc=1 writes=0", out.stdout)
+        for f in self.files:
+            self.assertEqual(f.read_text().strip(), "f", f"{f} was overwritten")
+
+    def test_a_non_numeric_cpu_is_refused(self):
+        out = self.run_set("x")
+        self.assertIn("rc=1 writes=0", out.stdout)
+        for f in self.files:
+            self.assertEqual(f.read_text().strip(), "f", f"{f} was overwritten")
+
+
+class ExplicitMapChosenCpu(unittest.TestCase):
+    """An explicit --irq-map names the CPU the rps masks follow."""
+
+    def setUp(self):
+        self.fixture = ProcFixture()
+        self.addCleanup(self.fixture.cleanup)
+        proc = self.fixture.proc
+        (proc / "interrupts").write_text(
+            HEADER
+            + " 50:        900        100        100        100  mt7996e    0 Edge      pcie0\n"
+            + " 51:        800        100        100        100  mt7996e    1 Edge      pcie1\n"
+        )
+        for irq in ("50", "51"):
+            d = proc / "irq" / irq
+            d.mkdir(parents=True)
+            f = d / "smp_affinity"
+            f.write_text("1\n")
+            f.chmod(0o644)
+        self.net = self.fixture.root / "net"
+        (self.net / "cpu" / "queues" / "rx-0").mkdir(parents=True)
+        (self.net / "cpu" / "queues" / "rx-0" / "rps_cpus").write_text("f\n")
+
+    def test_the_first_map_record_names_the_rps_cpu(self):
+        out = run_script(
+            [
+                "--proc-root",
+                str(self.fixture.proc),
+                "--sys-class-net",
+                str(self.net),
+                # online_cpus reads the host's /sys, not PROC_ROOT: pin the
+                # list so the map validation does not depend on the runner.
+                "--cpus",
+                "0,1,2,3",
+                "--irq-map",
+                "50:2,51:3",
+                "--with-rps",
+                "--dry-run",
+            ]
+        )
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        # Before the fix this line said "cpu?" (SPLIT_CHOSEN_CPU was only set
+        # on the automatic branch) and rps_set_cpu then wrote mask 1.
+        self.assertIn(
+            "--with-rps: the split arm also writes rps_cpus to cpu2",
+            out.stdout,
+        )
 
 
 class SplitTargetChoice(unittest.TestCase):
@@ -324,7 +432,6 @@ class SplitTargetChoice(unittest.TestCase):
             f"PROC_ROOT={proc}\n"
             + extract_function("note")
             + extract_function("add_missing")
-            + extract_function("is_uint")
             + extract_function("sample_sleep")
             + extract_function("timer_cpus")
             + extract_function("choose_split_targets")
