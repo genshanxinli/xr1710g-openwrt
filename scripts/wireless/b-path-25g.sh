@@ -944,9 +944,10 @@ setup_addressing() {
 
 detach_data_port() {
 	# Runs after main() armed the EXIT trap, never before: an interrupt at
-	# any point from here on puts the port back.  The link is not bounced,
-	# so a speed below 2500 after the detach means the port really is not a
-	# 2.5G data port and the run skips (which restores it through the trap).
+	# any point from here on puts the port back.  detaching keeps carrier and
+	# speed, so a speed below 2500 after the detach means the port really is
+	# not a 2.5G data port and the run skips (which restores it through the
+	# trap).
 	local master=${DETACH_PENDING#*:}
 
 	[ -n "$DETACH_PENDING" ] || return 0

@@ -33,10 +33,16 @@
 #
 # shellcheck disable=SC3043  # "local" is used by every harness in this tree
 #
-# The link is not bounced: `nomaster` on an up port keeps carrier and speed,
-# so the peer NIC does not renegotiate and the arm starts from the same link
-# the pre-detach probe recorded.  The operator-facing plan in the harness
-# still prints down/nomaster/up, which is the conservative manual recipe.
+# The link itself is not bounced and carrier/speed are unchanged, but on the
+# real board the bridge does re-run its state machine for the port: detaching
+# lan2 on the XR1710G logs "port 1(lan2) entered blocking state ... disabled
+# state" and then "blocking state ... forwarding state" again on the restore
+# (uptime 54340, 2026-11-22).  That window is sub-second and the 20 x 0.1 s
+# waits below cover it, so the arm starts from the same carrier and speed the
+# pre-detach probe recorded.  Whether the peer NIC renegotiates is unproven;
+# it does not have to, because the detach never touches the PHY.  The
+# operator-facing plan in the harness still prints down/nomaster/up, which
+# is the conservative manual recipe.
 
 PD_SYSFS=${PD_SYSFS:-/sys}
 PD_PORT=

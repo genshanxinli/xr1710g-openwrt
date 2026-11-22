@@ -849,7 +849,8 @@ print_bridge_plan() {
 	# Printed by --detach-from-bridge and by the default bridged-port block.
 	# Without --detach-port this script edits no bridge, UCI file or firewall,
 	# so the operator runs these; --detach-port runs the library's own
-	# nomaster/master pair instead (no link bounce, see lib/port-detach.sh).
+	# nomaster/master pair instead (carrier and speed are kept, see
+	# lib/port-detach.sh).
 	local dev_if="$1" bridge="$2" netif
 
 	netif=${bridge#br-}
@@ -930,8 +931,8 @@ refuse_detach_if_ssh_ingress() {
 
 detach_pending_port() {
 	# detach_pending_port LABEL: detach the port check_device queued for this
-	# label, then re-read its link.  The link is not bounced, so a speed below
-	# 2500 here means the port really is not a 2.5G data port.
+	# label, then re-read its link.  carrier and speed are kept, so a speed
+	# below 2500 here means the port really is not a 2.5G data port.
 	local label=$1 entry rest dev_if master speed
 	for entry in $DETACH_PENDING; do
 		case $entry in
