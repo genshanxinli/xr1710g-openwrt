@@ -22,14 +22,61 @@ the script is exercised.  Run from the repository root:
 """
 
 import json
+import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "scripts/wireless/thermal-soak.sh"
+# THERMAL_SOAK_UNDER_TEST points the tests at another copy of the script so a
+# red proof can run them against the pre-fix version (repo convention).
+SCRIPT = Path(
+    os.environ.get("THERMAL_SOAK_UNDER_TEST")
+    or REPO_ROOT / "scripts/wireless/thermal-soak.sh"
+)
+
+# An AP whose two radios sit in different bands, as --soak requires.
+IW_STUB = """#!/bin/sh
+case "$*" in
+"dev") printf '\\tInterface wlan0\\n\\tInterface wlan1\\n' ;;
+"dev wlan0 info")
+	printf '\\tInterface wlan0\\n\\ttype AP\\n\\tchannel 6 (2437 MHz), width: 20 MHz\\n'
+	printf '\\ttxpower 20.00 dBm\\n'
+	;;
+"dev wlan1 info")
+	printf '\\tInterface wlan1\\n\\ttype AP\\n\\tchannel 37 (6115 MHz), width: 320 MHz\\n'
+	printf '\\ttxpower 20.00 dBm\\n'
+	;;
+esac
+exit 0
+"""
+
+# A generator that is not iperf3.  leg_loop() only counts a cycle as ok when
+# the JSON carries a moving sum_sent, which is what iperf3 -J prints.
+SOURCE_STUB = """#!/bin/sh
+sleep 1
+cat <<'JSON'
+{
+	"end": {
+		"sum_sent": {
+			"bits_per_second": 1234000000.0
+		},
+		"sum_received": {
+			"bits_per_second": 1234000000.0
+		}
+	}
+}
+JSON
+"""
+
+TOOLS = (
+    "sh", "awk", "sed", "grep", "cut", "tr", "sort", "head", "tail", "wc",
+    "date", "mkdir", "rm", "mv", "cat", "sleep", "find", "ls", "env",
+    "dirname", "basename", "nproc", "uname", "id", "expr", "timeout", "ip",
+)
 
 CYCLES_HEADER = (
     "time,epoch,elapsed_s,leg,iface,client,cycle,ok,assoc,throughput_mbps,"
@@ -215,6 +262,79 @@ class StderrClassification(unittest.TestCase):
             "iperf3: error - unable to connect to server: Network is unreachable",
         ):
             self.assertTrue(self.matches(outage, text), text)
+
+
+class MissingTool(unittest.TestCase):
+    """No iperf3 is a recorded gap (exit 2), and --source replaces the load."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.root = Path(self.dir.name)
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        for name in TOOLS:
+            real = shutil.which(name)
+            if real is not None:
+                (self.bin / name).symlink_to(real)
+        (self.bin / "iw").write_text(IW_STUB)
+        (self.bin / "iw").chmod(0o755)
+        (self.bin / "udpblast").write_text(SOURCE_STUB)
+        (self.bin / "udpblast").chmod(0o755)
+        # PATH holds the real tools and nothing else: iperf3 is really absent
+        # instead of being shadowed by the system one.
+        self.env = dict(
+            os.environ,
+            PATH=str(self.bin),
+            HOME=str(self.root),
+            NWD_ALLOW_NO_SERVICE="1",
+        )
+
+    def run_soak(self, out, extra=()):
+        return subprocess.run(
+            [
+                "sh", str(SCRIPT),
+                "--soak",
+                "--iface-a", "wlan0",
+                "--iface-b", "wlan1",
+                "--client-ip-a", "192.0.2.9",
+                "--client-ip-b", "192.0.2.10",
+                "--duration", "4",
+                "--out", str(out),
+                *extra,
+            ],
+            capture_output=True,
+            text=True,
+            env=self.env,
+            timeout=180,
+            check=False,
+        )
+
+    def test_missing_iperf3_records_the_gap_and_exits_2(self):
+        out = self.root / "no-tool"
+        result = self.run_soak(out)
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 2, combined)
+        self.assertIn("SKIP: iperf3 is required", result.stderr)
+        self.assertIn("missing iperf3", result.stderr)
+        record = json.loads((out / "result.json").read_text())
+        self.assertEqual(record["schema"], "wireless-no-client/v1")
+        self.assertEqual(record["status"], "no-client")
+        self.assertEqual(record["missing"], "iperf3")
+        self.assertEqual(str(record["ticket"]), "53")
+
+    def test_source_runs_the_load_without_iperf3(self):
+        out = self.root / "source"
+        result = self.run_soak(out, ["--source", "sh %s" % (self.bin / "udpblast")])
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, combined)
+        self.assertNotIn("iperf3 is required", combined)
+        rows = (out / "cycles-a.csv").read_text().splitlines()
+        header, first = rows[0].split(","), rows[1].split(",")
+        row = dict(zip(header, first))
+        self.assertEqual(row["ok"], "1", rows[1])
+        self.assertEqual(row["src"], "iperf", rows[1])
+        self.assertEqual(row["throughput_mbps"], "1234.000", rows[1])
 
 
 if __name__ == "__main__":

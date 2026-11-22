@@ -178,6 +178,9 @@ SYSFS_NET=${SYSFS_NET:-$DEFAULT_SYSFS_NET}
 IW=${IW:-iw}
 WIFI=${WIFI:-wifi}
 IPERF3=${IPERF3:-iperf3}
+# Optional replacement for the iperf3 source, run through sh -c with the
+# target and duration in the environment (see --source in usage).
+SOURCE=
 
 TARGET=
 STA_OPT=
@@ -347,6 +350,33 @@ skip_no_sta() {
 	exit 0
 }
 
+# require_source: the iperf3 source must exist, or --source must name another
+# generator.  A host with neither has a missing tool, not a failed run.
+require_source() {
+	[ -n "$SOURCE" ] && return 0
+	command -v "$IPERF3" >/dev/null 2>&1 || [ -x "$IPERF3" ] ||
+		skip_no_tool iperf3 "iperf3 is not available on this host ('$IPERF3')"
+}
+
+# skip_no_tool NAME DETAIL: record the missing tool like a missing station
+# and exit 2.  The status stays "no-client" so hw-gap-report.sh files the key
+# under missing hardware; 2 says nothing was measured, which the clean SKIP
+# status 0 would hide.
+skip_no_tool() {
+	_name=$1
+	_detail=$2
+	_rec=$(no_client_record "${OUT_OPT:-}" 68 "$_name" \
+		"sh scripts/wireless/6g-clear-air.sh --interferer <2.4GHZ_AP_IP> --target <6GHZ_STA_IP> --create-bss" \
+		"$_detail" \
+		"6 GHz rx_ampdu_bytes_cnt delta, clear vs interferer" \
+		"CCA busy time and airtime share per arm" \
+		"mt76 token_info / WED token delta" 2>/dev/null)
+	printf 'SKIP: %s\n' "$_detail"
+	printf '      missing %s; install it (opkg install iperf3) or pass --source CMD to run another traffic generator\n' "$_name"
+	[ -n "$_rec" ] && printf '      no-client record: %s\n' "$_rec"
+	exit 2
+}
+
 usage() {
 	cat <<'EOF'
 Usage: 6g-clear-air.sh --target IP [options]
@@ -400,6 +430,11 @@ Traffic:
                      report every round plus the mean (default 1)
   --parallel N       iperf3 streams per direction (default 4)
   --port PORT        iperf3 server port on the STA (default 5201)
+  --source CMD       run CMD instead of iperf3 as the traffic source, in
+                     both arms and both directions.  CMD goes through
+                     "sh -c" with TARGET, DURATION, PORT, PARALLEL and
+                     IPERF_DIRECTION (ap2sta|sta2ap) in the environment.
+                     Use it when iperf3 is not installed on this host.
 
 Timing:
   --settle SEC       wait after the STA re-associates before each arm
@@ -431,11 +466,16 @@ header for the exact counter names.
 
 The output prints "SKIP: no 6G STA" and exits 0 when no station is
 associated on any 6 GHz AP BSS; without --create-bss that path writes no
-configuration.  A run needs root and bounces every radio with wifi reload,
-so manage the board over a wired link.
+configuration.  A host without iperf3 (and without --source) and a run
+without a live interferer print "SKIP:"/"INVALID" and exit 2, each with a
+result.json that names the missing piece for
+scripts/wireless/hw-gap-report.sh.  A run needs root and bounces every
+radio with wifi reload, so manage the board over a wired link.
 
-Exit status: 0 measured and restored, or clean SKIP; 1 runtime,
-measurement or restore failure; 2 invalid arguments.
+Exit status: 0 measured and restored, or clean SKIP (no 6G STA); 1
+runtime, measurement or restore failure; 2 blocked - a missing tool or
+the missing interferer, both recorded as a no-client record - or invalid
+arguments.
 EOF
 }
 
@@ -485,6 +525,11 @@ parse_args() {
 		--port)
 			need_value "$1" $# "${2:-}"
 			PORT=$2
+			shift 2
+			;;
+		--source)
+			need_value "$1" $# "${2:-}"
+			SOURCE=$2
 			shift 2
 			;;
 		--settle)
@@ -1611,7 +1656,13 @@ iperf_error() {
 # --- the iperf3 source ------------------------------------------------
 
 iperf_command() {
-	# $1 direction (ap2sta|sta2ap)
+	# $1 direction (ap2sta|sta2ap).  A --source replaces the iperf3 client in
+	# both arms and both directions; the direction reaches it as
+	# IPERF_DIRECTION in the environment, so one command can cover both.
+	if [ -n "$SOURCE" ]; then
+		printf '%s' "$SOURCE"
+		return 0
+	fi
 	_cmd="$IPERF3 -c ${TARGET:-<STA_IP>} -t $DURATION -p $PORT -P $PARALLEL -J"
 	if [ "$1" = "sta2ap" ]; then
 		_cmd="$_cmd -R"
@@ -1625,9 +1676,17 @@ run_iperf() {
 	say "  source: $_cmd"
 	printf '%s %s\n' "$1" "$_cmd" >>"$OUT/source-commands.txt"
 	log_cmd "$_cmd"
-	# The command is intentionally word-split; set -f is on globally.
-	# shellcheck disable=SC2086
-	$_cmd >"$2" 2>"$3" &
+	if [ -n "$SOURCE" ]; then
+		# A substitute source is a shell command: it gets the direction and
+		# the sizing knobs in the environment, the same shape as
+		# ab-80-160.sh's --source.
+		IPERF_DIRECTION=$1 TARGET=$TARGET DURATION=$DURATION \
+			PORT=$PORT PARALLEL=$PARALLEL sh -c "$SOURCE" >"$2" 2>"$3" &
+	else
+		# The command is intentionally word-split; set -f is on globally.
+		# shellcheck disable=SC2086
+		$_cmd >"$2" 2>"$3" &
+	fi
 	IPERF_PID=$!
 	wait "$IPERF_PID"
 	_rc=$?
@@ -1636,9 +1695,13 @@ run_iperf() {
 		_msg=$(cat "$3" 2>/dev/null | tail -n 3 | tr '\n' ' ')
 		die "iperf3 $1 failed (exit $_rc): ${_msg:-see $3}"
 	fi
-	_err=$(iperf_error "$2" || true)
-	if [ -n "$_err" ]; then
-		die "iperf3 $1 reported: $_err"
+	# Only iperf3's own JSON is parsed for errors; a substitute source may
+	# emit anything, and its arm validity is decided from the counters.
+	if [ -z "$SOURCE" ]; then
+		_err=$(iperf_error "$2" || true)
+		if [ -n "$_err" ]; then
+			die "iperf3 $1 reported: $_err"
+		fi
 	fi
 }
 
@@ -1823,7 +1886,11 @@ interferer_start() {
 		set -- ping -i 1 -s 1400 -c $((_secs * 2)) "$INTERFERER_RESOLVED"
 		;;
 	*)
-		need_cmd "$IPERF3"
+		# --source covers the measured arms, not this out-of-band load: it
+		# targets a different station.  Record the gap (the run's trap still
+		# restores the config) instead of dying with nothing written.
+		command -v "$IPERF3" >/dev/null 2>&1 || [ -x "$IPERF3" ] ||
+			skip_no_tool iperf3 "the interferer load needs iperf3 on this host ('$IPERF3'); --source replaces the measured arms only"
 		set -- "$IPERF3" -c "$INTERFERER_RESOLVED" -p "$PORT" -t "$_secs"
 		[ "$INTERFERER_LOAD" = udp ] && set -- "$@" -u
 		[ -n "$INTERFERER_RATE" ] && set -- "$@" -b "${INTERFERER_RATE}M"
@@ -2393,13 +2460,13 @@ main() {
 	if [ "$_sel" -eq 0 ]; then
 		[ -n "$TARGET" ] ||
 			usage_error "--target is required when a 6G STA is associated"
-		need_cmd "$IPERF3"
+		require_source
 		need_cmd md5sum
 		prepare_run
 	elif [ "$_sel" -eq 2 ] && [ "$CREATE_BSS" = 1 ]; then
 		[ -n "$TARGET" ] ||
 			usage_error "--target is required with --create-bss"
-		need_cmd "$IPERF3"
+		require_source
 		need_cmd md5sum
 		prepare_run
 		if [ -z "$IFACE_OPT" ]; then
@@ -2414,7 +2481,7 @@ main() {
 	elif [ "$CREATE_BSS" = 1 ]; then
 		[ -n "$TARGET" ] ||
 			usage_error "--target is required with --create-bss"
-		need_cmd "$IPERF3"
+		require_source
 		need_cmd md5sum
 		prepare_run
 		create_marked_bss
@@ -2446,11 +2513,23 @@ main() {
 		say "no A/B is measured: without a running out-of-band interferer the"
 		say "loaded arm would differ from the clear arm only in our own 6G"
 		say "traffic, which is not interference"
-		invalid "NO_INTERFERER: $INTERFERER_NOTE"
-		emit "verdict: INVALID (NO_INTERFERER: $INTERFERER_NOTE)"
+		# A missing interferer is a second device that is not on the bench,
+		# not a run that failed.  invalid() would set INVALID, and cleanup
+		# turns that into status 1; record the gap and leave through 2
+		# (blocked) so a reader can tell the two apart.
+		touch "$OUT/verdict.invalid" 2>/dev/null || :
+		printf 'INVALID|NO_INTERFERER: %s\n' "$INTERFERER_NOTE" >>"$OUT/checks.txt" 2>/dev/null || :
 		printf 'INVALID\n' >"$OUT/verdict"
-		printf 'NO_INTERFERER|%s\n' "$INTERFERER_NOTE" >>"$OUT/checks.txt"
-		cleanup 1
+		emit "verdict: INVALID (NO_INTERFERER: $INTERFERER_NOTE)"
+		_rec=$(no_client_record "$OUT" 68 no-interferer \
+			"sh scripts/wireless/6g-clear-air.sh --interferer <2.4GHZ_AP_IP> --target <6GHZ_STA_IP> --create-bss" \
+			"NO_INTERFERER: $INTERFERER_NOTE" \
+			"6 GHz rx_ampdu_bytes_cnt delta, clear vs interferer" \
+			"CCA busy time and airtime share per arm" \
+			"mt76 token_info / WED token delta" 2>/dev/null)
+		printf '      missing no-interferer: a second device that can load 2.4/5 GHz out of band; once it is available run: sh scripts/wireless/6g-clear-air.sh --interferer <2.4GHZ_AP_IP> --target <6GHZ_STA_IP> --create-bss\n'
+		[ -n "$_rec" ] && printf '      no-client record: %s\n' "$_rec"
+		cleanup 2
 	fi
 
 	ROUND=1

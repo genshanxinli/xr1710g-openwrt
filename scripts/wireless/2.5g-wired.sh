@@ -310,6 +310,22 @@ skip_no_link() {
 	exit 0
 }
 
+missing_tool() {
+	# missing_tool NAME DETAIL: iperf3 is required on both ends of every arm
+	# and there is no source slot here (the host plays iperf3 server for the
+	# device client and client for the device server), so a host or device
+	# without it cannot measure at all.  Record the gap and exit 2: a
+	# recorded prerequisite, not a failed run (1) and not a clean skip (0).
+	_rec=$(no_client_record "${OUT_DIR_OPT:-}" 70 "$1" "$NC_2G5_RUN" "$2" \
+		"both ends report >= 2500 Mb/s (ethtool) and are link-up (/sys/class/net/*/carrier)" \
+		"iperf3 TCP both directions >= 2.2 Gbit/s at --parallel 4 --duration 10" \
+		"UDP arm loses < 0.1% at the offered 2500 Mbit/s" 2>/dev/null)
+	note "missing $1; on the device: opkg install iperf3 (or apk add iperf3)"
+	[ -n "$_rec" ] && note "no-client record: $_rec"
+	printf 'BLOCKED: missing %s\n' "$1"
+	exit 2
+}
+
 blocked_record() {
 	# blocked_record MISSING REASON: best effort status "blocked" record
 	# (issue #70).  MISSING is the gap hw-gap-report.sh groups by: 2.5g-peer
@@ -586,7 +602,15 @@ check_link_tools() {
 }
 
 check_traffic_tools() {
-	check_tools "$1" ssh iperf3 ethtool
+	# iperf3 is checked on its own: its absence is a recorded tool gap
+	# (exit 2), not a generic "missing local command" die (issue #70).
+	check_tools "$1" ssh ethtool
+	command -v iperf3 >/dev/null 2>&1 && return 0
+	if [ "$1" = "dry-run" ]; then
+		note "missing local command(s): iperf3 (dry-run continues)"
+		return 0
+	fi
+	missing_tool iperf3 "iperf3 is missing on the bench host"
 }
 
 host_2_5g_candidates() {
@@ -880,7 +904,7 @@ check_device() {
 	# Only require iperf3 after the link checks: an absent or 1G link is
 	# a clean skip, even on a device that has no iperf3 package.
 	dev_have iperf3 ||
-		die "iperf3 is missing on $DEVICE (opkg install iperf3 / apk add iperf3)"
+		missing_tool iperf3 "iperf3 is missing on $DEVICE"
 	dev_have timeout >/dev/null 2>&1 && DEV_HAVE_TIMEOUT=1
 	dev_have ping >/dev/null 2>&1 && DEV_HAVE_PING=1
 	if ssh_dev "iperf3 --help 2>&1 | grep -q -- '--connect-timeout'"; then

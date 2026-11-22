@@ -29,6 +29,7 @@ Run from the repository root:
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -37,7 +38,10 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "scripts/wireless/hw-gap-report.sh"
+# NO_HARD_ROOT points the source guards at a tree of pre-fix script copies,
+# which is the red proof: the working tree is the tree that got fixed.
+TREE = Path(os.environ.get("NO_HARD_ROOT") or REPO_ROOT)
+SCRIPT = TREE / "scripts/wireless/hw-gap-report.sh"
 LIB = REPO_ROOT / "scripts/wireless/lib/no-client.sh"
 WIRELESS = REPO_ROOT / "scripts/wireless"
 SH = shutil.which("sh") or "/bin/sh"
@@ -247,6 +251,82 @@ class HwGapReportTest(unittest.TestCase):
             self.assertIn("%s %s" % (ticket, missing), text,
                           "%s must record ticket %s / missing %s"
                           % (script, ticket, missing))
+
+
+    def test_tool_gaps_join_the_table_as_hardware(self):
+        """A missing tool is recorded as no-client, so it lands in the same
+        "buy/borrow this" table as a missing client, not in the
+        configuration-block section.  A status "blocked" record still does."""
+        scan = self.tmp / "scan-tools"
+        write_record(
+            scan / "bench10g",
+            script="bench-10g-unidirectional.sh",
+            ticket="13",
+            missing="iperf3",
+            reason="iperf3 not found in PATH (install it on the host under test)",
+            command="IFACE=<IFACE> TARGET=<PEER_IP> "
+                    "scripts/bench-10g-unidirectional.sh --peer-connects",
+            criteria=["both directions run"],
+        )
+        write_record(
+            scan / "clearair",
+            script="6g-clear-air.sh",
+            ticket="68",
+            missing="no-interferer",
+            reason="NO_INTERFERER: station has no ARP entry",
+            command="sh scripts/wireless/6g-clear-air.sh --interferer "
+                    "<2.4GHZ_AP_IP> --target <6GHZ_STA_IP>",
+            criteria=["loaded arm moves bytes on another band"],
+        )
+        write_record(
+            scan / "bridged",
+            script="2.5g-wired.sh",
+            ticket="70",
+            status="blocked",
+            missing="port-in-bridge",
+            reason="lan2 is in br-lan",
+            command="ip link set <DEV_IF> nomaster",
+            criteria=["the selected device port has no master"],
+        )
+        proc = run_report(SCRIPT, scan)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        rows = {r[0].strip("`"): r for r in table_rows(proc.stdout)}
+        self.assertEqual(set(rows), {"iperf3", "no-interferer", "port-in-bridge"},
+                         proc.stdout)
+        self.assertEqual(rows["iperf3"][4], "hardware", proc.stdout)
+        self.assertEqual(rows["no-interferer"][4], "hardware", proc.stdout)
+        self.assertEqual(rows["port-in-bridge"][4], "configuration", proc.stdout)
+        self.assertIn("#13", rows["iperf3"][1])
+        self.assertIn("#68", rows["no-interferer"][1])
+
+    def test_the_tool_harnesses_record_instead_of_dying(self):
+        """The eight harnesses that used to die on a missing tool keep a
+        no_client_record call and no hard iperf3 die, so the table above can
+        only get fuller over time."""
+        cases = (
+            "scripts/wireless/6g-clear-air.sh",
+            "scripts/wireless/6g-rx.sh",
+            "scripts/wireless/edca-6g-ab.sh",
+            "scripts/wireless/2.5g-wired.sh",
+            "scripts/wireless/b-path-25g.sh",
+            "scripts/bench-10g-unidirectional.sh",
+            "scripts/wireless/thermal-soak.sh",
+        )
+        # A die about iperf3 *missing* is the defect; a die about a run that
+        # produced no throughput stays, because that one is a real failure.
+        hard_die = re.compile(
+            r'need_cmd "\$IPERF3"'
+            r'|\|\| die "iperf3 (not found|not installed|is missing)'
+            r'|dev_have iperf3 \|\| die'
+        )
+        for path in cases:
+            text = (TREE / path).read_text(encoding="utf-8")
+            self.assertIn("no_client_record", text, path)
+            self.assertIsNone(hard_die.search(text),
+                              "%s still dies on a missing iperf3" % path)
+        clear_air = (TREE / "scripts/wireless/6g-clear-air.sh").read_text(
+            encoding="utf-8")
+        self.assertIn("68 no-interferer", clear_air)
 
 
 if __name__ == "__main__":

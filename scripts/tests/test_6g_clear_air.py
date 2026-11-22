@@ -24,6 +24,7 @@ directory; no radio, no config write outside the temporary directory.
     python3 scripts/tests/test_6g_clear_air.py
 """
 
+import json
 import os
 import subprocess
 import tempfile
@@ -31,7 +32,12 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "scripts/wireless/6g-clear-air.sh"
+# SIXG_CLEAR_AIR_UNDER_TEST points the tests at another copy of the script so a
+# red proof can run them against the pre-fix version (repo convention).
+SCRIPT = Path(
+    os.environ.get("SIXG_CLEAR_AIR_UNDER_TEST")
+    or REPO_ROOT / "scripts/wireless/6g-clear-air.sh"
+)
 
 CONFIG = """config wifi-device 'radio0'
 \toption type 'mac80211'
@@ -108,6 +114,27 @@ SCAN
 esac
 """
 
+# A generator that is not iperf3: it moves the same counters and prints a
+# different throughput, so a --source run is distinguishable from the default.
+STUB_ALT_SOURCE = """#!/bin/sh
+bump() {
+	v=$(cat "$1")
+	printf '%s\\n' $((v + 400000)) >"$1"
+}
+bump "$STUB_ROOT/state/sta_tx"
+bump "$STUB_ROOT/net/phy2-ap0/statistics/tx_bytes"
+cat <<'JSON'
+{
+	"alternate-source": "udpblast3",
+	"end": {
+		"sum_sent": { "bytes": 40000000, "bits_per_second": 1234000000.0, "retransmits": 0 },
+		"sum_received": { "bytes": 40000000, "bits_per_second": 1234000000.0 }
+	}
+}
+JSON
+exit 0
+"""
+
 # One direction of the 6 GHz source, or the interferer source.  The counters
 # move so the harness can verify that the flow really used the radio.
 STUB_IPERF3 = """#!/bin/sh
@@ -165,7 +192,11 @@ class Fixture:
         self.cfg.write_text(CONFIG)
         self.original = CONFIG
         (self.root / "bin" / "wifi").parent.mkdir(parents=True)
-        for name, body in (("iw", STUB_IW), ("iperf3", STUB_IPERF3)):
+        for name, body in (
+            ("iw", STUB_IW),
+            ("iperf3", STUB_IPERF3),
+            ("udpblast", STUB_ALT_SOURCE),
+        ):
             path = self.root / "bin" / name
             path.write_text(body)
             path.chmod(0o755)
@@ -353,6 +384,72 @@ class RefreshLive(unittest.TestCase):
             self.assertEqual(fields[0], "phy2-ap0")
             self.assertEqual(fields[2], "6135")
             self.assertEqual(fields[6], "320")
+
+
+class MissingTool(unittest.TestCase):
+    """A missing tool is recorded as a gap (exit 2), not a crashed run (#68)."""
+
+    def setUp(self):
+        self.fixture = Fixture()
+        self.addCleanup(self.fixture.cleanup)
+
+    def test_missing_iperf3_records_the_gap_and_exits_2(self):
+        out = self.fixture.run(
+            [], IPERF3=str(self.fixture.root / "bin" / "no-iperf3-here")
+        )
+        combined = out.stdout + out.stderr
+        self.assertEqual(out.returncode, 2, combined)
+        self.assertIn("SKIP", out.stdout)
+        self.assertIn("missing iperf3", out.stdout)
+        record = self.fixture.out / "result.json"
+        self.assertTrue(record.exists(), combined)
+        data = json.loads(record.read_text())
+        self.assertEqual(data["schema"], "wireless-no-client/v1")
+        self.assertEqual(data["status"], "no-client")
+        self.assertEqual(str(data["ticket"]), "68")
+        self.assertEqual(data["missing"], "iperf3")
+        # The config was restored by the run's own trap.
+        self.assertEqual(self.fixture.cfg.read_text(), self.fixture.original)
+
+
+class SourceSlot(unittest.TestCase):
+    """--source replaces the iperf3 client in the measured arms."""
+
+    def setUp(self):
+        self.fixture = Fixture()
+        self.addCleanup(self.fixture.cleanup)
+
+    def source(self):
+        return "sh %s" % (self.fixture.root / "bin" / "udpblast")
+
+    def test_source_runs_the_measured_arms(self):
+        out = self.fixture.run(
+            ["--source", self.source(), "--interferer", "5g:36:tcp:100:192.168.1.51"]
+        )
+        combined = out.stdout + out.stderr
+        self.assertEqual(out.returncode, 0, combined)
+        self.assertIn("verdict: ok", combined)
+        arms = (self.fixture.out / "arms.tsv").read_text()
+        self.assertIn("1234", arms)
+        commands = (self.fixture.out / "source-commands.txt").read_text()
+        self.assertIn("udpblast", commands)
+
+    def test_source_lets_a_host_without_iperf3_measure_the_clear_arm(self):
+        # No iperf3 anywhere: the clear arm still runs through --source, then
+        # the interferer load (which really is iperf3) is recorded as missing.
+        out = self.fixture.run(
+            ["--source", self.source(), "--interferer", "5g:36:tcp:100:192.168.1.51"],
+            IPERF3=str(self.fixture.root / "bin" / "no-iperf3-here"),
+        )
+        combined = out.stdout + out.stderr
+        self.assertEqual(out.returncode, 2, combined)
+        arms = (self.fixture.out / "arms.tsv").read_text()
+        self.assertIn("1234", arms)
+        self.assertIn("SKIP", out.stdout)
+        self.assertIn("interferer", out.stdout)
+        data = json.loads((self.fixture.out / "result.json").read_text())
+        self.assertEqual(data["missing"], "iperf3")
+        self.assertEqual(self.fixture.cfg.read_text(), self.fixture.original)
 
 
 if __name__ == "__main__":

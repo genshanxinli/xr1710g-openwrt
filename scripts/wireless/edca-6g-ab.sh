@@ -61,7 +61,11 @@
 # A missing iperf3 is treated the same way ("SKIP: iperf3 not found on the
 # AP"), because nothing has been measured and nothing was written; a missing
 # measurement tool is not a harness failure.  Both skips record the reason in
-# result.json when --result-dir named a directory.
+# result.json when --result-dir named a directory, and both write a
+# wireless-no-client/v1 record (missing "6ghz-eht-client" / "iperf3") that
+# scripts/wireless/hw-gap-report.sh merges with the other harnesses.
+# --source CMD replaces the iperf3 client in every arm, so a host without
+# iperf3 still measures when another generator is named.
 #
 # No module load/unload, no firmware change, no reboot.  The script only
 # changes the single 6 GHz radio's tx_burst UCI option or the edca_apply
@@ -105,6 +109,8 @@ ARMS=${EDCA6G_ARMS:-'0 63 171'}
 # Environment defaults.  Every one can also be set with a flag; the flags
 # override the environment (see usage).
 TARGET=${TARGET:-}
+# Optional replacement for the iperf3 client, run through sh -c per arm.
+SOURCE=${SOURCE:-}
 IFACE=${IFACE:-}
 STATION=${STATION:-}
 RADIO=${RADIO:-}
@@ -155,6 +161,10 @@ Optional inputs (environment variable or flag):
                          device.txt (default "unknown")
   --duration SEC         iperf3 seconds per arm (default 20)
   --parallel N           iperf3 streams per arm (default 4)
+  --source CMD           run CMD instead of iperf3 as the traffic source in
+                         every arm; CMD goes through "sh -c" with TARGET,
+                         DURATION and PARALLEL in the environment.  Use it
+                         when iperf3 is not installed on the AP.
   --settle SEC           wait after the arm is applied (default 2)
   --rounds N             run the whole arm sequence N times (default 1).
                          Every round uses the same arm order, so the
@@ -324,6 +334,27 @@ skip_no_client() {
 	say "      missing 6ghz-eht-client; once it is available run: $_nc_run"
 	[ -n "$_rec" ] && say "      no-client record: $_rec"
 	log_line "SKIP: $1"
+	exit 0
+}
+
+# skip_no_tool DETAIL: iperf3 is missing on the AP and no --source names
+# another generator.  Same skip contract as skip_no_client (rc 0, one SKIP
+# line, skip record when --result-dir was given), plus the no-client record
+# that hw-gap-report.sh collects.  It lives in a subdirectory so the harness
+# keeps its own result.json.
+skip_no_tool() {
+	_nc_run='sh scripts/wireless/edca-6g-ab.sh --target <STA_IP> --result-dir <DIR>'
+	_nc_dir=${RESULT_DIR:-}
+	[ -n "$_nc_dir" ] && _nc_dir=$_nc_dir/no-client
+	_rec=$(no_client_record "$_nc_dir" 43 iperf3 "$_nc_run" "$1" \
+		"EDCA parameter A/B throughput delta per arm" \
+		"tx_burst / airtime restore verification" \
+		"per-arm station retries and failed frames" 2>/dev/null)
+	say "SKIP: $1"
+	say "      missing iperf3; install it (opkg install iperf3) or pass --source CMD"
+	[ -n "$_rec" ] && say "      no-client record: $_rec"
+	log_line "SKIP: $1"
+	[ -n "${RESULT_DIR:-}" ] && write_skip_result "$RESULT_DIR" "$1"
 	exit 0
 }
 
@@ -1055,8 +1086,10 @@ run_arm() {
 	_sta_retries_before=$(sta_field "$_sta_before" 'tx retries')
 	_t0=$(date +%s)
 
-	log_cmd "$EDCA6G_IPERF3 -c $TARGET -t $DURATION -P $PARALLEL -J"
-	"$EDCA6G_IPERF3" -c "$TARGET" -t "$DURATION" -P "$PARALLEL" -J \
+	log_cmd "$SOURCE"
+	# Every arm runs the same source string through sh -c, so the default
+	# iperf3 client and a --source are shaped the same way.
+	TARGET=$TARGET DURATION=$DURATION PARALLEL=$PARALLEL sh -c "$SOURCE" \
 		>"$_dir/iperf3.json" 2>"$_dir/iperf3.err"
 	_rc=$?
 	_t1=$(date +%s)
@@ -1076,7 +1109,7 @@ run_arm() {
 	_reason=
 	if [ "$_rc" -ne 0 ]; then
 		_valid=false
-		_reason="iperf3 exit $_rc"
+		_reason="source exit $_rc"
 	fi
 	case " $(sta_macs "$IFACE" | tr '\n' ' ') " in
 	*" $STATION "*) _sta_present=true ;;
@@ -1500,6 +1533,8 @@ Each arm uses the same iperf3 source, with the AP as client:
 
   iperf3 -c ${TARGET:-<required>} -t $DURATION -P $PARALLEL -J
 
+A --source replaces that line in every arm (same sh -c, same environment).
+
 Inputs:
   AP interface   ${IFACE:-<auto-detect 6G AP>}
   STA MAC        ${STATION:-<auto-detect one 6G STA>}
@@ -1615,6 +1650,15 @@ while [ "$#" -gt 0 ]; do
 		;;
 	--parallel=*)
 		PARALLEL=${1#*=}
+		shift
+		;;
+	--source)
+		[ "$#" -ge 2 ] || usage_error '--source requires a value'
+		SOURCE=$2
+		shift 2
+		;;
+	--source=*)
+		SOURCE=${1#*=}
 		shift
 		;;
 	--settle)
@@ -1737,9 +1781,15 @@ validate_6g_only_iface "$IFACE" "$STATION"
 
 # The measurement tool is checked only now that a STA exists: without a STA
 # there is nothing to measure, so its absence is a skip (exit 0), not a
-# runtime failure (exit 1).
-command -v "$EDCA6G_IPERF3" >/dev/null 2>&1 ||
-	skip_run "iperf3 not found on the AP ('$EDCA6G_IPERF3')"
+# runtime failure (exit 1).  A --source replaces the iperf3 client, so a host
+# without iperf3 still measures when one is given; otherwise the gap is
+# recorded for hw-gap-report.sh.
+if [ -z "$SOURCE" ] && command -v "$EDCA6G_IPERF3" >/dev/null 2>&1; then
+	# shellcheck disable=SC2016  # expands in the per-arm "sh -c"
+	SOURCE="$EDCA6G_IPERF3"' -c "$TARGET" -t "$DURATION" -P "$PARALLEL" -J'
+fi
+[ -n "$SOURCE" ] ||
+	skip_no_tool "iperf3 not found on the AP ('$EDCA6G_IPERF3') and no --source was given"
 
 PHY_NAME=$(iface_phy_name "$IFACE") ||
 	die "cannot determine the phy of $IFACE"

@@ -158,6 +158,8 @@ WIFI_HWMONS=
 
 IPERF3_BIN=
 IPERF3_CONNECT_TIMEOUT=0
+# Optional replacement for the iperf3 client, run through sh -c per cycle.
+SOURCE=
 
 HOLD_PRIOR=
 HOLD_TAKEN=0
@@ -253,6 +255,22 @@ usage_error() {
 	exit 2
 }
 
+# skip_no_tool NAME DETAIL: a measurement tool is missing, not a failed run.
+# Record the gap for hw-gap-report.sh and exit 2 (blocked); 1 stays for a run
+# that started and went wrong.
+skip_no_tool() {
+	_name=$1
+	_detail=$2
+	_nc_run='sh scripts/wireless/thermal-soak.sh --soak --client-ip-a <IP_A> --client-ip-b <IP_B> --source <CMD>'
+	_rec=$(no_client_record "${OUT:-}" 53 "$_name" "$_nc_run" "$_detail" \
+		"two-leg concurrent soak throughput" \
+		"thermal / throughput curve over the soak window" 2>/dev/null)
+	note "SKIP: $_detail"
+	note "missing $_name; install it (opkg install iperf3) or pass --source CMD"
+	[ -n "$_rec" ] && note "no-client record: $_rec"
+	exit 2
+}
+
 is_uint() {
 	case ${1-} in
 	'' | *[!0-9]*) return 1 ;;
@@ -340,6 +358,10 @@ Common options:
   --direction down|up   down = AP transmits (iperf3 default, the default
                         here); up = AP receives (iperf3 -R).  Down is the
                         direction whose AP-side retries/PER are meaningful.
+  --source CMD          Run CMD instead of iperf3 for every cycle, e.g. when
+                        iperf3 is not installed.  CMD goes through "sh -c"
+                        with IPERF_IP, IPERF_SECS, IPERF_STREAMS and
+                        IPERF_DIRECTION (down|up) in the environment.
   --assoc-poll SEC      Reconnect poll interval.  Default 5.
   --out DIR             Evidence directory.  Default
                         /root/thermal-soak.<mode>.<UTC timestamp> (falls back
@@ -426,7 +448,8 @@ Examples:
   sh thermal-soak.sh --thermal --apply --fan-pwm 255 --txpower 20 \
       --client-ip 192.168.1.236
 
-Exit status: 0 ok/dry run, 1 setup or run failure, 2 usage error,
+Exit status: 0 ok/dry run, 1 setup or run failure, 2 usage error or a
+missing traffic tool with no --source (recorded for hw-gap-report.sh),
 130/143/129 interrupted by INT/TERM/HUP.
 
 Notes:
@@ -491,6 +514,11 @@ parse_args() {
 		--direction)
 			need_arg "$@"
 			DIRECTION=$2
+			shift
+			;;
+		--source)
+			need_arg "$@"
+			SOURCE=$2
 			shift
 			;;
 		--assoc-poll)
@@ -1711,9 +1739,20 @@ leg_loop() {
 
 		jf="$RUN/raw/$RUN_ID-$leg-$cycle.json"
 		ef="$RUN/raw/$RUN_ID-$leg-$cycle.err"
-		set -- iperf3 -c "$ip" -t "$t" -P "$STREAMS" -J
-		[ "$DIRECTION" = up ] && set -- "$@" -R
-		[ "$IPERF3_CONNECT_TIMEOUT" -eq 1 ] && set -- "$@" --connect-timeout 5
+		if [ -n "$SOURCE" ]; then
+			# A substitute source gets the sizing knobs in the environment.
+			# env(1) is the vehicle, not a shell assignment prefix: the
+			# argv is handed to bg_start_redir as "$@", where a leading
+			# NAME=value word is an argument, never an assignment.  Each
+			# leg therefore carries its own values and the concurrent legs
+			# cannot fight over exported ones.
+			set -- env IPERF_IP="$ip" IPERF_SECS="$t" IPERF_STREAMS="$STREAMS" \
+				IPERF_DIRECTION="$DIRECTION" sh -c "$SOURCE"
+		else
+			set -- iperf3 -c "$ip" -t "$t" -P "$STREAMS" -J
+			[ "$DIRECTION" = up ] && set -- "$@" -R
+			[ "$IPERF3_CONNECT_TIMEOUT" -eq 1 ] && set -- "$@" --connect-timeout 5
+		fi
 
 		bg_start_redir "iperf-$leg" "$jf" "$ef" "$@"
 		pid=$BG_PID
@@ -2249,6 +2288,7 @@ plan_common_sensors() {
 }
 
 plan_load() {
+	[ -n "$SOURCE" ] && say "load source: $SOURCE (instead of iperf3)"
 	if [ "$MODE" = thermal ]; then
 		if [ -n "$IP_A" ]; then
 			say "load traffic: iperf3 $STREAMS stream(s) $DIRECTION to $IP_A (${IPERF_TIME}s cycles, ${IPERF_GAP}s gap)"
@@ -2284,10 +2324,12 @@ print_plan() {
 	if [ "$MODE" = soak ]; then
 		[ -n "$IP_B" ] && say "client b: mac=${CLIENT_B:-auto} ip=$IP_B assoc=$( [ -n "$IFACE_B" ] && [ -n "${CLIENT_B:-}" ] && station_present "$IFACE_B" "$CLIENT_B" && echo yes || echo no/unknown)"
 	fi
-	if [ -n "$IPERF3_BIN" ]; then
+	if [ -n "$SOURCE" ]; then
+		say "source: $SOURCE (instead of iperf3)"
+	elif [ -n "$IPERF3_BIN" ]; then
 		say "iperf3: $IPERF3_BIN (connect-timeout=$IPERF3_CONNECT_TIMEOUT)"
 	else
-		say "iperf3: MISSING (a real run with traffic would fail)"
+		say "iperf3: MISSING (a real run with traffic would stop with a recorded gap)"
 	fi
 	HOLD_PRIOR=$(nw_hold_state)
 	case "$HOLD_PRIOR" in
@@ -2392,7 +2434,8 @@ run() {
 		iface_is_ap "$IFACE_B" || die "$IFACE_B is not an AP interface"
 	fi
 	if [ -n "$IP_A" ] || [ -n "$IP_B" ]; then
-		iperf_check || die "iperf3 is required for the traffic load but was not found"
+		[ -n "$SOURCE" ] || iperf_check ||
+			skip_no_tool iperf3 "iperf3 is required for the traffic load but was not found and no --source was given"
 	fi
 	if [ -n "$FAN_PWM" ] || [ -n "$TXPOWER" ]; then
 		command_exists iw || die "iw is required for txpower writes"

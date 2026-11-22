@@ -23,8 +23,11 @@
 #
 # Two statuses share this schema:
 #
-#   no-client  the board is reachable; a piece of hardware is missing and the
-#              harness exits 0 with a "SKIP:" line.  "missing" names it.
+#   no-client  the board is reachable; a piece of hardware or a measurement
+#              tool is missing.  "missing" names it.  A missing client is a
+#              clean skip (exit 0, "SKIP:" line); a missing tool that the run
+#              cannot do without is recorded the same way but exits 2, so
+#              "nothing was measured" stays distinguishable from "measured".
 #   blocked    the board is reachable but the association cannot work until a
 #              configuration is fixed; the harness exits non-zero with a
 #              "BLOCKED:" line and the record says what to change.

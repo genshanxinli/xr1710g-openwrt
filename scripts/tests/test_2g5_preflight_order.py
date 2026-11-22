@@ -15,8 +15,9 @@ and never reached the verdict the issue actually cares about:
    2500" (exit 1)
 
 Reordering is the whole fix: the link verdict is decided before any traffic
-tool is demanded.  A missing iperf3 is still a hard error, but only once there
-is actually a 2.5G link to measure.
+tool is demanded.  A missing iperf3 is still an error, but only once there is
+actually a 2.5G link to measure, and it now leaves a record with exit 2
+instead of a bare exit 1 (see test_2g5_missing_tool.py).
 
 The tests build a PATH that has every command the scripts need except iperf3,
 so the tool check is exercised for real instead of being mocked away.  Run

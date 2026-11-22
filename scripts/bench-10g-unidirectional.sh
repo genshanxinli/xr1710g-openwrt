@@ -42,7 +42,8 @@
 # POSIX sh only, so it runs on the OpenWrt device with busybox ash.
 #
 # Exit status: 0 both directions ran, 1 an iperf3 run failed or setup was
-# impossible, 2 invalid arguments (--help documents them).
+# impossible, 2 invalid arguments or a missing traffic tool (iperf3, recorded
+# so scripts/wireless/hw-gap-report.sh can name it; --help documents them).
 
 set -u
 set -f
@@ -243,6 +244,29 @@ usage_error() {
 die() {
 	printf '%s: error: %s\n' "$PROG" "$1" >&2
 	exit 1
+}
+
+# Shared "no client" record (scripts/wireless/lib/no-client.sh).  Best effort:
+# the harness must still report the gap when the record cannot be written and
+# the library is absent.
+NO_CLIENT_LIB=$(dirname "$0")/wireless/lib/no-client.sh
+# shellcheck source=wireless/lib/no-client.sh
+[ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
+
+missing_iperf3() {
+	# DETAIL: why iperf3 is required on this box.  There is no source slot:
+	# with --peer-connects the box under test runs "iperf3 -s -1" and the peer
+	# drives, and the JSON parser reads iperf3's own schema.  Record the gap in
+	# a subdirectory so a result.json from an earlier run is never clobbered,
+	# then exit 2 (recorded prerequisite, not a failed run).
+	_cmd='IFACE=<IFACE> TARGET=<PEER_IP> scripts/bench-10g-unidirectional.sh --peer-connects'
+	_rec=$(no_client_record "$RESULT_DIR/no-client" 13 iperf3 "$_cmd" "$1" \
+		"both directions run and result.json carries bits/s, pps and PPE deltas" \
+		"the flow binds in the PPE (ppe/usage bound entries grow)" 2>/dev/null)
+	printf '%s: error: %s\n' "$PROG" "$1" >&2
+	[ -n "$_rec" ] && printf '%s: no-client record: %s\n' "$PROG" "$_rec" >&2
+	printf 'BLOCKED: missing iperf3\n'
+	exit 2
 }
 
 require_positive_int() {
@@ -1560,7 +1584,7 @@ fi
 [ -n "$IFACE" ] || usage_error "IFACE is required (local network interface)"
 
 command -v iperf3 >/dev/null 2>&1 ||
-	die "iperf3 not found in PATH (install it on the host under test)"
+	missing_iperf3 "iperf3 not found in PATH (install it on the host under test)"
 
 if ! command -v ip >/dev/null 2>&1; then
 	die "the 'ip' command is required to verify that IFACE has an IPv4/IPv6 address"

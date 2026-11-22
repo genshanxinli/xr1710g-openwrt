@@ -220,6 +220,21 @@ skip_no_feeder() {
 	exit 0
 }
 
+missing_tool() {
+	# missing_tool NAME DETAIL: iperf3 has to exist on both ends (the feeder
+	# host acts as server for one arm and client for the other) and there is no
+	# source slot here.  Record the gap and exit 2: a recorded prerequisite,
+	# not a failed run (1) and not a clean skip (0).
+	_rec=$(no_client_record "${OUT_DIR_OPT:-}" 70 "$1" "$NC_2G5_RUN" "$2" \
+		"feeder NIC reports 2500 Mb/s and the AP data port reports 2500baseT/Full" \
+		"feeder arm arrived >= 2.2 Gbit/s over 20 s at --parallel 4" \
+		"token_info peak stays below the pool and hw-queues PLE pages do not pin" 2>/dev/null)
+	note "missing $1; on the device: opkg install iperf3 (or apk add iperf3)"
+	[ -n "$_rec" ] && note "no-client record: $_rec"
+	printf 'BLOCKED: missing %s\n' "$1"
+	exit 2
+}
+
 is_uint() {
 	case ${1-} in
 	''|*[!0-9]*) return 1 ;;
@@ -533,7 +548,15 @@ check_link_tools() {
 }
 
 check_traffic_tools() {
-	check_tools "$1" ssh iperf3 ethtool
+	# iperf3 is checked on its own: its absence is a recorded tool gap
+	# (exit 2), not a generic "missing local command" die (issue #70).
+	check_tools "$1" ssh ethtool
+	command -v iperf3 >/dev/null 2>&1 && return 0
+	if [ "$1" = "dry-run" ]; then
+		note "missing local command(s): iperf3 (dry-run continues)"
+		return 0
+	fi
+	missing_tool iperf3 "iperf3 is missing on the feeder host"
 }
 
 resolve_feeder_iface() {
@@ -635,7 +658,7 @@ check_device() {
 	')
 
 	dev_have iperf3 ||
-		die "iperf3 is missing on $DEVICE (opkg install iperf3 / apk add iperf3)"
+		missing_tool iperf3 "iperf3 is missing on $DEVICE"
 	dev_have iw || die "iw is missing on $DEVICE; it is needed for station/AP iface sampling"
 	dev_have ping || die "ping is missing on $DEVICE"
 
@@ -1768,5 +1791,9 @@ main() {
 	fi
 	exit 1
 }
+
+# Sourced by scripts/tests/test_2g5_missing_tool.py to exercise the missing
+# tool record without a NIC, a device or traffic.
+[ "${G25_BPATH_LIB_ONLY:-0}" = 1 ] && return 0
 
 main "$@"

@@ -33,7 +33,12 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "scripts/wireless/edca-6g-ab.sh"
+# EDCA6G_UNDER_TEST points the tests at another copy of the script so a red
+# proof can run them against the pre-fix version (repo convention).
+SCRIPT = Path(
+    os.environ.get("EDCA6G_UNDER_TEST")
+    or REPO_ROOT / "scripts/wireless/edca-6g-ab.sh"
+)
 TARGET = "192.0.2.1"  # TEST-NET-1, never routed
 STA_MAC = "aa:bb:cc:dd:ee:ff"
 
@@ -182,6 +187,13 @@ class SkipPaths(Harness):
         data = self.result_json()
         self.assertEqual(data["status"], "skip")
         self.assertIn("iperf3 not found", data["skip_reason"])
+        # The gap also lands as a wireless-no-client/v1 record, in a
+        # subdirectory so it never overwrites the skip's result.json.
+        record = json.loads((self.out / "no-client" / "result.json").read_text())
+        self.assertEqual(record["schema"], "wireless-no-client/v1")
+        self.assertEqual(record["status"], "no-client")
+        self.assertEqual(str(record["ticket"]), "43")
+        self.assertEqual(record["missing"], "iperf3")
 
 
 class Rounds(Harness):
@@ -254,6 +266,38 @@ class Rounds(Harness):
             "--target", TARGET, "--rounds", 0, "--result-dir", self.out
         )
         self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+
+
+class SourceSlot(Harness):
+    """--source measures without iperf3 on the AP."""
+
+    def test_source_replaces_the_iperf3_client(self):
+        self.write_mock("udpblast", IPERF3_MOCK)
+        proc = self.run_harness(
+            "--target",
+            TARGET,
+            "--edca-apply",
+            self.edca_apply,
+            "--settle",
+            0,
+            "--source",
+            "sh %s" % (self.bin / "udpblast"),
+            "--result-dir",
+            self.out,
+            EDCA6G_IPERF3="iperf3-not-installed-h4347",
+        )
+        combined = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0, combined)
+        self.assertNotIn("SKIP", proc.stdout)
+        records = [
+            json.loads(line)
+            for line in (self.out / "arms.jsonl").read_text().splitlines()
+            if line.strip()
+        ]
+        self.assertEqual([r["arm"] for r in records], [0, 63])
+        self.assertTrue(all(r["valid"] for r in records), records)
+        self.assertTrue(all(r["iperf3"]["gbps"] > 0 for r in records), records)
+        self.assertFalse((self.out / "no-client").exists(), combined)
 
 
 if __name__ == "__main__":
