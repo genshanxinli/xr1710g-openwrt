@@ -25,6 +25,13 @@
 #     3. --serial names a usable USB serial console, or --no-serial is
 #        explicitly acknowledged.
 #
+#   Gate 1 has one deliberate exception: when netwatchdog is not installed at
+#   all there is no watchdog that could reboot the board, so that case is
+#   downgraded to a warning and the run continues (the gates report says
+#   "hold (downgraded)").  A netwatchdog that is installed but does not report
+#   an active hold stays a hard refusal: that is the real risk.  Set
+#   NWD_REQUIRE_SERVICE=1 to make the missing service a hard refusal again.
+#
 # One-shot rules:
 #   - exactly one add -> reload -> association -> traffic -> restore cycle;
 #   - a missing link, a missing station, a disconnected station or a
@@ -95,6 +102,9 @@ STATION_TIMEOUT=${MLO3_STATION_TIMEOUT:-90}
 HARD_TIMEOUT=${MLO3_HARD_TIMEOUT:-600}
 CMD_TIMEOUT=${MLO3_CMD_TIMEOUT:-15}
 TRAFFIC=${MLO3_TRAFFIC:-auto}
+# Gate 1 policy: a missing netwatchdog is a warning (there is no watchdog to
+# restart the board) unless the caller asks for the strict gate.
+NWD_REQUIRE_SERVICE=${NWD_REQUIRE_SERVICE:-0}
 
 MODE=run
 DRY_RUN=0
@@ -147,8 +157,10 @@ GATE_HOLD=0
 GATE_SERIAL=0
 GATE_RISK_MSG=
 GATE_HOLD_MSG=
+GATE_HOLD_DOWNGRADED=0
 GATE_SERIAL_MSG=
 NW_WHY=
+NW_HOLD_DOWNGRADED=0
 SERIAL_WHY=
 PICKED=
 PICKED_OFF=
@@ -1252,6 +1264,7 @@ classify_result() {
 gates_evaluate() {
 	GATE_RISK=0
 	GATE_HOLD=0
+	GATE_HOLD_DOWNGRADED=0
 	GATE_SERIAL=0
 
 	if [ "$RISK" = 1 ]; then
@@ -1264,6 +1277,7 @@ gates_evaluate() {
 	if nw_hold_active; then
 		GATE_HOLD=1
 		GATE_HOLD_MSG=$NW_WHY
+		[ "$NW_HOLD_DOWNGRADED" = 1 ] && GATE_HOLD_DOWNGRADED=1
 	else
 		GATE_HOLD_MSG=$NW_WHY
 	fi
@@ -1282,14 +1296,20 @@ gates_evaluate() {
 gates_report() {
 	_report() {
 		if [ "$1" = 1 ]; then
-			printf '  %-7s PASS  %s\n' "$2" "$3"
+			printf '  %-17s PASS  %s\n' "$2" "$3"
 		else
-			printf '  %-7s FAIL  %s\n' "$2" "$3"
+			printf '  %-17s FAIL  %s\n' "$2" "$3"
 		fi
 	}
 	printf 'gates:\n'
 	_report "$GATE_RISK" risk "$GATE_RISK_MSG"
-	_report "$GATE_HOLD" hold "$GATE_HOLD_MSG"
+	# A downgraded hold is not a held watchdog: say so on the line, so nobody
+	# reads the report as "the hold was taken".
+	if [ "$GATE_HOLD_DOWNGRADED" = 1 ]; then
+		_report "$GATE_HOLD" "hold (downgraded)" "$GATE_HOLD_MSG"
+	else
+		_report "$GATE_HOLD" hold "$GATE_HOLD_MSG"
+	fi
 	_report "$GATE_SERIAL" serial "$GATE_SERIAL_MSG"
 }
 
@@ -1305,9 +1325,24 @@ gates_require() {
 
 nw_hold_active() {
 	NW_WHY=
+	NW_HOLD_DOWNGRADED=0
 	if ! have netwatchdog; then
-		NW_WHY="netwatchdog is not installed"
-		return 1
+		# The gate exists so netwatchdog cannot cold-reboot the board in the
+		# middle of the experiment.  With no netwatchdog installed there is no
+		# watchdog to restart anything, so that risk is absent and the gate is
+		# downgraded to a warning: refusing here only made the no-client record
+		# below unreachable.  An installed netwatchdog that does not hold is
+		# the real risk and stays a hard failure.
+		case "$NWD_REQUIRE_SERVICE" in
+		1|yes|true|YES|TRUE)
+			NW_WHY="netwatchdog is not installed"
+			return 1
+			;;
+		esac
+		NW_HOLD_DOWNGRADED=1
+		NW_WHY="netwatchdog is not installed; the hold gate is downgraded to a warning because there is no watchdog to restart the board"
+		warn "$NW_WHY"
+		return 0
 	fi
 	if [ ! -e /tmp/netwatchdog.hold ]; then
 		NW_WHY="/tmp/netwatchdog.hold is missing; run netwatchdog hold on first"
@@ -1607,7 +1642,9 @@ write_result() {
 		printf '  "dmesg_new_matches": %s,\n' "$_dmesg_matches"
 		printf '  "boot_id": "%s",\n' "$(_json_str "${BOOT_ID:-}")"
 		printf '  "serial": "%s",\n' "$(_json_str "$_serial")"
-		printf '  "gates": {"risk": %s, "hold": %s, "serial": %s},\n' "$GATE_RISK" "$GATE_HOLD" "$GATE_SERIAL"
+		printf '  "gates": {"risk": %s, "hold": %s, "serial": %s, "hold_downgraded": %s},\n' \
+			"$GATE_RISK" "$GATE_HOLD" "$GATE_SERIAL" \
+			"$([ "$GATE_HOLD_DOWNGRADED" = 1 ] && printf true || printf false)"
 		printf '  "evidence": "%s"\n' "$(_json_str "$CAPTURE")"
 		printf '}\n'
 	} >"$CAPTURE/result.json" 2>/dev/null || warn "cannot write $CAPTURE/result.json"
@@ -1786,7 +1823,10 @@ do_run() {
 		RESULT=no-station
 		STOP="no station associated to $SSID within ${STATION_TIMEOUT}s"
 		_nc_run='sh scripts/wireless/mlo-3link.sh --peer <3LINK_CLIENT_IP> --local-ip <IPV4/PREFIX> --ssid <SSID>'
-		_rec=$(no_client_record "${CAPTURE:-}" 89 6ghz-mlo-3link-client \
+		# A subdirectory of the evidence dir: cleanup() rewrites
+		# "$CAPTURE/result.json" with this run's own result, which would
+		# otherwise overwrite the no-client record.
+		_rec=$(no_client_record "${CAPTURE:+$CAPTURE/no-client}" 89 6ghz-mlo-3link-client \
 			"$_nc_run" "$STOP" \
 			"3-link MLO association (links=3 on the AP MLD)" \
 			"per-link station rates from iw station dump" \
@@ -2005,7 +2045,9 @@ Environment:
   MLO3_SSID, MLO3_KEY, MLO3_CONFIG, MLO3_STATE_DIR, MLO3_PEER, MLO3_LOCAL_IP,
   MLO3_STA, MLO3_IFNAME, MLO3_SERIAL, MLO3_DURATION, MLO3_PARALLEL,
   MLO3_ASSOC_TIMEOUT, MLO3_STATION_TIMEOUT, MLO3_HARD_TIMEOUT, MLO3_CMD_TIMEOUT,
-  MLO3_TRAFFIC.  Flags override the environment.
+  MLO3_TRAFFIC, NWD_REQUIRE_SERVICE (1 = a missing netwatchdog is a hard
+  refusal; by default it is a warning, because a board without netwatchdog has
+  no watchdog that could restart it).  Flags override the environment.
 EOF
 }
 
