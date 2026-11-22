@@ -57,7 +57,22 @@
 # turn every default-path run into "blocked" -- the pin file and the reader
 # would disagree with each other, not with upstream.  Give the variable only
 # when the reader is supposed to be moving; then a reader that has not moved
-# since the pin date can no longer produce a "keep".
+# past the pin can no longer produce a "keep".
+#
+# The "mirror.moved" row has three values, and only one of them withdraws a
+# "keep".  The judgement is commit ancestry against PKG_SOURCE_VERSION, never a
+# timestamp: two tips committed on the same calendar day can be 8 commits apart
+# (the real reader was exactly that), and a date test then calls a moving
+# reader parked.
+#
+#   yes      the reader tip carries the pin and at least one later commit
+#   no       the reader tip *is* the pin, or an ancestor of it: the reader has
+#            provably produced nothing after the pin, so "keep" is withdrawn
+#            (blocked, rc 2) -- the upstream comparison would only measure how
+#            stale the reader is
+#   unknown  the reader ref or the pin is unreadable in the reader repository,
+#            or the two tips are not on one lineage: nothing was compared, so
+#            "keep" stands and the row must not be read as "no"
 #
 # blocked.by: an optional PKG_MIRROR_BLOCKED_BY:=<symbol,symbol,...> in the pin
 # file records the upstream symbols this tree does not have yet (see
@@ -285,9 +300,9 @@ if [ -z "$verdict" ]; then
 fi
 
 # --- reader progress ---------------------------------------------------------
-# A reader that has not moved since the pin date cannot answer "should the pin
-# move?": comparing the pin against a frozen mirror only measures how stale the
-# mirror is.  Opt-in (MT76_MIRROR_REF), so the default path keeps its verdict.
+# A reader that has not moved past the pin cannot answer "should the pin move?":
+# comparing the pin against a frozen mirror only measures how stale the mirror
+# is.  Opt-in (MT76_MIRROR_REF), so the default path keeps its verdict.
 mirror_moved=unknown
 mirror_date=''
 if [ -n "$MIRROR_REF" ]; then
@@ -310,16 +325,23 @@ if [ -n "$MIRROR_REF" ]; then
 			2>/dev/null) || mirror_date=''
 	fi
 	if [ -n "$mirror_date" ]; then
-		# pin_date - mirror_date >= 0 means the reader has produced nothing
-		# after the date the pin declares: it is not moving, it is parked.
-		mirror_lag=$(days_between "$mirror_date" "$pin_date")
-		if [ -n "$mirror_lag" ]; then
-			row mirror.date "$mirror_date"
-			if [ "$mirror_lag" -ge 0 ]; then
-				mirror_moved=no
-			else
-				mirror_moved=yes
-			fi
+		row mirror.date "$mirror_date"
+	fi
+	# Progress is a sha question, not a date question: pin 46b67e5b and
+	# upstream main 0936617d are both dated 2026-10-28 and 8 commits apart, so
+	# comparing %cs calls a reader that has moved "parked".  Only a proven
+	# "the reader stopped at or before the pin" may answer no; everything the
+	# ancestry test cannot place is unknown, never no.
+	if [ -n "$mirror_sha" ]; then
+		if [ "$mirror_sha" = "$pin_sha" ]; then
+			mirror_moved=no
+		elif git -C "$mirror_repo" cat-file -e "$pin_sha^{commit}" 2>/dev/null &&
+			git -C "$mirror_repo" merge-base --is-ancestor \
+				"$pin_sha" "$mirror_sha" 2>/dev/null; then
+			mirror_moved=yes
+		elif git -C "$mirror_repo" merge-base --is-ancestor \
+			"$mirror_sha" "$pin_sha" 2>/dev/null; then
+			mirror_moved=no
 		fi
 	fi
 fi
@@ -330,9 +352,11 @@ row mirror.moved "$mirror_moved"
 if [ "$verdict" = bump ] && [ "$blocked_n" -gt 0 ]; then
 	block "upstream needs $blocked_n cfg80211/nl80211 symbols this tree does not have"
 fi
-# "keep" is only evidence when the reader could have moved.
+# "keep" is only evidence when the reader could have moved.  Unknown never
+# withdraws it: nothing was compared, and treating "not checked" as "not moved"
+# is the failure this row exists to prevent.
 if [ "$verdict" = keep ] && [ "$mirror_moved" = no ]; then
-	block "reader has not moved since $mirror_date, so keep is not evidence"
+	block "reader stopped at or before $mirror_date (tip is the pin or its ancestor), so keep is not evidence"
 fi
 
 row verdict "$verdict"

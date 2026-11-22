@@ -243,6 +243,10 @@ if sh "$SCRIPT" --help >/dev/null 2>&1; then
 else
 	fail "--help exits non-zero"
 fi
+sh "$SCRIPT" --help 2>&1 | grep -q 'mirror.moved' ||
+	fail "--help does not document the mirror.moved row"
+sh "$SCRIPT" --help 2>&1 | grep -q 'unknown' ||
+	fail "--help does not document the unknown value"
 
 # --- 9: mirror.moved -- the reader is allowed to be the thing that stopped ---
 #
@@ -250,8 +254,10 @@ fi
 # purpose (it is the reproducible source of the pin).  A check that fired by
 # default would therefore turn every default-path run into "blocked", so the
 # reader audit is opt-in: MT76_MIRROR_REF names the reader that is supposed to
-# move.  up-0's HEAD is dated 2026-10-08, the pin date, so it has produced
-# nothing after the pin: "keep" would be a claim nobody measured.
+# move.  The judgement is commit ancestry against the pin sha (yes / no /
+# unknown), not a date: up-0's only commit is byte-identical to the pin commit
+# (same tree, author, message and date, so the same sha), which is a proven
+# "no" -- "keep" would be a claim nobody measured.
 
 run_case mirror-default 0 keep \
 	MT76_PIN_FILE="$PIN_AT_TIP" MT76_PATCH_DIR="$PATCHES" \
@@ -287,6 +293,69 @@ run_case mirror-typo 0 keep \
 	MT76_MIRROR_REF=no-such-branch
 printf '%s\n' "$OUT" | grep -q '^mirror.moved *unknown$' ||
 	fail "mirror-typo: an unreadable reader must be unknown; output: $OUT"
+
+# --- 9b: same calendar day, different sha --------------------------------
+#
+# The original predicate compared %cs: a reader whose tip lands on the pin's
+# day was called parked even when it carried later commits.  That is the real
+# shape of the mt76 reader (pin 46b67e5b and upstream main 0936617d are both
+# 2026-10-28 and 8 commits apart), so it is the case the sha test must catch.
+SAME="$WORK/up-sameday"
+rm -rf "$SAME"
+git init -q -b main "$SAME"
+git -C "$SAME" config user.name t
+git -C "$SAME" config user.email t@t
+GIT_COMMITTER_DATE='2026-10-07T00:00:00+0000' git -C "$SAME" commit -q --allow-empty \
+	-m base --date '2026-10-07T00:00:00+0000' --author 't <t@t>'
+same_base=$(git -C "$SAME" rev-parse HEAD)
+GIT_COMMITTER_DATE='2026-10-08T00:00:00+0000' git -C "$SAME" commit -q --allow-empty \
+	-m pin --date '2026-10-08T00:00:00+0000' --author 't <t@t>'
+same_pin=$(git -C "$SAME" rev-parse HEAD)
+git -C "$SAME" branch at-pin "$same_pin"
+git -C "$SAME" branch behind "$same_base"
+git -C "$SAME" branch rewritten "$same_base"
+git -C "$SAME" checkout -q rewritten
+GIT_COMMITTER_DATE='2026-10-08T00:00:00+0000' git -C "$SAME" commit -q --allow-empty \
+	-m rewritten --date '2026-10-08T00:00:00+0000' --author 't <t@t>'
+git -C "$SAME" checkout -q main
+GIT_COMMITTER_DATE='2026-10-08T00:00:00+0000' git -C "$SAME" commit -q --allow-empty \
+	-m same-day --date '2026-10-08T00:00:00+0000' --author 't <t@t>'
+PIN_SAME="$WORK/pin-same"
+write_pin "$PIN_SAME" 2026-10-08 "$same_pin"
+
+# one commit past the pin, committed the same day: the reader moved
+run_case mirror-same-day 0 keep \
+	MT76_PIN_FILE="$PIN_SAME" MT76_PATCH_DIR="$PATCHES" \
+	MT76_UPSTREAM_REPO="$SAME" MT76_UPSTREAM_REF=main \
+	MT76_MIRROR_REF=main
+printf '%s\n' "$OUT" | grep -q '^mirror.moved *yes$' ||
+	fail "mirror-same-day: a tip one commit past the pin must be yes even on the pin's day; output: $OUT"
+
+# the reader tip is the pin itself: proven parked, keep withdrawn
+run_case mirror-at-pin 2 blocked \
+	MT76_PIN_FILE="$PIN_SAME" MT76_PATCH_DIR="$PATCHES" \
+	MT76_UPSTREAM_REPO="$SAME" MT76_UPSTREAM_REF=main \
+	MT76_MIRROR_REF=at-pin
+printf '%s\n' "$OUT" | grep -q '^mirror.moved *no$' ||
+	fail "mirror-at-pin: a reader tip equal to the pin is no; output: $OUT"
+printf '%s\n' "$OUT" | grep -q 'keep is not evidence' ||
+	fail "mirror-at-pin: reason does not say why keep was withdrawn; output: $OUT"
+
+# the reader stops before the pin: still proven parked
+run_case mirror-behind 2 blocked \
+	MT76_PIN_FILE="$PIN_SAME" MT76_PATCH_DIR="$PATCHES" \
+	MT76_UPSTREAM_REPO="$SAME" MT76_UPSTREAM_REF=main \
+	MT76_MIRROR_REF=behind
+printf '%s\n' "$OUT" | grep -q '^mirror.moved *no$' ||
+	fail "mirror-behind: a reader tip that is an ancestor of the pin is no; output: $OUT"
+
+# a rewritten reader on a sibling lineage: nothing was compared
+run_case mirror-diverged 0 keep \
+	MT76_PIN_FILE="$PIN_SAME" MT76_PATCH_DIR="$PATCHES" \
+	MT76_UPSTREAM_REPO="$SAME" MT76_UPSTREAM_REF=main \
+	MT76_MIRROR_REF=rewritten
+printf '%s\n' "$OUT" | grep -q '^mirror.moved *unknown$' ||
+	fail "mirror-diverged: a reader that shares no lineage with the pin must be unknown; output: $OUT"
 
 # --- 10: blocked.by -- a real count of commits this tree cannot absorb -------
 
