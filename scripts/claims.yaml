@@ -580,3 +580,55 @@ claims:
       - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:73 +\t\t * in byte units the rate is Kbps (div_u64(rate_bytes_ps, 1000)"
       - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:76 +\t\t * is.  The byte-unit rate can sit up to 8 kbit/s below tc's"
       - "text: target/linux/airoha/patches-7.3/99993-net-airoha-make-the-matchall-police-meter-observable.patch:80 +\t\tseq_printf(m, \"qdma %d requested rate %u kbps burst %u unit %s\\n\","
+
+  - id: ppe-meter-enabled-is-a-probe-snapshot
+    claim: "ppe/meter 的 enabled= 打印 ppe->meter_enabled，该字段只在 airoha_ppe_init() 里从 airoha_ppe_meter 拷贝一次，是 probe 期快照；运行期闸 airoha_ppe_meter_validate() 读的是参数变量本身，所以参数在运行期改成 Y 之后 enabled= 仍为 0 是字段语义，不是缺陷。要判运行期状态读 /sys/module/airoha_eth/parameters/airoha_ppe_meter。"
+    source:
+      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:564
+      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:359
+      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:601
+      - target/linux/airoha/patches-7.3/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:560
+    evidence: 代码
+    date: "2026-11-22"
+    status: supported
+    notes: "实机两段：参数权限 0644，运行期 echo 1 > parameters/airoha_ppe_meter 返回 rc=0、值 N->Y；随后 tc filter ... action police 落地 in_hw、ppe/meter 长出 meter 行，而该文件的 enabled= 仍是 0。字段刻意不改成运行期值：enabled= 唯一有价值的信息是「这个镜像 probe 期开没开 meter」，改成读参数就把这条信息换掉了（issue #351 任务 1 判定 A，代码注释已写明）。"
+    verify:
+      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:591 enabled= is the value airoha_ppe_meter had when this module"
+      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:597 keeps the probe-time snapshot on purpose"
+      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:359 +\tif (!airoha_ppe_meter)"
+      - "text: target/linux/airoha/patches-7.3/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:587 enabled= is the value airoha_ppe_meter had when this module"
+      - "text: target/linux/airoha/patches-7.3/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:598 +\tseq_printf(m, \"enabled=%u groups_total=%u"
+
+  - id: ppe-meter-reg-columns-cannot-be-the-written-word
+    claim: "ppe/meter 的 reg/hw_rate/hw_bucket 三列不是驱动写入值的回读证据：AN7581 上 FE + 0x200c + 16*group 读回 0xdeadbeef（bit 31 置位），而驱动写进这个字的位只有 2..18（TICK bit 2、RATE 16..3、BUCKET 18..17），所以这个 readback 不可能是那次写的回读；hw_rate 228816000 只是 ((0xdeadbeef>>3)&0x3fff)*16000 = 14301*16000 的算术结果，与请求速率无关。"
+    source:
+      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:576
+      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:578
+      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:74
+      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:619
+      - target/linux/airoha/patches-7.4/999-net-airoha-add-minimal-PPE-multicast-replication.patch:355
+    evidence: 代码
+    date: "2026-11-22"
+    status: supported
+    notes: "静态部分（本机可判）：写的 mask 上界是 bit 18，回读 bit 31 置位 ⇒ 该字不是这次写的结果；同理 hw_rate/hw_bucket 都是这个死值派生出来的，不看。动态部分（本机不可判）：为什么读回 0xdeadbeef —— 最可能该 offset 在 AN7581 上未实现，与同窗口先例 REG_PPE_MCAST_PPSE（FE+0x284，注释写明 not implemented on AN7581、reads back as 0xdeadbeef）一致；确定要靠 datasheet 或另一块板。越界已排除：FE 窗口 0x1fb50000 size 0x2600，0x200c+16*62=0x23ec 在窗内。三列保留，供将来与 vendor SDK dump 对照。"
+    verify:
+      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:576 on AN7581 that read returns 0xdeadbeef"
+      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:580 so a word with bit 31 set cannot be that write coming back"
+      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:79 +#define AIROHA_PPE_METER_RATE\t\tGENMASK(16, 3)"
+      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:620 +\t\treg = airoha_fe_rr(eth, AIROHA_PPE_METER_GROUP(i));"
+      - "text: target/linux/airoha/patches-7.4/999-net-airoha-add-minimal-PPE-multicast-replication.patch:355 0xdeadbeef and the vendor SDK never writes it"
+
+  - id: ppe-meter-rate-is-bytes-per-second
+    claim: "两个调试节点都有一列叫 rate，但单位不同：ppe/meter 的 rate/peakrate 是 tc 的 police.rate_bytes_ps 原值（bytes/s），qdma/rx_meter 的 rate 是驱动送进硬件的 Kbps（byte 单位）或 pps（packet 单位）。对账前必须先换算，不能逐字比较。"
+    source:
+      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:422
+      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:626
+      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:80
+    evidence: 实测
+    date: "2026-11-22"
+    status: supported
+    notes: "实机两个点：tc ... action police rate 10mbit burst 32k 之后 ppe/meter 打 rate 1250000（10e6/8，bytes/s）；另一台配置里 tc 写 rate 1250000bit，qdma/rx_meter 打 requested rate 1248 kbps（除以 1000 再 <<3 的既有换算，见 matchall-rx-meter-unit-is-kbps）。同名不同单位，是本条留档的唯一目的，不改代码。"
+    verify:
+      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:422 rate_bps = min_t(u64, act->police.rate_bytes_ps,"
+      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:627 meter %2u refcount %u rate %u peakrate %u burst %u"
+      - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:80 requested rate %u kbps burst %u unit %s"

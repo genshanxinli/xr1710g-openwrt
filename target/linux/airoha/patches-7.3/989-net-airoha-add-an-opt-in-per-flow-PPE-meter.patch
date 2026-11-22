@@ -563,14 +563,19 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	foe_size = ppe_num_entries * sizeof(struct airoha_foe_entry);
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -470,6 +470,54 @@
+@@ -470,6 +470,70 @@
  	.write		= airoha_ppe_debugfs_flush_write,
  };
  
-+/* Read-only view of the opt-in per-flow meters.  The software record is
-+ * what was requested; the register value next to it is what the PPE
-+ * actually holds, so a dump can tell "never programmed" apart from
-+ * "programmed with a rate the driver did not intend".
++/* Read-only view of the opt-in per-flow meters.  The software columns are
++ * what tc requested.  reg is the frame-engine word returned at
++ * FE + 0x200c + 16 * group; on AN7581 that read returns 0xdeadbeef, so
++ * hw_rate and hw_bucket derived from it are not the rate the PPE holds.
++ * The driver writes at most bits 2..18 there (AIROHA_PPE_METER_TICK bit 2,
++ * AIROHA_PPE_METER_RATE bits 16..3, AIROHA_PPE_METER_BUCKET bits 18..17),
++ * so a word with bit 31 set cannot be that write coming back.  The three
++ * register columns stay so a vendor-SDK dump can be compared once silicon
++ * answers at this offset.
 + */
 +static int airoha_ppe_debugfs_meter_show(struct seq_file *m, void *private)
 +{
@@ -579,7 +584,18 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +	struct airoha_eth *eth = ppe->eth;
 +	int i;
 +
-+	seq_printf(m, "enabled=%u groups=%u\n", ppe->meter_enabled,
++	/* enabled= is the value airoha_ppe_meter had when this module
++	 * probed, not the live switch: airoha_ppe_meter is writable at run
++	 * time and the gate that accepts a police action
++	 * (airoha_ppe_meter_validate()) reads the parameter itself.  For the
++	 * current value read
++	 * /sys/module/airoha_eth/parameters/airoha_ppe_meter.  This field
++	 * keeps the probe-time snapshot on purpose: it is the only place
++	 * that records whether the image that booted had the meter on, and
++	 * making it follow the parameter would trade that away.
++	 * groups_total= is AIROHA_PPE_METER_NUM, not the number of free groups.
++	 */
++	seq_printf(m, "enabled=%u groups_total=%u\n", ppe->meter_enabled,
 +		   AIROHA_PPE_METER_NUM);
 +
 +	for (i = 0; i < AIROHA_PPE_METER_NUM; i++) {
@@ -618,7 +634,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
  {
  	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
-@@ -485,6 +533,8 @@
+@@ -485,6 +549,8 @@
  			    &airoha_ppe_debugfs_bind_rate_fops);
  	debugfs_create_file("tb_regs", 0444, ppe->debugfs_dir, ppe,
  			    &airoha_ppe_debugfs_tb_regs_fops);
