@@ -356,6 +356,7 @@ claims:
       - "text: package/kernel/mt76/Makefile:12 PKG_SOURCE_VERSION:=46b67e5b7c49313d11b2b2d83df3c8025406d63e"
       - "text: scripts/check-mt76-pin.sh:41 blocked    not decidable / not actionable"
       - "text: scripts/tests/test_check_mt76_pin.sh:179 run_case pin-on-side-branch 2 blocked"
+      - "text: package/kernel/mt76/Makefile:17 PKG_MIRROR_BLOCKED_BY:="
 
   - id: wan-defaults-gate
     claim: "#90 的 WAN 产品化默认值可以逐行判定：scripts/wan-defaults-check.sh 输出 20 行（19 PASS + 1 SKIP），scripts/tests/test_wan_defaults_rollback.sh 对每个默认值做「基线 → 改坏 → FAIL → 回滚 → PASS」矩阵，并断言检查脚本不重写任何配置。唯一 SKIP 是 ppe/pppoe_decap，因为那个 debugfs 档只存在于 patches-7.3/9907 之后的镜像。"

@@ -49,7 +49,8 @@ jobs:
         run: |
           python3 scripts/claims-verify.py --strict --skip device
           python3 -m unittest scripts/tests/test_claims_verify.py \
-            scripts/tests/test_claims_sources_exist.py
+            scripts/tests/test_claims_sources_exist.py \
+            scripts/tests/test_mt76_blocked_declaration.py
 
       # Issue #189: README records the upstream-drift facts in one
       # <!-- upstream-record: ... --> line rather than in prose.  This checkout
