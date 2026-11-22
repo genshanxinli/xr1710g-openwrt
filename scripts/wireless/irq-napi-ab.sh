@@ -126,8 +126,8 @@ IRQ_BUSY_PER_S=${IRQ_BUSY_PER_S:-50000}
 # on every tick (7.4-rc3 deltas per tick: +429/+171/+193/+84) and an
 # increment test reserves all four CPUs.  Over one second the columns grow
 # cpu0 215, cpu1 86, cpu2 97, cpu3 42 -- the ratio, not the direction, is the
-# signal.  150/s is the geometric mean of cpu2 and cpu0 (sqrt(97*215) = 144):
-# cpu0 clears it with a 1.4x margin, cpu2 misses it with a 1.5x margin.
+# signal.  150/s = sqrt(215*104.3), the geometric mean of the slowest boot
+# and fastest from-CPU rate: 1.43x/1.44x; 100 would reserve the 104.3/s CPU.
 IRQ_TIMER_PER_S=${IRQ_TIMER_PER_S:-150}
 # The window must span several ticks.  The board's cadence is ~2 s per tick
 # (429 per tick against 215/s), so a 1 s window holds 0 or 1 tick and the
