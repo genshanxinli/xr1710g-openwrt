@@ -508,3 +508,24 @@ claims:
       - "text: target/linux/generic/pending-6.18/947-net-mac80211-prevent-AP-VLAN-tx-from-other-interfaces.patch:66 sta = sta_info_get(sdata, skb->data);"
       - "text: package/kernel/mac80211/Makefile:15 PKG_RELEASE:=11"
     notes: "运行时 mac80211 来自 package/kernel/mac80211 的 backports-7.2，018 在这个源树上按 -F0 顺序应用（61 个 subsys 补丁含 018 全部无 fuzz），补丁号接在 016 之后。7.3 内核树判据：net/mac80211/tx.c:2533-2535 的签名带 bool bss、2557-2560 按 bss 分支；7.4-rc3 判据：net/mac80211/tx.c:2628-2630 与 2652-2655。两者都已含 7f93ca31f7fd，故不再往 pending-7.3/7.4 放重复补丁。f0（干净 worktree，不含主 checkout 的未提交 99991）：7.4 449/0/44、7.3 344/0/594、6.18 690→691/0/442。未上设备实测。"
+
+  - id: distfeeds-key-fingerprint
+    claim: "每次构建现场生成一把 APK 签名密钥（规则见 package/Makefile:77-81，路径由 rules.mk:354-355 固定为 TOPDIR/private-key.pem 与 TOPDIR/public-key.pem），同一把 public-key.pem 既装进镜像的 /etc/apk/keys/（package/base-files/Makefile:130）又被复制进 distfeeds 树（scripts/build-distfeeds.sh:131），所以同一构建出的镜像与 feed 天然配套，装 feed 时无需手工拷 key；拿另一构建的 feed 来装只会得到 UNTRUSTED signature。MANIFEST.json 的 public_key_sha256 记录 feed 树里那把 key 的 sha256（scripts/build-distfeeds.sh:253），设备用 sha256sum /etc/apk/keys/public-key.pem 对照即可判断 feed 是否属于本机。"
+    source:
+      - package/Makefile:77
+      - package/Makefile:81
+      - rules.mk:355
+      - package/base-files/Makefile:130
+      - scripts/build-distfeeds.sh:131
+      - scripts/build-distfeeds.sh:253
+    evidence: 代码
+    date: "2026-11-22"
+    status: supported
+    notes: "实测交叉核对：release xr1710g-2026.11.21-83aeaa8 的 distfeeds-83aeaa8.tar.gz（sha256 5dd8fdc0a797…，与其 sha256sums 一致）里 distfeeds/public-key.pem 为 2b119c14947a…；该树跑改后的 build-distfeeds.sh 得到的 public_key_sha256 正是 2b119c14…。反面对照：设备 r38247+1-280fd1aabd 镜像信 3088cf1c…（本机当前构建为 42387b8e…），装 83aeaa8 的 feed 报 WARNING: opening file:///…/packages.adb: UNTRUSTED signature 与 kmod-sched-act-police (no such package)。固定一把 key 的方案已被否，只做指纹；字段取不到时为 null 并打 note，不阻断发布。"
+    verify:
+      - "text: package/Makefile:77 $(BUILD_KEY_APK_SEC):"
+      - "text: package/Makefile:81 -pubout > $(BUILD_KEY_APK_PUB)"
+      - "text: rules.mk:355 BUILD_KEY_APK_PUB=$(TOPDIR)/public-key.pem"
+      - "text: package/base-files/Makefile:130 $(CP) $(BUILD_KEY_APK_PUB) $(1)/etc/apk/keys/"
+      - "text: scripts/build-distfeeds.sh:131 cp \"$topdir/public-key.pem\" \"$out/public-key.pem\""
+      - "text: scripts/build-distfeeds.sh:253 manifest[\"public_key_sha256\"] = public_key_sha256"

@@ -79,19 +79,23 @@ else
 	no "distfeeds.list lists both indexes"
 fi
 
-# #362 B: the feed names the image and commit it belongs to.  This tree has no
-# .itb, so image_sha256 must be null *and* present, with a note on stderr -- a
-# field that quietly disappears when its evidence is missing is the defect.
+# #362 B: the feed names the image and commit it belongs to, and the key that
+# signed it.  This tree has no .itb and no public-key.pem, so both digests must
+# be null *and* present, each with a note on stderr -- a field that quietly
+# disappears when its evidence is missing is the defect.
 if python3 -c "
 import json, sys
 m = json.load(open(sys.argv[1]))
-sys.exit(0 if (m['image_sha256'] is None and 'git_commit' in m
+sys.exit(0 if (m['image_sha256'] is None and m['public_key_sha256'] is None
+               and 'git_commit' in m
                and set(m) == {'packages', 'kmods', 'feeds', 'image_sha256',
-                              'git_commit'}) else 1)
-" "$tmp/out/MANIFEST.json" && grep -q 'MANIFEST image_sha256 is null' "$tmp/good.err"; then
-	ok "MANIFEST keeps image_sha256: null plus a note when no image is present"
+                              'public_key_sha256', 'git_commit'}) else 1)
+" "$tmp/out/MANIFEST.json" &&
+	grep -q 'MANIFEST image_sha256 is null' "$tmp/good.err" &&
+	grep -q 'MANIFEST public_key_sha256 is null' "$tmp/good.err"; then
+	ok "MANIFEST keeps image_sha256/public_key_sha256 null plus a note without evidence"
 else
-	no "MANIFEST keeps image_sha256: null plus a note when no image is present"
+	no "MANIFEST keeps image_sha256/public_key_sha256 null plus a note without evidence"
 fi
 
 # With exactly one sysupgrade image it is named by digest.
@@ -112,6 +116,28 @@ print(json.load(open(sys.argv[1]))['image_sha256'])
 	fi
 else
 	no "MANIFEST names the sysupgrade image by sha256 (run failed)"
+fi
+
+# With a public key in the build tree it is published and named by the digest
+# of the published copy -- the file a device will compare against.
+printf 'fixture key\n' >"$tree/public-key.pem"
+if TOPDIR=$tree sh "$script" "$tmp/out-key" >"$tmp/key.log" 2>"$tmp/key.err"; then
+	want=$(python3 -c "
+import hashlib, sys
+print(hashlib.sha256(open(sys.argv[1], 'rb').read()).hexdigest())
+" "$tmp/out-key/public-key.pem")
+	got=$(python3 -c "
+import json, sys
+print(json.load(open(sys.argv[1])).get('public_key_sha256'))
+" "$tmp/out-key/MANIFEST.json" 2>/dev/null || echo '<absent>')
+	if [ "$got" = "$want" ] &&
+		cmp -s "$tree/public-key.pem" "$tmp/out-key/public-key.pem"; then
+		ok "MANIFEST names the published public key by sha256"
+	else
+		no "MANIFEST names the published public key by sha256 (got $got)"
+	fi
+else
+	no "MANIFEST names the published public key by sha256 (run failed)"
 fi
 
 

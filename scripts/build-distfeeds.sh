@@ -121,6 +121,16 @@ if [ ! -f "$out/distfeeds.list" ]; then
 	done
 fi
 
+# The device trusts the key that signed the indexes it booted with; publish
+# the public half so a feed from another build tree can be verified.  Copied
+# before the manifest is written because the manifest records the digest of
+# this published copy (#362): a feed signed by a different build's key fails
+# with "UNTRUSTED signature", and the digest is what turns that failure into
+# "feed signed by X, this image trusts Y".
+if [ -f "$topdir/public-key.pem" ]; then
+	cp "$topdir/public-key.pem" "$out/public-key.pem"
+fi
+
 # Verify the indexes really describe the packages we are about to publish,
 # and that the core feed carries kernel + kmods. python3 because jq is not
 # guaranteed on the build hosts.
@@ -128,6 +138,16 @@ python3 - "$out" "$bin" "$topdir" "$here" <<'EOF'
 import glob, hashlib, json, os, subprocess, sys
 
 out, bin, topdir, here = sys.argv[1:5]
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 total = kmods = 0
 rows = []
 stale = []
@@ -204,11 +224,7 @@ manifest = {
 images = sorted(glob.glob(os.path.join(bin, "targets", "*", "*", "*-sysupgrade.itb")))
 image_sha256 = None
 if len(images) == 1:
-    digest = hashlib.sha256()
-    with open(images[0], "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            digest.update(chunk)
-    image_sha256 = digest.hexdigest()
+    image_sha256 = sha256_file(images[0])
 elif not images:
     sys.stderr.write("note: no *-sysupgrade.itb under %s, MANIFEST image_sha256 is null\n" % bin)
 else:
@@ -217,6 +233,24 @@ else:
         % (len(images), bin, ", ".join(os.path.basename(p) for p in images))
     )
 manifest["image_sha256"] = image_sha256
+
+# Which key signed the indexes, as the digest of the copy published in this
+# tree.  The key is generated per build (package/Makefile), so the digest is
+# the only stable name for it: a device compares it with
+# `sha256sum /etc/apk/keys/public-key.pem` to learn whether the feed it is
+# installing from belongs to the image it booted (#362).  Null plus a note when
+# the key is absent, same as image_sha256: a field that disappears when its
+# evidence is missing is how the missing key stayed invisible.
+key = os.path.join(out, "public-key.pem")
+public_key_sha256 = None
+if os.path.isfile(key):
+    public_key_sha256 = sha256_file(key)
+else:
+    sys.stderr.write(
+        "note: no public-key.pem under %s, MANIFEST public_key_sha256 is null\n"
+        % out
+    )
+manifest["public_key_sha256"] = public_key_sha256
 
 # The commit that produced bin/.  TOPDIR is the checkout on a builder and a
 # bare unpack directory in the release tier, so fall back to this script's own
@@ -242,12 +276,6 @@ with open(os.path.join(out, "MANIFEST.json"), "w") as f:
     f.write("\n")
 print("total: %d packages, %d kmod/kernel" % (total, kmods))
 EOF
-
-# The device trusts the key that signed the indexes it booted with; publish
-# the public half only so a feed from another build tree can be verified.
-if [ -f "$topdir/public-key.pem" ]; then
-	cp "$topdir/public-key.pem" "$out/public-key.pem"
-fi
 
 # Nothing above writes into bin/, so any build output newer than start_epoch is
 # a build that was still running: the tree we just packed may be a half-written
