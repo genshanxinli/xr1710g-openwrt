@@ -15,6 +15,18 @@ PKG_NAME:=base-files
 PKG_FLAGS:=nonshared
 PKG_RELEASE:=$(COMMITCOUNT)
 
+# Carry the revision's ahead count into the package version.  REVISION looks
+# like r<N>[+<ahead>]-<hash>; apk only accepts [0-9a-z] after '~', so the
+# ahead count becomes a dotted release component:
+#   r38247+8-280fd1aabd  ->  1722.8~280fd1aabd
+#   r0-084047e           ->  1722~084047e  (shallow clone: no ahead part)
+# Without it the package name is constant across +N and apk keeps the stale
+# package, leaving DISTRIB_REVISION at an older commit in incremental trees.
+REVHEAD:=$(firstword $(subst -, ,$(REVISION)))
+REVAHEAD:=$(word 2,$(subst +, ,$(REVHEAD)))
+REVHASH:=$(lastword $(subst -, ,$(REVISION)))
+BASE_FILES_PKG_VERSION:=$(PKG_RELEASE)$(if $(REVAHEAD),.$(REVAHEAD))~$(REVHASH)
+
 PKG_FILE_DEPENDS:=$(PLATFORM_DIR)/ $(GENERIC_PLATFORM_DIR)/base-files/
 PKG_BUILD_DEPENDS:=usign/host ucert/host
 PKG_LICENSE:=GPL-2.0
@@ -50,7 +62,7 @@ define Package/base-files
 	+ucode +ucode-mod-fs +ucode-mod-digest
   TITLE:=Base filesystem for OpenWrt
   URL:=https://openwrt.org/
-  VERSION:=$(PKG_RELEASE)~$(lastword $(subst -, ,$(REVISION)))
+  VERSION:=$(BASE_FILES_PKG_VERSION)
 endef
 
 define Package/base-files/conffiles
@@ -263,7 +275,7 @@ ifneq ($(CONFIG_USE_APK),)
 
 	rm -f $(1)/etc/uci-defaults/13_fix-group-user
 	rm -f $(1)/sbin/pkg_check
-	echo $(PKG_RELEASE)~$(lastword $(subst -, ,$(REVISION))) >$(STAGING_DIR)/base-files.version
+	echo $(BASE_FILES_PKG_VERSION) >$(STAGING_DIR)/base-files.version
 else
 	$(if $(CONFIG_CLEAN_IPKG),, \
 		mkdir -p $(1)/etc/opkg; \
