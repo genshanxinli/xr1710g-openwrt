@@ -299,6 +299,7 @@ say "      mkdir -p $DIR"
 say "      ssh $HOST 'dd if=/dev/ubi0_0 bs=1M' > $DIR/fit-slot.bin   # sha256 $SLOT_SHA, $SLOT_LEN bytes"
 say "      ssh $HOST 'cat /proc/cmdline; cat /proc/mtd; ubinfo /dev/ubi0 -a; fw_printenv bootargs bootcmd' > $DIR/device.txt"
 say ' 1. push the image (device /tmp is tmpfs; 14 MiB fits; the box has no sftp-server):'
+say "      ssh $HOST 'rm -f /tmp/$IMG_NAME /tmp/$NAME'   # a killed push leaves a half file under the original name"
 say "      tar -C $IMG_DIR -cf - $IMG_NAME | ssh $HOST 'tar -C /tmp -xf - && mv -f /tmp/$IMG_NAME /tmp/$NAME'"
 say " 2. prove the pushed bytes: sha256sum /tmp/$NAME == $WANT"
 say ' 3. the image is checkable but not acceptable (no fwtool metadata), so -F is required:'
@@ -356,7 +357,19 @@ say "restore point: $DIR/fit-slot.bin + device.txt"
 # only created by the `mv` after the remote tar exits 0, so a broken session
 # cannot leave half an image there; the digest below decides, and a mismatch
 # removes both names.
+#
+# The pre-mv name is a different story: a session that dies mid-tar leaves a
+# partial /tmp/<image> behind (measured on the board: 2999488, 999488 and
+# 2780600 bytes), and `mv` never gets to touch it.  Device /tmp is tmpfs, so a
+# retry over that residue eats space next to #89's /tmp no-client/result.json.
+# Every attempt therefore clears both names first and refuses to continue if it
+# cannot: a pre-clean that silently fails would let the next `mv` overwrite the
+# residue and hide the problem.
 push_image() {
+	ssh "$HOST" "rm -f /tmp/$IMG_NAME /tmp/$NAME" || {
+		echo "cannot clear a stale /tmp/$IMG_NAME or /tmp/$NAME on $HOST" >&2
+		return $EXIT_IMAGE
+	}
 	tar -C "$IMG_DIR" -cf - "$IMG_NAME" |
 		ssh "$HOST" "tar -C /tmp -xf - && mv -f /tmp/$IMG_NAME /tmp/$NAME"
 }
