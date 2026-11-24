@@ -40,6 +40,13 @@
 #   1  bump       upstream is far enough ahead to justify re-anchoring
 #   2  blocked    not decidable / not actionable, with the reason on stdout
 #
+# Every output names the cache it read: cache.repo (the repo path), cache.ref,
+# cache.origin (the cache's remote, or none), cache.source (default|env|flag:
+# how the path was chosen), cache.mode (offline|fetch), and cache.fetched /
+# cache.age.days (newest file a clone or fetch wrote).  Two mt76 caches live in
+# this tree and they answer different questions; without these rows a "keep"
+# from one reads as contradicting a "backlog" from the other.
+#
 # Environment:
 #   MT76_PIN_FILE          default package/kernel/mt76/Makefile
 #   MT76_PATCH_DIR         default package/kernel/mt76/patches
@@ -97,6 +104,11 @@ PIN_FILE=${MT76_PIN_FILE:-$topdir/package/kernel/mt76/Makefile}
 PATCH_DIR=${MT76_PATCH_DIR:-$topdir/package/kernel/mt76/patches}
 REF=${MT76_UPSTREAM_REF:-main}
 REPO=${MT76_UPSTREAM_REPO:-}
+REPO_SOURCE=default
+if [ -n "$REPO" ]; then
+	# shellcheck disable=SC2209 # a label printed as cache.source, not a command
+	REPO_SOURCE=env
+fi
 BUMP_MIN=${MT76_BUMP_MIN_COMMITS:-10}
 PATCH_LIMIT=${MT76_LOCAL_PATCH_LIMIT:-50}
 MIRROR_REF=${MT76_MIRROR_REF:-}
@@ -121,6 +133,7 @@ while [ $# -gt 0 ]; do
 	--repo)
 		need_value "$@"
 		REPO=$2
+		REPO_SOURCE=flag
 		shift 2
 		;;
 	--ref)
@@ -149,6 +162,10 @@ while [ $# -gt 0 ]; do
 		;;
 	esac
 done
+
+# --repo "" selects the default path, not a cache the caller named: "flag" would
+# credit it with a path it never gave.
+[ -n "$REPO" ] || REPO_SOURCE=default
 
 [ -f "$PIN_FILE" ] || {
 	echo "check-mt76-pin: no pin file: $PIN_FILE" >&2
@@ -251,6 +268,55 @@ elif [ "$FETCH" = 1 ]; then
 		block "fetch failed in $REPO"
 	fi
 fi
+
+# --- cache provenance --------------------------------------------------------
+# Named before the comparison so a verdict is never read without the repo and
+# ref that produced it.  Freshness is the newest file a clone or fetch writes
+# (FETCH_HEAD, the loose ref, packed-refs), which is what distinguishes "the
+# cache has not been refreshed" from "upstream has not moved".
+row cache.repo "$REPO"
+row cache.ref "$REF"
+cache_origin=none
+cache_fetched=unknown
+cache_age=unknown
+if [ -d "$REPO" ]; then
+	origin=$(git -C "$REPO" config --get remote.origin.url 2>/dev/null) || origin=
+	if [ -n "$origin" ]; then
+		cache_origin=$origin
+	fi
+	cache_mtime=0
+	# Bare caches keep these files at the top, working clones under .git; ask
+	# git instead of assuming, or a clone fixture reads as "never fetched".
+	cache_gitdir=$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || cache_gitdir=$REPO
+	[ -n "$cache_gitdir" ] || cache_gitdir=$REPO
+	for f in "$cache_gitdir/FETCH_HEAD" "$cache_gitdir/refs/heads/$REF" \
+		"$cache_gitdir/packed-refs"; do
+		[ -f "$f" ] || continue
+		m=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || true)
+		if [ -n "$m" ] && [ "$m" -gt "$cache_mtime" ]; then
+			cache_mtime=$m
+		fi
+	done
+	if [ "$cache_mtime" -gt 0 ]; then
+		cache_fetched=$(date -d "@$cache_mtime" +%F 2>/dev/null) || cache_fetched=unknown
+		if [ "$cache_fetched" != unknown ]; then
+			cache_age=$((($(date +%s) - cache_mtime) / 86400))
+			# A file stamped after "now" (clock went back, shared cache) is 0
+			# days old, not a negative age: mt76-pin-age.py clamps the same
+			# way, and the two readers must agree on the number.
+			[ "$cache_age" -ge 0 ] || cache_age=0
+		fi
+	fi
+fi
+row cache.origin "$cache_origin"
+row cache.source "$REPO_SOURCE"
+if [ "$FETCH" = 1 ]; then
+	row cache.mode fetch
+else
+	row cache.mode offline
+fi
+row cache.fetched "$cache_fetched"
+row cache.age.days "$cache_age"
 
 if [ -d "$REPO" ]; then
 	up_sha=$(git -C "$REPO" rev-parse -q --verify "refs/heads/$REF^{commit}" 2>/dev/null) || up_sha=''

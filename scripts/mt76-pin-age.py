@@ -73,8 +73,21 @@ Output rows (machine-readable, `key: value`):
   upstream BRANCH: DATE (SHORT_SHA) | unavailable
   age: N days | unknown
   commits_behind: N | unknown
+  cache.repo: PATH | test-injection (not read)
+  cache.ref: BRANCH
+  cache.origin: URL | none | unknown
+  cache.mode: offline | fetch | test-injection
+  cache.fetched: YYYY-MM-DD | unknown
+  cache.age.days: N | unknown
   verdict: fresh|backlog|stale|blocked
   reason: ...                       (blocked only)
+
+The cache rows exist because this tree keeps two mt76 caches
+(mt76-openwrt.git here, mt76-upstream.git in check-mt76-pin.sh) on different
+refs; a verdict is only comparable to another tool's when both name the repo
+and ref they read.  cache.fetched / cache.age.days are the newest file a clone
+or fetch wrote, so an unrefreshed cache is visible as such instead of looking
+like "upstream has not moved".
 
 Environment:
   MT76_PIN_FILE              default package/kernel/mt76/Makefile
@@ -95,6 +108,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from datetime import date
 from pathlib import Path
 
@@ -159,6 +173,32 @@ def cache_path():
     if rc == 0 and common:
         return Path(common) / "mt76-openwrt.git"
     return Path(os.environ.get("TMPDIR", "/tmp")) / "mt76-openwrt.git"
+
+
+def cache_provenance(repo, ref):
+    """(origin, fetched_date, age_days) for the cache this verdict read."""
+    rc, origin, _ = git(["-C", str(repo), "config", "--get", "remote.origin.url"])
+    origin = origin if rc == 0 and origin else "none"
+    # Bare caches keep the files at the top, working clones under .git; ask git
+    # rather than assume, or a clone fixture reads as "never fetched".
+    rc, gitdir, _ = git(["-C", str(repo), "rev-parse",
+                         "--path-format=absolute", "--git-common-dir"])
+    candidates = []
+    if rc == 0 and gitdir:
+        base = Path(gitdir)
+        candidates = [base / "FETCH_HEAD", base / "refs" / "heads" / ref,
+                      base / "packed-refs"]
+    newest = 0.0
+    for path in candidates:
+        try:
+            newest = max(newest, path.stat().st_mtime)
+        except OSError:
+            continue
+    if newest <= 0:
+        return origin, "unknown", "unknown"
+    return (origin,
+            date.fromtimestamp(newest).isoformat(),
+            "%d" % max(0, int((time.time() - newest) // 86400)))
 
 
 def is_shallow(repo):
@@ -331,6 +371,23 @@ def main(argv):
         days = 0
     print("age: %s" % ("%d days" % days if days is not None else "unknown"))
     print("commits_behind: %s" % ("%d" % behind if behind is not None else "unknown"))
+
+    # Provenance before the verdict: a "backlog" here and a "keep" from
+    # check-mt76-pin.sh are only comparable when both name their cache.
+    if injected:
+        cache_rows = ("test-injection (not read)", ref, "unknown",
+                      "test-injection", "unknown", "unknown")
+    elif repo.is_dir():
+        origin, fetched, cache_age_days = cache_provenance(repo, ref)
+        cache_rows = (str(repo), ref, origin,
+                      "fetch" if fetch else "offline", fetched, cache_age_days)
+    else:
+        cache_rows = (str(repo), ref, "unknown",
+                      "fetch" if fetch else "offline", "unknown", "unknown")
+    for key, value in zip(("cache.repo", "cache.ref", "cache.origin",
+                           "cache.mode", "cache.fetched", "cache.age.days"),
+                          cache_rows):
+        print("%s: %s" % (key, value))
 
     if days is None:
         print("verdict: blocked")

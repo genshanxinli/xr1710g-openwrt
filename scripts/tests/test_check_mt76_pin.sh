@@ -37,6 +37,14 @@ ok() {
 	printf 'ok   %s\n' "$1"
 }
 
+# row_is KEY VALUE MESSAGE: the script prints "%-16s %s" rows, so one literal
+# padded line is the whole assertion.  grep -F keeps a mktemp path's '.' and
+# '*' from being read as a pattern.
+row_is() {
+	printf '%s\n' "$OUT" | grep -qF "$(printf '%-16s %s' "$1" "$2")" ||
+		fail "$3; output: $OUT"
+}
+
 [ -f "$SCRIPT" ] || {
 	fail "$SCRIPT is missing"
 	printf 'check-mt76-pin cases failed\n' >&2
@@ -243,9 +251,9 @@ if sh "$SCRIPT" --help >/dev/null 2>&1; then
 else
 	fail "--help exits non-zero"
 fi
-sh "$SCRIPT" --help 2>&1 | grep -q 'mirror.moved' ||
+sh "$SCRIPT" --help 2>&1 | grep -qF 'mirror.moved' ||
 	fail "--help does not document the mirror.moved row"
-sh "$SCRIPT" --help 2>&1 | grep -q 'unknown' ||
+sh "$SCRIPT" --help 2>&1 | grep -qF 'unknown' ||
 	fail "--help does not document the unknown value"
 
 # --- 9: mirror.moved -- the reader is allowed to be the thing that stopped ---
@@ -384,6 +392,92 @@ printf '%s\n' "$OUT" | grep -q '^behind.commits *12$' ||
 	fail "blocked-by-bump: behind.commits is not 12; output: $OUT"
 printf '%s\n' "$OUT" | grep -q '^reason *upstream needs 2 cfg80211/nl80211 symbols' ||
 	fail "blocked-by-bump: reason does not name the missing symbols; output: $OUT"
+
+# --- 11: the cache this verdict read is named, not implied -------------------
+#
+# Two local caches are in play in this tree (mt76-upstream.git and
+# mt76-openwrt.git), and each answers a different question.  A "keep" from one
+# cache and a "backlog" from the other must never look like a contradiction,
+# so the verdict row has to sit next to the exact repo, ref, origin and age it
+# was computed from.
+#
+git -C "$WORK/up-3" remote add origin https://example.invalid/mt76-upstream.git \
+	2>/dev/null || true
+
+run_case cache-provenance 0 keep \
+	MT76_PIN_FILE="$PIN_QUIET" MT76_PATCH_DIR="$PATCHES" \
+	MT76_UPSTREAM_REPO="$WORK/up-3" MT76_UPSTREAM_REF=main
+row_is cache.repo "$WORK/up-3" \
+	"cache-provenance: cache.repo does not name the repo that was read"
+row_is cache.ref main \
+	"cache-provenance: cache.ref does not name the ref that was read"
+row_is cache.origin https://example.invalid/mt76-upstream.git \
+	"cache-provenance: cache.origin does not name the remote"
+row_is cache.source env \
+	"cache-provenance: cache.source does not say how the path was chosen"
+row_is cache.mode offline \
+	"cache-provenance: cache.mode does not say whether a fetch happened"
+printf '%s\n' "$OUT" | grep -q '^cache.fetched *20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]$' ||
+	fail "cache-provenance: cache.fetched is not a date; output: $OUT"
+printf '%s\n' "$OUT" | grep -q '^cache.age.days *[0-9][0-9]*$' ||
+	fail "cache-provenance: cache.age.days is not a number; output: $OUT"
+
+# the same cache selected with --repo is labelled differently from the env var
+OUT=$(env MT76_PIN_FILE="$PIN_QUIET" MT76_PATCH_DIR="$PATCHES" \
+	sh "$SCRIPT" --repo "$WORK/up-3" --ref main 2>&1)
+RC=$?
+printf '%-16s rc=%s verdict=%s\n' cache-flag "$RC" \
+	"$(printf '%s\n' "$OUT" | awk '$1 == "verdict" { print $2; exit }')"
+printf '%s\n' "$OUT"
+[ "$RC" = 0 ] || fail "cache-flag: rc=$RC, wanted 0; output: $OUT"
+row_is cache.source flag \
+	"cache-flag: --repo must be labelled flag, not env/default"
+
+# a cache with no origin remote says none instead of an empty row
+run_case cache-no-origin 0 keep \
+	MT76_PIN_FILE="$PIN_AT_TIP" MT76_PATCH_DIR="$PATCHES" \
+	MT76_UPSTREAM_REPO="$WORK/up-0" MT76_UPSTREAM_REF=main
+row_is cache.origin none \
+	"cache-no-origin: an origin-less cache must say none"
+
+# --- 12: an empty --repo and a cache dated in the future ---------------------
+#
+# Two provenance labels that used to lie: --repo "" fell back to the default
+# path while still printing cache.source flag, and a cache file stamped after
+# "now" printed a negative cache.age.days where mt76-pin-age.py clamps the
+# same number to 0.
+
+OUT=$(env MT76_PIN_FILE="$PIN_QUIET" MT76_PATCH_DIR="$PATCHES" \
+	sh "$SCRIPT" --offline --repo "" 2>&1)
+RC=$?
+printf '%-16s rc=%s verdict=%s\n' cache-empty-repo "$RC" \
+	"$(printf '%s\n' "$OUT" | awk '$1 == "verdict" { print $2; exit }')"
+printf '%s\n' "$OUT"
+case "$RC" in
+0 | 1 | 2) ;;
+*) fail "cache-empty-repo: rc=$RC is not one of 0/1/2; output: $OUT" ;;
+esac
+row_is cache.source default \
+	"cache-empty-repo: --repo \"\" must be labelled default, not flag"
+
+# A cache file dated in the future: clock skew or a shared cache, not a
+# negative age.  The fixture is small on purpose -- one commit at the pin.
+FUTURE="$WORK/up-future"
+rm -rf "$FUTURE"
+git init -q -b main "$FUTURE"
+git -C "$FUTURE" config user.name t
+git -C "$FUTURE" config user.email t@t
+GIT_COMMITTER_DATE='2026-10-08T00:00:00+0000' git -C "$FUTURE" commit -q --allow-empty \
+	-m pin --date '2026-10-08T00:00:00+0000' --author 't <t@t>'
+touch -t 203001010000 "$FUTURE/.git/refs/heads/main"
+future_pin=$(git -C "$FUTURE" rev-parse HEAD)
+PIN_FUTURE="$WORK/pin-future"
+write_pin "$PIN_FUTURE" 2026-10-08 "$future_pin"
+run_case cache-future-mtime 0 keep \
+	MT76_PIN_FILE="$PIN_FUTURE" MT76_PATCH_DIR="$PATCHES" \
+	MT76_UPSTREAM_REPO="$FUTURE" MT76_UPSTREAM_REF=main
+row_is cache.age.days 0 \
+	"cache-future-mtime: a future-dated cache is 0 days old, not negative"
 
 [ "$FAILED" = 0 ] || {
 	printf 'check-mt76-pin cases failed\n' >&2

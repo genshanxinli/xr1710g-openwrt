@@ -294,6 +294,44 @@ class ReaderTest(unittest.TestCase):
         self.assertEqual(rows(out)["pin"], "unavailable (unknown)")
         self.assertEqual(rows(out)["verdict"], "blocked")
 
+    def test_the_cache_that_produced_the_number_is_named(self):
+        # This tree keeps two mt76 caches (mt76-upstream.git on main,
+        # mt76-openwrt.git on master) and each drives a different verdict.
+        # The age rows must carry the repo, ref, origin and freshness they were
+        # computed from, so a "backlog" here is never read as the other
+        # script's "keep".
+        repo, shas = self.make_upstream(["2026-10-08", "2026-10-20"])
+        subprocess.run(["git", "-C", str(repo), "remote", "add", "origin",
+                        "https://example.invalid/mt76-openwrt.git"],
+                       check=True, env=self.env, capture_output=True)
+        pin = self.write_pin("2026-10-08", shas[0])
+        rc, out, err = run(dict(self.env, MT76_PIN_FILE=str(pin),
+                                MT76_PIN_AGE_REPO=str(repo)))
+        self.assertEqual(rc, 0, out + err)
+        got = rows(out)
+        self.assertEqual(got["cache.repo"], str(repo))
+        self.assertEqual(got["cache.ref"], "master")
+        self.assertEqual(got["cache.origin"],
+                         "https://example.invalid/mt76-openwrt.git")
+        self.assertRegex(got["cache.fetched"], r"^\d{4}-\d{2}-\d{2}$")
+        self.assertRegex(got["cache.age.days"], r"^\d+$")
+        self.assertRegex(got["cache.mode"], r"^(offline|fetch)$")
+        self.assertNotRegex(out, r"\blive\b",
+                           "the cache is local; the output must not claim a live read")
+
+    def test_a_cache_without_an_origin_says_none(self):
+        repo, shas = self.make_upstream(["2026-10-08", "2026-10-20"])
+        pin = self.write_pin("2026-10-08", shas[0])
+        _, out, _ = run(dict(self.env, MT76_PIN_FILE=str(pin),
+                             MT76_PIN_AGE_REPO=str(repo)))
+        self.assertEqual(rows(out)["cache.origin"], "none")
+
+    def test_the_injected_path_does_not_pretend_to_have_read_a_cache(self):
+        rc, out, _ = run(inject("2026-11-01", "2026-11-10"))
+        self.assertEqual(rc, 0)
+        self.assertEqual(rows(out)["cache.repo"], "test-injection (not read)")
+        self.assertEqual(rows(out)["cache.fetched"], "unknown")
+
 
 class WorkflowTest(unittest.TestCase):
     """The scheduler must stay a monthly age check, not the quarterly gate."""
