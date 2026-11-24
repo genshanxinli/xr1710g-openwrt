@@ -1,0 +1,226 @@
+Subject: [PATCH] wifi: mt76: reclaim tokens whose txfree completion was lost
+
+Tokens of frames without per-mpdu status tracking (NO_ACK broadcast/
+multicast data) are only released by the txfree event. If that event
+is lost, the token, the skb and its pending AQL airtime leak forever:
+mt76_tx_status_check() only sweeps wcid->pktid, which never sees
+NO_ACK frames. On MT7996 the leaked airtime accumulates until mac80211
+gates all broadcast/multicast TXQs at the AQL multicast limit,
+silently killing broadcast/multicast traffic on all bands until
+reboot.
+
+Fix this by stamping the queue time on every skb and reclaiming from
+mt7996_mac_work tokens whose non-pktid skb has been pending for more
+than MT7996_TOKEN_SKB_TIMEOUT, completing the skb so mac80211 releases
+the pending airtime. Frames tracked in wcid->pktid are left to the
+existing txs/timeout path.
+
+The reclaim must not run ahead of the rings: on the host DMA path a
+descriptor that is still queued keeps the txwi that its cleanup later
+returns to the cache, so freeing the token first would put that same
+txwi on the cache list twice. Retire all three phys' MT_TXQ_PSD and
+MT_TXQ_BE the same way mt7996_mac_tx_free() does before touching the
+token idr.
+
+The sweep walks the whole token idr under token_lock, so it runs on
+the primary phy only, one tick in ten of MT7996_WATCHDOG_TIME: once
+per second instead of 3 phys x 10 Hz.
+
+---
+--- a/mt76.h	2026-11-24 14:33:02.189564114 +0800
++++ b/mt76.h	2026-11-24 14:33:02.510946322 +0800
+@@ -2147,6 +2147,8 @@
+ struct mt76_txwi_cache *
+ mt76_token_release(struct mt76_dev *dev, int token, bool *wake);
+ int mt76_token_consume(struct mt76_dev *dev, struct mt76_txwi_cache **ptxwi);
++bool mt76_tx_token_reclaim(struct mt76_dev *dev, struct list_head *list,
++			   unsigned long timeout);
+ void __mt76_set_tx_blocked(struct mt76_dev *dev, bool blocked);
+ int mt76_token_set_reserved(struct mt76_dev *dev, unsigned int band,
+ 			    unsigned int reserved);
+--- a/mt7996/mac.c
++++ b/mt7996/mac.c
+@@ -2910,14 +2910,64 @@
+ 	mutex_unlock(&dev->mt76.mutex);
+ }
+ 
++static void
++mt7996_mac_token_check(struct mt7996_dev *dev)
++{
++	struct mt76_txwi_cache *t, *tmp;
++	LIST_HEAD(txwi_list);
++	LIST_HEAD(free_list);
++	struct sk_buff *skb, *skb_tmp;
++	struct mt76_phy *p;
++	bool wake;
++	int i;
++
++	/* Retire whatever the rings already retired before dropping idr
++	 * entries: a descriptor still sitting on a ring keeps the txwi that
++	 * its cleanup later hands back to the cache, so freeing the token
++	 * here first would put the same txwi on the cache list twice.
++	 */
++	mt76_queue_tx_cleanup(dev, dev->mphy.q_tx[MT_TXQ_PSD], false);
++	mt76_queue_tx_cleanup(dev, dev->mphy.q_tx[MT_TXQ_BE], false);
++	for (i = MT_BAND1; i <= MT_BAND2; i++) {
++		p = dev->mt76.phys[i];
++		if (!p)
++			continue;
++
++		mt76_queue_tx_cleanup(dev, p->q_tx[MT_TXQ_PSD], false);
++		mt76_queue_tx_cleanup(dev, p->q_tx[MT_TXQ_BE], false);
++	}
++
++	wake = mt76_tx_token_reclaim(&dev->mt76, &txwi_list,
++				     MT7996_TOKEN_SKB_TIMEOUT);
++	if (list_empty(&txwi_list))
++		return;
++
++	list_for_each_entry_safe(t, tmp, &txwi_list, list) {
++		list_del_init(&t->list);
++		mt7996_txwi_free(dev, t, NULL, NULL, &free_list);
++	}
++
++	if (wake)
++		mt76_set_tx_blocked(&dev->mt76, false);
++
++	mt76_worker_schedule(&dev->mt76.tx_worker);
++
++	list_for_each_entry_safe(skb, skb_tmp, &free_list, list) {
++		skb_list_del_init(skb);
++		consume_skb(skb);
++	}
++}
++
+ void mt7996_mac_work(struct work_struct *work)
+ {
++	struct mt7996_dev *dev;
+ 	struct mt7996_phy *phy;
+ 	struct mt76_phy *mphy;
+ 
+ 	mphy = (struct mt76_phy *)container_of(work, struct mt76_phy,
+ 					       mac_work.work);
+ 	phy = mphy->priv;
++	dev = phy->dev;
+ 
+ 	mutex_lock(&mphy->dev->mutex);
+ 
+@@ -2940,6 +2990,14 @@
+ 
+ 	mt76_beacon_mon_check(mphy);
+ 	mt76_tx_status_check(mphy->dev, false);
++	/* The reclaim scans the whole token idr under token_lock and reaps
++	 * the ring of every phy: run it from the primary phy, one tick in
++	 * ten, i.e. once per second instead of 10x/s per phy. The per-phy
++	 * mac_work_count resets at 5 in this driver, so it cannot carry
++	 * that cadence.
++	 */
++	if (phy == &dev->phy && !(dev->token_check_count++ % 10))
++		mt7996_mac_token_check(phy->dev);
+ 
+ 	ieee80211_queue_delayed_work(mphy->hw, &mphy->mac_work,
+ 				     MT7996_WATCHDOG_TIME);
+--- a/mt7996/mt7996.h
++++ b/mt7996/mt7996.h
+@@ -20,6 +20,7 @@
+ 					 mt7996_max_interface_num(dev))
+ 
+ #define MT7996_WATCHDOG_TIME		(HZ / 10)
++#define MT7996_TOKEN_SKB_TIMEOUT	(5 * HZ)
+ #define MT7996_RESET_TIMEOUT		(30 * HZ)
+ 
+ #define MT7996_TX_RING_SIZE		2048
+@@ -508,6 +509,7 @@
+ 	u16 chainmask;
+ 	u8 chainshift[__MT_MAX_BAND];
+ 	u32 hif_idx;
++	u8 token_check_count;
+ 
+ 	struct work_struct init_work;
+ 	struct work_struct rc_work;
+--- a/tx.c	2026-11-24 14:33:02.148955345 +0800
++++ b/tx.c	2026-11-24 14:33:02.511527275 +0800
+@@ -129,6 +129,8 @@
+ 
+ 	memset(cb, 0, sizeof(*cb));
+ 
++	cb->jiffies = jiffies;
++
+ 	if (!wcid)
+ 		return MT_PACKET_ID_NO_ACK;
+ 
+@@ -1326,6 +1328,74 @@
+ }
+ EXPORT_SYMBOL_GPL(mt76_token_release);
+ 
++bool mt76_tx_token_reclaim(struct mt76_dev *dev, struct list_head *list,
++			   unsigned long timeout)
++{
++	struct mt76_txwi_cache *t;
++	bool wake = false;
++	int id, band;
++
++	spin_lock_bh(&dev->token_lock);
++
++	idr_for_each_entry(&dev->token, t, id) {
++		struct sk_buff *skb = t->skb;
++		struct mt76_tx_cb *cb;
++
++		if (!skb)
++			continue;
++
++		cb = mt76_tx_skb_cb(skb);
++		if (cb->pktid >= MT_PACKET_ID_FIRST)
++			continue;
++
++		if (!cb->jiffies ||
++		    time_is_after_jiffies(cb->jiffies + timeout))
++			continue;
++
++		idr_remove(&dev->token, id);
++
++		/* A reclaimed token has to leave the per-band quota the
++		 * same way mt76_token_release() does, or the reserved pool
++		 * drifts high and a band that 0017 stopped is never
++		 * re-evaluated
++		 */
++		band = t->phy_idx;
++		if (band >= __MT_MAX_BAND)
++			band = MT_BAND0;
++
++		dev->token_count--;
++		if (dev->token_band_used[band])
++			dev->token_band_used[band]--;
++
++		if (t->qid == MT_TXQ_PSD) {
++			struct mt76_phy *mphy = mt76_dev_phy(dev, t->phy_idx);
++			if (atomic_dec_and_test(&mphy->mgmt_tx_pending))
++				wake_up(&dev->tx_wait);
++		}
++
++#ifdef CONFIG_NET_MEDIATEK_SOC_WED
++		if (mtk_wed_device_active(&dev->mmio.wed) &&
++		    id >= dev->mmio.wed.wlan.token_start &&
++		    --dev->wed_token_count == 0)
++			wake_up(&dev->tx_wait);
++#endif
++
++		list_add_tail(&t->list, list);
++	}
++
++	if (READ_ONCE(dev->token_quota))
++		wake = mt76_token_quota_refresh(dev);
++	else if (dev->token_count <
++		 dev->token_size - MT76_TOKEN_FREE_THR &&
++		 dev->phy.q_tx[0]->blocked)
++		wake = true;
++
++	spin_unlock_bh(&dev->token_lock);
++
++	return wake;
++}
++EXPORT_SYMBOL_GPL(mt76_tx_token_reclaim);
++
+ struct mt76_txwi_cache *
+ mt76_rx_token_release(struct mt76_dev *dev, int token)
+ {

@@ -32,8 +32,79 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  mt7996/npu.c     | 69 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
  3 files changed, 101 insertions(+)
 
---- a/mt7996/npu.c
-+++ b/mt7996/npu.c
+--- a/mt7996/debugfs.c	2026-11-24 14:33:01.976963487 +0800
++++ b/mt7996/debugfs.c	2026-11-24 14:33:02.011153831 +0800
+@@ -1430,6 +1430,41 @@
+ 	return 0;
+ }
+ 
++static int mt7996_npu_band1_tx_show(struct seq_file *s, void *data)
++{
++	struct mt7996_dev *dev = s->private;
++	u32 total = 0;
++	int i;
++
++	seq_printf(s, "requested: %d\n", dev->npu_band1_tx.requested);
++	seq_printf(s, "allocated: %d\n", dev->npu_band1_tx.allocated);
++	seq_printf(s, "present: %d\n", dev->npu_band1_tx.present);
++
++	/* The band0/band2 windows are the reference layout; printing their DMA
++	 * addresses makes the band1 window (or its absence) directly comparable.
++	 */
++	for (i = 0; i < MT7996_NPU_TXD_SIZE; i++)
++		seq_printf(s, "band0_window%d_addr: 0x%llx\n", i,
++			   (unsigned long long)dev->npu_txd_addr[i]);
++	for (i = 0; i < MT7996_NPU_TXD_SIZE; i++)
++		seq_printf(s, "band2_window%d_addr: 0x%llx\n", i,
++			   (unsigned long long)
++			   dev->npu_txd_addr[MT7996_NPU_TXD_SIZE + i]);
++
++	for (i = 0; i < MT7996_NPU_TXD_SIZE; i++) {
++		seq_printf(s, "window%d_addr: 0x%llx\n", i,
++			   (unsigned long long)dev->npu_band1_tx.addr[i]);
++		seq_printf(s, "window%d_size: %u\n", i,
++			   dev->npu_band1_tx.size[i]);
++		total += dev->npu_band1_tx.size[i];
++	}
++	seq_printf(s, "total_size: %u\n", total);
++
++	return 0;
++}
++
++DEFINE_SHOW_ATTRIBUTE(mt7996_npu_band1_tx);
++
+ int mt7996_init_debugfs(struct mt7996_dev *dev)
+ {
+ 	struct dentry *dir;
+@@ -1441,6 +1476,8 @@
+ 	debugfs_create_file("xmit-queues", 0400, dir, dev,
+ 			    &mt7996_xmit_queues_fops);
+ 	debugfs_create_file("tx_stats", 0400, dir, dev, &mt7996_tx_stats_fops);
++	debugfs_create_file("npu_band1_tx", 0400, dir, dev,
++			    &mt7996_npu_band1_tx_fops);
+ 	debugfs_create_file("aql", 0400, dir, dev, &mt7996_aql_fops);
+ 	debugfs_create_file("sys_recovery", 0600, dir, dev,
+ 			    &mt7996_sys_recovery_ops);
+--- a/mt7996/mt7996.h	2026-11-24 14:33:01.930788003 +0800
++++ b/mt7996/mt7996.h	2026-11-24 14:33:02.034688008 +0800
+@@ -575,6 +575,15 @@
+ 
+ 	dma_addr_t npu_txd_addr[2 * MT7996_NPU_TXD_SIZE];
+ 
++	struct {
++		bool requested;
++		bool allocated;
++		bool present;
++		bool failed;
++		dma_addr_t addr[MT7996_NPU_TXD_SIZE];
++		u32 size[MT7996_NPU_TXD_SIZE];
++	} npu_band1_tx;
++
+ 	bool ibf;
+ 	u8 fw_debug_wm;
+ 	u8 fw_debug_wa;
+--- a/mt7996/npu.c	2026-10-28 20:48:05.000000000 +0800
++++ b/mt7996/npu.c	2026-11-24 14:33:02.034829520 +0800
 @@ -8,6 +8,11 @@
  
  #include "mt7996.h"
@@ -102,13 +173,19 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	err = mt7996_npu_offload_init(dev, npu);
  	if (err)
  		return err;
-@@ -556,10 +596,35 @@
+@@ -556,10 +596,51 @@
  	return 0;
  }
  
 +static void mt7996_npu_band1_tx_alloc(struct mt7996_dev *dev)
 +{
 +	int i;
++
++	/* A rolled back allocation must not be retried: the devres pool
++	 * cannot hand the same memory back, a retry only leaks another set
++	 */
++	if (dev->npu_band1_tx.failed)
++		return;
 +
 +	for (i = 0; i < MT7996_NPU_TXD_SIZE; i++) {
 +		u32 size = i == MT7996_NPU_TXD_SIZE - 1 ?
@@ -120,6 +197,16 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +			dev_warn_ratelimited(dev->mt76.dev,
 +					     "failed allocating band1 NPU TX buffer window %d, keeping host injection\n",
 +					     i);
++
++			/* drop the windows reserved so far, so a half built
++			 * set can never be read as an allocated one
++			 */
++			while (i--) {
++				dev->npu_band1_tx.size[i] = 0;
++				dev->npu_band1_tx.addr[i] = 0;
++			}
++			dev->npu_band1_tx.failed = true;
++
 +			return;
 +		}
 +
@@ -138,7 +225,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	BUILD_BUG_ON(ARRAY_SIZE(dev->npu_txd_addr) % 3);
  
  	for (i = 0; i < ARRAY_SIZE(dev->npu_txd_addr); i += 3) {
-@@ -584,6 +649,10 @@
+@@ -584,6 +665,10 @@
  			return -ENOMEM;
  	}
  
@@ -149,76 +236,3 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	mutex_lock(&dev->mt76.mutex);
  	err = __mt7996_npu_hw_init(dev);
  	mutex_unlock(&dev->mt76.mutex);
-
---- a/mt7996/mt7996.h
-+++ b/mt7996/mt7996.h
-@@ -564,6 +564,14 @@
- 
- 	dma_addr_t npu_txd_addr[2 * MT7996_NPU_TXD_SIZE];
- 
-+	struct {
-+		bool requested;
-+		bool allocated;
-+		bool present;
-+		dma_addr_t addr[MT7996_NPU_TXD_SIZE];
-+		u32 size[MT7996_NPU_TXD_SIZE];
-+	} npu_band1_tx;
-+
- 	bool ibf;
- 	u8 fw_debug_wm;
- 	u8 fw_debug_wa;
-
---- a/mt7996/debugfs.c
-+++ b/mt7996/debugfs.c
-@@ -1151,6 +1151,41 @@
- 	return 0;
- }
- 
-+static int mt7996_npu_band1_tx_show(struct seq_file *s, void *data)
-+{
-+	struct mt7996_dev *dev = s->private;
-+	u32 total = 0;
-+	int i;
-+
-+	seq_printf(s, "requested: %d\n", dev->npu_band1_tx.requested);
-+	seq_printf(s, "allocated: %d\n", dev->npu_band1_tx.allocated);
-+	seq_printf(s, "present: %d\n", dev->npu_band1_tx.present);
-+
-+	/* The band0/band2 windows are the reference layout; printing their DMA
-+	 * addresses makes the band1 window (or its absence) directly comparable.
-+	 */
-+	for (i = 0; i < MT7996_NPU_TXD_SIZE; i++)
-+		seq_printf(s, "band0_window%d_addr: 0x%llx\n", i,
-+			   (unsigned long long)dev->npu_txd_addr[i]);
-+	for (i = 0; i < MT7996_NPU_TXD_SIZE; i++)
-+		seq_printf(s, "band2_window%d_addr: 0x%llx\n", i,
-+			   (unsigned long long)
-+			   dev->npu_txd_addr[MT7996_NPU_TXD_SIZE + i]);
-+
-+	for (i = 0; i < MT7996_NPU_TXD_SIZE; i++) {
-+		seq_printf(s, "window%d_addr: 0x%llx\n", i,
-+			   (unsigned long long)dev->npu_band1_tx.addr[i]);
-+		seq_printf(s, "window%d_size: %u\n", i,
-+			   dev->npu_band1_tx.size[i]);
-+		total += dev->npu_band1_tx.size[i];
-+	}
-+	seq_printf(s, "total_size: %u\n", total);
-+
-+	return 0;
-+}
-+
-+DEFINE_SHOW_ATTRIBUTE(mt7996_npu_band1_tx);
-+
- int mt7996_init_debugfs(struct mt7996_dev *dev)
- {
- 	struct dentry *dir;
-@@ -1162,7 +1192,9 @@
- 	debugfs_create_file("xmit-queues", 0400, dir, dev,
- 			    &mt7996_xmit_queues_fops);
- 	debugfs_create_file("tx_stats", 0400, dir, dev, &mt7996_tx_stats_fops);
-+	debugfs_create_file("npu_band1_tx", 0400, dir, dev,
-+			    &mt7996_npu_band1_tx_fops);
- 	debugfs_create_file("aql", 0400, dir, dev, &mt7996_aql_fops);
- 	debugfs_create_file("sys_recovery", 0600, dir, dev,
- 			    &mt7996_sys_recovery_ops);
- 	debugfs_create_file("fw_debug_wm", 0600, dir, dev, &fops_fw_debug_wm);

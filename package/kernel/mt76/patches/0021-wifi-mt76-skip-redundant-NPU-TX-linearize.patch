@@ -31,7 +31,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/dma.c
 +++ b/dma.c
-@@ -8,6 +8,39 @@
+@@ -8,6 +8,36 @@
  #include "dma.h"
  #include "mt76_connac.h"
  
@@ -40,12 +40,9 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 + */
 +#define NPU_TX_MAX_FRAME_LEN	0x1fff
 +
-+/* The NPU TX descriptor (struct airoha_npu_tx_dma_desc) carries one address
-+ * plus one length field, so the NPU cannot gather fragments: a nonlinear skb
-+ * still has to be copied into a single contiguous buffer.  A linear skb,
-+ * which is what the stack hands over as long as the driver does not advertise
-+ * NETIF_F_SG, needs no copy at all, so count the frames that actually needed
-+ * one instead of calling skb_linearize() and calling it a linearize.
++/* The NPU TX descriptor carries one address and one length field, so a
++ * nonlinear skb has to be copied into one buffer, a linear skb (what the
++ * stack hands over without NETIF_F_SG) needs no copy at all.
 + */
 +static int mt76_npu_tx_prepare(struct mt76_dev *dev, struct sk_buff *skb)
 +{
@@ -59,11 +56,11 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +		atomic64_inc(&dev->npu_tx.passthrough);
 +	}
 +
-+	/* FIELD_PREP() on the 13-bit descriptor length silently truncates a
-+	 * longer frame, so count those too.
-+	 */
-+	if (skb->len > NPU_TX_MAX_FRAME_LEN)
++	/* FIELD_PREP() would store a truncated length for a longer frame. */
++	if (skb->len > NPU_TX_MAX_FRAME_LEN) {
 +		atomic64_inc(&dev->npu_tx.oversize);
++		return -EMSGSIZE;
++	}
 +
 +	return 0;
 +}
@@ -71,19 +68,22 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  static struct mt76_txwi_cache *
  mt76_alloc_txwi(struct mt76_dev *dev)
  {
-@@ -685,8 +718,10 @@
- 	if (test_bit(MT76_RESET, &phy->state))
- 		goto free_skb;
+@@ -687,8 +717,12 @@
  
 -	/* TODO: Take into account unlinear skbs */
 -	if (mt76_npu_device_active(dev) && skb_linearize(skb))
-+	/* The NPU TX descriptor has a single address and a single length, so
-+	 * the frame must be contiguous before it is handed to the NPU.
-+	 */
-+	if (mt76_npu_device_active(dev) && mt76_npu_tx_prepare(dev, skb))
- 		goto free_skb;
+-		goto free_skb;
++	/* The NPU TX descriptor has one address and one length field, so the
++	 * frame has to be contiguous and inside the 13-bit length field. */
++	if (mt76_npu_device_active(dev)) {
++		ret = mt76_npu_tx_prepare(dev, skb);
++		if (ret)
++			goto free_skb;
++	}
  
  	t = mt76_get_txwi(dev);
+ 	if (!t)
+ 		goto free_skb;
 --- a/debugfs.c
 +++ b/debugfs.c
 @@ -160,6 +160,22 @@

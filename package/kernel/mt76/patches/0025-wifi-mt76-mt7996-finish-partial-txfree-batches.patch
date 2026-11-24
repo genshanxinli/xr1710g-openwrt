@@ -1,0 +1,70 @@
+From: OpenWrt XR1710G <dev@xr1710g.local>
+Subject: [PATCH] wifi: mt76: mt7996: finish partial txfree batches
+
+A firmware txfree event can be truncated in the middle of a MPDU
+entry: the tail of the DMA buffer is still parsed as if it held a
+complete entry, so the last couple of words of a short event get
+interpreted as a wcid pair or an msdu id. Bound every read by the
+size still left in the buffer instead of just the end pointer,
+including the version 7 pair word, and reject events that are too
+short to even hold the tx_free header. Pull the whole skb into the
+linear buffer before parsing it, the payload may still be paged.
+
+---
+
+--- a/mt7996/mac.c	2026-11-24 14:33:02.317074619 +0800
++++ b/mt7996/mac.c	2026-11-24 14:33:02.357602374 +0800
+@@ -1255,11 +1255,17 @@
+ 	struct mt76_wcid *wcid = NULL;
+ 	LIST_HEAD(free_list);
+ 	struct sk_buff *skb, *tmp;
+-	void *end = data + len;
++	void *end;
+ 	bool wake = false;
+ 	u16 total, count = 0;
+ 	u8 ver;
+ 
++	/* tx_free[0] and tx_free[1] are read unconditionally below */
++	if (len < 2 * (int)sizeof(*tx_free))
++		return;
++
++	end = data + len;
++
+ 	/* clean DMA queues and unmap buffers first */
+ 	mt76_queue_tx_cleanup(dev, dev->mphy.q_tx[MT_TXQ_PSD], false);
+ 	mt76_queue_tx_cleanup(dev, dev->mphy.q_tx[MT_TXQ_BE], false);
+@@ -1281,8 +1287,9 @@
+ 		u32 msdu, info;
+ 		u8 i;
+ 
+-		if (WARN_ON_ONCE((void *)cur_info >= end))
+-			return;
++		if ((void *)cur_info >= end ||
++		    end - (void *)cur_info < sizeof(*cur_info))
++			break;
+ 		/* 1'b1: new wcid pair.
+ 		 * 1'b0: msdu_id with the same 'wcid pair' as above.
+ 		 */
+@@ -1304,7 +1311,8 @@
+ 				goto next;
+ next:
+ 			/* ver 7 has a new DW with pair = 1, skip it */
+-			if (ver == 7 && ((void *)(cur_info + 1) < end) &&
++			if (ver == 7 &&
++			    end - (void *)(cur_info + 1) >= sizeof(*cur_info) &&
+ 			    (le32_to_cpu(*(cur_info + 1)) & MT_TXFREE_INFO_PAIR))
+ 				cur_info++;
+ 			continue;
+@@ -1584,7 +1592,11 @@
+ 			break;
+ 		}
+ 
+-		mt7996_mac_tx_free(dev, skb->data, skb->len);
++		/* the firmware may hand us a short event; don't parse
++		 * past the end of the linear buffer
++		 */
++		if (pskb_may_pull(skb, skb->len))
++			mt7996_mac_tx_free(dev, skb->data, skb->len);
+ 		napi_consume_skb(skb, 1);
+ 		break;
+ 	case PKT_TYPE_RX_EVENT:

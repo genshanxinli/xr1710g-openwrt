@@ -100,8 +100,20 @@ class NpuTxLinearizeTest(unittest.TestCase):
     def test_call_site_keeps_the_npu_gate(self):
         # Without the NPU the frames go out through the host path and the
         # accounting must not run there.
-        self.assertIn("mt76_npu_device_active(dev) && "
-                      "mt76_npu_tx_prepare(dev, skb)", self.text)
+        #
+        # The helper reports why it could not prepare the frame (-ENOMEM from
+        # skb_linearize(), -EMSGSIZE above the 13-bit descriptor length), so
+        # the gate is a block that keeps the value and aborts the transmit.
+        # The one-liner it replaced ("... && mt76_npu_tx_prepare(dev, skb)")
+        # only propagated a negative return by accident of C's short-circuit
+        # result and said nothing about which failure happened.
+        self.assertIn("if (mt76_npu_device_active(dev)) {", self.text)
+        gate = self.text.split("if (mt76_npu_device_active(dev)) {", 1)[1]
+        self.assertIn("ret = mt76_npu_tx_prepare(dev, skb);", gate.split("}", 1)[0])
+        self.assertIn("if (ret)", gate.split("}", 1)[0])
+        self.assertIn("goto free_skb;", gate.split("}", 1)[0])
+        self.assertNotIn("mt76_npu_device_active(dev) && "
+                         "mt76_npu_tx_prepare(dev, skb)", self.text)
 
     def test_npu_tx_debugfs_reports_the_counters(self):
         for line in ("passthrough: %llu", "linearized: %llu",
