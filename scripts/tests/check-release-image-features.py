@@ -493,7 +493,24 @@ def test_capture() -> None:
             "cpu/tx-16   min_limit = 210290   max_limit = 529246   max_inflight = 116038\n"
         )
         rc, out = run_gate("--capture", str(good), "--skip-source", "--skip-build", "--skip-image")
-        check("inflight >= 64 KiB passes", rc == 0, out[-300:])
+        # The probe prints the sysfs field names (min_limit/max_limit), not "limit".
+        # The note is the only observable that separates "limit was read" from
+        # "limit was skipped", so assert its value, not just the exit code.
+        check(
+            "inflight >= 64 KiB passes and reports the observed BQL limit",
+            rc == 0 and "observed BQL limit up to 529246 bytes" in out,
+            out[-300:],
+        )
+
+        # A BQL cap below 64 KiB can never hold 64 KiB in flight, so a high
+        # inflight sample alone must not pass: the limit has to be checked too.
+        capped = root / "capped.txt"
+        capped.write_text(
+            "@@@BQL shrink\n"
+            "cpu/tx-16   min_limit = 20000   max_limit = 40000   max_inflight = 116038\n"
+        )
+        rc, out = run_gate("--capture", str(capped), "--skip-source", "--skip-build", "--skip-image")
+        check("BQL limit below 64 KiB fails", rc == 1 and "below" in out, out[-300:])
 
         low = root / "low.txt"
         low.write_text("cpu/tx-16 l=2908 i=2884\n")

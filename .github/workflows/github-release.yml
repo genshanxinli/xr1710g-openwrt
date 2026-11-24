@@ -3,6 +3,14 @@ name: Create GitHub release
 permissions:
   contents: write
 
+# One release per repository at a time.  Both tiers write outside this repo and
+# share the workspace tiers of the builder named by XR1710G_BUILD_RUNNER, so a
+# cancelled run would leave a half-packed distfeeds/ and a half-published
+# release behind: never cancel, queue instead.
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
+
 on:
   push:
     tags:
@@ -39,11 +47,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          # This job exists to pack the bin/ that the previous `make` left in
+          # this workspace.  The default clean runs `git clean -ffdx`, which
+          # deletes bin/ (and distfeeds/, and the signing key) before the pack
+          # step that is supposed to read them.
+          clean: false
 
       - name: Pack distfeeds
         run: |
           if [ ! -d bin/packages ] && [ ! -d bin/targets ]; then
-            echo "::error::$PWD carries no bin/ from a finished build; tier 1 needs the builder named by the repository variable XR1710G_BUILD_RUNNER"
+            echo "::error::$PWD carries no bin/ from a finished build; tier 1 needs the builder named by the repository variable XR1710G_BUILD_RUNNER (is the checkout missing clean: false?)"
             exit 1
           fi
           ./scripts/build-distfeeds.sh distfeeds
@@ -71,6 +85,13 @@ jobs:
   # (index against the .apk files on disk) run against the *published* bytes.
   # A tag with no matching build, a release whose feeds went missing, or a feed
   # tree that no longer agrees with its index is red here, not on a device.
+  #
+  # Then publish the tarball this tier just verified.  It used to end at `ls -l`
+  # and let the file die with the runner: the tag push went green, the workflow
+  # named "Create GitHub release" created no release, and the verified feeds
+  # were thrown away (#P0-2).  The `files:` list is deliberately only the
+  # tarball -- tier 2 has no bin/targets, and `fail_on_unmatched_files: true`
+  # would turn the first such glob into a red tag.
   feed-source:
     if: vars.XR1710G_BUILD_RUNNER == ''
     runs-on: ubuntu-latest
@@ -140,3 +161,12 @@ jobs:
           tar -czf distfeeds.tar.gz -C distfeeds .
           test -s distfeeds.tar.gz
           ls -l distfeeds.tar.gz
+
+      - name: Release
+        uses: softprops/action-gh-release@v3
+        with:
+          draft: true
+          prerelease: true
+          fail_on_unmatched_files: true
+          files: |
+            distfeeds.tar.gz

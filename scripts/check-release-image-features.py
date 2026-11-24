@@ -94,7 +94,7 @@ MAKE_PATCHVER_RE = re.compile(r"(?m)^\s*KERNEL(?:_TESTING)?_PATCHVER\s*:?=\s*(\d
 VERSION_RE = re.compile(rb"Linux version [^\x00\n\r]{1,200}")
 INFLIGHT_RE = re.compile(r"(?i)\b(?:max_)?inflight\b\s*[:=]?\s*(\d+)")
 INFLIGHT_I_RE = re.compile(r"(?i)\bi\s*=\s*(\d+)")
-LIMIT_RE = re.compile(r"(?i)\blimit(?:_max)?\s*[:=]\s*(\d+)")
+LIMIT_RE = re.compile(r"(?i)(?<![a-z0-9_])(?:max_|min_)?limit(?:_max)?\s*[:=]\s*(\d+)")
 BQL_STAT_RE = re.compile(r"(?i)\b(?:bql|byte_queue|inflight|dql)\b")
 
 
@@ -830,6 +830,13 @@ def check_capture_stage(capture: Path, min_inflight: int, report: Report) -> boo
     maximum, where = max(values, key=lambda item: item[0])
     if limits:
         report.note(f"observed BQL limit up to {max(limits)} bytes")
+        if max(limits) < min_inflight:
+            report.fail(
+                f"BQL limit {max(limits)} bytes is below {min_inflight} bytes "
+                f"({min_inflight // 1024} KiB); the driver's cap is smaller than the in-flight "
+                "bytes 974 must hold, so a high inflight sample cannot be sustained"
+            )
+            return False
     if ethtool_hits:
         report.note(f"ethtool -S BQL-looking counters: {len(ethtool_hits)} (e.g. {ethtool_hits[0]})")
     elif ethtool_seen:

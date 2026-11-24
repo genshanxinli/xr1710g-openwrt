@@ -19,12 +19,16 @@ keeps them apart:
   |   |                                                               | tree it is checking        |
   | 6 | missing build_dir/bin fails loudly, it does not pass           | a silent SKIP is the       |
   |   |                                                               | original defect            |
+  | 7 | every path that gates the push also gates the PR               | a PR that touches          |
+  |   |                                                               | patches-*/ was not gated   |
+  |   |                                                               | by this file at all (#P1-1)|
 
 Run from the repository root:
 
     python3 scripts/tests/test_release_image_gate_workflow.py
 """
 
+import copy
 import re
 import unittest
 from pathlib import Path
@@ -50,6 +54,27 @@ def gate_steps(data: dict) -> list[tuple[str, dict]]:
         for step in job.get("steps", [])
         if GATE in (step.get("run") or "")
     ]
+
+
+def path_filter_problems(data: dict) -> list[str]:
+    """Paths that gate the push but not the PR.
+
+    The PR list may be a superset of the push list (a PR can run a gate the
+    branch push does not), but never a subset: a path that only re-runs on merge
+    is a gate the PR passed by not being asked.
+    """
+    triggers = data.get("on") or data.get(True)
+    push = set(triggers["push"]["paths"])
+    pr = set(triggers["pull_request"]["paths"])
+    return sorted(push - pr)
+
+
+def without_pr_path(text: str, path: str) -> str:
+    """Delete one entry from the pull_request paths list, leaving push alone."""
+    start = text.index("  pull_request:")
+    end = text.index("\n  push:", start)
+    block = text[start:end]
+    return text[:start] + block.replace("      - '%s'\n" % path, "", 1) + text[end:]
 
 
 class TierTest(unittest.TestCase):
@@ -142,6 +167,30 @@ class TierTest(unittest.TestCase):
         joined = "\n".join(runs)
         self.assertIn("scripts/tests/check-release-image-features.py", joined)
         self.assertIn("scripts/tests/test_release_image_gate_workflow.py", joined)
+
+    def test_pr_and_push_path_filters_agree(self):
+        self.assertEqual(
+            path_filter_problems(self.data), [],
+            "a path that gates the push does not gate the PR: %r"
+            % (path_filter_problems(self.data),),
+        )
+
+    def test_dropping_a_pr_path_turns_it_red(self):
+        # Same file, one filter removed from the PR trigger: the check must
+        # notice, or it would pass on a list it never compared.
+        path = "target/linux/airoha/patches-*/**"
+        mutated = without_pr_path(WORKFLOW.read_text(encoding="utf-8"), path)
+        self.assertNotEqual(mutated, WORKFLOW.read_text(encoding="utf-8"),
+                            "the PR paths filter %r was not in the PR block" % path)
+        self.assertIn(path, path_filter_problems(yaml.safe_load(mutated)),
+                      "the check stayed green with the PR filter deleted")
+
+    def test_a_pr_superset_stays_green(self):
+        data = copy.deepcopy(self.data)
+        triggers = data.get("on") or data.get(True)
+        triggers["pull_request"]["paths"].append("target/linux/airoha/dts/**")
+        self.assertEqual(path_filter_problems(data), [],
+                         "a path that only runs on the PR is allowed")
 
 
 if __name__ == "__main__":

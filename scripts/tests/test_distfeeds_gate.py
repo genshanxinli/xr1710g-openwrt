@@ -5,14 +5,18 @@ Issue #6: the release job listed distfeeds.tar.gz but ran with
 ``fail_on_unmatched_files: false`` and skipped the packing step when bin/ was
 empty, so a release could ship without any feeds and still look green.  A
 device then had no way to `apk add` anything that was not already in the
-image.  These tests pin the two halves of the fix:
+image.  These tests pin the properties of the fix:
 
   a. the release actually demands its files (``fail_on_unmatched_files: true``);
   b. the pack step builds the tree and asserts the tarball exists;
-  c. ``build-distfeeds.sh --emit-build-patch`` stays byte-stable;
-  d. flipping (a) back to ``false`` makes this suite red.
+  c. every ``files:`` block lists ``distfeeds.tar.gz`` -- the asset this file is
+     about; ``fail_on_unmatched_files`` alone guards whatever is listed, so
+     deleting the tarball from the list would disable the guard it feeds;
+  d. ``build-distfeeds.sh --emit-build-patch`` stays byte-stable;
+  e. flipping (a) back to ``false`` or dropping the tarball from ``files:``
+     makes this suite red.
 
-(c) is the reason no patch file is stored in this tree.  The hunk targets
+(d) is the reason no patch file is stored in this tree.  The hunk targets
 ``.github/workflows/build.yml`` in the separate genshanxinli/xr1710g-builds
 repo, which this tree cannot see, so a stored copy would rot unnoticed; the
 sha256 constant below is the reproducibility evidence instead.  When the
@@ -60,6 +64,25 @@ def distfeeds_step(text):
     return "\n".join(body)
 
 
+def asset_lists(text):
+    """Every `files:` list in the workflow, as lists of entries."""
+    out, current, indent = [], None, 0
+    for line in text.splitlines():
+        if re.match(r"^\s*files:\s*\|", line):
+            current, indent = [], len(line) - len(line.lstrip())
+            out.append(current)
+            continue
+        if current is None:
+            continue
+        if not line.strip():
+            continue
+        if len(line) - len(line.lstrip()) <= indent:
+            current = None
+            continue
+        current.append(line.strip())
+    return out
+
+
 def workflow_problems(text):
     """Every reason the release could ship without its feeds.
 
@@ -69,11 +92,23 @@ def workflow_problems(text):
     problems = []
     wanted = re.findall(r"^\s*fail_on_unmatched_files:\s*(\S+)\s*$", text,
                         re.MULTILINE)
-    if wanted != ["true"]:
+    if not wanted or any(value != "true" for value in wanted):
         problems.append(
-            "fail_on_unmatched_files is %r, not `true`: an absent "
-            "distfeeds.tar.gz is dropped from the release without failing"
+            "fail_on_unmatched_files is %r, not `true` on every release step: an "
+            "absent distfeeds.tar.gz is dropped from the release without failing"
             % (wanted,))
+
+    # Both tiers list the tarball in `files:`.  `fail_on_unmatched_files` only
+    # guards the entries that are there, so dropping the tarball itself would
+    # take the guard away without touching the flag this file pins.
+    lists = asset_lists(text)
+    if not lists:
+        problems.append("no `files:` block lists the release assets")
+    for entries in lists:
+        if "distfeeds.tar.gz" not in entries:
+            problems.append(
+                "a `files:` block does not list distfeeds.tar.gz (%r): the feed "
+                "tarball is what this gate exists for" % (entries,))
 
     step = distfeeds_step(text)
     if not step:
@@ -107,6 +142,18 @@ class DistfeedsGate(unittest.TestCase):
             copy.write_text(mutated)
             self.assertTrue(workflow_problems(copy.read_text()),
                             "gate stayed green with a droppable asset")
+
+    def test_gate_turns_red_when_the_feeds_are_not_listed(self):
+        text = WORKFLOW.read_text()
+        mutated = text.replace("            distfeeds.tar.gz\n", "", 1)
+        self.assertNotEqual(mutated, text,
+                            "workflow no longer lists distfeeds.tar.gz")
+        with tempfile.TemporaryDirectory() as tmp:
+            copy = Path(tmp) / "github-release.yml"
+            copy.write_text(mutated)
+            self.assertTrue(workflow_problems(copy.read_text()),
+                            "gate stayed green with the feeds left out of "
+                            "`files:`")
 
 
 if __name__ == "__main__":

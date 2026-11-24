@@ -19,25 +19,29 @@ name: Shell syntax
 # program under test (2026-11-21: that pattern deleted a 100+ GB build tree).
 # It rides in this workflow rather than a new file so the job name - and any
 # branch protection keyed on it - stays put; it needs no shell to run.
+#
+# The third gate is scripts/check-uboot-ubi-volumes.py: a U-Boot environment
+# that names a UBI volume the board DTS does not define only shows up as a
+# boot failure.  It had zero callers until this workflow; same for the offline
+# `.sh` behaviour tests and the Python suite below, which is why a green
+# "parse-only" job never said anything about behaviour.
 
 on:
   pull_request:
     paths:
       - '**/*.sh'
-      - 'scripts/check-shell-syntax.py'
-      - 'scripts/tests/test_check_shell_syntax.py'
-      - 'scripts/check-test-cleanup-safety.py'
-      - 'scripts/tests/**/*.py'
+      - 'scripts/**'
+      - 'package/boot/**'
+      - 'target/linux/airoha/dts/**'
       - '.github/workflows/shell-syntax.yml'
   push:
     branches:
       - xr1710g
     paths:
       - '**/*.sh'
-      - 'scripts/check-shell-syntax.py'
-      - 'scripts/tests/test_check_shell_syntax.py'
-      - 'scripts/check-test-cleanup-safety.py'
-      - 'scripts/tests/**/*.py'
+      - 'scripts/**'
+      - 'package/boot/**'
+      - 'target/linux/airoha/dts/**'
       - '.github/workflows/shell-syntax.yml'
   workflow_dispatch:
 
@@ -52,7 +56,9 @@ jobs:
   syntax:
     name: Parse each script with its own interpreter
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    # The Python suite runs ~470 tests and dominates the job (~4 min on a
+    # developer box); 5 minutes left no headroom for a cold runner.
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -74,3 +80,42 @@ jobs:
 
       - name: Refuse cleanups of a path parsed out of the script under test
         run: python3 scripts/check-test-cleanup-safety.py
+
+      # Prove the parser on synthetic fixtures, then run it on the real
+      # U-Boot environment and DTS: the selftest cannot see today's tree.
+      - name: Test the UBI volume checker
+        run: python3 scripts/check-uboot-ubi-volumes.py --selftest
+
+      - name: Refuse a U-Boot environment volume the DTS does not define
+        run: python3 scripts/check-uboot-ubi-volumes.py
+
+      # Offline behaviour tests for the .sh gates.  An explicit list, not a
+      # glob: a new case lands here by hand, so one that needs a box, a build
+      # tree or the network cannot wander in through a wildcard.
+      - name: Run the offline .sh behaviour tests
+        run: |
+          set -eu
+          for t in \
+            scripts/tests/test_check_mt76_pin.sh \
+            scripts/tests/test_flash_gate.sh \
+            scripts/tests/test_flash_gate_offline.sh \
+            scripts/tests/test_flash_gate_exitcodes.sh \
+            scripts/tests/test_compat_not_forceable.sh \
+            scripts/tests/test_build_distfeeds.sh \
+            scripts/tests/test_uci_restore_guard.sh \
+            scripts/tests/test_wan_defaults_rollback.sh \
+            scripts/tests/test-wan-masq.sh \
+            scripts/tests/test-hotplug-wan-lro-pppoe-flowtable.sh \
+            scripts/tests/test_pppoe_4path.sh
+          do
+            case "$(head -n 1 "$t")" in
+              *bash*) bash "$t" ;;
+              *) sh "$t" ;;
+            esac
+          done
+
+      # Nothing above runs the Python suite, so a broken module under
+      # scripts/tests/ used to be invisible to CI.  Same discovery command
+      # AGENTS.md documents for a local gate run.
+      - name: Run the Python test suite
+        run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'

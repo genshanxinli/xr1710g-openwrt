@@ -25,6 +25,9 @@ on:
       - 'scripts/check-release-image-features.py'
       - 'scripts/tests/check-release-image-features.py'
       - 'scripts/tests/test_release_image_gate_workflow.py'
+      # Same list as push, or a PR that touches the patch queue passes a gate
+      # that only asks the question after the merge.
+      - 'target/linux/airoha/patches-*/**'
       - '.github/workflows/check-release-image-features.yml'
   push:
     branches:

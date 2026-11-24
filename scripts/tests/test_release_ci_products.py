@@ -13,19 +13,26 @@ it.  Both repos are public, so that fetch reads a release asset anonymously:
 `actions/download-artifact` across repositories would need `actions:read` on the
 other repo, i.e. a long-lived PAT.
 
-This test pins the four properties that keep the second tier honest:
+This test pins the six properties that keep the two tiers honest:
 
   | # | property                                                   | why                          |
   |---|------------------------------------------------------------|------------------------------|
   | 1 | a step fetches BUILDS_REPO's release assets                 | nothing else supplies bin/   |
   | 2 | that step cannot fail quietly (no `|| true`, no            | a swallowed 404 is a release |
   |   | `continue-on-error`), and it reports `::error::` + exit 1   | with no feeds                |
-  | 3 | `fail_on_unmatched_files` is exactly `true`                | #320's gate, not regressed   |
+  | 3 | `fail_on_unmatched_files` is exactly `true` on every        | #320's gate, not regressed   |
+  |   | release step                                                |                              |
   | 4 | the pack step still asserts `test -s distfeeds.tar.gz`     | idem                         |
+  | 5 | tier 1's checkout passes `clean: false`                     | the default `git clean      |
+  |   |                                                             | -ffdx` deletes the bin/ it  |
+  |   |                                                             | is about to pack (#P0-1)    |
+  | 6 | tier 2 publishes the tarball it verified, or fails loudly   | a green job that releases   |
+  |   |                                                             | nothing (#P0-2)             |
 
-Each of the four is also proven by mutation: a bad copy of the same file must be
-reported, so a future edit that deletes the fetch or flips a flag cannot leave
-this file green (`test_*_turns_red`).
+Each of the six is also proven by mutation: a bad copy of the same file must be
+reported, so a future edit that deletes the fetch, the publish step, or the
+`clean: false`, or flips a flag, cannot leave this file green
+(`test_*_turns_red`).
 
 The workflow under test is `$XR1710G_RELEASE_WORKFLOW` when set, else this
 repo's.  The path is printed on import, because a red proof that silently read
@@ -107,10 +114,10 @@ def problems(text):
 
     wanted = re.findall(r"^\s*fail_on_unmatched_files:\s*(\S+)\s*$", text,
                         re.MULTILINE)
-    if wanted != ["true"]:
+    if not wanted or any(value != "true" for value in wanted):
         found.append(
-            "fail_on_unmatched_files is %r, not `true`: an absent "
-            "distfeeds.tar.gz is dropped from the release without failing"
+            "fail_on_unmatched_files is %r, not `true` on every release step: an "
+            "absent distfeeds.tar.gz is dropped from the release without failing"
             % (wanted,))
 
     if "test -s distfeeds.tar.gz" not in text:
@@ -120,13 +127,91 @@ def problems(text):
     if "vars.XR1710G_BUILD_RUNNER" not in text:
         found.append("tier 1 is not gated on vars.XR1710G_BUILD_RUNNER, so it "
                      "runs where bin/ cannot exist")
+
+    # P0-1: the tier only exists to pack the bin/ that the previous `make` left
+    # in the workspace, and actions/checkout cleans with `git clean -ffdx`
+    # unless told otherwise -- it would delete its own input before packing it.
+    if not cleans_nothing(text):
+        found.append(
+            "tier 1's checkout does not pass `clean: false`: the default "
+            "`git clean -ffdx` deletes the bin/ the job is about to pack (#P0-1)")
+
+    # P0-2: tier 2 verified the published feeds, wrote distfeeds.tar.gz and then
+    # let it die with the runner -- a tag push went green and published nothing.
+    if not publishes_or_fails(text):
+        found.append(
+            "tier 2 verified the feeds, wrote distfeeds.tar.gz, and released "
+            "nothing: neither a release step nor an explicit failure (#P0-2)")
     return found
 
 
 def local_tier(text):
     """The tier-1 job body: everything up to the next job key."""
-    match = re.search(r"^  release:\n(.*?)(?=^  \S)", text, re.MULTILINE | re.DOTALL)
+    match = re.search(r"^  release:\n(.*?)(?=^  \S|\Z)", text,
+                      re.MULTILINE | re.DOTALL)
     return match.group(0) if match else ""
+
+
+def checkout_step(text):
+    """The tier-1 Checkout step body, or ""."""
+    for name, body in steps(local_tier(text)):
+        if name == "Checkout":
+            return body
+    return ""
+
+
+def cleans_nothing(text):
+    """True only when the Checkout step itself passes `clean: false`.
+
+    A substring search over the whole job body is satisfied by the `::error::`
+    prose that mentions `clean: false?`, so the key has to be read where it
+    lives: inside the Checkout step, as a key of its own.
+    """
+    return re.search(r"^\s*clean:\s*false\s*$", checkout_step(text),
+                     re.MULTILINE) is not None
+
+
+def feed_source_body(text):
+    """The tier-2 job body, or "" when the job is gone."""
+    match = re.search(r"^  feed-source:\n(.*?)(?=^  \S|\Z)", text,
+                      re.MULTILINE | re.DOTALL)
+    return match.group(0) if match else ""
+
+
+def tier_two_release_step(text):
+    """The tier-2 step that publishes released assets, or ""."""
+    for _name, body in steps(feed_source_body(text)):
+        if "action-gh-release" in body or "gh release create" in body:
+            return body
+    return ""
+
+
+def publishes_or_fails(text):
+    """Tier 2 either publishes what it verified, or fails loudly and says why.
+
+    Both are acceptable products; a green job that does neither is not.  The
+    "released nothing" arm has to find the `::error::`, the non-zero exit and
+    the statement in one step: this job's fetch step already ends in `exit 1`
+    with an `::error::`, so markers read from anywhere in the job would let a
+    comment stand in for the failure.
+    """
+    for _name, step in steps(feed_source_body(text)):
+        if "action-gh-release" in step or "gh release create" in step:
+            return True
+        if ("released nothing" in step and "::error::" in step
+                and re.search(r"\bexit 1\b", step)):
+            return True
+    return False
+
+
+def without_tier_two_release(text):
+    """Drop tier 2's publish step (it is the job's last step)."""
+    at = text.find("  feed-source:")
+    if at < 0:
+        return text
+    head, tail = text[:at], text[at:]
+    step = tail.find("      - name: Release\n")
+    return head + tail[:step] if step >= 0 else text
 
 
 def drop_step(text, name):
@@ -220,6 +305,48 @@ class ReleaseTier(unittest.TestCase):
         self.assertNotEqual(copy.read_text(), self.text)
         self.assertTrue(problems(copy.read_text()),
                         "gate stayed green without `test -s distfeeds.tar.gz`")
+
+    def test_tier_one_checkout_keeps_the_build_tree(self):
+        """Tier 1's entire input is the bin/ a previous `make` left behind."""
+        self.assertTrue(cleans_nothing(self.text),
+                        "tier-1 checkout runs `git clean -ffdx` and deletes the "
+                        "bin/ it is about to pack")
+
+    def test_cleaning_the_tier_one_checkout_turns_it_red(self):
+        copy = bad_copy(self.text,
+                        lambda t: t.replace("          clean: false\n", "", 1))
+        self.assertNotEqual(copy.read_text(), self.text,
+                            "the tier-1 `clean: false` was not found")
+        self.assertTrue(problems(copy.read_text()),
+                        "gate stayed green with a checkout that cleans bin/ away")
+
+    def test_tier_two_publishes_or_says_it_published_nothing(self):
+        self.assertTrue(publishes_or_fails(self.text),
+                        "tier 2 verified the feeds, wrote distfeeds.tar.gz, and "
+                        "released nothing")
+
+    def test_the_tier_two_release_step_ships_the_verified_tarball(self):
+        step = tier_two_release_step(self.text)
+        self.assertTrue(step, "no release step in the feed-source tier")
+        self.assertIn("distfeeds.tar.gz", step,
+                      "the published asset is the tarball the tier verified")
+        self.assertIn("draft: true", step)
+        self.assertIn("prerelease: true", step)
+        self.assertIn("fail_on_unmatched_files: true", step)
+        # Tier 2 has no bin/targets: listing those globs with
+        # fail_on_unmatched_files: true would turn every tag push red.
+        self.assertNotIn("bin/targets", step,
+                         "tier 2 has no bin/targets; an unmatched glob there "
+                         "fails the release")
+
+    def test_deleting_the_tier_two_release_turns_it_red(self):
+        copy = bad_copy(self.text, without_tier_two_release)
+        self.assertNotEqual(copy.read_text(), self.text,
+                            "the tier-2 release step was not found")
+        self.assertFalse(publishes_or_fails(copy.read_text()),
+                         "the check stayed green after deleting the publish step")
+        self.assertTrue(problems(copy.read_text()),
+                        "problems() stayed green with tier 2 publishing nothing")
 
 
 if __name__ == "__main__":
