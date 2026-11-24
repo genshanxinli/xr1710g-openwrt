@@ -90,6 +90,13 @@ USAGE=$PPE_DIR/usage
 BIND_RATE_FILE=$PPE_DIR/bind_rate
 
 PROBE_DURATION=3
+# /proc/stat counts in USER_HZ = CLK_TCK, which is 100 on most arm64 builds
+# but not on every one of them; converting ticks with a hardcoded 100 puts a
+# silent factor on the only number this bench exists to report.
+BENCH_HZ=$(getconf CLK_TCK 2>/dev/null) || BENCH_HZ=100
+case $BENCH_HZ in
+'' | *[!0-9]* | 0) BENCH_HZ=100 ;;
+esac
 TIMEOUT_BIN=
 TMPDIR_RUN=
 RAW_LOG=
@@ -883,6 +890,27 @@ run_iperf() {
 	return "$st"
 }
 
+# us of softirq per wire packet, from the softirq tick delta alone.
+#
+# The aggregate `cpu ` line is a sum over every core, so scaling it by the
+# wall clock divides the answer by ncpu: a 4-core board reports a quarter of
+# the real cost.  Ticks / HZ is seconds of softirq, and seconds / packets is
+# the per-packet cost, with no core count in it at all.
+softirq_us_per_wire() {
+	local soft_ticks=$1 wire_pkts=$2 hz=${3:-}
+	case $hz in
+	'' | *[!0-9]* | 0) hz=100 ;;
+	esac
+	case $soft_ticks in
+	'' | *[!0-9]*) return 1 ;;
+	esac
+	case $wire_pkts in
+	'' | *[!0-9]* | 0) return 1 ;;
+	esac
+	awk -v s="$soft_ticks" -v w="$wire_pkts" -v hz="$hz" \
+		'BEGIN { printf "%.2f", s * 1000000 / (hz * w) }'
+}
+
 probe_peer() {
 	local json="$TMPDIR_RUN/probe.json"
 	local st sbps ssecs sret rbps
@@ -974,7 +1002,7 @@ run_arm() {
 	local b_total b_soft b_wire b_bound a_total a_soft a_wire a_bound
 	local sbps ssecs sret rbps
 	local sender receiver retr secs total_ticks soft_ticks wire_pkts
-	local share us bound_delta n bnd unb bit23 bnd23 ib1s status
+	local share us cost bound_delta n bnd unb bit23 bnd23 ib1s status
 
 	json="$TMPDIR_RUN/arm$k.json"
 	write_knob "$k"
@@ -1025,16 +1053,16 @@ EOF
 		bound_delta=$((a_bound - b_bound))
 	fi
 
+	# share is the aggregate softirq share of all CPUs; it is reported for
+	# context only and is not a per-core number.
 	share=n/a
 	us=n/a
-	if [ "$total_ticks" != "null" ] && [ "$soft_ticks" != "null" ] &&
-	   [ "$total_ticks" -gt 0 ] && [ "$soft_ticks" -ge 0 ]; then
+	if [ "$total_ticks" != "null" ] && [ "$total_ticks" -gt 0 ] &&
+	   [ "$soft_ticks" != "null" ] && [ "$soft_ticks" -ge 0 ]; then
 		share=$(awk -v s="$soft_ticks" -v t="$total_ticks" \
 			'BEGIN { printf "%.4f", s / t }')
-		if [ "$wire_pkts" != "null" ] && [ "$wire_pkts" -gt 0 ] &&
-		   [ "$secs" != "0" ]; then
-			us=$(awk -v sh="$share" -v sec="$secs" -v w="$wire_pkts" \
-				'BEGIN { printf "%.2f", sh * sec * 1000000 / w }')
+		if cost=$(softirq_us_per_wire "$soft_ticks" "$wire_pkts" "$BENCH_HZ"); then
+			us=$cost
 		fi
 	fi
 
@@ -1078,8 +1106,15 @@ EOF
 	ARM_STATUS[$k]=$status
 }
 
+# $1 is main's failure accumulator (restore_knob and run_arm both feed it).
+# This function used to keep its own rc, so a failed knob restore still wrote
+# "# verdict PASS" into the TSV while main exited 1: the artifact and the exit
+# code disagreed and only the exit code was right.  Taking rc alone was not
+# enough either: the say() line below still printed PASS whenever the arms
+# looked good, so the TSV said FAIL while the log said PASS.
 verdict() {
-	local rc=0 primary=
+	local rc=${1:-0} primary=
+	[ "$rc" -eq 0 ] || rc=1
 	if [ "${ARM_STATUS[1]:-missing}" = "ok" ] && [ "${ARM_BND23[1]:-0}" -gt 0 ]; then
 		primary=1
 	elif [ "${ARM_STATUS[2]:-missing}" = "ok" ] && [ "${ARM_BND23[2]:-0}" -gt 0 ]; then
@@ -1087,9 +1122,15 @@ verdict() {
 	fi
 
 	if [ -n "$primary" ]; then
-		say "verdict: PASS - decap=${primary} produced ${ARM_BND23[$primary]} BND entries with ib1 bit23 set (of ${ARM_N[$primary]} matching entries)"
+		# The arms looking right is not enough: main's accumulator also covers
+		# a failed restore_knob, and the log is the artifact an operator reads.
+		if [ "$rc" -eq 0 ]; then
+			say "verdict: PASS - decap=${primary} produced ${ARM_BND23[$primary]} BND entries with ib1 bit23 set (of ${ARM_N[$primary]} matching entries)"
+		else
+			say "verdict: FAIL - decap=${primary} produced ${ARM_BND23[$primary]} BND entries with ib1 bit23 set, but the run failed elsewhere (see the restore/arm notes above)"
+		fi
 		if [ "${ARM_STATUS[1]:-missing}" != "ok" ]; then
-			say "verdict: note - the decap=1 arm status is ${ARM_STATUS[1]:-missing}; the pass is from decap=${primary}"
+			say "verdict: note - the decap=1 arm status is ${ARM_STATUS[1]:-missing}; the verdict rests on decap=${primary}"
 		fi
 	elif [ "${ARM_STATUS[1]:-missing}" != "ok" ]; then
 		say "verdict: FAIL - the decap=1 arm did not complete (status=${ARM_STATUS[1]:-missing})"
@@ -1154,7 +1195,7 @@ main() {
 	done
 
 	restore_knob || rc=1
-	verdict || rc=1
+	verdict "$rc" || rc=1
 	say "result: $OUT"
 	say "raw: $RAW_LOG"
 	exit "$rc"

@@ -71,6 +71,10 @@ LABEL=${LABEL:-unlabelled}
 ENV_NOTE=${ENV_NOTE:-}
 PEER=${PEER:-client}
 PEER_WAIT=${PEER_WAIT:-120}
+# Where the stale-listener sweep looks, and what it kills it with.  Both are
+# env seams so the test can point at a fixture /proc and a logging stub.
+SWEEP_PROC=${BENCH_SWEEP_PROC:-/proc}
+KILL_BIN=${BENCH_KILL:-kill}
 DRY_RUN=0
 
 # Snapshot file names are part of the on-disk format; keep them stable so
@@ -587,6 +591,7 @@ serve_iperf() {
 	_err=$3
 	log_cmd "$(iperf_cmd_string "$_dir") > $_out"
 	: >"$_out"
+	sweep_stale_listeners
 	# Backgrounded with its pid kept, so a timeout stops this listener and
 	# never another iperf3 that happens to run on the same box.
 	iperf3 -s -1 -J -p "$PORT" >"$_out" 2>"$_err" </dev/null &
@@ -620,6 +625,43 @@ serve_iperf() {
 	fi
 	log_note "iperf3 $_dir exit=$_st"
 	return "$_st"
+}
+
+# A harness killed mid-run leaves `iperf3 -s -1 -p PORT` behind: -1 keeps it
+# alive until one test arrives, and nothing else ever stops it.  The next
+# passive run then either cannot listen, or the peer's test lands on that
+# foreign server and the number is measured by a process nobody controls;
+# its data ports (PORT+1..PORT+N) stay bound as well.  BusyBox has no pkill,
+# and "set -f" above disables globbing, so /proc is walked by ls.  Only the
+# server role on this port is swept: a client-role run talks to a peer server
+# that is supposed to exist.
+sweep_stale_listeners() {
+	_swept=0
+	for _pid in $(ls "$SWEEP_PROC" 2>/dev/null); do
+		case $_pid in
+		'' | *[!0-9]*) continue ;;
+		esac
+		_cmd=$SWEEP_PROC/$_pid/cmdline
+		[ -r "$_cmd" ] || continue
+		if tr '\000' '\n' <"$_cmd" 2>/dev/null | awk -v p="$PORT" '
+			BEGIN { prev = "" }
+			{
+				n = split($0, w, "/")
+				if (w[n] == "iperf3") bin = 1
+				if ($0 == "-s") srv = 1
+				if (prev == "-p" && $0 == p) port = 1
+				prev = $0
+			}
+			END { exit !(bin && srv && port) }
+		'; then
+			"$KILL_BIN" "$_pid" 2>/dev/null || :
+			_swept=$((_swept + 1))
+		fi
+	done
+	if [ "$_swept" -gt 0 ] && [ "${DRY_RUN:-0}" -eq 0 ]; then
+		log_note "swept $_swept stale iperf3 listener(s) on port $PORT"
+	fi
+	return 0
 }
 
 # Runs one direction only.  The caller decides when the next direction

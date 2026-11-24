@@ -32,7 +32,8 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "scripts/pcie-single-cut.sh"
+SCRIPT = Path(os.environ.get("PCIE_SINGLE_CUT_UNDER_TEST",
+                    REPO_ROOT / "scripts/pcie-single-cut.sh"))
 DTSI = REPO_ROOT / "target/linux/airoha/dts/an7581.dtsi"
 FIXTURE = REPO_ROOT / "scripts/tests/fixtures/pbus_csr-1fbe3400.registers"
 
@@ -137,11 +138,12 @@ class ScriptRunTest(unittest.TestCase):
         self.mem.write_text("")
 
         self.script = self.tmp / "pcie-single-cut.sh"
-        self.script.write_text(
-            SCRIPT.read_text().replace("MEM_DEV=/dev/mem", "MEM_DEV=%s"
-                                       % self.mem).replace(
-                "BACKUP_DIR=/tmp/pcie-single-cut",
-                "BACKUP_DIR=%s" % (self.tmp / "state")))
+        text = SCRIPT.read_text().replace("MEM_DEV=/dev/mem", "MEM_DEV=%s"
+                                          % self.mem)
+        text, count = re.subn(r"(?m)^BACKUP_DIR=.*$",
+                              "BACKUP_DIR=%s" % (self.tmp / "state"), text)
+        self.assertEqual(count, 1, "BACKUP_DIR= line not found in the script")
+        self.script.write_text(text)
         self.backup = self.tmp / "state" / "backup.txt"
 
     def tearDown(self):
@@ -187,6 +189,39 @@ class ScriptRunTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertEqual(self.state.read_text(), before)
         self.assertFalse(self.backup.exists())
+
+    def test_restore_without_a_backup_says_the_original_is_not_on_record(self):
+        # A reboot (or the hang a bad register write can cause) erases tmpfs.
+        # "run apply first" is then wrong advice in the dangerous direction:
+        # apply would record the current value as the original.
+        result = self.run_script("restore")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("no record of the original", result.stderr)
+        self.assertNotIn("run 'apply --confirm' first", result.stderr)
+        self.assertFalse(self.backup.exists())
+
+
+class StateDirTest(unittest.TestCase):
+    """The saved original must outlive the boot it was taken in."""
+
+    def test_backup_dir_is_persistent_and_private(self):
+        text = SCRIPT.read_text()
+        match = re.search(r"(?m)^BACKUP_DIR=(.*)$", text)
+        self.assertIsNotNone(match, "BACKUP_DIR= line is missing")
+        backup_dir = match.group(1)
+        self.assertEqual(backup_dir, "/root/.pcie-single-cut",
+                         "the saved original still lives on tmpfs: %r"
+                         % backup_dir)
+        self.assertIn('chmod 700 "$BACKUP_DIR"', text,
+                      "the state dir holding the original is not made 0700")
+
+    def test_doc_states_where_the_original_lives(self):
+        text = SCRIPT.read_text()
+        for needle in ("/root/.pcie-single-cut/backup.txt",
+                       "/root/.pcie-single-cut/result.json"):
+            self.assertTrue(needle in text,
+                            "the header still documents the tmpfs path: "
+                            "%s is not in the script" % needle)
 
 
 if __name__ == "__main__":

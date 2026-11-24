@@ -27,9 +27,15 @@
 #   4. Starts a one-shot "iperf3 -s" on the peer over SSH, runs a single
 #      client-to-server TCP stream for the requested duration, and records
 #      the reported throughput.
-#   5. Writes result.json (refcounts, throughput, the exact ESP parameters,
-#      and the failure reason when something goes wrong), removes the xfrm
-#      state again, and exits non-zero on failure.
+#   5. Reads the kernel's per-SA packet counters ("ip -s xfrm state list",
+#      'lifetime current: ... (packets)') for both SPIs on the local end and
+#      fails when either SA carried no packet.  A refcount that only proves
+#      the SA was allocated says nothing about the data path: a selector
+#      typo, a policy that lost to SNAT, or an iperf3 flow that never left
+#      the host keeps the stream in cleartext with the refcount still high.
+#   6. Writes result.json (refcounts, ESP packet counters, throughput, the
+#      exact ESP parameters, and the failure reason when something goes
+#      wrong), removes the xfrm state again, and exits non-zero on failure.
 #
 # The script never adds routes or firewall rules and never touches the
 # default routing table.  The only persistent changes are the two ESP SAs
@@ -87,6 +93,10 @@ PEER_RC_AFTER_SETUP=
 PEER_RC_AFTER_RUN=
 SEL_DRIVER=
 SEL_PRIO=
+ESP_OUT_PACKETS=
+ESP_OUT_BYTES=
+ESP_IN_PACKETS=
+ESP_IN_BYTES=
 BPS=
 GBPS=
 IPERF_BYTES=
@@ -303,6 +313,50 @@ peer_refcnt() {
 	printf '%s' "$_out"
 }
 
+# The kernel's per-SA counters, as "PACKETS BYTES" for one SPI, from the text
+# of `ip -s xfrm state list`.  Empty when the SA is not there or the line does
+# not carry a packets counter; bytes is "unknown" when the kernel printed
+# packets but no byte count.
+#
+# Two things about that text are easy to get wrong, and both were (board run,
+# 2026-11-24): `ip -s` prints the SPI as "0x%08x(%u)", and it prints the
+# counters on the line *under* "lifetime current:", not on that line -
+# iproute2 6.18 ip/ipxfrm.c:403-407 writes the label, then
+# "  %llu(bytes), %llu(packets)" on the next line.  So the SPI is compared
+# after normalising (drop the decimal suffix, the 0x and the leading zeros)
+# and the counters are recognised by their own shape, on whatever line they
+# land.  "lifetime config:" prints "(INF)(bytes), (INF)(packets)" and matches
+# neither pattern.
+esp_parse() {
+	printf '%s\n' "$1" | awk -v want="$2" '
+		function norm(s) {
+			sub(/\(.*/, "", s)
+			sub(/^0[xX]/, "", s)
+			sub(/^0+/, "", s)
+			return tolower(s)
+		}
+		BEGIN { want = norm(want) }
+		$1 == "proto" && $2 == "esp" && $3 == "spi" { spi = norm($4); next }
+		spi == want && /[0-9]+\(bytes\)/ && /[0-9]+\(packets\)/ {
+			if (match($0, /[0-9]+\(bytes\)/))
+				bytes = substr($0, RSTART, RLENGTH - 7)
+			if (match($0, /[0-9]+\(packets\)/))
+				packets = substr($0, RSTART, RLENGTH - 9)
+		}
+		END {
+			if (packets == "")
+				exit
+			if (bytes == "")
+				bytes = "unknown"
+			print packets " " bytes
+		}'
+}
+
+esp_state() {
+	log_cmd "[local] ip -s xfrm state list"
+	ip -s xfrm state list 2>/dev/null
+}
+
 # Print the highest-priority implementation of authenc(AUTH,CIPHER) as
 # "driver<TAB>priority", using only the kernels' /proc/crypto text.
 proc_crypto_selected() {
@@ -469,6 +523,10 @@ write_result() {
 		printf '    "spi_in": "%s",\n' "$(json_escape "$SPI_IN")"
 		printf '    "enc_key_bits": %s,\n' "$(json_num "$ENC_KEY_BITS")"
 		printf '    "auth_key_bits": %s,\n' "$(json_num "$AUTH_KEY_BITS")"
+		printf '    "packets_out": %s,\n' "$(json_num "$ESP_OUT_PACKETS")"
+		printf '    "bytes_out": %s,\n' "$(json_num "$ESP_OUT_BYTES")"
+		printf '    "packets_in": %s,\n' "$(json_num "$ESP_IN_PACKETS")"
+		printf '    "bytes_in": %s,\n' "$(json_num "$ESP_IN_BYTES")"
 		printf '    "policy_out": "%s/32 -> %s/32 proto tcp dport %s",\n' \
 			"$(json_escape "$LOCAL")" "$(json_escape "$PEER")" "$PORT"
 		printf '    "policy_in": "%s/32 -> %s/32 proto tcp sport %s"\n' \
@@ -538,6 +596,8 @@ print_summary() {
 		"$LOCAL_RC_BEFORE" "$LOCAL_RC_AFTER_SETUP" "$LOCAL_RC_AFTER_RUN"
 	printf '  eip93 refcnt peer:  %s -> %s (after SAs), %s (after run)\n' \
 		"$PEER_RC_BEFORE" "$PEER_RC_AFTER_SETUP" "$PEER_RC_AFTER_RUN"
+	printf '  ESP packets: %s out (%s bytes), %s in (%s bytes)\n' \
+		"$ESP_OUT_PACKETS" "$ESP_OUT_BYTES" "$ESP_IN_PACKETS" "$ESP_IN_BYTES"
 	printf '  driver: %s (priority %s)\n' "$SEL_DRIVER" "$SEL_PRIO"
 	printf '  throughput: %s Gbit/s (%s bit/s, iperf3 local -> peer)\n' \
 		"$GBPS" "$BPS"
@@ -978,6 +1038,45 @@ PEER_RC_AFTER_RUN=$(peer_refcnt) ||
 	fail_run "cannot read $MODPATH on peer $PEER_SSH after the run"
 log_note "local eip93 refcnt after run: $LOCAL_RC_AFTER_RUN"
 log_note "peer eip93 refcnt after run: $PEER_RC_AFTER_RUN"
+
+# The module refcount can only fall like this when the transform was released
+# while the test ran; an equal or higher count keeps the "still allocated"
+# evidence meaningful.
+if [ "$LOCAL_RC_AFTER_RUN" -lt "$LOCAL_RC_AFTER_SETUP" ]; then
+	fail_run "local eip93 refcount fell after the run ($LOCAL_RC_AFTER_SETUP -> $LOCAL_RC_AFTER_RUN); the ESP transform did not stay allocated for the whole flow"
+fi
+if [ "$PEER_RC_AFTER_RUN" -lt "$PEER_RC_AFTER_SETUP" ]; then
+	fail_run "peer eip93 refcount fell after the run ($PEER_RC_AFTER_SETUP -> $PEER_RC_AFTER_RUN); the peer ESP transform did not stay allocated for the whole flow"
+fi
+
+# A high refcount only says the SAs exist.  The counters say the iperf3 flow
+# actually went through them.
+_state=$(esp_state) || _state=
+ESP_OUT_COUNTERS=$(esp_parse "$_state" "$SPI_OUT") || ESP_OUT_COUNTERS=
+ESP_IN_COUNTERS=$(esp_parse "$_state" "$SPI_IN") || ESP_IN_COUNTERS=
+ESP_OUT_PACKETS=${ESP_OUT_COUNTERS% *}
+ESP_OUT_BYTES=${ESP_OUT_COUNTERS#* }
+ESP_IN_PACKETS=${ESP_IN_COUNTERS% *}
+ESP_IN_BYTES=${ESP_IN_COUNTERS#* }
+log_note "esp spi $SPI_OUT packets=$ESP_OUT_PACKETS bytes=$ESP_OUT_BYTES"
+log_note "esp spi $SPI_IN packets=$ESP_IN_PACKETS bytes=$ESP_IN_BYTES"
+
+case $ESP_OUT_PACKETS in
+''|*[!0-9]*)
+	fail_run "cannot read the ESP packet counter for spi $SPI_OUT from 'ip -s xfrm state list'; the SA is gone or 'ip' printed an unexpected format"
+	;;
+esac
+case $ESP_IN_PACKETS in
+''|*[!0-9]*)
+	fail_run "cannot read the ESP packet counter for spi $SPI_IN from 'ip -s xfrm state list'; the SA is gone or 'ip' printed an unexpected format"
+	;;
+esac
+if [ "$ESP_OUT_PACKETS" -eq 0 ]; then
+	fail_run "no ESP packet on SPI $SPI_OUT; the iperf3 flow bypassed the IPsec policy (cleartext). Check the selector, the policy priority against any NAT/firewall rule, and that iperf3 connected to $PEER directly"
+fi
+if [ "$ESP_IN_PACKETS" -eq 0 ]; then
+	fail_run "no ESP packet on SPI $SPI_IN; the peer sent nothing back through the policy (cleartext). Check the peer-side policy and that the peer's iperf3 server ran"
+fi
 
 RESULT=pass
 ERROR=

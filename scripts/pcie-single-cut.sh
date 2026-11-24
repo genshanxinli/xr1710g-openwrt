@@ -18,9 +18,10 @@
 #   status          read 0x1fbe3418 through devmem and print the value.
 #                   Nothing is written, no backup or result file is made.
 #   apply --confirm back up the current value to
-#                   /tmp/pcie-single-cut/backup.txt, write 0x0, read the
-#                   register back immediately, print the before value and
-#                   the readback, and write /tmp/pcie-single-cut/result.json.
+#                   /root/.pcie-single-cut/backup.txt (the dir is made 0700),
+#                   write 0x0, read the register back immediately, print the
+#                   before value and the readback, and write
+#                   /root/.pcie-single-cut/result.json.
 #                   --confirm is mandatory; without it this script does not
 #                   access the register at all.
 #   restore         write the value saved by apply back, read it back,
@@ -34,12 +35,18 @@
 #     script can never clear an unknown field by writing 0x0.
 #   - apply refuses to overwrite a backup that differs from the current
 #     value, so a second apply cannot lose the original 0x7 captured first.
+#   - restore says so when there is no backup, instead of telling the user to
+#     run apply: apply after a reboot would record the *current* value as the
+#     original, which is the one thing the backup exists to prevent.
 #   - apply and restore check /dev/mem and devmem before touching the
 #     register.  The stock XR1710G kernel has CONFIG_DEVMEM unset and the
 #     busybox devmem applet disabled, so a real run refuses on today's
 #     image; enabling both is a separate kernel/busybox change and
 #     deliberately not part of this script.
 #   - apply writes 0x0 only.  restore writes only the value in backup.txt.
+#   - The backup lives on the overlay (root=), not on tmpfs: it is the only
+#     copy of the original value, and a reboot -- or the hang a bad register
+#     write can cause -- would erase it there.
 #
 # Exit status: 0 success (including status and help), 1 access, readback or
 # verification failure, 2 invalid usage (including apply without --confirm).
@@ -59,7 +66,7 @@ FORBIDDEN_LO=0x1e900000
 FORBIDDEN_HI=0x1ebfffff
 
 MEM_DEV=/dev/mem
-BACKUP_DIR=/tmp/pcie-single-cut
+BACKUP_DIR=/root/.pcie-single-cut
 BACKUP_FILE=$BACKUP_DIR/backup.txt
 RESULT_FILE=$BACKUP_DIR/result.json
 
@@ -214,6 +221,20 @@ check_device() {
 	return 0
 }
 
+ensure_state_dir() {
+	# 0700 because the file names the original register value, and the
+	# directory must survive the boot it was taken in.
+	if ! mkdir -p "$BACKUP_DIR"; then
+		warn "could not create $BACKUP_DIR"
+		return 1
+	fi
+	if ! chmod 700 "$BACKUP_DIR"; then
+		warn "could not make $BACKUP_DIR private (0700)"
+		return 1
+	fi
+	return 0
+}
+
 store_backup() {
 	if ! printf '%s\n' "$(hex32 "$1")" > "$BACKUP_FILE"; then
 		warn "could not write backup to $BACKUP_FILE"
@@ -224,7 +245,9 @@ store_backup() {
 
 load_backup() {
 	if [ ! -f "$BACKUP_FILE" ]; then
-		warn "no backup at $BACKUP_FILE; run '$PROG apply --confirm' first"
+		warn "no backup at $BACKUP_FILE: this host has no record of the original"
+		warn "value, so restore cannot know what to write back.  If the register"
+		warn "still reads 0x7, run '$PROG apply --confirm' now to record it."
 		return 1
 	fi
 	_lb_line=
@@ -298,8 +321,8 @@ do_status() {
 do_apply() {
 	ACTION=apply
 
-	if ! mkdir -p "$BACKUP_DIR"; then
-		die "could not create $BACKUP_DIR"
+	if ! ensure_state_dir; then
+		die "no state directory, the register was not accessed"
 	fi
 	if ! check_device; then
 		warn "apply refused; the register was not accessed"
@@ -394,8 +417,8 @@ do_apply() {
 do_restore() {
 	ACTION=restore
 
-	if ! mkdir -p "$BACKUP_DIR"; then
-		die "could not create $BACKUP_DIR"
+	if ! ensure_state_dir; then
+		die "no state directory, the register was not accessed"
 	fi
 	if ! check_device; then
 		warn "restore refused; the register was not accessed"

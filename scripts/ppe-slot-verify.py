@@ -228,27 +228,33 @@ def _parse_ipv4_endpoint(text):
     return words, port
 
 
+def _ipv6_words(address):
+    value = int(address)
+    return [(value >> shift) & MASK32 for shift in (96, 64, 32, 0)]
+
+
 def _parse_ipv6_endpoint(text):
+    # %pI6 prints IPv6 addresses compressed, so "fe80::2e0:4cff:fee2:12b:42401"
+    # is a legal address *and* a legal "address:port" pair.  Trying the whole
+    # string first picks the address reading, leaves port=None, and the caller
+    # rejects the row as "not a five-tuple": every 5T row ends up in skipped
+    # while an IPv4-only dump still reports status=OK.  The port reading has
+    # to win, so split first and accept the whole-string address only when
+    # there is no legal "address:port" split.
+    if ":" in text:
+        address_text, port_text = text.rsplit(":", 1)
+        if port_text.isdigit() and int(port_text) <= 65535:
+            try:
+                address = ipaddress.IPv6Address(address_text)
+            except ValueError:
+                pass
+            else:
+                return _ipv6_words(address), int(port_text)
     try:
         address = ipaddress.IPv6Address(text)
-        port = None
     except ValueError:
-        # The debugfs prints an uncompressed address followed by ":port"
-        # for a five-tuple.  ipaddress rejects that whole string, so split
-        # the port off and require the prefix to be an address.
-        if ":" not in text:
-            raise ValueError("not an IPv6 endpoint")
-        address_text, port_text = text.rsplit(":", 1)
-        if not port_text.isdigit():
-            raise ValueError("port is not decimal")
-        address = ipaddress.IPv6Address(address_text)
-        port = int(port_text)
-        if port > 65535:
-            raise ValueError("port out of range")
-
-    value = int(address)
-    words = [(value >> shift) & MASK32 for shift in (96, 64, 32, 0)]
-    return words, port
+        raise ValueError("not an IPv6 endpoint")
+    return _ipv6_words(address), None
 
 
 def parse_five_tuple(text, family):
@@ -725,11 +731,14 @@ def _self_test():
         )
 
     # IPv6 five-tuples use the driver's word XORs; the expected raw hash
-    # below was computed by hand from that formula, not from this file.
+    # below was computed by hand from that formula, not from this file.  The
+    # address is written the way %pI6 prints it (compressed), because that is
+    # the form the debugfs emits and the form a whole-string parse gets wrong:
+    # fe80::2e0:4cff:fee2:12b is also a legal prefix for ":42401".
     ipv6_line = (
         "01fc4 UNB IPv6 5T "
-        "orig=fe80:0000:0000:0000:02e0:4cff:fee2:012b:42401"
-        "->ff02:0000:0000:0000:0000:0000:0000:00fb:100 "
+        "orig=fe80::2e0:4cff:fee2:12b:42401"
+        "->ff02::fb:100 "
         "eth=00:00:00:00:00:00->00:00:00:00:00:00 etype=0000 "
         "data=00000000 vlan=0,0 ib1=5a000143 ib2=02e04cff "
         "packets=n/a bytes=n/a"
@@ -757,6 +766,22 @@ def _self_test():
         check(
             tuple_hash(ipv6_tuple) == 0x9A216397,
             "IPv6 raw hash is wrong",
+        )
+        # The uncompressed spelling of the same address must parse to the
+        # same words and ports, so the compressed form is not a special case.
+        check(
+            parse_five_tuple(
+                "fe80:0000:0000:0000:02e0:4cff:fee2:012b:42401"
+                "->ff02:0000:0000:0000:0000:0000:0000:00fb:100",
+                "ipv6",
+            ).src_words
+            == ipv6_tuple.src_words,
+            "compressed and uncompressed IPv6 spellings disagree",
+        )
+        # A bare compressed address still has no port (3T rows).
+        check(
+            _parse_ipv6_endpoint("2001:db8::10") == ([0x20010DB8, 0, 0, 0x10], None),
+            "a bare compressed address was read as address:port",
         )
 
     # Parsing must reject a truncated tuple and not count header text.

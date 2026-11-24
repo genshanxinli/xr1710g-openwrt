@@ -117,5 +117,76 @@ class PpeSlotVerifyGuard(unittest.TestCase):
         self.assertGreater(compared, 0)
 
 
+# A real %pI6 print is compressed: fe80::2e0:4cff:fee2:12b, not eight groups.
+# The last group is decimal, so "prefix + :port" is a legal parse of the whole
+# string.  Treating that whole string as a bare address leaves port=None, the
+# five-tuple is rejected, and every IPv6 row lands in skipped: an IPv4-only
+# report then says status=OK while the IPv6 hash half was never verified.
+COMPRESSED_IPV6_5T = (
+    "01fc4 UNB IPv6 5T orig=fe80::2e0:4cff:fee2:12b:42401"
+    "->ff02::fb:100 eth=00:00:00:00:00:00->00:00:00:00:00:00 "
+    "etype=0000 data=00000000 vlan=0,0 ib1=5a000143 ib2=02e04cff "
+    "packets=n/a bytes=n/a\n"
+)
+
+
+def load_module():
+    """Import the verifier itself; the CLI runs main() only as __main__."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("ppe_slot_verify_under_test",
+                                                  SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class Ipv6CompressedEndpointTest(unittest.TestCase):
+    """The parser must read the compressed form the kernel actually prints."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = load_module()
+
+    def test_compressed_address_plus_port_is_a_five_tuple(self):
+        tuple_value = self.mod.parse_five_tuple(
+            "fe80::2e0:4cff:fee2:12b:42401->ff02::fb:100", "ipv6")
+        self.assertEqual(tuple_value.src_port, 42401)
+        self.assertEqual(tuple_value.dst_port, 100)
+        self.assertEqual(
+            tuple_value.src_words,
+            [0xFE800000, 0x00000000, 0x02E04CFF, 0xFEE2012B])
+        self.assertEqual(
+            tuple_value.dst_words,
+            [0xFF020000, 0x00000000, 0x00000000, 0x000000FB])
+
+    def test_a_bare_compressed_address_has_no_port(self):
+        words, port = self.mod._parse_ipv6_endpoint("2001:db8::10")
+        self.assertIsNone(port)
+        self.assertEqual(words, [0x20010DB8, 0, 0, 0x10])
+
+    def test_uncompressed_eight_group_form_still_parses(self):
+        tuple_value = self.mod.parse_five_tuple(
+            "fe80:0000:0000:0000:02e0:4cff:fee2:012b:42401"
+            "->ff02:0000:0000:0000:0000:0000:0000:00fb:100", "ipv6")
+        self.assertEqual(tuple_value.src_port, 42401)
+        self.assertEqual(tuple_value.dst_port, 100)
+
+    def test_compressed_ipv6_row_is_compared_not_skipped(self):
+        result = run_script(["--image", "compressed", "--geometry", "32768"],
+                            COMPRESSED_IPV6_5T)
+        match = re.search(r"compared=(\d+) skipped=(\d+)",
+                          result.stdout.splitlines()[0])
+        self.assertIsNotNone(match, result.stdout)
+        self.assertEqual(int(match.group(1)), 1,
+                         "the compressed IPv6 row was skipped, not compared")
+        self.assertEqual(int(match.group(2)), 0, result.stderr)
+
+    def test_self_test_covers_the_compressed_form(self):
+        text = SCRIPT.read_text(encoding="utf-8")
+        self.assertTrue("orig=fe80::2e0:4cff:fee2:12b:42401" in text,
+                        "the self-test fixture dodges the compressed form")
+
+
 if __name__ == "__main__":
     unittest.main()
