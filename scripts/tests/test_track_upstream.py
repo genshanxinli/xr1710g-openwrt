@@ -81,6 +81,17 @@ class SynthRepo:
         self.git("update-ref", "refs/remotes/origin/kernel73", k73)
         self.git("checkout", "-q", "main")
         self.git("reset", "-q", "--hard", self.base)
+        self.k74 = k74
+        self.k73 = k73
+
+    def write_record(self, ancestor, merge_base, mirror_tree,
+                     mirror="origin/kernel73", checked="2026-11-24"):
+        """Write the README record line the way the real tree carries it."""
+        (self.root / "README.md").write_text(
+            "base\n<!-- upstream-record: checked=%s merge_base=%s ancestor=%s"
+            " mirror_tree=%s branches=kernel73,kernel74,main mirror=%s"
+            " local=HEAD -->\n"
+            % (checked, merge_base, ancestor, mirror_tree, mirror))
 
     def git(self, *args):
         return subprocess.run(
@@ -207,6 +218,94 @@ class TrackUpstreamVerdict(unittest.TestCase):
         # Green: the same two repos now diverge on the exit code alone.
         self.assertEqual(self.repo(behind=3).run("--quiet", "--verdict").returncode, 0)
         self.assertEqual(self.repo(behind=120).run("--quiet", "--verdict").returncode, 1)
+
+
+class TrackUpstreamRecordCheck(unittest.TestCase):
+    """`--check` asserts the record, not the tree (review P2-1, #9).
+
+    README.md records ancestor=no / mirror_tree=different on purpose.  A check
+    that went red for that would be permanently red until a sync #189 calls
+    infeasible, so the default must pass and say "record matches reality
+    (drift recorded)".  CI that wants the drift to fail opts in with
+    --strict-drift.  A record that disagrees with the refs is stale either way.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def repo(self, **kw):
+        return SynthRepo(tempfile.mkdtemp(dir=self.tmp.name), **kw)
+
+    def test_recorded_drift_passes_by_default_and_names_the_drift(self):
+        repo = self.repo(behind=0, files=1)
+        repo.write_record(ancestor="no", merge_base=repo.base[:10],
+                          mirror_tree="different", mirror="main")
+        p = repo.run("--check", "--mirror", "main")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("verdict: record matches reality", p.stdout)
+        self.assertIn("drift recorded", p.stdout)
+        self.assertIn("ancestor=no", p.stdout)
+        self.assertIn("mirror_tree=different", p.stdout)
+        self.assertNotIn("record in sync", p.stdout)
+
+    def test_strict_drift_turns_the_recorded_drift_into_exit_one(self):
+        repo = self.repo(behind=0, files=1)
+        repo.write_record(ancestor="no", merge_base=repo.base[:10],
+                          mirror_tree="different", mirror="main")
+        p = repo.run("--check", "--mirror", "main", "--strict-drift")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("drift recorded", p.stdout)
+
+    def test_a_record_without_drift_says_so_and_strict_drift_is_green(self):
+        repo = self.repo(behind=0)
+        repo.write_record(ancestor="yes", merge_base=repo.base[:10],
+                          mirror_tree="identical")
+        p = repo.run("--check")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("no drift recorded", p.stdout)
+        strict = repo.run("--check", "--strict-drift")
+        self.assertEqual(strict.returncode, 0, strict.stdout + strict.stderr)
+
+    def test_static_checks_the_shape_only_and_says_so(self):
+        # .github/workflows/claims.yml runs --static on a depth-1 checkout: no
+        # refs, so nothing is compared.  It must not borrow --check's wording
+        # ("matches reality"), and it must still fail when asked to treat the
+        # drift it accepted as a failure.
+        repo = self.repo(behind=0, files=1)
+        repo.write_record(ancestor="no", merge_base=repo.base[:10],
+                          mirror_tree="different", mirror="main")
+        p = repo.run("--static", "--mirror", "main")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("verdict: record shape ok (static; drift recorded", p.stdout)
+        self.assertIn("ancestor=no", p.stdout)
+        self.assertIn("mirror_tree=different", p.stdout)
+        self.assertNotIn("matches reality", p.stdout)
+
+        strict = repo.run("--static", "--mirror", "main", "--strict-drift")
+        self.assertEqual(strict.returncode, 1, strict.stdout + strict.stderr)
+        self.assertIn("record shape ok (static; drift recorded", strict.stdout)
+
+    def test_a_record_that_disagrees_with_the_refs_is_still_stale(self):
+        repo = self.repo(behind=0, files=1)
+        repo.write_record(ancestor="no", merge_base=repo.base[:10],
+                          mirror_tree="identical", mirror="main")
+        p = repo.run("--check", "--mirror", "main")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("verdict: record stale", p.stdout)
+
+    def test_gate_branch_outside_track_is_counted_not_unknown(self):
+        # A08-F7: the behind count was only assigned while iterating --track,
+        # so a valid upstream ref outside that list resolved but left the
+        # verdict at unknown(3).  --gate-branch is documented as any branch.
+        repo = self.repo(behind=120)
+        repo.git("update-ref", "refs/remotes/upstream/next", repo.k74)
+        p = repo.run("--quiet", "--verdict", "--gate-branch", "next")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        line = verdict_line(p)
+        self.assertIn("branch=next", line)
+        self.assertIn("behind=120", line)
+        self.assertNotIn("unknown", line)
 
 
 if __name__ == "__main__":

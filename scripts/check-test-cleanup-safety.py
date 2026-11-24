@@ -34,20 +34,29 @@ It is a violation when the argument
     "record directory" of a shallow path is ``/``;
   * names something that came out of the program under test: ``record``,
     ``result``, ``parsed``, ``printed``, ``stdout``, ``stderr``, ``output``,
-    ``reply`` in the attribute chain or the variable name.
+    ``reply`` in the attribute chain or the variable name - at any depth, so
+    ``rmtree(str(parsed_dir))`` and ``addCleanup(rmtree, os.fspath(out), True)``
+    are violations and not "unknown".  Wrapping a path in ``str()`` or
+    ``os.fspath()`` does not make it the test's own.
 
 An unrecognised name is *not* a violation: the gate cannot know whether it is
 yours or the program's, and a gate that fails on every name it has not seen
 gets an allowlist and then gets ignored.  Unknown sites are printed instead,
 one line each, and the human decides.  There is no allowlist file: the rules
-are here.
+are here.  A call-wrapped argument the gate cannot resolve (anything other
+than the rules above) is unknown as well, and says so in its message.
+
+``--strict-unknown`` turns those unknowns into failures, for a caller that
+wants the decision made now rather than at review time.
 
 Usage::
 
     scripts/check-test-cleanup-safety.py                 # scripts/tests/**.py
     scripts/check-test-cleanup-safety.py PATH [PATH ...]  # files or directories
+    scripts/check-test-cleanup-safety.py --strict-unknown  # unknowns fail too
 
-Exit codes: 0 clean, 1 at least one violation, 2 usage/input error.
+Exit codes: 0 clean, 1 at least one violation (or an unknown under
+``--strict-unknown``), 2 usage/input error.
 """
 
 from __future__ import annotations
@@ -145,6 +154,37 @@ def noqa_reason(lines: list[str], node: ast.AST) -> str | None:
     return None
 
 
+def indexes_parents(node: ast.AST) -> bool:
+    """``x.parents[1]`` anywhere under ``node`` - the accident's shape."""
+    for sub in ast.walk(node):
+        if (
+            isinstance(sub, ast.Subscript)
+            and isinstance(sub.value, ast.Attribute)
+            and sub.value.attr == "parents"
+        ):
+            return True
+    return False
+
+
+def chains(node: ast.AST) -> list[str]:
+    """Every name/attribute chain under ``node``, in ``ast.walk`` order.
+
+    ``ast.walk`` is breadth-first, so ``str(parsed_dir)`` yields
+    ``['str', 'parsed_dir']``: the wrapper comes first, the name it wraps
+    still comes.  That is the point - ``dotted()`` alone returned ``''`` for
+    a Call and the argument escaped as "unknown" (the P0-4 gap).  The order
+    only decides which chain the violation message quotes; every chain is
+    graded, so the verdict is order-independent.
+    """
+    found: list[str] = []
+    for sub in ast.walk(node):
+        if isinstance(sub, (ast.Name, ast.Attribute)):
+            chain = dotted(sub)
+            if chain:
+                found.append(chain)
+    return found
+
+
 def classify(
     arg: ast.AST | None,
     function: str | None,
@@ -158,36 +198,45 @@ def classify(
     except Exception:  # pragma: no cover - unparse is total for parsed trees
         text = ast.dump(arg)
 
-    if (
-        isinstance(arg, ast.Subscript)
-        and isinstance(arg.value, ast.Attribute)
-        and arg.value.attr == "parents"
-    ):
+    if indexes_parents(arg):
         return (
             "violation",
             f"rmtree({text}) indexes .parents[N]; the record directory of a "
             "shallow path is / (the 2026-11-21 accident)",
         )
-    if is_mkdtemp(arg):
+
+    # Grade the whole argument subtree, not just a bare dotted name: a
+    # wrapper call (str(), os.fspath(), Path()) must not launder the value.
+    under = chains(arg)
+    for chain in under:
+        lowered = chain.lower()
+        for marker in UNTRUSTED:
+            if marker in lowered:
+                return (
+                    "violation",
+                    f"rmtree({text}) deletes a path that came out of the "
+                    f"program under test ('{marker}' in '{chain}'); route it "
+                    "through safe_rmtree or add_run_dir_cleanup",
+                )
+
+    if has_mkdtemp(arg):
         return "allow", ""
     if function in GUARD_FUNCTIONS:
         return "allow", ""
 
-    chain = dotted(arg)
-    parts = [part for part in chain.split(".") if part]
-    lowered = chain.lower()
-    for marker in UNTRUSTED:
-        if marker in lowered:
-            return (
-                "violation",
-                f"rmtree({text}) deletes a path that came out of the program "
-                f"under test ('{marker}'); route it through safe_rmtree or "
-                "add_run_dir_cleanup",
-            )
-    if any(part in OWN_NAMES for part in parts):
-        return "allow", ""
-    if chain and (chain in bound or parts[-1] in bound):
-        return "allow", ""
+    for chain in under:
+        parts = [part for part in chain.split(".") if part]
+        if any(part in OWN_NAMES for part in parts):
+            return "allow", ""
+        if chain in bound or (parts and parts[-1] in bound):
+            return "allow", ""
+
+    if isinstance(arg, ast.Call):
+        return (
+            "unknown",
+            f"rmtree({text}) wraps the path in a call; the gate cannot tell "
+            "whose it is",
+        )
     return "unknown", text
 
 
@@ -269,7 +318,7 @@ def collect(arguments: list[str]) -> list[Path]:
     return files
 
 
-def check(paths: list[Path]) -> int:
+def check(paths: list[Path], strict: bool = False) -> int:
     violations: list[tuple[Path, int, str]] = []
     unknowns: list[tuple[Path, int, str]] = []
 
@@ -288,19 +337,24 @@ def check(paths: list[Path]) -> int:
     for path, line, message in violations:
         print(f"::error file={path},line={line}::{message}")
     for path, line, message in unknowns:
-        print(
-            f"unknown: {path}:{line}: {message} -- decide, or record why it is "
-            f"ours with '# {NOQA} <reason>'"
-        )
-    verb = "FAILED" if violations else "OK"
+        if strict:
+            print(f"::error file={path},line={line}::{message} (unknown under --strict-unknown)")
+        else:
+            print(
+                f"unknown: {path}:{line}: {message} -- decide, or record why it is "
+                f"ours with '# {NOQA} <reason>'"
+            )
+    verb = "FAILED" if violations or (strict and unknowns) else "OK"
     print(
         f"test cleanup safety: {verb}: {len(paths)} files, "
         f"{len(violations)} violations, {len(unknowns)} unknown"
     )
-    return 1 if violations else 0
+    return 1 if violations or (strict and unknowns) else 0
 
 
 def main(argv: list[str]) -> int:
+    strict = "--strict-unknown" in argv
+    argv = [argument for argument in argv if argument != "--strict-unknown"]
     if argv and argv[0] in ("-h", "--help"):
         print(__doc__.strip())
         return 0
@@ -309,7 +363,7 @@ def main(argv: list[str]) -> int:
     if not paths:
         print(f"no python files under {', '.join(arguments)}", file=sys.stderr)
         return 2
-    return check(paths)
+    return check(paths, strict)
 
 
 if __name__ == "__main__":

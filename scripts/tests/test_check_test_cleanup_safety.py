@@ -14,6 +14,14 @@ read it" that let `shutil.rmtree(record.parent)` through in the first place.
   | 3 | `shutil.rmtree(self.record.parent)`                 | rc 1, line no |
   | 4 | `shutil.rmtree(mystery)`                            | rc 0, unknown |
   | 5 | the real scripts/tests tree                          | rc 0          |
+  | 6 | `shutil.rmtree(str(parsed_dir))`                    | rc 1, line no |
+  | 7 | `addCleanup(rmtree, os.fspath(printed_root))`       | rc 1, line no |
+  | 8 | `shutil.rmtree(str(mystery))`                       | rc 0 unknown; rc 1 with `--strict-unknown` |
+
+Case 6/7 are the P0: `dotted()` returned `''` for every call argument, so
+wrapping the same bad path in `str()` or `os.fspath()` downgraded a
+violation to `unknown`, which `check()` counted and then ignored (rc 0).
+`--strict-unknown` is the CI mode where an unknown site fails too.
 
 Run from the repository root:
 
@@ -36,9 +44,9 @@ GATE = Path(
 )
 
 
-def run_gate(*paths: Path) -> subprocess.CompletedProcess[str]:
+def run_gate(*paths: Path, flags: tuple[str, ...] = ()) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["python3", str(GATE), *[str(path) for path in paths]],
+        ["python3", str(GATE), *flags, *[str(path) for path in paths]],
         capture_output=True,
         text=True,
         timeout=120,
@@ -48,7 +56,7 @@ def run_gate(*paths: Path) -> subprocess.CompletedProcess[str]:
 
 def rmtree_line(path: Path) -> int:
     for number, line in enumerate(path.read_text().splitlines(), 1):
-        if "rmtree(" in line:
+        if "rmtree(" in line or "rmtree," in line:
             return number
     raise AssertionError(f"fixture at {path} has no rmtree call")
 
@@ -121,6 +129,52 @@ class GateTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("1 unknown", result.stdout)
         self.assertIn(f"unknown: {path}:", result.stdout)
+
+    def test_a_wrapped_untrusted_path_is_still_a_violation(self):
+        path = self.write_fixture(
+            """
+            import shutil
+
+
+            def clean(parsed_dir):
+                shutil.rmtree(str(parsed_dir))
+            """
+        )
+        result = run_gate(path)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(f"::error file={path},line={rmtree_line(path)}::", result.stdout)
+        self.assertIn("parsed", result.stdout)
+
+    def test_os_fspath_in_add_cleanup_is_still_a_violation(self):
+        path = self.write_fixture(
+            """
+            import os
+            import shutil
+
+
+            def clean(printed_root):
+                self.addCleanup(shutil.rmtree, os.fspath(printed_root), True)
+            """
+        )
+        result = run_gate(path)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(f"::error file={path},line={rmtree_line(path)}::", result.stdout)
+        self.assertIn("printed", result.stdout)
+
+    def test_a_wrapped_unknown_name_needs_a_reason(self):
+        path = self.write_fixture(
+            """
+            import shutil
+
+            shutil.rmtree(str(mystery))
+            """
+        )
+        result = run_gate(path)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("1 unknown", result.stdout)
+        strict = run_gate(path, flags=("--strict-unknown",))
+        self.assertEqual(strict.returncode, 1, strict.stdout + strict.stderr)
+        self.assertIn("::error", strict.stdout)
 
     def test_the_real_test_suite_is_clean(self):
         result = run_gate(REPO_ROOT / "scripts/tests")

@@ -32,26 +32,26 @@ claims:
   - id: ppe-table-24576
     claim: "目标配置开了 CONFIG_NET_AIROHA_FLOW_STATS=y，两颗 PPE 的 SRAM 数据表各 4096 项（合计 8192），整机 PPE 表为 8192 SRAM + 16384 DRAM = 24576，不是 32768 或 49152。"
     source:
-      - target/linux/airoha/patches-7.3/209-net-airoha-size-the-SRAM-tables-the-way-the-hardware-sees-them.patch:14
-      - target/linux/airoha/patches-7.3/209-net-airoha-size-the-SRAM-tables-the-way-the-hardware-sees-them.patch:36
-      - target/linux/airoha/patches-7.3/214-net-airoha-stop-paying-for-unused-flow-counters.patch:83
-      - target/linux/airoha/patches-7.3/9999-net-airoha-report-the-derived-IPv4-capacity-in-ppe-usage.patch:71
-      - target/linux/airoha/an7581/config-7.3:279
+      - target/linux/airoha/patches-7.4/209-net-airoha-size-the-SRAM-tables-the-way-the-hardware-sees-them.patch:14
+      - target/linux/airoha/patches-7.4/209-net-airoha-size-the-SRAM-tables-the-way-the-hardware-sees-them.patch:36
+      - target/linux/airoha/patches-7.4/214-net-airoha-stop-paying-for-unused-flow-counters.patch:85
+      - target/linux/airoha/patches-7.4/9999-net-airoha-report-the-derived-IPv4-capacity-in-ppe-usage.patch:72
+      - target/linux/airoha/an7581/config-7.4:294
     evidence: 代码
     date: "2026-11-15"
     status: supported
     notes: "只在 FLOW_STATS=y 且 NPU 接受流计数器时成立；patch 214 把它改成运行时条件（num_stats > 0 && !ppe->foe_stats_enabled 时不切 SRAM），所以同一份 config 在两台机器上可以是 24576 或 32768。ppe/usage 的 ipv4_capacity 打印当下生效的那一个，但硬件上的 dump 仍未采集。"
 
     verify:
-      - "text: target/linux/airoha/patches-7.3/209-net-airoha-size-the-SRAM-tables-the-way-the-hardware-sees-them.patch:14 each PPE's table holds 4096 entries"
-      - "text: target/linux/airoha/patches-7.3/214-net-airoha-stop-paying-for-unused-flow-counters.patch:83 if (num_stats > 0 && !ppe->foe_stats_enabled)"
-      - "kconfig: target/linux/airoha/an7581/config-7.3 CONFIG_NET_AIROHA_FLOW_STATS=y"
+      - "text: target/linux/airoha/patches-7.4/209-net-airoha-size-the-SRAM-tables-the-way-the-hardware-sees-them.patch:14 each PPE's table holds 4096 entries"
+      - "text: target/linux/airoha/patches-7.4/214-net-airoha-stop-paying-for-unused-flow-counters.patch:85 if (num_stats > 0 && !ppe->foe_stats_enabled)"
+      - "kconfig: target/linux/airoha/an7581/config-7.4 CONFIG_NET_AIROHA_FLOW_STATS=y"
   - id: ppe-table-32768
     claim: "整机 PPE 表是 32768（SRAM 16384 + DRAM 16384 共享），不是 49152。"
     source:
       - https://github.com/genshanxinli/xr1710g-openwrt/issues/31
-      - target/linux/airoha/patches-7.3/209-net-airoha-size-the-SRAM-tables-the-way-the-hardware-sees-them.patch:36
-      - target/linux/airoha/patches-7.3/214-net-airoha-stop-paying-for-unused-flow-counters.patch:83
+      - target/linux/airoha/patches-7.4/209-net-airoha-size-the-SRAM-tables-the-way-the-hardware-sees-them.patch:36
+      - target/linux/airoha/patches-7.4/214-net-airoha-stop-paying-for-unused-flow-counters.patch:85
     evidence: 代码
     date: "2026-11-15"
     status: refuted
@@ -69,45 +69,44 @@ claims:
   - id: ppe-counter-index-identity
     claim: "流计数器按流自身的 hash 做恒等映射：只有 hash < 8192 的 SRAM 流能拿到计数器，块外 hash 直接返回无计数器，不会折叠到别的流的槽位。"
     source:
-      - target/linux/airoha/patches-7.3/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:20
-      - target/linux/airoha/patches-7.3/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:47
-      - target/linux/airoha/patches-7.3/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:56
+      - target/linux/airoha/patches-7.4/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:13
+      - target/linux/airoha/patches-7.4/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:11
+      - target/linux/airoha/patches-7.4/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:20
     evidence: 代码
     date: "2026-11-15"
     status: supported
     notes: "修复前的 hash - PPE_STATS_NUM_ENTRIES 会让 hash 4096 与 8192、4097 与 8193 等 4096 对槽位别名（patch 210:20）。静态代码结论，未用 NPU 计数器做硬件验证。"
 
     verify:
-      - "text: target/linux/airoha/patches-7.3/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:20 so hash 4096 and hash 8192 share slot 4096"
-      - "text: target/linux/airoha/patches-7.3/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:53 if (hash >= ppe_num_stats_entries)"
+      - "text: target/linux/airoha/patches-7.4/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:9 Every SRAM entry owns the counter slot named by its own hash"
+      - "text: target/linux/airoha/patches-7.4/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:17 if (hash >= ppe_num_stats_entries)"
   - id: ppe-hash-bijective
     claim: "PPE 的 hash 折叠对 32768 和 24576 两种表几何都覆盖全部槽位（32768→32768，24576→24576），且不引入每包 udiv。"
     source:
-      - target/linux/airoha/patches-7.3/212-net-airoha-address-PPE-entries-from-their-own-table.patch:29
-      - target/linux/airoha/patches-7.3/212-net-airoha-address-PPE-entries-from-their-own-table.patch:30
+      - target/linux/airoha/patches-7.4/212-net-airoha-address-PPE-entries-from-their-own-table.patch:30
+      - target/linux/airoha/patches-7.4/212-net-airoha-address-PPE-entries-from-their-own-table.patch:31
     evidence: 代码
     date: "2026-11-15"
     status: supported
     notes: "取自 patch 212 的 split-fold 说明；只有静态一致性检查，没有运行时碰撞或覆盖率统计。"
 
     verify:
-      - "text: target/linux/airoha/patches-7.3/212-net-airoha-address-PPE-entries-from-their-own-table.patch:62 if (num_entries == 3 * PPE_SRAM_NUM_ENTRIES)"
-      - "text: target/linux/airoha/patches-7.3/212-net-airoha-address-PPE-entries-from-their-own-table.patch:63 return ((hash >> 13) % 3) * PPE_SRAM_NUM_ENTRIES +"
+      - "text: target/linux/airoha/patches-7.4/212-net-airoha-address-PPE-entries-from-their-own-table.patch:30 if (num_entries == 3 * PPE_SRAM_NUM_ENTRIES)"
+      - "text: target/linux/airoha/patches-7.4/212-net-airoha-address-PPE-entries-from-their-own-table.patch:31 return ((hash >> 13) % 3) * PPE_SRAM_NUM_ENTRIES +"
   - id: bridge-ttl-hardware-path
     claim: "同一个 bridge 两个端口之间转发的流保持 IP TTL；PPE 只在这类流上清 IB1.BIND_TTL，routed 流仍递减。该修复只覆盖已绑定 PPE 的硬件路径，未绑定流仍由软件 ip_decrease_ttl() 递减。"
     source:
-      - target/linux/airoha/patches-7.3/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:15
-      - target/linux/airoha/patches-7.3/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:20
-      - target/linux/airoha/patches-7.3/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:23
-      - target/linux/airoha/patches-7.3/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:75
+      - target/linux/airoha/patches-7.4/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:21
+      - target/linux/airoha/patches-7.4/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:26
+      - target/linux/airoha/patches-7.4/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:46
     evidence: 代码
     date: "2026-11-15"
     status: supported
     notes: "patch 963 记录修复前实测：TTL 5 的帧从 lan2 进、phy0.0-ap0 出变成 TTL 4。修复本身是代码结论，未做修复后的 TTL A/B。"
 
     verify:
-      - "text: target/linux/airoha/patches-7.3/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:20 and BIND_TTL is cleared.  Routed flows keep decrementing"
-      - "text: target/linux/airoha/patches-7.3/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:56 val |= AIROHA_FOE_IB1_BIND_TTL;"
+      - "text: target/linux/airoha/patches-7.4/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:21 Bridged flows that stay inside one bridge"
+      - "text: target/linux/airoha/patches-7.4/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:27 val |= AIROHA_FOE_IB1_BIND_TTL;"
   - id: eip93-no-gcm
     claim: "EIP93 的 AEAD 只注册 authenc(hmac(md5/sha1/sha224/sha256), cbc(aes|des|des3_ede) 或 rfc3686(ctr(aes)))，没有 gcm(aes) 或 ChaCha；IPsec 只能按 classic ESP 规划。"
     source:
@@ -124,7 +123,6 @@ claims:
   - id: fullcone-udp-only
     claim: "内置 nft-fullcone 只对 UDP 实现真正的 full-cone；其他协议等价于 MASQUERADE，模块加载失败时 fw4 回退普通 NAT。"
     source:
-      - README.md:132
       - README.md:134
     evidence: 代码
     date: "2026-11-15"
@@ -132,7 +130,7 @@ claims:
     notes: "README 记录的行为；模块源码不在本仓库，未逐行核对。"
 
     verify:
-      - "text: README.md:133 Note that the shipped `nft-fullcone` module only"
+      - "text: README.md:134 Note that the shipped `nft-fullcone` module only"
   - id: cpu-top-opp-1200
     claim: "当前树的 CPU OPP 表最高 1.2 GHz（an7581.dtsi 的 opp-1200000000），不是 issue #1 验收里写的 1.35 GHz。"
     source:
@@ -195,8 +193,8 @@ claims:
   - id: pppoe-decap-bit23
     claim: "PPPoE 入向硬件 decap 靠 IB1 bit23（BIND_TUNNEL_DECAP）的推断未在树内确立：decap 实验里 decap=0 的 entry 不带 bit23、decap=1 才带；9907 把编码做成 0/1/2/3 四档（bit22|bit23、bit23、bit22 单独、bit22），并写明 bit22/bit23 谁都不是已证实的 strip 位。入向最小集（5T/route 键 + STATE=2 + TTL + IB1 bit23，etype=8864/bit22/pppoe_id 非必需）仍只是 b12 的推断，原始记录未入库。"
     source:
-      - target/linux/airoha/patches-7.3/9907-net-airoha-selectable-pppoe-decap-encoding.patch:12
-      - target/linux/airoha/patches-7.3/9907-net-airoha-selectable-pppoe-decap-encoding.patch:127
+      - target/linux/airoha/patches-7.4/9907-net-airoha-selectable-pppoe-decap-encoding.patch:12
+      - target/linux/airoha/patches-7.4/9907-net-airoha-selectable-pppoe-decap-encoding.patch:135
       - https://github.com/genshanxinli/xr1710g-openwrt/issues/31
       - https://github.com/genshanxinli/xr1710g-openwrt/issues/81
     evidence: 推断
@@ -205,8 +203,8 @@ claims:
     notes: "9907 的原话是 bit23 只有 DS-Lite/6rd 在推方向用过、PPPoE 入向从未设过 bit22/bit23，所以它把四档摆出来给真机 PPPoE WAN 逐档量（scripts/pppoe-decap-hw-bench.sh），默认 0 = 完全保持旧行为。本机 wan proto=dhcp，没有 PPPoE 会话，四档都未测；b12 的原始记录也不在库内。etype=8864/pppoe_id 不作为必需项这一点与 9907 的‘每档强制写 ETH_P_PPP_SES、pppoe_id 恒 0’一致。"
 
     verify:
-      - "text: target/linux/airoha/patches-7.3/9907-net-airoha-selectable-pppoe-decap-encoding.patch:12 bind the push direction sets, bit23 (BIND_TUNNEL_DECAP, the vendor's"
-      - "text: target/linux/airoha/patches-7.3/9907-net-airoha-selectable-pppoe-decap-encoding.patch:127 Every arm forces the L2 match word to ETH_P_PPP_SES and leaves pppoe_id at"
+      - "text: target/linux/airoha/patches-7.4/9907-net-airoha-selectable-pppoe-decap-encoding.patch:12 bind the push direction sets, bit23 (BIND_TUNNEL_DECAP, the vendor's"
+      - "text: target/linux/airoha/patches-7.4/9907-net-airoha-selectable-pppoe-decap-encoding.patch:135 Every arm forces the L2 match word to ETH_P_PPP_SES and leaves pppoe_id at"
 
   - id: pbus-csr-0x18-reads-7
     claim: "XR1710G 上 pbus_csr（0x1fbe3400）的 0x18 偏移即 0x1fbe3418，开机后读 0x00000007。"
@@ -275,11 +273,11 @@ claims:
     verify:
       - "text: target/linux/airoha/an7581/base-files/etc/hotplug.d/net/50-bridge-hw-offload:58 [ \"$waits\" -lt 200 ]"
   - id: nf-flow-pppoe-trace-compiled
-    claim: "airoha/an7581 的内核会编入 nf_flow_pppoe tracepoint：config/Config-kernel.in 给 KERNEL_FTRACE 和 KERNEL_ENABLE_DEFAULT_TRACERS 加了 default y if TARGET_airoha_an7581；当前的 7.4（KERNEL_PATCHVER）生成的 linux-7.4/.config 有 CONFIG_TRACEPOINTS=y，net/netfilter/nf_flow_table_ip.o 里有 __tracepoint_nf_flow_pppoe；7.3 队列带同一补丁，同一份源码在改之前的 tracing-off 配置下该符号为 0。"
+    claim: "airoha/an7581 的内核会编入 nf_flow_pppoe tracepoint：config/Config-kernel.in 给 KERNEL_FTRACE 和 KERNEL_ENABLE_DEFAULT_TRACERS 加了 default y if TARGET_airoha_an7581；当前的 7.4（KERNEL_PATCHVER）生成的 linux-7.4/.config 有 CONFIG_TRACEPOINTS=y，net/netfilter/nf_flow_table_ip.o 里有 __tracepoint_nf_flow_pppoe；同一份源码在改之前的 tracing-off 配置下该符号为 0（那次对照跑在当时的 7.3 队列上）。"
     source:
       - config/Config-kernel.in:377
       - config/Config-kernel.in:400
-      - target/linux/airoha/patches-7.3/917-netfilter-flowtable-add-opt-in-pppoe-ingress-trace.patch:104
+      - target/linux/airoha/patches-7.4/917-netfilter-flowtable-add-opt-in-pppoe-ingress-trace.patch:102
       - https://github.com/genshanxinli/xr1710g-openwrt/issues/60
     evidence: 实测
     date: "2026-11-20"
@@ -287,7 +285,6 @@ claims:
     notes: "实测(2026-11-21)已到运行期：镜像 r38189+1-bc6ee752a1 / linux-7.4-rc3 的 .config 有 CONFIG_FTRACE=y(4568)/CONFIG_TRACING=y(4566)/CONFIG_TRACEPOINTS=y(292)，打包进 kmod-nf-flow 的 nf_flow_table.ko 有 6 个 nf_flow_pppoe 符号（含 __tracepoint_nf_flow_pppoe 与 __traceiter_nf_flow_pppoe），/proc/kallsyms 有 __traceiter_nf_flow_pppoe [nf_flow_table]，临时挂 tracefs 后 available_events 含 nf_flow_table:nf_flow_pppoe；vmlinux 与 mt7996e.ko 里为 0，因为 CONFIG_NF_FLOW_TABLE=m 且该 tracepoint 归 netfilter 不归无线，属预期。踩过的坑：build_dir/**/linux-7.4-rc3/.config 会同时命中 toolchain-* 下那份 kernel-headers 的 .config（CONFIG_TRACEPOINTS 未开），路径必须窄到 build_dir/target-*/；另 /sys/kernel/debug/tracing 在本镜像不存在、tracefs 未挂载，所以「available_events 里看不到」曾被误判成「没编进内核」。未验证：本机没有 PPPoE 会话（wan proto=dhcp，/proc/net/pppoe 0 条），从未采到真实 PPPoE 入向事件。"
     verify:
       - "text: config/Config-kernel.in:377 default y if TARGET_airoha_an7581"
-      - "text: target/linux/airoha/patches-7.3/917-netfilter-flowtable-add-opt-in-pppoe-ingress-trace.patch:56 trace_nf_flow_pppoe(skb, tuple, NF_FLOW_PPPOE_HOOK_INGRESS);"
       - "text: target/linux/airoha/patches-7.4/917-netfilter-flowtable-add-opt-in-pppoe-ingress-trace.patch:54 trace_nf_flow_pppoe(skb, tuple, NF_FLOW_PPPOE_HOOK_INGRESS);"
       - "kconfig: build_dir/target-*/linux-airoha_an7581/linux-7.4-rc3/.config CONFIG_TRACEPOINTS=y"
       - "symbol: build_dir/target-*/linux-airoha_an7581/linux-7.4-rc3/net/netfilter/nf_flow_table_ip.o __tracepoint_nf_flow_pppoe"
@@ -326,18 +323,18 @@ claims:
     verify:
       - "text: package/kernel/mac80211/Makefile:13 PKG_SOURCE_VERSION:=7.2"
   - id: soe-probe-off-by-default
-    claim: "990/970 的 SOE 只读探针在 an7581/config-7.3 里显式关掉（config-7.3:281 写 `# CONFIG_NET_AIROHA_SOE is not set`，Kconfig 里 `default n`），所以默认镜像里不编 `airoha_soe_probe.o`；在 7.3 树上 `yes \"\" | make ARCH=arm64 syncconfig` 只剩 0 个 `(NEW)` 符号。"
+    claim: "990/970 的 SOE 只读探针在 an7581/config-7.4 里显式关掉（config-7.4:490 写 `# CONFIG_NET_AIROHA_SOE is not set`，Kconfig 里 `default n`），所以默认镜像里不编 `airoha_soe_probe.o`；2026-11-20 在当时的 linux-7.3 树上 `yes \"\" | make ARCH=arm64 syncconfig` 只剩 0 个 `(NEW)` 符号，同一条 `# CONFIG_NET_AIROHA_SOE is not set` 仍在 7.4 配置的 490 行。"
     source:
-      - target/linux/airoha/an7581/config-7.3:281
-      - target/linux/airoha/patches-7.3/970-net-airoha-soe-readonly-probe.patch:36
+      - target/linux/airoha/an7581/config-7.4:490
+      - target/linux/airoha/patches-7.4/970-net-airoha-soe-readonly-probe.patch:29
     evidence: 实测
     date: "2026-11-20"
     status: supported
-    notes: "2026-11-20 在 build_dir 的 linux-7.3 上实测：0 个 (NEW)；去掉 281 行后同一棵树恰好出现 1 个 (NEW)=NET_AIROHA_SOE，这行就是它缺席时 syncconfig 卡住的原因。未验证的是这套配置在新 untar 的树上重复一遍时要重新 apply 队列（本次 fresh tree 队列 338 个补丁全过）；618 对等性清单见 issue #9。"
+    notes: "2026-11-20 在 build_dir 的 linux-7.3 上实测：0 个 (NEW)；去掉 7.3 配置的 281 行后同一棵树恰好出现 1 个 (NEW)=NET_AIROHA_SOE，这行就是它缺席时 syncconfig 卡住的原因。未验证的是这套配置在新 untar 的树上重复一遍时要重新 apply 队列（本次 fresh tree 队列 338 个补丁全过）；618 对等性清单见 issue #9。"
     verify:
-      - "text: target/linux/airoha/an7581/config-7.3:281 # CONFIG_NET_AIROHA_SOE is not set"
-      - "kconfig: target/linux/airoha/an7581/config-7.3 CONFIG_NET_AIROHA_SOE=n"
-      - "text: target/linux/airoha/patches-7.3/970-net-airoha-soe-readonly-probe.patch:56 obj-$(CONFIG_NET_AIROHA_SOE) += airoha_soe_probe.o"
+      - "text: target/linux/airoha/an7581/config-7.4:490 # CONFIG_NET_AIROHA_SOE is not set"
+      - "kconfig: target/linux/airoha/an7581/config-7.4 CONFIG_NET_AIROHA_SOE=n"
+      - "text: target/linux/airoha/patches-7.4/970-net-airoha-soe-readonly-probe.patch:47 obj-$(CONFIG_NET_AIROHA_SOE) += airoha_soe_probe.o"
 
   - id: mt76-pin-drift
     claim: "本树 mt76 pin 是 package/kernel/mt76/Makefile 的 2026-10-28 / 46b67e5b（OpenWRT-fanboy/mt76-firmware 的 main 分支上的提交，落后 main 尖 8 个 commit）。它已从 261008 线的 639e1287 换到 main 线：639e1287 不是 main 的祖先（merge-base = 467ae2e3），换线后 scripts/check-mt76-pin.sh 的判定从 blocked(rc=2) 变成 keep(rc=0)。不再前推到 main 尖 0936617d 的原因不是面子问题：main 最后 8 个 commit 用到本树 cfg80211（linux-7.4-rc3 / backports-7.2）没有的 API，编译不过。"
@@ -345,7 +342,7 @@ claims:
       - package/kernel/mt76/Makefile:11
       - package/kernel/mt76/Makefile:12
       - scripts/check-mt76-pin.sh:41
-      - scripts/tests/test_check_mt76_pin.sh:179
+      - scripts/tests/test_check_mt76_pin.sh:187
       - package/kernel/mt76/patches/0010-enable-firmware-txpower-limit.patch:1
     evidence: 实测
     date: "2026-11-21"
@@ -355,16 +352,16 @@ claims:
       - "text: package/kernel/mt76/Makefile:11 PKG_SOURCE_DATE:=2026-10-28"
       - "text: package/kernel/mt76/Makefile:12 PKG_SOURCE_VERSION:=46b67e5b7c49313d11b2b2d83df3c8025406d63e"
       - "text: scripts/check-mt76-pin.sh:41 blocked    not decidable / not actionable"
-      - "text: scripts/tests/test_check_mt76_pin.sh:179 run_case pin-on-side-branch 2 blocked"
+      - "text: scripts/tests/test_check_mt76_pin.sh:187 run_case pin-on-side-branch 2 blocked"
       - "text: package/kernel/mt76/Makefile:17 PKG_MIRROR_BLOCKED_BY:="
 
   - id: wan-defaults-gate
-    claim: "#90 的 WAN 产品化默认值可以逐行判定：scripts/wan-defaults-check.sh 输出 20 行（19 PASS + 1 SKIP），scripts/tests/test_wan_defaults_rollback.sh 对每个默认值做「基线 → 改坏 → FAIL → 回滚 → PASS」矩阵，并断言检查脚本不重写任何配置。唯一 SKIP 是 ppe/pppoe_decap，因为那个 debugfs 档只存在于 patches-7.3/9907 之后的镜像。"
+    claim: "#90 的 WAN 产品化默认值可以逐行判定：scripts/wan-defaults-check.sh 输出 20 行（19 PASS + 1 SKIP），scripts/tests/test_wan_defaults_rollback.sh 对每个默认值做「基线 → 改坏 → FAIL → 回滚 → PASS」矩阵，并断言检查脚本不重写任何配置。唯一 SKIP 是 ppe/pppoe_decap，因为那个 debugfs 档只存在于 patches-7.4/9907 之后的镜像。"
     source:
       - scripts/wan-defaults-check.sh:238
       - scripts/wan-defaults-check.sh:240
       - scripts/tests/test_wan_defaults_rollback.sh:140
-      - target/linux/airoha/patches-7.3/9907-net-airoha-selectable-pppoe-decap-encoding.patch:30
+      - target/linux/airoha/patches-7.4/9907-net-airoha-selectable-pppoe-decap-encoding.patch:30
     evidence: 实测
     date: "2026-11-21"
     status: supported
@@ -420,28 +417,28 @@ claims:
   - id: nft-bridged-guard-inet-only
     claim: "With 675-05 alone applied, the nft flowtable offload guard that records the per-direction ingress and egress port and refuses to offload once a new ingress port equals the peer direction's egress port only runs on table bridge flowtables.  The 675-05 pending patch computes \"bool routing = flowtable->type->family != NFPROTO_BRIDGE;\" so the family split happens before the guard, and this firmware feeds br-lan bridged packets into the inet fw4 flowtable instead (50-nf-bridge-call sets nf_call_iptables=1), where that guard never executes.  At the tip 675-06 has deleted the split, so the 'never executes' half holds for 675-05 in isolation only; see nft-bridged-guard-applied-to-inet."
     source:
-      - target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:284
+      - target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:317
       - target/linux/airoha/an7581/base-files/etc/hotplug.d/net/50-nf-bridge-call:28
     evidence: 代码
     date: 2026-11-21
     status: supported
     verify:
-      - "text: target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:284 bool routing = flowtable->type->family != NFPROTO_BRIDGE;"
+      - "text: target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:317 bool routing = flowtable->type->family != NFPROTO_BRIDGE;"
       - "text: package/network/config/firewall4/patches/001-add-bridge-flowtable-support.patch:39 flowtable bridge fw4 fb"
     notes: "Consequence for #2: the guard does not cover the GDM4/GDM1 shape on the default fw4 inet flowtable.  Verified by bypass2 against the applied 7.4 tree.  This describes 675-05 on its own; 675-06 applies the same guard to every family, see nft-bridged-guard-applied-to-inet."
 
   - id: nft-bridged-guard-roam-not-a-crossing
     claim: "675-05/675-06 的跨桥判据不止看入口口：每个方向同时记首个入口口和首个桥出口（nf_bridge_get_physoutif()），只有新入口口等于对向方向记下的出口口时才置 multi。5 GHz↔6 GHz 漫游（同一 BSS，换桥口不换方向）因此不再被判成第二次穿越，流不被 gc 拆掉、该 conntrack 继续可卸载；经桥后路由器的真实二次穿越仍被拆流并拒绝卸载。scripts/tests/test_bridged_crossing_roam.py 在 netns 里把两种形状的 hook 入参跑出来，再分别喂给新旧两种判据做断言。"
     source:
-      - target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:242
+      - target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:267
       - scripts/tests/bridged-crossing-roam.sh:58
-      - scripts/tests/test_bridged_crossing_roam.py:140
+      - scripts/tests/test_bridged_crossing_roam.py:183
     evidence: 代码
     date: "2026-11-21"
     status: supported
     verify:
-      - "text: target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:242 if (iif != READ_ONCE(rec->outif[peer]))"
-      - "text: scripts/tests/test_bridged_crossing_roam.py:140 self.assertFalse("
+      - "text: target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:267 if (iif != READ_ONCE(rec->outif[peer]))"
+      - "text: scripts/tests/test_bridged_crossing_roam.py:183 self.assertFalse("
     notes: "判据只到代码与同机 netns 的 hook 入参实测：iptables -m physdev 读的正是 nf_bridge 的 physinif/physoutdev 这一对字段，脚本把换入口的 5 元组跑两遍并打印每次穿越的入/出口口。没有在 XR1710G 上做双主机漫游实测，PPE 侧未实测；CI 未跑。"
 
   - id: nft-bridged-guard-applied-to-inet
@@ -489,10 +486,6 @@ claims:
       - "text: target/linux/airoha/patches-7.4/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:38 act->police.overhead || act->police.mtu) {"
       - "text: target/linux/airoha/patches-7.4/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:39 act->police.overhead) {"
       - "text: target/linux/airoha/patches-7.4/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:42 peakrate/avrate/overhead police is not supported"
-      - "text: target/linux/airoha/patches-7.3/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:10 net/sched/act_police.c:168-172"
-      - "text: target/linux/airoha/patches-7.3/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:38 act->police.overhead || act->police.mtu) {"
-      - "text: target/linux/airoha/patches-7.3/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:39 act->police.overhead) {"
-      - "text: target/linux/airoha/patches-7.3/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:42 peakrate/avrate/overhead police is not supported"
       - "text: target/linux/airoha/patches-7.4/99991-net-airoha-let-the-tc-police-flow-reach-the-PPE-meter.patch:54 avrate/overhead police is not supported"
 
   - id: cve-2026-98822-backported
@@ -534,52 +527,46 @@ claims:
   - id: matchall-police-takes-no-ppe-meter-group
     claim: "tc matchall police 在 7.3/7.4 上刻意不分配 ppe->meter[] 组，这不是漏分配：ppe->meter[] 是 63 个按 FOE 表项（AIROHA_FOE_SHAPER_ID）命名的每流组，而 airoha_qdma_set_rx_meter() 一次编程该 QDMA 的全部 RX ring，是整口语义；matchall 规则没有 flow key，占掉一个组只会挤掉可单独整形的流。两条路径落在不同块：组寄存器在 frame-engine 窗口（0x200c + 16 * group），这个 TRTCM 在 QDMA 窗口，所以 matchall 之后 ppe/meter 空是设计，不是缺口；matchall 要看的量由 qdma/rx_meter 给出。"
     source:
-      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:133
-      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:135
-      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:139
-      - target/linux/airoha/patches-7.3/99993-net-airoha-make-the-matchall-police-meter-observable.patch:133
+      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:411
+      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:413
+      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:417
     evidence: 代码
     date: "2026-11-22"
     status: supported
     notes: "判据是补丁 post-image 与内核源码：airoha_eth.c 里 airoha_qdma_set_rx_meter() 循环 eth->qdma 的每个 q_rx[i] 调 airoha_qdma_init_rl_config()/airoha_qdma_set_rl_token_bucket()（整块），airoha_dev_tc_matchall() 只把 act->police.rate_pkt_ps/burst 传进去，没有 flow key；airoha_ppe.c:1205 用 FIELD_PREP(AIROHA_FOE_SHAPER_ID, data->meter) 把组号写进 FOE 表项，:419 的 find_first_zero_bit(..., 63) 说明组就是 63 个限额资源。没有在实机上验证「不占组会更快分配成功」——这一点只从代码推。"
     verify:
-      - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:133 + * all traffic arriving on the port.  It deliberately takes no ppe->meter[]"
-      - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:135 + * and there are only AIROHA_PPE_METER_NUM (63) of them, so a group is a"
-      - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:139 + * blocks -- the group register is frame-engine space at 0x200c + 16 *"
-      - "text: target/linux/airoha/patches-7.3/99993-net-airoha-make-the-matchall-police-meter-observable.patch:133 + * all traffic arriving on the port.  It deliberately takes no ppe->meter[]"
+      - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:411 + * all traffic arriving on the port.  It deliberately takes no ppe->meter[]"
+      - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:413 + * and there are only AIROHA_PPE_METER_NUM (63) of them, so a group is a"
+      - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:417 + * blocks -- the group register is frame-engine space at 0x200c + 16 *"
 
   - id: matchall-meter-readback-boundary
     claim: "qdma/rx_meter（7.3/7.4 的 99993）把 matchall police 变成可观测，但只报两类东西：软件记录的请求（rate/burst/unit，DESTROY 时归零）和每 ring 经 TRTCM_MISC_MODE 读回的 arming（meter_en/pps/tick_sel）。token rate 与 bucket shift 不打印——驱动只经 TRTCM 参数窗写它们、从不回读，从写入值反推一个数只会把软件记录伪装成寄存器值（与 ppe/meter 的 reg deadbeef 同一类错误）。"
     source:
-      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:122
-      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:155
-      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:54
-      - target/linux/airoha/patches-7.3/99993-net-airoha-make-the-matchall-police-meter-observable.patch:122
+      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:132
+      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:433
+      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:64
     evidence: 代码
     date: "2026-11-22"
     status: supported
     notes: "选 qdma/ 而不是 ppe/ 是因为落点不同块：ppe/ 的 16 个节点都读 frame-engine 侧，QDMA TRTCM 在 QDMA 窗口，塞进 ppe/ 只会让读者以为它和组表同源。可回读性依据：airoha_qdma_set_rl_config() 在写之前先用 airoha_qdma_get_rl_param(..., TRTCM_MISC_MODE, ...) 做读-改-写，所以该参数确实可读；TRTCM_TOKEN_RATE_MODE / TRTCM_BUCKETSIZE_SHIFT_MODE 在整棵树里只有 set 路径、没有 get 调用点。未在实机读回：rx_meter 的输出还没在 r38242+ 上抓过，逐 ring 的 mode 值与 matchall+police 之后 ppe/meter 仍为空这两点都待设备验证。"
     verify:
-      - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:122 +\tdebugfs_create_file(\"rx_meter\", 0444, eth->qdma_debugfs_dir, eth,"
-      - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:54 + * TRTCM_MISC_MODE, the parameter the driver reads before every write.  The"
-      - "text: target/linux/airoha/patches-7.3/99993-net-airoha-make-the-matchall-police-meter-observable.patch:122 +\tdebugfs_create_file(\"rx_meter\", 0444, eth->qdma_debugfs_dir, eth,"
+      - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:132 +\tdebugfs_create_file(\"rx_meter\", 0444, eth->qdma_debugfs_dir, eth,"
+      - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:64 + * TRTCM_MISC_MODE, the parameter the driver reads before every write.  The"
 
   - id: matchall-rx-meter-unit-is-kbps
     claim: "qdma/rx_meter 的 rate 列是驱动收到的 Kbps（byte 单位）或 pps（packet 单位），不是 tc 请求的 bps；byte 单位下 airoha_eth.c 先 div_u64(rate_bytes_ps, 1000) 再 << 3，那次除法截断使打印值最多比 tc 请求低 8 kbit/s，节点如实显示驱动收到的值。"
     source:
-      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:80
-      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:76
-      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:73
-      - target/linux/airoha/patches-7.3/99993-net-airoha-make-the-matchall-police-meter-observable.patch:80
+      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:90
+      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:86
+      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:83
     evidence: 代码
     date: "2026-11-22"
     status: supported
     notes: "实机两个数据点：tc rate 1250000bit 打印 1248（1250000/8 = 156250 B/s，/1000 截断为 156，<<3 = 1248）；lan2 上 2000000bit 打印 2000（整除，无截断损失）。截断的逐档（1..8 kbit/s 每一档）未上机验证，只验了这两个点；packet 单位（rate_pkt_ps -> pps）没有实测；\"mode unreadable\" 分支从未触发。数值没错，错的是 99993 新格式串的 bps 标签；截断来自既有 airoha_eth.c（/1000<<3），不改它以免动到 airoha_qdma_set_rl_token_bucket() 的硬件编程语义。"
     verify:
-      - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:80 +\t\tseq_printf(m, \"qdma %d requested rate %u kbps burst %u unit %s\\n\","
-      - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:73 +\t\t * in byte units the rate is Kbps (div_u64(rate_bytes_ps, 1000)"
-      - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:76 +\t\t * is.  The byte-unit rate can sit up to 8 kbit/s below tc's"
-      - "text: target/linux/airoha/patches-7.3/99993-net-airoha-make-the-matchall-police-meter-observable.patch:80 +\t\tseq_printf(m, \"qdma %d requested rate %u kbps burst %u unit %s\\n\","
+      - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:90 +\t\tseq_printf(m, \"qdma %d requested rate %u kbps burst %u unit %s\\n\","
+      - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:83 +\t\t * in byte units the rate is Kbps (div_u64(rate_bytes_ps, 1000)"
+      - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:86 +\t\t * is.  The byte-unit rate can sit up to 8 kbit/s below tc's"
 
   - id: ppe-meter-enabled-is-a-probe-snapshot
     claim: "ppe/meter 的 enabled= 打印 ppe->meter_enabled，该字段只在 airoha_ppe_init() 里从 airoha_ppe_meter 拷贝一次，是 probe 期快照；运行期闸 airoha_ppe_meter_validate() 读的是参数变量本身，所以参数在运行期改成 Y 之后 enabled= 仍为 0 是字段语义，不是缺陷。要判运行期状态读 /sys/module/airoha_eth/parameters/airoha_ppe_meter。"
@@ -587,7 +574,6 @@ claims:
       - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:564
       - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:359
       - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:601
-      - target/linux/airoha/patches-7.3/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:560
     evidence: 代码
     date: "2026-11-22"
     status: supported
@@ -596,8 +582,7 @@ claims:
       - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:591 enabled= is the value airoha_ppe_meter had when this module"
       - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:597 keeps the probe-time snapshot on purpose"
       - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:359 +\tif (!airoha_ppe_meter)"
-      - "text: target/linux/airoha/patches-7.3/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:587 enabled= is the value airoha_ppe_meter had when this module"
-      - "text: target/linux/airoha/patches-7.3/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:598 +\tseq_printf(m, \"enabled=%u groups_total=%u"
+      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:602 +\tseq_printf(m, \"enabled=%u groups_total=%u"
 
   - id: ppe-meter-reg-columns-cannot-be-the-written-word
     claim: "ppe/meter 的 reg/hw_rate/hw_bucket 三列不是驱动写入值的回读证据：AN7581 上 FE + 0x200c + 16*group 读回 0xdeadbeef（bit 31 置位），而驱动写进这个字的位只有 2..18（TICK bit 2、RATE 16..3、BUCKET 18..17），所以这个 readback 不可能是那次写的回读；hw_rate 228816000 只是 ((0xdeadbeef>>3)&0x3fff)*16000 = 14301*16000 的算术结果，与请求速率无关。"
@@ -623,7 +608,7 @@ claims:
     source:
       - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:422
       - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:626
-      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:80
+      - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:90
     evidence: 实测
     date: "2026-11-22"
     status: supported
@@ -631,4 +616,4 @@ claims:
     verify:
       - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:422 rate_bps = min_t(u64, act->police.rate_bytes_ps,"
       - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:627 meter %2u refcount %u rate %u peakrate %u burst %u"
-      - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:80 requested rate %u kbps burst %u unit %s"
+      - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:90 requested rate %u kbps burst %u unit %s"

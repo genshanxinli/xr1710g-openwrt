@@ -39,7 +39,7 @@ Assertion syntax (one assertion per ``verify:`` list item, all optional):
     verify:
       - "symbol: build_dir/**/airoha_eth.o airoha_qdma_tx_bql_add"
       - "kconfig: build_dir/**/linux-7.4-rc3/.config CONFIG_TRACEPOINTS=y"
-      - "text: target/linux/airoha/patches-7.3/210-....patch:53 if (hash >= ...)"
+      - "text: target/linux/airoha/patches-7.4/210-....patch:17 if (hash >= ...)"
       - "device: /sys/class/watchdog/watchdog0/min_timeout 28"
 
     symbol   PATH-GLOB SYMBOL          byte-match inside the matched artifact
@@ -317,26 +317,44 @@ def _cited_paths(record: dict) -> list[str]:
             continue
         match = FILE_LINE_RE.fullmatch(value)
         paths.append(match.group(1) if match else value)
-    if not paths:
-        paths.extend(record.get("__source_paths__") or [])
     return paths
 
 
+def _is_shallow_clone(root: Path) -> bool:
+    try:
+        result = subprocess.run(["git", "-C", str(root), "rev-parse", "--is-shallow-repository"],
+                                capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and result.stdout.strip() == "true"
+
+
 def needs_reverify(record: dict, root: Path, head: str | None) -> str | None:
-    """Warn when a cited path moved after verified_at and no hook re-checks it."""
+    """Name the drift check's verdict -- including "cannot tell".
+
+    ``None`` means "the check ran and found nothing moved".  When the check
+    cannot run (URL-only evidence, a truncated history, a bad sha) the reason
+    is returned instead, because a silent ``None`` there is the bug P1-8: the
+    warning went quiet exactly where the ledger most needed it.
+    """
     sha = record.get("verified_at")
     if not sha or record.get("verify"):
         return None
+    target = head or "HEAD"
     paths = _cited_paths(record)
     if not paths:
-        return None
-    command = ["git", "-C", str(root), "diff", "--name-only", f"{sha}..{head or 'HEAD'}", "--"] + paths
+        return (f"no in-tree source to diff {sha}..{target}: row cites URLs only, "
+                "so drift cannot be detected mechanically")
+    command = ["git", "-C", str(root), "diff", "--name-only", f"{sha}..{target}", "--"] + paths
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.SubprocessError):
-        return None
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"cannot compare {sha}..{target}: git did not run ({exc})"
     if result.returncode != 0:
-        return None
+        detail = (result.stderr.strip().splitlines() or ["git diff failed"])[0]
+        if _is_shallow_clone(root):
+            detail += " (shallow clone: fetch full history, e.g. actions/checkout fetch-depth: 0)"
+        return f"cannot compare {sha}..{target}: {detail}"
     changed = [line for line in result.stdout.splitlines() if line.strip()]
     if not changed:
         return None

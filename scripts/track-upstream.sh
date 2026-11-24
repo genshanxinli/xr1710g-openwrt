@@ -51,6 +51,12 @@
 #   --review-hot N     --act-hot N      hot-commit thresholds (default 25 / 80)
 #   --check            verify the README record against the refs; 0 match,
 #                      1 stale, 2 not enough refs to judge (prints the fix)
+#   --strict-drift     with --check/--static: exit 1 when the record matches
+#                      reality but the reality it records is a drift
+#                      (ancestor=no or mirror_tree=different).  Off by default:
+#                      README.md records the drift on purpose, so a default
+#                      failure would be permanently red until a sync #189 calls
+#                      infeasible.  CI that wants drift to fail opts in.
 #   --static           with --check: verify only the record's shape and that its
 #                      constants match this script's defaults; needs no refs,
 #                      which is what a shallow CI checkout can do
@@ -83,6 +89,7 @@ FETCH=0
 QUIET=0
 CHECK=0
 STATIC=0
+STRICT_DRIFT=0
 RECORD=0
 VERDICT=0
 LISTHOT=0
@@ -110,6 +117,7 @@ while [ $# -gt 0 ]; do
 	--review-hot) REVIEW_HOT=${2:?--review-hot needs a number}; shift ;;
 	--act-hot) ACT_HOT=${2:?--act-hot needs a number}; shift ;;
 	--check) CHECK=1 ;;
+	--strict-drift) STRICT_DRIFT=1 ;;
 	--static) CHECK=1; STATIC=1 ;;
 	--record) RECORD=1 ;;
 	--quiet) QUIET=1 ;;
@@ -188,14 +196,50 @@ record_facts() {
 	fi
 }
 
+# --check asserts the record, not the tree.  A record that says ancestor=no /
+# mirror_tree=different is *accurate* while the tree is drifted, and README.md
+# documents that state on purpose.  Only --strict-drift turns a recorded drift
+# into exit 1, so CI decides; the wording never claims the tree is in sync.
+#
+# --static compares nothing: it has no refs.  Saying "matches reality" there
+# would report a shape check as a verified comparison, and --static is the only
+# path CI runs.  It says what it did: the record is well formed, and here is
+# the drift it records.
+#   $1 mode: check|static   $2 drift 0/1   $3 ancestor   $4 mirror_tree
+record_verdict() {
+	if [ "$1" = check ]; then
+		if [ "$2" = 1 ]; then
+			say "verdict: record matches reality (drift recorded: ancestor=$3 mirror_tree=$4)"
+			if [ "$STRICT_DRIFT" = 1 ]; then
+				exit 1
+			fi
+			exit 0
+		fi
+		say "verdict: record matches reality (no drift recorded)"
+		exit 0
+	fi
+	if [ "$2" = 1 ]; then
+		say "verdict: record shape ok (static; drift recorded: ancestor=$3 mirror_tree=$4)"
+		if [ "$STRICT_DRIFT" = 1 ]; then
+			exit 1
+		fi
+		exit 0
+	fi
+	say "verdict: record shape ok (static; no drift recorded)"
+	exit 0
+}
+
 if [ "$STATIC" = 1 ]; then
 	record_static || {
 		echo "verdict: record malformed" >&2
 		exit 1
 	}
+	static_drift=0
+	if [ "$(record_get ancestor)" = no ] || [ "$(record_get mirror_tree)" = different ]; then
+		static_drift=1
+	fi
 	say "record  $RECFILE shape ok; constants match --track/--mirror/--local"
-	say "verdict: record in sync (static)"
-	exit 0
+	record_verdict static "$static_drift" "$(record_get ancestor)" "$(record_get mirror_tree)"
 fi
 
 git rev-parse --git-dir >/dev/null 2>&1 || {
@@ -225,7 +269,12 @@ gate_branch() {
 		printf '%s\n' "$GATE"
 		return
 	fi
-	pv=$(sed -n 's/^KERNEL_PATCHVER:=//p' target/linux/airoha/an7581/target.mk 2>/dev/null | head -n 1)
+	# Read from the checkout root, not the caller's cwd: the pin file decides
+	# which upstream branch the device builds, and a run from scripts/ must
+	# not silently fall back to the first --track entry.
+	top=$(git rev-parse --show-toplevel 2>/dev/null) || top=.
+	pv=$(sed -n 's/^KERNEL_PATCHVER:=//p' \
+		"$top/target/linux/airoha/an7581/target.mk" 2>/dev/null | head -n 1)
 	if [ -n "$pv" ]; then
 		b="kernel$(printf '%s' "$pv" | tr -d '.')"
 		case " $TRACK " in
@@ -278,8 +327,11 @@ if [ "$CHECK" = 1 ]; then
 		exit 1
 	fi
 	say "record  $RECFILE: ancestor=$act_anc merge_base=$act_mb mirror_tree=$act_tree"
-	say "verdict: record in sync"
-	exit 0
+	rec_drift=0
+	if [ "$act_anc" = no ] || [ "$act_tree" = different ]; then
+		rec_drift=1
+	fi
+	record_verdict check "$rec_drift" "$act_anc" "$act_tree"
 fi
 
 if [ "$RECORD" = 1 ]; then
@@ -330,6 +382,23 @@ for b in $TRACK; do
 		"$b" "$(short "$us")" "$(when "$us")" "$(short "$mb")" \
 		"$behind" "$ahead" "$state")"
 done
+
+# A08-F7: --gate-branch accepts any upstream ref, but the loop above only
+# assigns gate_behind for branches listed in --track.  A resolved ref outside
+# that list used to leave the count empty and the verdict at unknown(3) even
+# though the count is well defined.  Count it directly here.  An in-track
+# branch with no merge base stays unknown: nothing was compared.
+if [ -z "$gate_behind" ]; then
+	case " $TRACK " in
+	*" $GATE "*) ;;
+	*)
+		if has_ref "$gate_ref" &&
+			git merge-base "$gate_ref" "$LOCAL_SHA" >/dev/null 2>&1; then
+			gate_behind=$(git rev-list --count "$LOCAL_SHA..$gate_ref")
+		fi
+		;;
+	esac
+fi
 
 # kernel73 is meant to be a content mirror of upstream/kernel73 (README), so
 # compare trees rather than SHAs: equal trees is the byte-identical property.

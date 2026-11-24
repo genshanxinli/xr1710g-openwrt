@@ -82,7 +82,10 @@ class SafeRmtreeTest(unittest.TestCase):
         if d.exists():
             self.skipTest("%s already exists; not ours to remove" % d)
         d.mkdir()
-        self.addCleanup(shutil.rmtree, d, True)
+        # The gate cannot tell whose path 'd' is: it is not a mkdtemp name and
+        # not one of its own-name words.  This test made it two lines up and
+        # asserts below that the guard left it alone, so the cleanup is ours.
+        self.addCleanup(shutil.rmtree, d, True)  # noqa: cleanup-safety created by this test just above
         self.refuse(d)
         self.assertTrue(d.is_dir())
 
