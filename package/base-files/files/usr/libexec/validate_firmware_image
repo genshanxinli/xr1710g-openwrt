@@ -45,10 +45,13 @@ FWTOOL_SIGNATURE=$?
 
 fwtool_check_image "$1" >&2
 FWTOOL_DEVICE_MATCH=$?
-# 74 = a major compat version mismatch: the image was built for a different
-# partition layout (UBI 1.x vs 2.0), which is a soft brick, not a decision the
-# operator gets to force past.  The other failures fwtool_check_image reports
-# (no signature, no metadata, board not in the image) stay forceable.
+# 74 = unverifiable layout: a major compat version mismatch (UBI 1.x vs 2.0),
+# absent or invalid image metadata on a board with REQUIRE_IMAGE_METADATA=1,
+# or a 2.0 image without new_supported_devices.  The image would be written
+# over a flash layout it was not built for -- a soft brick, not a decision the
+# operator gets to force past.  The other failures stay forceable: a missing
+# signature and a board absent from the image's device list only mean "you may
+# be doing something odd".
 case "$FWTOOL_DEVICE_MATCH" in
 0)
 	;;

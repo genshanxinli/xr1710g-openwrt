@@ -95,14 +95,15 @@ boot the other board's device tree.
 (`target/linux/airoha/image/an7581.mk:83`) and written onto the device by
 `.../base-files/etc/board.d/05_compat-version:11-14`. `sysupgrade` reads it
 back and compares it with the image before it writes anything
-(`package/base-files/files/lib/upgrade/fwtool.sh:49-50,52-54,75-80`).
+(`package/base-files/files/lib/upgrade/fwtool.sh:58-59,61-63,102-106`).
 
 - **1.x unit + 2.0 image, plain `sysupgrade`** → the compat check fails, `sysupgrade`
   aborts, **nothing is written to flash**. That is the gate working.
-- **1.x unit + 2.0 image, `sysupgrade -F`** → **the gate is gone**. A compat
-  mismatch is reported as "invalid but forceable" (`validate_firmware_image:10`
-  `FORCEABLE=1`, `:14-16`), so `-F` writes the 2.0 partition table over the 1.x
-  one and the unit no longer boots; recovery then needs serial/TTL (see below).
+- **1.x unit + 2.0 image, `sysupgrade -F`** → **refused as well**. A major compat
+  mismatch, absent or unreadable metadata on a metadata-requiring board, and a
+  2.0 image without `new_supported_devices` all return 74, which
+  `validate_firmware_image:19-22` turns into `notify_firmware_broken`
+  (`FORCEABLE=0`), so `-F` cannot write the 2.0 partition table over the 1.x one.
   **Never use `-F` to get past a compat mismatch.**
 - Stock (vendor AXON) units do not run OpenWrt's `sysupgrade` at all — conversion
   happens through the vendor web UI or U-Boot TFTP, which write `ubi` directly.

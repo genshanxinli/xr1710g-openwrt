@@ -29,17 +29,26 @@ fwtool_check_image() {
 
 	. /usr/share/libubox/jshn.sh
 
+	# Without metadata the compat_version is unknown, so a board that
+	# requires metadata cannot tell whether this image fits the flash
+	# layout.  That is the same "layout unknown, do not write" state as a
+	# major compat mismatch: 74 makes it non-forceable.  Boards that do
+	# not require metadata keep the upstream forceable path.
 	if ! fwtool -q -i /tmp/sysupgrade.meta "$1"; then
 		v "Image metadata not present"
-		[ "$REQUIRE_IMAGE_METADATA" = 1 -a "$FORCE" != 1 ] && {
+		[ "$REQUIRE_IMAGE_METADATA" = 1 ] && {
+			v "This board requires image metadata, so the compat version cannot be checked and -F cannot override this."
+			return 74
+		}
+		[ "$FORCE" != 1 ] && {
 			v "Use sysupgrade -F to override this check when downgrading or flashing to vendor firmware"
 		}
-		[ "$REQUIRE_IMAGE_METADATA" = 1 ] && return 1
 		return 0
 	fi
 
 	json_load "$(cat /tmp/sysupgrade.meta)" || {
 		v "Invalid image metadata"
+		[ "$REQUIRE_IMAGE_METADATA" = 1 ] && return 74
 		return 1
 	}
 	# Step 1. check if oem_name file exist and is not empty
@@ -56,9 +65,15 @@ fwtool_check_image() {
 	# select correct supported list based on compat_version
 	# (using this ensures that compatibility check works for devices
 	#  not knowing about compat-version)
+	# A 2.0 image without new_supported_devices is unverifiable, not
+	# "another board": the device list that carries the compat verdict is
+	# missing.  Same 74 rule as above on metadata-requiring boards.
 	local supported=supported_devices
 	[ "$imagecompat" != "1.0" ] && supported=new_supported_devices
-	json_select $supported || return 1
+	json_select $supported || {
+		[ "$REQUIRE_IMAGE_METADATA" = 1 ] && return 74
+		return 1
+	}
 
 	json_get_keys dev_keys
 	for k in $dev_keys; do
@@ -81,9 +96,9 @@ fwtool_check_image() {
 			# recovery can bring back.  74 is the same "broken, not
 			# forceable" status platform_check_image() uses for a foreign
 			# device tree; validate_firmware_image turns it into
-			# notify_firmware_broken.  Every other rejection here stays
-			# forceable: no signature, no metadata and an unknown board are
-			# "you may be doing something odd", not "this will brick it".
+			# notify_firmware_broken.  Forceable: missing signature, unknown board
+			# -- "you may be doing something odd", not "this will brick it".
+			# Absent metadata is 74 on a requiring board (above), not forceable.
 			if [ "${devicecompat%.*}" != "${imagecompat%.*}" ]; then
 				v "The device is supported, but this image is incompatible for sysupgrade based on the image version ($devicecompat->$imagecompat)."
 				[ -n "$compatmessage" ] && v "$compatmessage"

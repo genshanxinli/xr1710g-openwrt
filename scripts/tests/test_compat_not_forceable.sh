@@ -38,6 +38,17 @@
 #   6  clean image, stock flags                           -> valid forceable, -T rc 0
 #   7  image for another board                            -> !valid forceable, -T -F rc 0
 #   8  no compat field on either side (1.0 == 1.0)        -> valid forceable, -T rc 0
+#   9  no metadata on a REQUIRE_IMAGE_METADATA=1 board    -> !valid !forceable, -T -F rc 1
+#  10  compat 2.0 metadata without new_supported_devices  -> !valid !forceable, -T -F rc 1
+#  11  no metadata, REQUIRE_IMAGE_METADATA=0              -> !valid forceable, -T -F rc 0
+#  12  corrupt metadata, REQUIRE_IMAGE_METADATA=1         -> !valid !forceable, -T -F rc 1
+#
+# Cases 9, 10 and 12 are the red half of issue #7's second half: at the unfixed
+# fwtool.sh those paths return 1, which is forceable, so a metadata-stripped,
+# list-stripped or unparsable 2.0 image walks past the major-compat refusal with
+# -F.  Case 11 is the other half -- a board that does not require metadata keeps
+# the upstream forceable path -- and is green on both files by design.
+# Point FWTOOL_UNDER_TEST at a copy of the old file to watch 9, 10 and 12 fail.
 #
 # Usage: scripts/tests/test_compat_not_forceable.sh
 #
@@ -390,6 +401,84 @@ expect_json valid true
 expect_json forceable true
 run_sysupgrade -T
 expect_rc 0
+
+# --- 9: no metadata at all on a board that requires it -----------------------
+# The board's platform.sh sets REQUIRE_IMAGE_METADATA=1.  Without metadata the
+# compat_version is unknown, so -F must not answer the 1.x/2.0 layout question.
+
+reset_env metadata-absent
+FAKE_META=
+run_validator
+expect_rc 0
+expect_json valid false
+expect_json forceable false
+run_sysupgrade -T -F
+expect_rc 1
+expect_out 'Image metadata not present'
+expect_no_out 'will update anyway'
+
+# --- 10: compat 2.0 metadata without new_supported_devices -------------------
+# The device list that carries the compat verdict is missing, so the 2.0 image
+# is unverifiable, not "another board".  A 1 (forceable) return here is the
+# hole: -F would install a 2.0 layout over a 1.x one.
+
+reset_env compat-2.0-no-list
+cat >"$WORK/meta-2.0-nolist.json" <<'JSON'
+{ "metadata_version": "1.1", "compat_version": "2.0",
+  "supported_devices": ["gemtek,xr1710g-ubi - Image version mismatch: image 2.0, device 1.0. Please wipe config during upgrade (force required) or reinstall."],
+  "version": { "dist": "OpenWrt", "version": "SNAPSHOT", "revision": "r1",
+               "target": "airoha/an7581", "board": "gemtek,xr1710g-ubi" } }
+JSON
+FAKE_META=$WORK/meta-2.0-nolist.json
+run_validator
+expect_rc 0
+expect_json valid false
+expect_json forceable false
+run_sysupgrade -T -F
+expect_rc 1
+expect_no_out 'will update anyway'
+
+# --- 11: metadata absent on a board that does not require it -----------------
+# REQUIRE_IMAGE_METADATA=0 is the upstream half of the fix: only boards that
+# declare the requirement lose the -F escape for metadata-less images.  The
+# signature check is required and absent here, which is why the image stays
+# invalid -- forceable is the bit under test.
+
+reset_env metadata-not-required
+REQUIRE_IMAGE_METADATA=0
+REQUIRE_IMAGE_SIGNATURE=1
+FAKE_SIG_RC=1
+FAKE_META=
+run_validator
+expect_rc 0
+expect_json valid false
+expect_json forceable true
+run_sysupgrade -T -F
+expect_rc 0
+expect_out 'Image metadata not present'
+expect_out 'Image check failed but --force given - will update anyway!'
+
+# --- 12: corrupt metadata on a board that requires it ------------------------
+# Metadata is present but unparsable, so the compat_version cannot be recovered
+# any more than when the file is absent: same 74, same "do not write".  On the
+# unfixed fwtool.sh this falls through to json_select's plain `return 1`, i.e.
+# forceable, and -F installs a layout nobody verified.
+
+reset_env metadata-corrupt
+cat >"$WORK/meta-truncated.json" <<'JSON'
+{ "metadata_version": "1.1", "compat_version": "2.0",
+  "new_supported_devices": ["gemtek,xr1710g-ubi"
+JSON
+FAKE_META=$WORK/meta-truncated.json
+run_validator
+expect_rc 0
+expect_json valid false
+expect_json forceable false
+expect_out 'Failed to parse message data'
+run_sysupgrade -T -F
+expect_rc 1
+expect_out 'Image check failed.'
+expect_no_out 'will update anyway'
 
 [ "$FAILED" = 0 ] || {
 	printf 'compat-not-forceable cases failed\n' >&2

@@ -101,6 +101,26 @@ STUB
 
 chmod +x "$STUBS/dd" "$STUBS/fwtool" "$STUBS/dumpimage" "$STUBS/sysupgrade"
 
+# BusyBox applets on the device take a leading "--" as a NAME, not as an
+# option terminator: "dirname -- /x/img" prints "." there.  The gate must not
+# rely on GNU dirname/basename, so every run below sees this stub first.  On a
+# GNU host the real tools would hide the bug entirely (issue A08-F9).
+DIRNAME_STUBS="$WORK/dirname-stubs"
+mkdir -p "$DIRNAME_STUBS"
+REAL_DIRNAME=$(command -v dirname)
+REAL_BASENAME=$(command -v basename)
+cat >"$DIRNAME_STUBS/dirname" <<STUB
+#!/bin/sh
+[ "\${1:-}" = "--" ] && exit 1
+exec "$REAL_DIRNAME" "\$@"
+STUB
+cat >"$DIRNAME_STUBS/basename" <<STUB
+#!/bin/sh
+[ "\${1:-}" = "--" ] && exit 1
+exec "$REAL_BASENAME" "\$@"
+STUB
+chmod +x "$DIRNAME_STUBS/dirname" "$DIRNAME_STUBS/basename"
+
 # --- fixtures ---------------------------------------------------------------
 
 cat >"$WORK/mtd.txt" <<'MTD'
@@ -185,7 +205,7 @@ run_gate() {
 	CASES=$((CASES + 1))
 	OUT="$WORK/out-$CASE_NO"
 	ERR="$WORK/err-$CASE_NO"
-	PATH="$STUBS:$PATH" \
+	PATH="$DIRNAME_STUBS:$STUBS:$PATH" \
 		FG_PROC_MTD="${FG_PROC_MTD:-$WORK/mtd.txt}" \
 		FG_MTD_DEV_DIR="$DEV" \
 		FG_UBI_DIR="$UBICLASS" \

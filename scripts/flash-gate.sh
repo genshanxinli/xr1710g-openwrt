@@ -392,9 +392,18 @@ if [ "$PROBE" = 0 ]; then
 	# value recorded outside it, which is why it is compared before the image is
 	# even parsed further.
 	if [ -z "$DIGEST" ]; then
-		SUMS="$(dirname -- "$IMAGE")/sha256sums"
+		# POSIX parameter expansion, not dirname/basename: BusyBox applets
+		# take a leading "--" as a NAME, so "dirname -- /x/img" prints "."
+		# there and the digest would look absent (A08-F9).  A bare
+		# filename has no slash, and its directory is ".".
+		case $IMAGE in
+		*/*) _dir=${IMAGE%/*} ;;
+		*) _dir=. ;;
+		esac
+		_name=${IMAGE##*/}
+		SUMS="$_dir/sha256sums"
 		if [ -r "$SUMS" ]; then
-			DIGEST=$(awk -v n="$(basename -- "$IMAGE")" \
+			DIGEST=$(awk -v n="$_name" \
 				'($2 == n || $2 == "*" n) { print $1; exit }' "$SUMS")
 		fi
 	fi
