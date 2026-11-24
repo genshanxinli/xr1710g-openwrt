@@ -117,6 +117,22 @@ dev=$4
 printf '%s\n' "$6" > "$MOCK_IP_SYS_NET/$dev/tx_queue_len"
 '''
 
+# 51_wireless-tuning asks `iw phy` whether a channel exists.  Without a stub
+# the answer came from the machine running the tests: a runner with iw
+# installed and no phy of its own made phy_has() say "absent", so radio1 kept
+# channel 36 and test_default_goes_to_149_and_narrows_to_eht80 went red.  The
+# stub is a phy that carries both bands the defaults promote to; the branches
+# that decide a value stay the real script's.
+MOCK_IW = r'''#!/bin/sh
+[ "$1" = "phy" ] || exit 1
+cat <<'EOF'
+	Band 2:
+		* 5745 MHz [149] (disabled)
+	Band 4:
+		* 6135 MHz [37] (disabled)
+EOF
+'''
+
 LIB_FUNCTIONS = r'''board_name() {
 	cat "$BOARD_NAME_FILE"
 }
@@ -139,6 +155,7 @@ class Harness:
         self.lib.mkdir()
         write_exec(self.bin / "uci", MOCK_UCI)
         write_exec(self.bin / "logger", MOCK_LOGGER)
+        write_exec(self.bin / "iw", MOCK_IW)
         (self.lib / "functions.sh").write_text(LIB_FUNCTIONS)
         self.uci_state = self.tmp / "uci.json"
         self.log = self.tmp / "logger.log"

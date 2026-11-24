@@ -5,9 +5,9 @@
 Two behaviours are guarded here, both without a radio:
 
   * The preflight order.  "No 6G STA" and "no iperf3 on the AP" are clean
-    skips: rc=0 plus a "SKIP:" line, with the reason also written to
-    result.json.  Before the fix the iperf3 check ran before the STA was
-    looked for, so a board without a 6G client exited 1 even though there
+    skips: rc=0 plus a "SKIP:" line, with the reason written to
+    no-client/result.json (never a top-level result.json).  Before the fix
+    the iperf3 check ran before the STA was looked for, so a board without a 6G client exited 1 even though there
     was nothing to measure.
   * --rounds / --cooldown.  N rounds replay the same arm sequence, so the
     arms.jsonl records come out A/B/A/B and result.json carries rounds,
@@ -163,7 +163,10 @@ class SkipPaths(Harness):
         self.assertIn("missing 6ghz-eht-client", proc.stdout)
         self.assertIn("once it is available run: sh scripts/wireless/edca-6g-ab.sh",
                       proc.stdout)
-        data = self.result_json()
+        # The record goes to a subdirectory: a top-level result.json would
+        # trip the harness's own overwrite guard on the next real run.
+        self.assertFalse((self.out / "result.json").exists())
+        data = json.loads((self.out / "no-client" / "result.json").read_text())
         self.assertEqual(data["status"], "no-client")
         self.assertEqual(data["missing"], "6ghz-eht-client")
         self.assertEqual(str(data["ticket"]), "43")
@@ -184,11 +187,11 @@ class SkipPaths(Harness):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("SKIP", proc.stdout)
         self.assertIn("iperf3 not found", proc.stdout)
-        data = self.result_json()
-        self.assertEqual(data["status"], "skip")
-        self.assertIn("iperf3 not found", data["skip_reason"])
-        # The gap also lands as a wireless-no-client/v1 record, in a
-        # subdirectory so it never overwrites the skip's result.json.
+        # No top-level result.json: a skip must not poison the overwrite
+        # guard for the real run that follows once the tool is installed.
+        self.assertFalse((self.out / "result.json").exists())
+        # The gap lands as a wireless-no-client/v1 record, in a subdirectory
+        # so it never overwrites the harness's own result.json.
         record = json.loads((self.out / "no-client" / "result.json").read_text())
         self.assertEqual(record["schema"], "wireless-no-client/v1")
         self.assertEqual(record["status"], "no-client")
@@ -360,6 +363,53 @@ class SkipRunReachesTheGapReport(unittest.TestCase):
         )
         self.assertEqual(report.returncode, 0, report.stderr)
         self.assertIn("| `iperf3` | #43 |", report.stdout)
+
+
+class OweBlockRecord(unittest.TestCase):
+    """An OWE configuration block must also record under no-client/.
+
+    Red half: skip_no_client used to pass $RESULT_DIR straight to
+    nc_owe_mismatch_block, so a blocked run left a top-level result.json and
+    the harness's overwrite guard then refused the next real run in the same
+    --result-dir.  The library hook is stubbed, so no radio is needed.
+    """
+
+    def test_owe_block_record_is_subdir_only(self):
+        tmp = Path(tempfile.mkdtemp(prefix="edca-owe-block."))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        out = tmp / "res"
+        env = os.environ.copy()
+        env.update({"EDCA6G_LIB_ONLY": "1", "RESULT_DIR": str(out)})
+        proc = subprocess.run(
+            [
+                "sh",
+                "-c",
+                '. "$0" || exit 9; '
+                "IFACE=phy1-ap0; "
+                "nc_owe_mismatch() { "
+                'printf "%s\\n" "phy1-ap0: live Encryption OWE (CCMP), but '
+                'wireless.wifi6g.encryption is open (none)"; }; '
+                'skip_no_client "no 6G STA"',
+                str(SCRIPT),
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        combined = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 2, combined)
+        self.assertIn("BLOCKED", proc.stdout, combined)
+        self.assertFalse(
+            (out / "result.json").exists(),
+            "a blocked run left a top-level result.json; the next real run "
+            "will be refused: %s" % combined,
+        )
+        record = json.loads((out / "no-client" / "result.json").read_text())
+        self.assertEqual(record["status"], "blocked")
+        self.assertEqual(record["missing"], "6ghz-owe-mismatch")
+        self.assertEqual(str(record["ticket"]), "43")
 
 
 if __name__ == "__main__":

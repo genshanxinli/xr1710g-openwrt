@@ -12,10 +12,13 @@ The harness is exercised three ways, none of them needs a radio:
     it is a clean SKIP that says so, not a fatal error.  Before the fix the
     same required-command loop died here.
   * mt76 band_bytes is optional in the kernel.  When the debugfs tree has no
-    band_bytes, the per-band A-MPDU measurement is UNKNOWN: result.json says
-    "band_bytes_unavailable": true, status is unknown, and the exit code is
-    not 0.  Before the fix the run printed "n/a" and still exited 0, which
-    read as a measured result.
+    band_bytes, the per-band A-MPDU measurement is UNKNOWN and the run is
+    PARTIAL: result.json says "band_bytes_unavailable": true, status is
+    "partial", and the exit code is 3.  An optional counter must not turn a
+    real measurement into "unknown", and it must not exit 0 either.
+  * The verdict decides the exit code.  A positive station RX delta with an
+    undetermined IRQ attribution, or a zero A-MPDU byte delta, is invalid: no
+    result that could not be attributed may exit 0.
   * The direction is not inverted.  The listen arm keeps the AP as the
     iperf3 server and prints a STA client command with no -R; the reverse
     arm runs "iperf3 -c <sta-ip> -R" on the AP.
@@ -38,7 +41,11 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "scripts/wireless/6g-rx.sh"
+# SIXG_RX_UNDER_TEST points the tests at another copy of the script so a red
+# proof can run them against the pre-fix version (repo convention).
+SCRIPT = Path(
+    os.environ.get("SIXG_RX_UNDER_TEST") or REPO_ROOT / "scripts/wireless/6g-rx.sh"
+)
 IFACE = "phy1-ap0"
 STA_MAC = "aa:bb:cc:dd:ee:ff"
 AP_IP = "192.0.2.1"  # TEST-NET-1, never routed
@@ -82,6 +89,15 @@ exit 0
 # Fake ethtool: the A-MPDU byte counter climbs by 1000 per call, so the
 # required ethtool delta is never empty.
 ETHTOOL_MOCK = """#!/bin/sh
+if [ "$1" = -S ] && [ -n "${ETHTOOL_STATIC:-}" ]; then
+	# A counter that does not move: the A-MPDU delta is +0, which used to
+	# pass the presence-only gate.
+	printf 'rx_ampdu_bytes_cnt: 4000\n'
+	printf 'rx_ampdu_cnt: 40\n'
+	printf 'rx_mpdu_cnt: 400\n'
+	printf 'rx_ba_cnt: 8\n'
+	exit 0
+fi
 if [ "$1" = -S ]; then
 	_n=$(cat "$ETHTOOL_COUNTER" 2>/dev/null || printf 0)
 	_n=$((_n + 1))
@@ -116,6 +132,23 @@ BAND_BYTES = """Phy band 0
 rx_ampdu_bytes: 100
 Phy band 2
 rx_ampdu_bytes: 5000
+"""
+
+# A cat that grows the PCIe0 counter on every read of the interrupts file.
+# The harness reads it before and after the source, so a static file could
+# only ever produce two equal snapshots - and an IRQ delta of zero means the
+# verdict is undetermined, not PCIe0.  Every other file goes to the real cat.
+CAT_TICK = """#!/bin/sh
+if [ "$1" = "${PROC_INTERRUPTS:-}" ]; then
+	_n=$(${REAL_CAT:?} "$INTERRUPTS_COUNTER" 2>/dev/null || printf 0)
+	_n=$((_n + 1))
+	printf '%s\\n' "$_n" >"$INTERRUPTS_COUNTER"
+	printf '           CPU0       CPU1\\n'
+	printf '  30:  %8d %8d     PCIe0 status\\n' "$((10 * _n))" "$((10 * _n))"
+	printf '  31:         5         5     hif2 status\\n'
+	exit 0
+fi
+exec "${REAL_CAT:?}" "$@"
 """
 
 # Host tools the harness and the guard library need in a PATH that holds
@@ -188,6 +221,12 @@ class HarnessTest(unittest.TestCase):
                 if src is not None:
                     (where / name).symlink_to(src)
         self.write_mock(self.bin, "iperf3", IPERF3_MOCK)
+        # Replace the cat symlink: a static interrupts file can never show an
+        # IRQ delta, and the verdict needs one to be attributable.
+        cat_mock = self.bin / "cat"
+        cat_mock.unlink()
+        self.interrupts_counter = self.tmp / "interrupts.counter"
+        self.write_mock(self.bin, "cat", CAT_TICK)
         # isolated_bin holds the same tools but no iperf3: a PATH on which
         # "command -v iperf3" must fail.
 
@@ -213,6 +252,8 @@ class HarnessTest(unittest.TestCase):
                 "ETHTOOL_COUNTER": str(self.ethtool_counter),
                 "DEBUGFS": str(self.debugfs),
                 "PROC_INTERRUPTS": str(self.interrupts),
+                "INTERRUPTS_COUNTER": str(self.interrupts_counter),
+                "REAL_CAT": shutil.which("cat") or "/bin/cat",
                 # netwatchdog is not part of this test.
                 "NWD_ALLOW_NO_SERVICE": "1",
                 "NW_GUARD_HOLD_FILE": str(self.tmp / "netwatchdog.hold"),
@@ -250,15 +291,84 @@ class HarnessTest(unittest.TestCase):
         self.assertIn("SKIP", res.stdout)
         self.assertIn("iperf3", res.stdout)
 
-    def test_absent_band_bytes_is_unknown_not_ok(self):
+    def test_help_documents_the_partial_exit_code(self):
+        # --help is what an operator reads before a run: it must state the
+        # partial contract (optional band_bytes -> exit 3), not the old
+        # "a counter the kernel does not expose" -> exit 1 text.
+        res = self.run_harness("--help")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("3 the measurement ran and the verdict", res.stdout)
+        self.assertIn('band_bytes counter is absent (status\n"partial")', res.stdout)
+        self.assertIn("undetermined", res.stdout)
+        self.assertNotIn("a counter the kernel does not expose", res.stdout)
+
+    def test_absent_band_bytes_is_partial_and_keeps_the_verdict(self):
+        # band_bytes is optional: its absence makes the run partial (rc 3)
+        # instead of poisoning the real RX-delta verdict into "unknown".
         res = self.run_harness(*self.common_args())
-        self.assertNotEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(res.returncode, 3, res.stdout + res.stderr)
+        self.assertIn("PARTIAL", res.stderr)
         self.assertNotIn("status=ok", res.stdout)
         result = self.result_json()
         self.assertIs(result["band_bytes_unavailable"], True)
         self.assertIs(result["ok"], False)
-        self.assertEqual(result["status"], "unknown")
+        self.assertEqual(result["status"], "partial")
         self.assertEqual(result["counters"]["band_ampdu_status"], "UNKNOWN")
+        self.assertEqual(result["exit_rc"], 3)
+        self.assertEqual(result["verdict"], "PCIe0")
+
+    def test_undetermined_verdict_is_invalid_not_ok(self):
+        # A positive RX delta with no attributable IRQ group is not a
+        # measurement.  This run uses the static interrupts fixture, so the
+        # IRQ delta is zero and the verdict is undetermined.
+        static_cat = self.tmp / "bin-static"
+        static_cat.mkdir()
+        for name in HOST_TOOLS:
+            src = shutil.which(name)
+            if src is not None:
+                (static_cat / name).symlink_to(src)
+        for name, body in (("iw", IW_MOCK), ("ethtool", ETHTOOL_MOCK)):
+            self.write_mock(static_cat, name, body)
+        self.write_mock(static_cat, "iperf3", IPERF3_MOCK)
+        self.write_band_bytes()
+        env = self.env()
+        env["PATH"] = str(static_cat)
+        res = subprocess.run(
+            [SH, str(SCRIPT), *map(str, self.common_args())],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertIn("verdict undetermined", res.stderr)
+        self.assertNotIn("status=ok", res.stdout)
+        result = self.result_json()
+        self.assertEqual(result["status"], "invalid")
+        self.assertIs(result["ok"], False)
+        self.assertEqual(result["verdict"], "undetermined")
+        self.assertEqual(result["counters"]["band_ampdu_status"], "measured")
+
+    def test_zero_ampdu_delta_is_invalid_not_ok(self):
+        # A-MPDU presence is not evidence: a +0 delta proves no 802.11 byte
+        # was counted, so the run is invalid even with a positive RX delta.
+        self.write_band_bytes()
+        env = os.environ.copy()
+        env.update(self.env())
+        env["ETHTOOL_STATIC"] = "1"
+        res = subprocess.run(
+            [SH, str(SCRIPT), *map(str, self.common_args())],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertIn("positive A-MPDU byte delta is required", res.stderr)
+        self.assertNotIn("status=ok", res.stdout)
+        result = self.result_json()
+        self.assertEqual(result["status"], "invalid")
+        self.assertIs(result["ok"], False)
 
     def assert_ok(self, mode):
         self.write_band_bytes()

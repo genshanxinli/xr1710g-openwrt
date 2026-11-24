@@ -165,6 +165,69 @@ check 'untouched run exits 0' [ "$RC" -eq 0 ]
 check 'untouched run does not reload' [ ! -s "$TMP/wifi.log" ]
 check 'untouched run leaves the config alone' same "$TMP/case/wireless" "$TMP/case/wireless.orig"
 
+# --- case 5: a failed snapshot must not destroy the previous restore point
+# $URG_DIR is deliberately persistent: it is the evidence a crashed run left
+# behind, and the library promises to keep it when a restore fails.  A later
+# urg_init that cannot snapshot used to run "rm -rf $URG_DIR" *before* the
+# mkdir/cp, so an ENOSPC left neither the old restore point nor a new one.
+cp -p "$TMP/case/wireless.orig" "$TMP/case/wireless"
+rm -rf "$TMP/case/restore"
+mkdir -p "$TMP/case/restore"
+printf 'previous restore point\n' >"$TMP/case/restore/wireless.bak"
+printf 'deadbeef\n' >"$TMP/case/restore/wireless.md5"
+cp -p "$TMP/case/restore/wireless.bak" "$TMP/case/restore.bak"
+
+mkdir -p "$TMP/bin-failcp"
+REAL_CP=$(command -v cp)
+cat >"$TMP/bin-failcp/cp" <<EOF
+#!/bin/sh
+case \$* in
+*"$TMP/case/wireless"*) printf 'cp: simulated ENOSPC\n' >&2; exit 1 ;;
+esac
+exec "$REAL_CP" "\$@"
+EOF
+chmod +x "$TMP/bin-failcp/cp"
+
+no_leftovers() {
+	[ -z "$(ls -d "$1".new.* "$1".old.* 2>/dev/null)" ]
+}
+
+cat >"$TMP/case5.sh" <<'EOF'
+. "$LIB"
+urg_init trap-restore "$CFG"
+printf 'init_rc=%s\n' "$?"
+EOF
+CFG=$TMP/case/wireless DELTA=$TMP/case/delta URG_DIR=$TMP/case/restore \
+	URG_DELTA=$DELTA LIB=$LIB PATH=$TMP/bin-failcp:$PATH \
+	sh "$TMP/case5.sh" >"$TMP/case5.out" 2>"$TMP/case5.err"
+check 'a failed snapshot fails urg_init' \
+	grep -q 'init_rc=1' "$TMP/case5.out"
+check 'a failed snapshot keeps the previous restore point' \
+	same "$TMP/case/restore/wireless.bak" "$TMP/case/restore.bak"
+check 'a failed snapshot leaves no staging directory behind' \
+	no_leftovers "$TMP/case/restore"
+check 'the failed snapshot says why' grep -q 'cannot snapshot' "$TMP/case5.err"
+
+# --- case 6: a successful snapshot replaces the previous restore point -----
+printf 'stale\n' >"$TMP/case/restore/wireless.bak"
+rm -f "$TMP/case/restore/wireless.md5"
+cat >"$TMP/case6.sh" <<'EOF'
+. "$LIB"
+urg_init replacement "$CFG"
+printf 'init_rc=%s\n' "$?"
+EOF
+CFG=$TMP/case/wireless DELTA=$TMP/case/delta URG_DIR=$TMP/case/restore \
+	URG_DELTA=$DELTA LIB=$LIB \
+	sh "$TMP/case6.sh" >"$TMP/case6.out" 2>&1
+check 'a clean snapshot succeeds over an old restore point' \
+	grep -q 'init_rc=0' "$TMP/case6.out"
+check 'the new restore point holds the current config' \
+	same "$TMP/case/restore/wireless.bak" "$TMP/case/wireless"
+check 'the new restore point carries its md5 file' \
+	[ -s "$TMP/case/restore/wireless.md5" ]
+check 'a clean snapshot leaves no staging directory behind' \
+	no_leftovers "$TMP/case/restore"
+
 
 # --- the callers must keep the wiring --------------------------------------
 # A script that drops the ". .../uci-restore-guard.sh" line, or stops calling

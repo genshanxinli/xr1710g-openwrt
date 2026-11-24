@@ -796,7 +796,7 @@ timer_cpus() {
 	awk '$1 == "55:" || tolower($0) ~ /arch_timer/ { found = 1; exit }
 		END { exit !found }' "$PROC_ROOT/interrupts" 2>/dev/null ||
 		return 0
-	awk -v share_min="${IRQ_TIMER_SHARE_PCT:-30}" '
+	awk -v share_min="${IRQ_TIMER_SHARE_PCT:-30}" -v want="${1:-}" '
 		NR == 1 {
 			for (i = 1; i <= NF; i++) {
 				c = $i
@@ -825,6 +825,7 @@ timer_cpus() {
 			for (k = 1; k <= ncpu; k++) {
 				c = cname[k]
 				share = total > 0 ? 100 * now[c] / total : 0
+				if (want == "shares") { printf "%s:%.1f\n", c, share; continue }
 				if (share >= share_min) {
 					n++
 					out[n] = c + 0
@@ -844,7 +845,6 @@ timer_cpus() {
 		}
 	' "$PROC_ROOT/interrupts"
 }
-
 # Selection over "cpu N idle_pct P irq_per_s R" metrics on stdin: prints
 # "basis ..." and "targets CPU...", most idle first, never a CPU that already
 # carries IRQ_BUSY_PER_S interrupts/s or one that carries the timer/irq55.
@@ -1791,7 +1791,7 @@ EOF
 
 	# RPS decides the softirq hotspot (issue #315); read the masks before the
 	# split map so the plan can say whether an IRQ-only split is meaningful.
-	rps_probe || :
+	rps_probe || :; timer_record
 	if [ "$WITH_RPS" -eq 1 ] && [ "$RUN" -eq 1 ] && [ "$RPS_PROBE" = ok ]; then
 		rps_save
 	fi
@@ -2291,6 +2291,9 @@ measure_arm() {
 	fi
 	writes_start=$WRITE_COUNT
 	split_writes_start=$WRITE_COUNT
+	ARM_RPS_BEFORE=$(rps_current_json)
+	ARM_RPS_AFTER=$ARM_RPS_BEFORE
+	ARM_RPS_CHANGED=false
 
 	case $arm in
 	split|combined)
@@ -2383,6 +2386,8 @@ measure_arm() {
 	local up_after
 	up_after=$(awk '{ print $1 }' "$PROC_ROOT/uptime" 2>/dev/null || :)
 	snapshot after
+	ARM_RPS_AFTER=$(rps_current_json)
+	[ "$ARM_RPS_AFTER" = "$ARM_RPS_BEFORE" ] || ARM_RPS_CHANGED=true
 
 	if ! sources_alive; then
 		note "$arm: source process exited before the window ended"
@@ -2602,7 +2607,7 @@ $IRQ_RECORDS
 EOF
 	say ""
 
-	RESULT_RECORDS="$RESULT_RECORDS$CURRENT_ARM|$GBPS|$AP_TX_RETRIES_DELTA|${SOFTIRQ_PCT_PERCPU:-none}|$SOFTIRQ_NET_TX_DELTA|$SOFTIRQ_NET_RX_DELTA|$ARM_STATUS|${ARM_REASON:-none}|$WINDOW_MS_MEASURED|${APPLIED_NAPI:-none}|${APPLIED_SPLIT:-none}|$AP_TX_DELTA_BYTES|$AP_TX_DELTA_PACKETS
+	RESULT_RECORDS="$RESULT_RECORDS$CURRENT_ARM|$GBPS|$AP_TX_RETRIES_DELTA|${SOFTIRQ_PCT_PERCPU:-none}|$SOFTIRQ_NET_TX_DELTA|$SOFTIRQ_NET_RX_DELTA|$ARM_STATUS|${ARM_REASON:-none}|$WINDOW_MS_MEASURED|${APPLIED_NAPI:-none}|${APPLIED_SPLIT:-none}|$AP_TX_DELTA_BYTES|$AP_TX_DELTA_PACKETS|$ARM_RPS_BEFORE|$ARM_RPS_AFTER|$ARM_RPS_CHANGED
 "
 }
 
@@ -2642,19 +2647,50 @@ EOF2
 }
 
 arm_json_records() {
-	local arm gbps retries soft nettx netrx status reason wms napi split tdx tdp sep=''
+	local arm gbps retries soft nettx netrx status reason wms napi split tdx tdp rb ra rc sep=''
 
-	while IFS='|' read -r arm gbps retries soft nettx netrx status reason wms napi split tdx tdp; do
+	while IFS='|' read -r arm gbps retries soft nettx netrx status reason wms napi split tdx tdp rb ra rc; do
 		[ -n "$arm" ] || continue
-		printf '%s    {"arm": "%s", "status": "%s", "reason": "%s", "window_ms": %s, "gbps": "%s", "retries": "%s", "soft_pct_percpu": "%s", "net_tx": "%s", "net_rx": "%s", "tx_delta_bytes": "%s", "tx_delta_packets": "%s", "napi_threaded": "%s", "split_map": "%s"}' \
+		printf '%s    {"arm": "%s", "status": "%s", "reason": "%s", "window_ms": %s, "gbps": "%s", "retries": "%s", "soft_pct_percpu": "%s", "net_tx": "%s", "net_rx": "%s", "tx_delta_bytes": "%s", "tx_delta_packets": "%s", "napi_threaded": "%s", "split_map": "%s", "rps_before": %s, "rps_after": %s, "rps_changed": %s}' \
 			"$sep" "$arm" "$status" "$reason" "${wms:-0}" "$gbps" "$retries" \
 			"$soft" "$nettx" "$netrx" "${tdx:-unavailable}" "${tdp:-unavailable}" \
-			"$napi" "$split"
+			"$napi" "$split" "${rb:-[]}" "${ra:-[]}" "${rc:-false}"
 		echo
 		sep=','
 	done <<EOF3
 $RESULT_RECORDS
 EOF3
+}
+
+# Persist the basis the split rule used: the since-boot timer share table and
+# the CPU set it reserved (issue #66, F66-1).  The default timer_cpus shape
+# stays CPU numbers only, because the contract test pins that stdout.
+timer_record() {
+	TIMER_SOURCE=no-timer-row
+	TIMER_RESERVED=$(timer_cpus 2>/dev/null | tr '\n' ' ' || :)
+	TIMER_RESERVED=${TIMER_RESERVED% }
+	TIMER_SHARES=$(timer_cpus shares 2>/dev/null || :)
+	if [ -n "$TIMER_SHARES" ]; then
+		TIMER_SOURCE=since-boot
+	fi
+	return 0
+}
+
+# The masks as a JSON array, for the per-arm before/after record.  It reads
+# the same queues rps_set_cpu writes and never guesses a missing queue.
+rps_current_json() {
+	local f v out='' sep=''
+	[ -n "$RPS_DEV" ] || {
+		printf '[]'
+		return 0
+	}
+	for f in "$SYS_CLASS_NET/$RPS_DEV/queues"/rx-*/rps_cpus; do
+		[ -r "$f" ] || continue
+		v=$(cat "$f" 2>/dev/null || :)
+		out="$out$sep\"$v\""
+		sep=,
+	done
+	printf '[%s]' "$out"
 }
 
 # One machine-readable file per invocation, so a reader does not have to parse
@@ -2697,6 +2733,23 @@ write_result_json() {
 		printf '  "split_chosen_cpu": "%s",\n' "${SPLIT_CHOSEN_CPU:-none}"
 		printf '  "split_basis": "%s",\n' "$(json_str "${SPLIT_BASIS:-unavailable}")"
 		printf '  "split_map": "%s",\n' "${SPLIT_MAP:-none}"
+		printf '  "timer_source": "%s",\n' "$TIMER_SOURCE"
+		printf '  "irq_timer_share": {'
+		tfirst=1
+		for rec in $TIMER_SHARES; do
+			[ "$tfirst" -eq 1 ] || printf ', '
+			tfirst=0
+			printf '"%s": %s' "${rec%%:*}" "${rec#*:}"
+		done
+		printf '},\n'
+		printf '  "timer_reserved": ['
+		rfirst=1
+		for cpu in $TIMER_RESERVED; do
+			[ "$rfirst" -eq 1 ] || printf ', '
+			rfirst=0
+			printf '"%s"' "$cpu"
+		done
+		printf '],\n'
 		printf '  "irq_map_request": "%s",\n' "${IRQ_MAP_REQUEST:-none}"
 		printf '  "irq_map_readonly": %s,\n' "$IRQ_MAP_READONLY"
 		printf '  "rps_dev": "%s",\n' "$(json_str "${RPS_DEV:-}")"

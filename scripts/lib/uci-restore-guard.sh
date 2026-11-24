@@ -84,27 +84,64 @@ urg_init() {
 			URG_DIR=${TMPDIR:-/tmp}/uci-restore/$URG_LABEL
 		fi
 	fi
-	rm -rf "$URG_DIR"
-	mkdir -p "$URG_DIR" || { urg_die "cannot create $URG_DIR"; return 1; }
+	# Build the next snapshot beside the current one and rename it into
+	# place.  $URG_DIR is the evidence a crashed run left behind, so it must
+	# survive until a complete replacement exists: the old code ran
+	# "rm -rf $URG_DIR" first, and an ENOSPC in the cp then left neither.
+	#
+	# A SIGKILL between the two renames below still leaves one of the two
+	# temporaries behind.  The next urg_init only sweeps its own pid's names,
+	# so it does not adopt them: they stay as *.new.<pid> / *.old.<pid>
+	# beside $URG_DIR.  They are inert (urg_restore reads $URG_DIR only) and
+	# the window is a single rename, so this is recorded rather than
+	# reclaimed - a sweep would have to guess whether another live run owns
+	# the directory it is deleting.
+	_build=$URG_DIR.new.$$
+	_old=$URG_DIR.old.$$
+	rm -rf "$_build" "$_old"
+	mkdir -p "$_build" || { urg_die "cannot create $_build"; return 1; }
 
-	cp -p "$URG_CFG" "$URG_DIR/wireless.bak" || {
+	cp -p "$URG_CFG" "$_build/wireless.bak" || {
+		rm -rf "$_build"
 		urg_die "cannot snapshot $URG_CFG"
 		return 1
 	}
-	URG_MD5=$(urg_md5_of "$URG_DIR/wireless.bak") ||
+	URG_MD5=$(urg_md5_of "$_build/wireless.bak") ||
 		URG_MD5=$(urg_md5_of "$URG_CFG")
-	[ -n "$URG_MD5" ] || { urg_die 'cannot checksum the snapshot'; return 1; }
-	printf '%s\n' "$URG_MD5" >"$URG_DIR/wireless.md5"
+	if [ -z "$URG_MD5" ]; then
+		rm -rf "$_build"
+		urg_die 'cannot checksum the snapshot'
+		return 1
+	fi
+	printf '%s\n' "$URG_MD5" >"$_build/wireless.md5"
 
 	if [ -f "$URG_DELTA" ]; then
-		cp -p "$URG_DELTA" "$URG_DIR/delta.bak" || {
+		cp -p "$URG_DELTA" "$_build/delta.bak" || {
+			rm -rf "$_build"
 			urg_die "cannot snapshot $URG_DELTA"
 			return 1
 		}
-		: >"$URG_DIR/delta.present"
+		: >"$_build/delta.present"
 	else
-		: >"$URG_DIR/delta.absent"
+		: >"$_build/delta.absent"
 	fi
+
+	if [ -e "$URG_DIR" ]; then
+		mv "$URG_DIR" "$_old" || {
+			rm -rf "$_build"
+			urg_die "cannot move the previous restore point $URG_DIR aside"
+			return 1
+		}
+	fi
+	if ! mv "$_build" "$URG_DIR"; then
+		if [ -e "$_old" ]; then
+			mv "$_old" "$URG_DIR" || true
+		fi
+		rm -rf "$_build"
+		urg_die "cannot install the restore point at $URG_DIR"
+		return 1
+	fi
+	rm -rf "$_old"
 
 	URG_SNAPSHOT=1
 	printf 'restore point: %s (md5 %s)\n' "$URG_DIR" "$URG_MD5"

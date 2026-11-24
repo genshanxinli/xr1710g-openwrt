@@ -159,6 +159,16 @@ eht_oper_centr_freq_seg0_idx=31
 EOF
 """
 
+# An iw that reports the live width the way the board does: the width is one
+# field in a line that continues with the centre frequency ("width: 320 MHz,
+# center1: 6105 MHz"), so a parser that trims the line's tail reads
+# "320 MHz, center1: 6105".  FAKE_IW_WIDTH=160 is the EHT160 fallback the
+# config text cannot show: ieee80211be is still in the hostapd config.
+FAKE_IW = r"""#!/bin/sh
+printf 'phy#0\n\tInterface %s\n\t\tchannel 37 (6135 MHz), width: %s MHz, center1: 6105 MHz\n' \
+	"${FAKE_IW_IFACE:-phy0.2-ap0}" "${FAKE_IW_WIDTH:-320}"
+"""
+
 
 def write_exec(path: Path, text: str) -> None:
     path.write_text(text)
@@ -185,6 +195,7 @@ class Bench:
 
         write_exec(self.bin / "uci", FAKE_UCI)
         write_exec(self.bin / "wifi", FAKE_WIFI)
+        write_exec(self.bin / "iw", FAKE_IW)
         # The guard's "command -v $URG_WIFI" check only needs a name it can
         # find; the fake above is on PATH under that name.
         self.env = dict(os.environ)
@@ -193,6 +204,7 @@ class Bench:
             "WIRELESS_CFG": str(self.cfg),
             "HOSTAPD_CONF": str(self.hostapd),
             "G6_DEFAULTS": str(DEFAULTS),
+            "G6_IFACE": "phy0.2-ap0",
             "G6_VERIFY_TIMEOUT": "2",
             "URG_LIB": str(GUARD),
             "URG_DIR": str(self.urg_dir),
@@ -204,11 +216,13 @@ class Bench:
             "FAKE_WIFI_LOG": str(self.wifi_log),
             "FAKE_HOSTAPD_CFG": str(self.hostapd),
             "FAKE_UCI_MOVE": "1",
+            "FAKE_IW_WIDTH": "320",
         })
 
-    def run(self, *args, emit_be="1"):
+    def run(self, *args, emit_be="1", width="320"):
         env = dict(self.env)
         env["FAKE_WIFI_EMIT_BE"] = emit_be
+        env["FAKE_IW_WIDTH"] = width
         return subprocess.run(
             ["sh", str(SCRIPT), *args],
             env=env,
@@ -263,7 +277,8 @@ class RestoreTest(unittest.TestCase):
         )
         self.assertIn("reload", b.reloads())
         self.assertIn("verify:   ieee80211be present", result.stdout)
-        self.assertIn("status:   restored to EHT320", result.stdout)
+        self.assertIn("verify:   phy0.2-ap0 width: 320 MHz", result.stdout)
+        self.assertIn("status:   restored to EHT320 (320 MHz)", result.stdout)
         self.assertFalse(b.delta.exists(), "a committed delta must not be left behind")
         self.assertFalse(b.urg_dir.exists(), "a clean run must disarm its restore point")
 
@@ -282,6 +297,39 @@ class RestoreTest(unittest.TestCase):
             b.delta.exists(),
             "a delta created by the failed run must be removed, not folded in later",
         )
+
+    def test_eht160_fallback_is_a_failed_apply(self):
+        # ieee80211be in the hostapd config does not prove 320 MHz: a radio
+        # that negotiated 160 MHz still has it.  The apply must fail and roll
+        # back rather than report "restored to EHT320".
+        b = self.bench()
+        before = b.cfg.read_bytes()
+        result = b.run("--apply", width="160")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("verify:   width is 160 MHz, expected 320 MHz", result.stderr)
+        self.assertIn("status:   failed, EHT320 was written but is not in effect",
+                      result.stderr)
+        self.assertNotIn("status:   restored", result.stdout)
+        self.assertEqual(
+            b.cfg.read_bytes(),
+            before,
+            "a width the radio did not reach must not leave the write behind",
+        )
+        self.assertFalse(b.delta.exists(), "the failed run's delta must be removed")
+
+    def test_unreadable_width_is_a_failed_apply(self):
+        # No iw evidence at all (iw is present but reports no width line):
+        # the config text is not enough to call the radio restored.
+        b = self.bench()
+        result = b.run("--apply", width="unreadable")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("verify:   cannot read the width of phy0.2-ap0", result.stderr)
+        self.assertNotIn("status:   restored", result.stdout)
+        # The diagnostic is the only width line: no shell error from
+        # comparing "unreadable" with -ge first.
+        self.assertNotIn("Illegal number", result.stderr)
+        self.assertNotIn("integer expected", result.stderr)
+        self.assertNotIn("bad number", result.stderr)
 
     def test_already_at_the_default_is_left_alone(self):
         b = self.bench(config=CONFIG_EHT320, hostapd=HOSTAPD_BE)

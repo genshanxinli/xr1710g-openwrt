@@ -252,6 +252,7 @@ INTERFERER_PID=
 INTERFERER_LOG=
 SCAN_FILE=
 SCAN_RECORDS=
+SCAN_FOREIGN=
 SCAN_SAME=
 SCAN_NEAR=
 SCAN_OWN=
@@ -1912,10 +1913,17 @@ interferer_stop_and_verify() {
 		invalid "NO_INTERFERER: the loaded arm ran without a running generator"
 		return 0
 	fi
+	# Snapshot first, then classify: a generator that already exited may have
+	# moved bytes before it died, and only the counters say how many.  The
+	# dead flag is recorded here, not turned into an early INVALID, so a
+	# generator that died without moving a byte still gets the accurate
+	# "no interferer evidence" verdict instead of a stand-in for it.
+	_dead=0
 	if ! kill -0 "$INTERFERER_PID" 2>/dev/null; then
-		invalid "INTERFERER_DIED: the $INTERFERER_LOAD generator exited during the loaded arm; see $INTERFERER_LOG"
+		_dead=1
+	else
+		kill "$INTERFERER_PID" 2>/dev/null || true
 	fi
-	kill "$INTERFERER_PID" 2>/dev/null || true
 	wait "$INTERFERER_PID" 2>/dev/null || true
 	INTERFERER_PID=
 	interferer_snapshot "$OUT/interferer-round$ROUND-after.txt"
@@ -1932,16 +1940,24 @@ interferer_stop_and_verify() {
 		printf 'ap_tx_bytes=%s\n' "$_ap_tx"
 		printf 'sta_tx_bytes=%s\n' "$_sta_tx"
 	} >"$OUT/interferer-round$ROUND.txt"
+	_dead_note=
+	[ "$_dead" = 1 ] && _dead_note=" and the $INTERFERER_LOAD generator exited during the arm"
 	case $_ap_tx in
 	'' | n/a)
-		invalid "NO_INTERFERER_EVIDENCE: AP tx_bytes delta is unavailable on $INTERFERER_IFACE"
+		invalid "NO_INTERFERER_EVIDENCE: AP tx_bytes delta is unavailable on $INTERFERER_IFACE$_dead_note"
 		;;
 	0)
-		invalid "NO_INTERFERER_EVIDENCE: the $INTERFERER_LOAD generator moved no bytes on $INTERFERER_IFACE (station $_sta_tx B); the loaded arm carried no out-of-band load"
+		invalid "NO_INTERFERER_EVIDENCE: the $INTERFERER_LOAD generator moved no bytes on $INTERFERER_IFACE (station $_sta_tx B)$_dead_note; the loaded arm carried no out-of-band load"
 		;;
 	*)
 		if [ "$_sta_tx" = "n/a" ] || [ -z "$_sta_tx" ] || [ "$_sta_tx" -le 0 ]; then
-			invalid "NO_INTERFERER_EVIDENCE: the interferer station counter did not move ($_sta_tx B); the traffic did not reach $INTERFERER_STA over the air"
+			invalid "NO_INTERFERER_EVIDENCE: the interferer station counter did not move ($_sta_tx B)$_dead_note; the traffic did not reach $INTERFERER_STA over the air"
+			return 0
+		fi
+		if [ "$_dead" = 1 ]; then
+			# It moved bytes, but it did not live through the arm: the load
+			# covered part of the arm, not the arm.
+			invalid "INTERFERER_DIED: the $INTERFERER_LOAD generator exited during the loaded arm after ${_ap_tx} B AP tx / ${_sta_tx} B station tx; see $INTERFERER_LOG"
 			return 0
 		fi
 		check PASS "loaded arm: interferer $INTERFERER_SPEC carried ${_ap_tx} B AP tx / ${_sta_tx} B station tx on $INTERFERER_IFACE"
@@ -1955,6 +1971,7 @@ scan_clear_air() {
 	# own counters.
 	SCAN_FILE=$OUT/scan-round$ROUND-$SEL_IFACE.txt
 	SCAN_RECORDS=0
+	SCAN_FOREIGN=0
 	SCAN_SAME=0
 	SCAN_NEAR=0
 	if ! "$IW" dev "$SEL_IFACE" scan >"$SCAN_FILE" 2>"$SCAN_FILE.err"; then
@@ -1962,10 +1979,15 @@ scan_clear_air() {
 		invalid "SCAN_UNKNOWN: no scan result on $SEL_IFACE; the clear arm cannot be called co-channel clean"
 		return 0
 	fi
-	_counts=$(awk -v want="$SEL_FREQ" '
+	# total counts every BSS the scan returned; foreign counts the ones that
+	# are not our own BSS.  Only foreign matters for the co-channel claim, but
+	# a scan that returns our own BSS and nothing else is still a scan that
+	# saw something (records=1), not "no BSS records".
+	_counts=$(awk -v want="$SEL_FREQ" -v own="$SEL_SSID" '
 		function flush() {
 			if (!seen)
 				return
+			total++
 			if (assoc || (own != "" && ssid == own)) {
 				own_bss++
 			} else {
@@ -1991,27 +2013,29 @@ scan_clear_air() {
 		$1 == "SSID:" { sub(/^SSID: /, ""); ssid = $0; next }
 		END {
 			flush()
-			printf "%d %d %d %d%s\n", n + 0, same + 0, near + 0, own_bss + 0, same_list
+			printf "%d %d %d %d %d%s\n", total + 0, n + 0, same + 0, near + 0, own_bss + 0, same_list
 		}
 	' "$SCAN_FILE")
 	SCAN_RECORDS=$(printf '%s' "$_counts" | awk '{ print $1 }')
-	SCAN_SAME=$(printf '%s' "$_counts" | awk '{ print $2 }')
-	SCAN_NEAR=$(printf '%s' "$_counts" | awk '{ print $3 }')
-	SCAN_OWN=$(printf '%s' "$_counts" | awk '{ print $4 }')
-	SCAN_NAMES=$(printf '%s' "$_counts" | awk '{$1 = $2 = $3 = $4 = ""; sub(/^ /, ""); print}')
-	printf 'round %s scan: %s BSS visible, %s on %s MHz, %s within 160 MHz\n' \
-		"$ROUND" "$SCAN_RECORDS" "$SCAN_SAME" "$SEL_FREQ" "$SCAN_NEAR" |
+	SCAN_FOREIGN=$(printf '%s' "$_counts" | awk '{ print $2 }')
+	SCAN_SAME=$(printf '%s' "$_counts" | awk '{ print $3 }')
+	SCAN_NEAR=$(printf '%s' "$_counts" | awk '{ print $4 }')
+	SCAN_OWN=$(printf '%s' "$_counts" | awk '{ print $5 }')
+	SCAN_NAMES=$(printf '%s' "$_counts" | awk '{$1 = $2 = $3 = $4 = $5 = ""; sub(/^ /, ""); print}')
+	printf 'round %s scan: %s BSS visible (%s foreign, %s own), %s on %s MHz, %s within 160 MHz\n' \
+		"$ROUND" "$SCAN_RECORDS" "$SCAN_FOREIGN" "$SCAN_OWN" "$SCAN_SAME" \
+		"$SEL_FREQ" "$SCAN_NEAR" |
 		sed 's/^/  /' | while IFS= read -r _line; do say "$_line"; done
-	printf 'round=%s records=%s same_channel=%s near_160=%s own=%s names=%s\n' \
-		"$ROUND" "$SCAN_RECORDS" "$SCAN_SAME" "$SCAN_NEAR" "$SCAN_OWN" \
-		"${SCAN_NAMES:-none}" >>"$OUT/scan.txt"
+	printf 'round=%s records=%s foreign=%s same_channel=%s near_160=%s own=%s names=%s\n' \
+		"$ROUND" "$SCAN_RECORDS" "$SCAN_FOREIGN" "$SCAN_SAME" "$SCAN_NEAR" \
+		"$SCAN_OWN" "${SCAN_NAMES:-none}" >>"$OUT/scan.txt"
 	if [ "$SCAN_RECORDS" -eq 0 ]; then
 		check UNKNOWN "clear arm: iw dev $SEL_IFACE scan returned no BSS records"
-		invalid "SCAN_UNKNOWN: the scan saw nothing, so the same-channel claim is unverified"
+		invalid "SCAN_UNKNOWN: iw dev $SEL_IFACE scan returned no BSS at all, so the same-channel claim is unverified"
 	elif [ "$SCAN_SAME" -gt 0 ]; then
 		invalid "CO_CHANNEL_BSS: $SCAN_SAME BSS on $SEL_FREQ MHz (${SCAN_NAMES:-no SSID}; $SCAN_NEAR more within 160 MHz); the clear arm is not co-channel clean"
 	else
-		check PASS "clear arm: scan sees $SCAN_RECORDS BSS, none on $SEL_FREQ MHz ($SCAN_NEAR within 160 MHz, $SCAN_OWN own)"
+		check PASS "clear arm: scan sees $SCAN_RECORDS BSS ($SCAN_FOREIGN foreign, $SCAN_OWN own), none on $SEL_FREQ MHz ($SCAN_NEAR within 160 MHz)"
 	fi
 }
 
@@ -2276,6 +2300,14 @@ cleanup() {
 		kill "$IPERF_PID" 2>/dev/null || true
 		wait "$IPERF_PID" 2>/dev/null || true
 		IPERF_PID=
+	fi
+	# The interferer is started in the loaded arm and killed by
+	# interferer_stop_and_verify; a run that dies between the two (die,
+	# SIGINT) must not leave that generator running forever.
+	if [ -n "$INTERFERER_PID" ]; then
+		kill "$INTERFERER_PID" 2>/dev/null || true
+		wait "$INTERFERER_PID" 2>/dev/null || true
+		INTERFERER_PID=
 	fi
 
 	if [ -n "$OUT" ] && [ -f "$BACKUP" ] && [ -f "$CONFIG" ]; then

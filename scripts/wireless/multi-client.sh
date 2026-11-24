@@ -1325,9 +1325,10 @@ kill_sources() {
 	for _p in $SRC_PIDS; do
 		kill -TERM -"$_p" 2>/dev/null
 	done
-	for _p in $SRC_PIDS; do
-		wait "$_p" 2>/dev/null
-	done
+	# Poll before reaping: a leader that traps or ignores TERM (a
+	# user-supplied --source wrapper) would block a blocking wait here and
+	# the KILL_WAIT escalation below would never run.  SIGKILL closes the
+	# group, so the reap after the escalation cannot block.
 	if ! wait_groups_gone "$KILL_WAIT"; then
 		for _p in $SRC_PIDS; do
 			kill -KILL -"$_p" 2>/dev/null
@@ -1338,6 +1339,9 @@ kill_sources() {
 			warn "$ARM_REASON"
 		fi
 	fi
+	for _p in $SRC_PIDS; do
+		wait "$_p" 2>/dev/null
+	done
 	SRC_PIDS=
 }
 
@@ -1513,13 +1517,26 @@ print_arm_table() {
 	_arxg=$(awk -v b="$_arx" -v s="$WINDOW_SECS" 'BEGIN {
 		if (s > 0) printf "%.3f", b * 8 / 1000000000 / s
 	}')
+	# The arm status is derived from the rows, not copied from $ARM_STATUS:
+	# compute_results runs before the per-client gate, so the variable can
+	# still hold the internal "abort" token here and the aggregate row then
+	# publishes a status outside ok|idle|invalid|ABORTED.
+	_ags=$(awk -F'\t' '
+		$2 ~ /^AGGREGATE/ { next }
+		NF < 15 { next }
+		{ n++ }
+		$15 == "invalid" || $15 == "ABORTED" { bad = 1 }
+		$15 == "idle" { idle = 1 }
+		$15 != "ok" && $15 != "invalid" && $15 != "idle" && $15 != "ABORTED" { bad = 1 }
+		END { if (n == 0 || bad) print "invalid"; else if (idle) print "idle"; else print "ok" }
+	' "$ARM_DIR/result.tsv")
 	printf '%-3s %-17s %-12s %-4s %-5s %-3s %-7s %12s %12s %7s %8s %8s %8s %s\n' \
 		"$ARM" "AGGREGATE(${ACTIVE_COUNT})" "-" "-" "-" "-" "-" \
 		"$_atx" "$_arx" "$WINDOW_SECS" "$_atxg" "$_arxg" "$_aret" \
-		"$ARM_STATUS"
+		"$_ags"
 	printf '%s\tAGGREGATE(%s)\t-\t-\t-\t-\t-\t%s\t%s\t%s\t%s\t%s\t%s\t-\t%s\t%s\n' \
 		"$ARM" "$ACTIVE_COUNT" "$_atx" "$_arx" "$WINDOW_SECS" \
-		"$_atxg" "$_arxg" "$_aret" "$ARM_STATUS" "$MIN_MBIT" >>"$ARM_DIR/result.tsv"
+		"$_atxg" "$_arxg" "$_aret" "$_ags" "$MIN_MBIT" >>"$ARM_DIR/result.tsv"
 
 	# A per-client floor that is only visible row by row still reads as
 	# "everything passed": count the statuses here so an arm that lost a

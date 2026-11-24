@@ -152,6 +152,7 @@ SAMPLES=0
 THERMAL=
 THERMAL_TYPE=
 FAN=
+BOARD_HWMON=
 CPU_CDEVS=
 WIFI_CDEVS=
 WIFI_HWMONS=
@@ -193,6 +194,7 @@ S_TCPU=na
 S_TW0=na
 S_TW1=na
 S_TW2=na
+S_BOARD=na
 S_FREQ=na
 S_FREQMAX=na
 S_GOV=na
@@ -217,7 +219,7 @@ S_THROTTLE=0
 S_NEW_THR=0
 S_NEW_SER=0
 
-SENSORS_HEADER='time,epoch,elapsed_s,uptime_s,boot_id,t_cpu_c,t_wifi0_c,t_wifi1_c,t_wifi2_c,freq_mhz,freq_max_mhz,governor,fan_pwm1,fan_pwm1_enable,fan_pwm2,fan_pwm3,fan_rpm,txpower_a_dbm,throughput_a_mbps,assoc_a,txpower_b_dbm,throughput_b_mbps,assoc_b,cdev_cpu,wifi_throttle,thr_cpu,thr_wifi,thr_dmesg,throttle,ser_total,hold,run'
+SENSORS_HEADER='time,epoch,elapsed_s,uptime_s,boot_id,t_cpu_c,t_wifi0_c,t_wifi1_c,t_wifi2_c,board_c,freq_mhz,freq_max_mhz,governor,fan_pwm1,fan_pwm1_enable,fan_pwm2,fan_pwm3,fan_rpm,txpower_a_dbm,throughput_a_mbps,assoc_a,txpower_b_dbm,throughput_b_mbps,assoc_b,cdev_cpu,wifi_throttle,thr_cpu,thr_wifi,thr_dmesg,throttle,ser_total,hold,run'
 CYCLES_HEADER='time,epoch,elapsed_s,leg,iface,client,cycle,ok,assoc,throughput_mbps,src,seconds,retries,tx_packets,tx_failed,per_pct,retry_pct,outage_s,err,run'
 
 # dmesg classifiers.  Both are POSIX ERE and deliberately narrow: a soak log
@@ -791,6 +793,21 @@ find_fan_hwmon() {
 	return 1
 }
 
+# The board's own temperature lives on the fan controller (nct7802
+# temp1_input), not in a thermal zone.  It is a separate discovery from FAN
+# because find_fan_hwmon may fall back to a chip without a temp input, and
+# the fan curve cannot be reproduced without it (issue #53, F53-1).
+find_board_hwmon() {
+	BOARD_HWMON=
+	for h in /sys/class/hwmon/hwmon*; do
+		[ -r "$h/name" ] || continue
+		[ "$(cat "$h/name" 2>/dev/null)" = nct7802 ] || continue
+		BOARD_HWMON=$h
+		return 0
+	done
+	return 1
+}
+
 find_wifi_hwmons() {
 	WIFI_HWMONS=
 	for h in /sys/class/hwmon/hwmon*; do
@@ -819,6 +836,7 @@ find_cooling_devices() {
 setup_sensors() {
 	find_thermal_zone || true
 	find_fan_hwmon || true
+	find_board_hwmon || true
 	find_wifi_hwmons || true
 	find_cooling_devices || true
 }
@@ -1355,6 +1373,15 @@ sample_fan() {
 	S_RPM=$(read_uint_or_na "$FAN/fan1_input")
 }
 
+# The board temperature is read every sample even when no fan PWM is
+# writable: sensors.csv has a board_c column and the summary reports it, so
+# a missing sensor degrades to na instead of dropping the column.
+sample_board() {
+	S_BOARD=na
+	[ -n "$BOARD_HWMON" ] || return 0
+	S_BOARD=$(read_temp_c_or_na "$BOARD_HWMON/temp1_input")
+}
+
 sample_cdev_cpu() {
 	S_CDEVCPU=0
 	any=0
@@ -1383,6 +1410,7 @@ sample_sensors() {
 	sample_wifi
 	sample_cpufreq
 	sample_fan
+	sample_board
 	sample_cdev_cpu
 
 	S_TXPA=na
@@ -1511,9 +1539,9 @@ ensure_csv() {
 }
 
 append_sensors() {
-	printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+	printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
 		"$S_TIME" "$S_EPOCH" "$S_ELAPSED" "$S_UPTIME" "$S_BOOT" \
-		"$S_TCPU" "$S_TW0" "$S_TW1" "$S_TW2" \
+		"$S_TCPU" "$S_TW0" "$S_TW1" "$S_TW2" "$S_BOARD" \
 		"$S_FREQ" "$S_FREQMAX" "$S_GOV" \
 		"$S_PWM1" "$S_PWM1E" "$S_PWM2" "$S_PWM3" "$S_RPM" \
 		"$S_TXPA" "$S_RATE_A" "$S_ASSOC_A" \
@@ -1963,8 +1991,8 @@ apply_restore_report() {
 summary_window() {
 	file=$1
 	run=$2
-	first=$(awk -F, -v run="$run" 'NR > 1 && $32 == run { print $2; exit }' "$file" 2>/dev/null)
-	last=$(awk -F, -v run="$run" '$32 == run { last = $2 } END { print last }' "$file" 2>/dev/null)
+	first=$(awk -F, -v run="$run" 'NR > 1 && $33 == run { print $2; exit }' "$file" 2>/dev/null)
+	last=$(awk -F, -v run="$run" '$33 == run { last = $2 } END { print last }' "$file" 2>/dev/null)
 	if is_uint "$first" && is_uint "$last" && [ "$last" -ge "$first" ]; then
 		echo $((last - first))
 	else
@@ -1979,23 +2007,26 @@ thermal_summary() {
 	awk -F, -v window="$window" -v run="$RUN_ID" '
 		function num(v) { return v ~ /^-?[0-9]+(\.[0-9]+)?$/ ? v + 0 : "" }
 		NR == 1 { next }
-		$32 != run { next }
+		$33 != run { next }
 		{
 			v = num($6); if (v != "") { if (tn == 0 || v < tmin) tmin = v; if (tn == 0 || v > tmax) tmax = v; tsum += v; tn++ }
 			for (i = 7; i <= 9; i++) { v = num($i); if (v != "") { if (wn == 0 || v > wmax) wmax = v; wn++ } }
-			v = num($10); if (v != "") { if (fn == 0 || v < fmin) fmin = v; if (fn == 0 || v > fmax) fmax = v; fn++ }
-			v = num($11); if (v != "") { if (cn == 0 || v > cap) cap = v; cn++ }
-			v = num($17); if (v != "") { if (rn == 0 || v < rmin) rmin = v; if (rn == 0 || v > rmax) rmax = v; rn++ }
-			v = num($13); if (v != "") { if (pn == 0 || v < pmin) pmin = v; if (pn == 0 || v > pmax) pmax = v; pn++ }
-			v = num($19); if (v != "") { qsum += v; qn++; if (v > qmax) qmax = v }
-			if ($29 == 1) thr++
-			ser = $30
+			v = num($10); if (v != "") { if (bn == 0 || v < bmin) bmin = v; if (bn == 0 || v > bmax) bmax = v; bsum += v; bn++ }
+			v = num($11); if (v != "") { if (fn == 0 || v < fmin) fmin = v; if (fn == 0 || v > fmax) fmax = v; fn++ }
+			v = num($12); if (v != "") { if (cn == 0 || v > cap) cap = v; cn++ }
+			v = num($18); if (v != "") { if (rn == 0 || v < rmin) rmin = v; if (rn == 0 || v > rmax) rmax = v; rn++ }
+			v = num($14); if (v != "") { if (pn == 0 || v < pmin) pmin = v; if (pn == 0 || v > pmax) pmax = v; pn++ }
+			v = num($20); if (v != "") { qsum += v; qn++; if (v > qmax) qmax = v }
+			if ($30 == 1) thr++
+			ser = $31
 			samples++
 		}
 		END {
 			printf "samples: %d over %ds\n", samples, window
 			if (tn) printf "cpu-thermal: min %.1f C max %.1f C avg %.1f C\n", tmin, tmax, tsum / tn
 			else print "cpu-thermal: na"
+			if (bn) printf "board-thermal: min %.1f C max %.1f C avg %.1f C\n", bmin, bmax, bsum / bn
+			else print "board-thermal: na"
 			if (wn) printf "mt7996: max %.1f C\n", wmax
 			else print "mt7996: na"
 			if (fn) printf "cpufreq: min %d MHz max %d MHz (cap %d MHz)\n", fmin, fmax, (cn ? cap : fmax)
@@ -2173,15 +2204,16 @@ soak_summary() {
 	awk -F, -v window="$window" -v run="$RUN_ID" '
 		function num(v) { return v ~ /^-?[0-9]+(\.[0-9]+)?$/ ? v + 0 : "" }
 		NR == 1 { next }
-		$32 != run { next }
+		$33 != run { next }
 		{
 			v = num($6); if (v != "") { if (tn == 0 || v < tmin) tmin = v; if (tn == 0 || v > tmax) tmax = v; tsum += v; tn++ }
 			for (i = 7; i <= 9; i++) { v = num($i); if (v != "") { if (wn == 0 || v > wmax) wmax = v; wn++ } }
-			v = num($10); if (v != "") { if (fn == 0 || v < fmin) fmin = v; if (fn == 0 || v > fmax) fmax = v; fn++ }
-			v = num($11); if (v != "") { if (cn == 0 || v > cap) cap = v; cn++ }
-			v = num($17); if (v != "") { if (rn == 0 || v < rmin) rmin = v; if (rn == 0 || v > rmax) rmax = v; rn++ }
-			if ($29 == 1) thr++
-			ser = $30
+			v = num($10); if (v != "") { if (bn == 0 || v < bmin) bmin = v; if (bn == 0 || v > bmax) bmax = v; bsum += v; bn++ }
+			v = num($11); if (v != "") { if (fn == 0 || v < fmin) fmin = v; if (fn == 0 || v > fmax) fmax = v; fn++ }
+			v = num($12); if (v != "") { if (cn == 0 || v > cap) cap = v; cn++ }
+			v = num($18); if (v != "") { if (rn == 0 || v < rmin) rmin = v; if (rn == 0 || v > rmax) rmax = v; rn++ }
+			if ($30 == 1) thr++
+			ser = $31
 			boot = $5
 			samples++
 		}
@@ -2189,6 +2221,8 @@ soak_summary() {
 			printf "samples: %d over %ds\n", samples, window
 			if (tn) printf "cpu-thermal: min %.1f C max %.1f C avg %.1f C\n", tmin, tmax, tsum / tn
 			else print "cpu-thermal: na"
+			if (bn) printf "board-thermal: min %.1f C max %.1f C avg %.1f C\n", bmin, bmax, bsum / bn
+			else print "board-thermal: na"
 			if (wn) printf "mt7996: max %.1f C\n", wmax
 			if (fn) printf "cpufreq: min %d MHz max %d MHz (cap %d MHz)\n", fmin, fmax, (cn ? cap : fmax)
 			if (rn) printf "fan: min %d RPM max %d RPM\n", rmin, rmax

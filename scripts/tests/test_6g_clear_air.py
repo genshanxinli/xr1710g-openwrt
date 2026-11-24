@@ -101,7 +101,10 @@ case "$*" in
 \tfi
 \t;;
 "dev phy2-ap0 scan")
-\tcat <<'SCAN'
+\tif [ -n "${STUB_SCAN_FILE:-}" ]; then
+\t\tcat "$STUB_SCAN_FILE"
+\telse
+\t\tcat <<'SCAN'
 BSS aa:bb:cc:00:00:01(on phy2-ap0) -- associated
 \tfreq: 6135
 \tSSID: 6g-clear-air
@@ -109,6 +112,7 @@ BSS aa:bb:cc:00:00:09(on phy2-ap0)
 \tfreq: 6480
 \tSSID: neighbour-6g
 SCAN
+\tfi
 \t;;
 *) ;;
 esac
@@ -150,20 +154,26 @@ done
 bump() {
 \t[ -n "${NOBUMP:-}" ] && return 0
 \tv=$(cat "$1")
-\tprintf '%s\\n' $((v + 200000)) >"$1"
+\t# Replace the file atomically: a truncate-then-write leaves a readable
+\t# empty counter for the harness "cat", which used to surface as a fake
+\t# INTERFERER_DIED / NO_INTERFERER_EVIDENCE under load.
+\tprintf '%s\\n' $((v + 200000)) >"$1.tmp" && mv "$1.tmp" "$1"
 }
 if [ "$ip" = "192.168.1.51" ]; then
 \t[ -z "${NOINTBUMP:-}" ] || exit 0
 \tbump "$STUB_ROOT/net/phy1-ap0/statistics/tx_bytes"
 \tbump "$STUB_ROOT/state/sta5_tx"
+\t# Stop on TERM/INT as well as on the harness kill: if the harness dies
+\t# between interferer_start and interferer_stop_and_verify, an unkillable
+\t# loop would outlive the fixture.  The bound is only a backstop.
+\ttrap 'exit 0' TERM INT
 \ti=0
-\twhile [ $i -lt 20 ]; do
+\twhile [ "$i" -lt 100000 ]; do
 \t\ti=$((i + 1))
 \t\tsleep 0.1
 \t\tbump "$STUB_ROOT/net/phy1-ap0/statistics/tx_bytes"
 \t\tbump "$STUB_ROOT/state/sta5_tx"
 \tdone
-\texit 0
 fi
 bump "$STUB_ROOT/state/sta_tx"
 bump "$STUB_ROOT/net/phy2-ap0/statistics/tx_bytes"
@@ -343,13 +353,102 @@ class Scan(unittest.TestCase):
         self.fixture = Fixture()
         self.addCleanup(self.fixture.cleanup)
 
+    def scan(self, body):
+        path = self.fixture.root / "scan.txt"
+        path.write_text(body)
+        return path
+
     def test_scan_counts_are_recorded(self):
         out = self.fixture.run(["--interferer", "5g:36:tcp:100:192.168.1.51"])
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
-        self.assertIn("check: PASS clear arm: scan sees 1 BSS", out.stdout)
+        self.assertIn(
+            "check: PASS clear arm: scan sees 2 BSS (1 foreign, 1 own)", out.stdout
+        )
         line = (self.fixture.out / "scan.txt").read_text().strip()
+        self.assertIn("records=2", line)
+        self.assertIn("foreign=1", line)
         self.assertIn("same_channel=0", line)
         self.assertIn("own=1", line)
+
+    def test_empty_scan_is_unknown_not_a_clean_scan(self):
+        # records == 0 is "no BSS at all", not "no foreign BSS": the check
+        # line must not claim the board saw anything but its own BSS.
+        scan = self.scan("")
+        out = self.fixture.run(
+            ["--interferer", "5g:36:tcp:100:192.168.1.51"],
+            STUB_SCAN_FILE=str(scan),
+        )
+        combined = out.stdout + out.stderr
+        self.assertNotEqual(out.returncode, 0, combined)
+        self.assertIn(
+            "check: UNKNOWN clear arm: iw dev phy2-ap0 scan returned no BSS records",
+            out.stdout,
+        )
+        self.assertIn("SCAN_UNKNOWN", combined)
+        self.assertNotIn("no foreign BSS", combined)
+
+    def test_own_bss_alone_is_a_clean_scan(self):
+        # The board's own BSS must not be counted as a co-channel neighbour
+        # (and the scan still counts as having seen a BSS).
+        scan = self.scan(
+            "BSS aa:bb:cc:00:00:01(on phy2-ap0) -- associated\n"
+            "\tfreq: 6135\n"
+            "\tSSID: 6g-clear-air\n"
+        )
+        out = self.fixture.run(
+            ["--interferer", "5g:36:tcp:100:192.168.1.51"],
+            STUB_SCAN_FILE=str(scan),
+        )
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn(
+            "check: PASS clear arm: scan sees 1 BSS (0 foreign, 1 own)", out.stdout
+        )
+        line = (self.fixture.out / "scan.txt").read_text().strip()
+        self.assertIn("records=1", line)
+        self.assertIn("foreign=0", line)
+        self.assertIn("same_channel=0", line)
+        self.assertIn("own=1", line)
+
+    def test_foreign_bss_on_our_channel_is_invalid(self):
+        scan = self.scan(
+            "BSS aa:bb:cc:00:00:01(on phy2-ap0) -- associated\n"
+            "\tfreq: 6135\n"
+            "\tSSID: 6g-clear-air\n"
+            "BSS aa:bb:cc:00:00:09(on phy2-ap0)\n"
+            "\tfreq: 6135\n"
+            "\tSSID: rogue-6g\n"
+        )
+        out = self.fixture.run(
+            ["--interferer", "5g:36:tcp:100:192.168.1.51"],
+            STUB_SCAN_FILE=str(scan),
+        )
+        combined = out.stdout + out.stderr
+        self.assertNotEqual(out.returncode, 0, combined)
+        self.assertIn("CO_CHANNEL_BSS", combined)
+        self.assertIn("verdict: INVALID", combined)
+        line = (self.fixture.out / "scan.txt").read_text().strip()
+        self.assertIn("same_channel=1", line)
+        self.assertIn("own=1", line)
+
+    def test_off_channel_foreign_bss_is_a_clean_scan(self):
+        scan = self.scan(
+            "BSS aa:bb:cc:00:00:01(on phy2-ap0) -- associated\n"
+            "\tfreq: 6135\n"
+            "\tSSID: 6g-clear-air\n"
+            "BSS aa:bb:cc:00:00:09(on phy2-ap0)\n"
+            "\tfreq: 5955\n"
+            "\tSSID: other-6g\n"
+        )
+        out = self.fixture.run(
+            ["--interferer", "5g:36:tcp:100:192.168.1.51"],
+            STUB_SCAN_FILE=str(scan),
+        )
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn(
+            "check: PASS clear arm: scan sees 2 BSS (1 foreign, 1 own)", out.stdout
+        )
+        line = (self.fixture.out / "scan.txt").read_text().strip()
+        self.assertIn("same_channel=0", line)
 
 
 class RefreshLive(unittest.TestCase):

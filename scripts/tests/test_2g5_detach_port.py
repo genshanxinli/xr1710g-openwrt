@@ -445,5 +445,84 @@ class BpathRestoresToo(Netns):
         self.assertIn("after_master=br0", out, out)
 
 
+class DetachFailureStillRestores(unittest.TestCase):
+    """A failing `ip link set ... nomaster` must not claim the port is untouched.
+
+    The remote call can fail after the link was already taken out of the
+    bridge (SSH drops, the device reboots mid-command, `ip` reports an error
+    after the netlink change landed).  `pd_detach` used to set PD_DETACHED=1
+    only *after* a successful call, so that path returned 1 with the flag at
+    0 and `pd_restore` short-circuited: the port stayed out of br-lan until
+    a reboot.  Deterministic stub, no netns: PD_EXEC answers the probe and
+    fails the nomaster call, and the test records whether the restore ran.
+    """
+
+    def run_library(self) -> subprocess.CompletedProcess:
+        self.tmp = Path(tempfile.mkdtemp(prefix="port-detach-fail."))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        fake = self.tmp / "fake-exec"
+        _write_exec(
+            fake,
+            textwrap.dedent(
+                """\
+                #!/bin/sh
+                case $1 in
+                *"ip link set lan2 nomaster"*)
+                    printf 'fake: RTNETLINK answers: Link has been severed\\n' >&2
+                    exit 1
+                    ;;
+                *"ip link set lan2 master br0"*)
+                    printf '%s\\n' "$1" >>"${RESTORE_LOG:?}"
+                    exit 0
+                    ;;
+                *class/net/lan2*)
+                    printf 'master=br0\\noperstate=up\\nspeed=2500\\ncarrier=1\\n'
+                    ;;
+                *"test -e"*)
+                    exit 1
+                    ;;
+                esac
+                exit 0
+                """
+            ),
+        )
+        env = dict(os.environ)
+        env["PD_EXEC"] = str(fake)
+        env["RESTORE_LOG"] = str(self.tmp / "restore.log")
+        env["PROG"] = "t"
+        body = textwrap.dedent(
+            """\
+            . %s
+            pd_detach lan2; echo "detach_rc=$?"
+            echo "detached_after_detach=$PD_DETACHED"
+            pd_restore; echo "restore_rc=$?"
+            echo "detached_after_restore=$PD_DETACHED"
+            """
+            % LIB
+        )
+        return subprocess.run(
+            ["sh", "-c", body],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=env,
+            check=False,
+        )
+
+    def test_a_failed_nomaster_still_arms_the_restore(self) -> None:
+        proc = self.run_library()
+        out, err = proc.stdout, proc.stderr
+        self.assertIn("detach_rc=1", out, out + err)
+        self.assertIn("detached_after_detach=1", out, out + err)
+        self.assertIn("state is unknown", err)
+        self.assertIn("restore_rc=0", out, out + err)
+        self.assertIn("detached_after_restore=0", out, out + err)
+        self.assertIn("restored: lan2 is back in br0", err)
+        log = self.tmp / "restore.log"
+        self.assertEqual(
+            log.read_text().splitlines(), ["ip link set lan2 master br0"]
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

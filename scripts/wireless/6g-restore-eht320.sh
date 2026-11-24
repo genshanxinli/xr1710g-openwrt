@@ -28,7 +28,8 @@
 #               print one status line per fact.  Writes nothing, reloads
 #               nothing.
 #   --apply     write radio2.htmode and nothing else, then verify that
-#               ieee80211be reached the live hostapd config.  A failed
+#               ieee80211be reached the live hostapd config *and* that the
+#               running interface negotiated at least 320 MHz.  A failed
 #               verification restores the config file, the pending UCI delta
 #               and the live radio, then exits 1.
 #
@@ -210,25 +211,58 @@ wait_be() {
 
 if wait_be; then
 	printf 'verify:   ieee80211be present in %s\n' "${HOSTAPD_CONF##*/}"
+	# ieee80211be in the netifd-generated hostapd config only proves that the
+	# config text asks for EHT: it does not prove hostapd came up, nor that
+	# the radio negotiated the requested width.  An EHT160 fallback - a
+	# regulatory constraint, a coex downgrade - still has ieee80211be in that
+	# file, so read the running interface before calling the apply a success.
+	_width=
 	if command -v iw >/dev/null 2>&1; then
-		iw dev "$G6_IFACE" info 2>/dev/null |
-			awk '/width:/ { print "verify:   " $0; found = 1 }
-			     END { exit !found }'
+		# iw prints "channel 37 (6135 MHz), width: 320 MHz, center1: 6105 MHz"
+		# and may append center2: only the token after the "width:" label is
+		# the width, never the rest of that line.
+		_width=$(iw dev "$G6_IFACE" info 2>/dev/null |
+			awk '/width:/ { n = split($0, a, " ")
+			                for (i = 1; i < n; i++)
+			                        if (a[i] == "width" || a[i] == "width:") { print a[i + 1]; found = 1; break }
+			              }
+			     END { if (!found) exit 1 }') || _width=
 	fi
-	if [ "$drift" != 0 ]; then
-		urg_disarm
+	# A non-numeric reading is handled by the diagnostic below; comparing it
+	# here would print a shell error ("Illegal number"/"bad number") right
+	# before that diagnostic.
+	_w=${_width:-0}
+	case $_w in
+	'' | *[!0-9]*) _w=0 ;;
+	esac
+	if [ "$_w" -ge 320 ]; then
+		if [ "$drift" != 0 ]; then
+			urg_disarm
+		fi
+		printf 'verify:   %s width: %s MHz\n' "$G6_IFACE" "$_width"
+		printf 'status:   restored to %s (%s MHz)\n' "$expected" "$_width"
+		exit 0
 	fi
-	printf 'status:   restored to %s\n' "$expected"
-	exit 0
+	case ${_width:-} in
+	'' | *[!0-9]*)
+		printf 'verify:   cannot read the width of %s (iw dev %s info); %s is in the config but the radio is unverified\n' \
+			"$G6_IFACE" "$G6_IFACE" "$expected" >&2
+		;;
+	*)
+		printf 'verify:   width is %s MHz, expected 320 MHz\n' "$_width" >&2
+		;;
+	esac
 fi
 
-printf 'verify:   FAILED - no ieee80211be in %s after %s s\n' \
-	"${HOSTAPD_CONF##*/}" "$G6_VERIFY_TIMEOUT" >&2
+printf 'verify:   FAILED - no verified 320 MHz EHT link on %s after %s s\n' \
+	"$G6_IFACE" "$G6_VERIFY_TIMEOUT" >&2
 if [ "$drift" = 0 ]; then
-	printf 'status:   failed, config was not written\n' >&2
+	printf 'status:   failed, the config already asked for %s; the live radio did not reach it\n' \
+		"$expected" >&2
 	exit 1
 fi
-printf 'status:   failed, rolling back\n' >&2
+printf 'status:   failed, %s was written but is not in effect; rolling back\n' \
+	"$expected" >&2
 # The armed trap restores the config file, the delta and the radio; exit
 # non-zero so the caller sees the failure rather than a restored-looking 0.
 exit 1

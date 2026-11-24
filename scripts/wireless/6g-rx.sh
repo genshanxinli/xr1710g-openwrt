@@ -59,14 +59,19 @@
 #
 # band_bytes is optional in the kernel.  When the mt76 debugfs tree has no
 # band_bytes file, the per-band A-MPDU measurement is recorded as UNKNOWN
-# (result.json: "band_bytes_unavailable": true) and the run is not ok: a
-# counter nobody could read must never be reported as a measured zero.
+# (result.json: "band_bytes_unavailable": true) and the run is PARTIAL (exit
+# 3): a counter nobody could read must never be reported as a measured zero,
+# but it must not overrule the verdict either - the station/ethtool counters
+# and the IRQ attribution are still a real measurement.
 #
-# Exit status: 0 the measurement ran and every counter it needs was read, or
-# the run was a clean SKIP (no iperf3, no 6G-only BSS, no STA source); 1 the
-# source or measurement failed, the measurement is incomplete (band_bytes
-# absent, A-MPDU byte counter unreadable), or the config restore failed;
-# 2 invalid arguments or an impossible setup.
+# Exit status: 0 the measurement ran, the verdict held and every counter it
+# needs was read, or the run was a clean SKIP (no iperf3, no 6G-only BSS, no
+# STA source); 1 the source or measurement failed, the required counters
+# (station RX delta, A-MPDU byte delta) were unreadable, the verdict could
+# not be attributed (undetermined), or the config restore failed; 2 invalid
+# arguments or an impossible setup; 3 the measurement ran and the verdict
+# held, but the optional per-band band_bytes counter is absent (status
+# "partial").
 
 set -u
 umask 077
@@ -478,10 +483,11 @@ json_num() {
 # --- result.json ------------------------------------------------------
 
 # RESULT_STATUS is the one word a wrapper reads: ok means the measurement ran
-# and every counter it needs was read; unknown means the kernel does not
-# expose one of them, so nothing here may be called ok; invalid means the
-# source or the measurement failed; skip means this board had nothing to
-# measure.
+# and every counter it needs was read; partial means the required counters
+# were read and the verdict held but an optional counter (band_bytes) is not
+# in this kernel; invalid means the source or the required measurement failed
+# or the verdict could not be attributed; skip means this board had nothing
+# to measure.
 RESULT_STATUS=invalid
 
 write_result_json() {
@@ -667,10 +673,14 @@ Examples:
   ./scripts/wireless/6g-rx.sh --add-bss --seconds 30
   ./scripts/wireless/6g-rx.sh --sta-ip 192.168.1.23 --seconds 20
 
-Exit status: 0 the measurement ran (all counters read) or the run was a clean
-SKIP, 1 source/measurement or restore failure or an incomplete measurement
-(a counter the kernel does not expose), 2 invalid arguments or impossible
-setup.
+Exit status: 0 the measurement ran, the verdict held and every counter it
+needs was read, or the run was a clean SKIP (no iperf3, no 6G-only BSS, no
+STA source); 1 the source or measurement failed, the required counters
+(station RX delta, A-MPDU byte delta) were unreadable, the verdict could
+not be attributed (undetermined), or the config restore failed; 2 invalid
+arguments or an impossible setup; 3 the measurement ran and the verdict
+held, but the optional per-band band_bytes counter is absent (status
+"partial").
 EOF
 }
 
@@ -1689,7 +1699,7 @@ resolve_debugfs() {
 	[ -n "$TOKEN_INFO_PATH" ] ||
 		warn "mt76 token_info not found under $DEBUGFS; NPU queue evidence will be n/a"
 	band_bytes_available ||
-		warn "mt76 band_bytes not found under $DEBUGFS; the per-band 6G A-MPDU measurement is UNKNOWN (result.json: band_bytes_unavailable=true) and the run cannot be ok"
+		warn "mt76 band_bytes not found under $DEBUGFS; the per-band 6G A-MPDU measurement is UNKNOWN (result.json: band_bytes_unavailable=true); the run will be partial (exit 3), the required counters still decide ok/invalid"
 }
 
 # --- snapshots and parsing --------------------------------------------
@@ -2299,7 +2309,7 @@ print_report() {
 		printf '  mt76 band_bytes Phy band %s rx_ampdu_bytes delta %s (%s)\n' \
 			"$SIXG_BAND" "$(val_or_na "$BAND_AMPDU_DELTA")" "$BAND_BYTES_PATH"
 	else
-		printf '  mt76 band_bytes UNKNOWN: not present in this kernel (no per-band 6G A-MPDU MIB; the ethtool and station counters above stand, result.json records band_bytes_unavailable=true)\n'
+		printf '  mt76 band_bytes UNKNOWN: not present in this kernel (no per-band 6G A-MPDU MIB; the ethtool and station counters above stand, result.json records band_bytes_unavailable=true, status=partial unless a required counter fails)\n'
 	fi
 
 	printf '\niperf3 receiver:\n'
@@ -2513,28 +2523,42 @@ if [ "$SOURCE_STATUS" -ne 0 ]; then
 	exit 1
 fi
 
-if [ -z "$AMPDU_BYTES_DELTA" ]; then
-	printf '\nERROR: rx_ampdu_bytes_cnt delta is unavailable; the A-MPDU byte evidence is incomplete\n' >&2
+# The required counters: a zero or unreadable A-MPDU byte delta proves
+# nothing about the 802.11 frame path, so "+0 passes" is not an ok result.
+if ! is_positive "${AMPDU_BYTES_DELTA:-}"; then
+	printf '\nERROR: rx_ampdu_bytes_cnt delta is %s; a positive A-MPDU byte delta is required, so the A-MPDU byte evidence is incomplete\n' \
+		"${AMPDU_BYTES_DELTA:-unavailable}" >&2
+	RESULT_STATUS=invalid
+	write_result_json 1
+	exit 1
+fi
+
+# The verdict is the whole point of the run: a positive RX delta with no
+# attributable IRQ group is not evidence that traffic took one path or the
+# other, so it must not exit 0.
+if ! is_positive "${RX_BYTES_DELTA:-}"; then
+	printf '\nERROR: the source ran but the station RX bytes did not increase\n' >&2
+	RESULT_STATUS=invalid
+	write_result_json 1
+	exit 1
+fi
+
+if [ "$VERDICT" = undetermined ]; then
+	printf '\nERROR: the traffic could not be attributed (verdict undetermined: %s); a positive RX delta without a winning IRQ group is not a measurement\n' \
+		"${VERDICT_REASON:-no reason recorded}" >&2
 	RESULT_STATUS=invalid
 	write_result_json 1
 	exit 1
 fi
 
 # The per-band counter is optional in the kernel.  Its absence makes the
-# measurement UNKNOWN: the rest of the evidence still stands, but nothing here
-# may be called ok.
+# run partial, not invalid: the required counters were read and the verdict
+# holds, so nothing here may be called ok but the verdict must survive.
 if [ "$BAND_BYTES_UNAVAILABLE" = 1 ]; then
-	printf '\nUNKNOWN: mt76 band_bytes is not present in this kernel, so the per-band 6G A-MPDU byte delta could not be measured; result.json records band_bytes_unavailable=true and the run is not ok (the ethtool and station counters above were read)\n' >&2
-	RESULT_STATUS=unknown
-	write_result_json 1
-	exit 1
-fi
-
-if [ "$VERDICT" = undetermined ] && ! is_positive "$RX_BYTES_DELTA"; then
-	printf '\nERROR: the source ran but the station RX bytes did not increase\n' >&2
-	RESULT_STATUS=invalid
-	write_result_json 1
-	exit 1
+	printf '\nPARTIAL: mt76 band_bytes is not present in this kernel, so the per-band 6G A-MPDU byte delta could not be measured; result.json records band_bytes_unavailable=true, the verdict above stands, and the run exits 3\n' >&2
+	RESULT_STATUS=partial
+	write_result_json 3
+	exit 3
 fi
 
 RESULT_STATUS=ok

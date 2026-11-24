@@ -22,7 +22,9 @@
 #                    `ip link set PORT nomaster`, then wait until the port is
 #                    gone from the bridge's brif list.  Returns non-zero with
 #                    a message on stderr when the port is absent, the
-#                    nomaster call fails, or the port is still in brif.
+#                    nomaster call fails, or the port is still in brif.  The
+#                    restore is armed before the write, so a failed call
+#                    still leaves PD_DETACHED=1 for the EXIT trap to re-probe.
 #   pd_restore       put PORT back into the recorded master and verify it.
 #                    Idempotent, safe to call twice (EXIT trap after an
 #                    explicit restore), and it reports the exact command to
@@ -187,15 +189,18 @@ pd_detach() {
 	PD_MASTER=$master
 	PD_PRE_OPERSTATE=$(pd_field operstate "$state")
 	PD_PRE_SPEED=$(pd_field speed "$state")
-	PD_DETACHED=0
+	# Armed *before* the write: the remote call can fail after the netlink
+	# change already landed (ssh drops, the device reboots mid-command), so
+	# "failed" does not mean "untouched".  pd_restore re-probes and is
+	# idempotent when the port never moved.
+	PD_DETACHED=1
 	PD_RESTORE_HINT="ip link set $port master $master"
 	pd_note "detach: $port is in $master; pre-state operstate=${PD_PRE_OPERSTATE:-unknown} speed=${PD_PRE_SPEED:-unknown} Mb/s carrier=$(pd_field carrier "$state")"
 
 	if ! pd_exec "ip link set $port nomaster"; then
-		pd_error "ip link set $port nomaster failed; $port is untouched"
+		pd_error "ip link set $port nomaster failed; $port's state is unknown - the exit trap will re-probe and restore it from $master"
 		return 1
 	fi
-	PD_DETACHED=1
 	pd_wait_master "$port" "" || return 1
 	pd_wait_brif_gone "$port" "$master" || return 1
 	pd_note "detached: $port is out of $master; on exit: $PD_RESTORE_HINT"

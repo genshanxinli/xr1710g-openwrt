@@ -267,47 +267,15 @@ die() {
 	exit 1
 }
 
-# write_skip_result DIR REASON: the harness-level skip record.  Written only
-# when --result-dir named a directory: a skip must not create an output tree
-# on its own, and the caller's explicit directory is where a wrapper looks for
-# it.  Nothing here is a configuration write.
-#
-# "status": "skip" is deliberate: this is the harness's own result.json, and
-# hw-gap-report.sh collects "no-client"/"blocked" records only, so a skip has
-# to leave the gap in the no-client/ sibling next to it (see skip_no_tool and
-# skip_run).  Do not make skip_run write this file again: that was the bug
-# where an edca skip never reached the gap table.
-write_skip_result() {
-	local _dir _reason
-	_dir=$1
-	_reason=$2
-	mkdir -p "$_dir" || return 0
-	{
-		printf '{\n'
-		printf '  "schema": "edca-6g-ab/v1",\n'
-		printf '  "timestamp": %s,\n' "$(json_str "$(now_ts)")"
-		printf '  "status": "skip",\n'
-		printf '  "skip_reason": %s,\n' "$(json_str "$_reason")"
-		printf '  "rounds": %s,\n' "$(json_num "$ROUNDS")"
-		printf '  "cooldown_s": %s,\n' "$(json_num "$COOLDOWN")"
-		printf '  "arms": [],\n'
-		printf '  "restore": null,\n'
-		printf '  "ok": true\n'
-		printf '}\n'
-	} >"$_dir/result.json.tmp" 2>/dev/null &&
-		mv "$_dir/result.json.tmp" "$_dir/result.json" 2>/dev/null
-	return 0
-}
-
 # skip_run REASON [MISSING]: a clean hardware/tool skip.  Prints one SKIP
 # line, records the missing item as a wireless-no-client/v1 record (status
 # "no-client") and exits 0.  Nothing has been written to the device at this
 # point.
 #
 # The record is the point: hw-gap-report.sh collects only "no-client" and
-# "blocked", so the old "status": "skip" write_skip_result left behind was a
-# record no report could ever see, which made this skip indistinguishable
-# from a harness that was never run.  MISSING names the item (default
+# "blocked", so the old top-level "status": "skip" record was one no report
+# could ever see, which made this skip indistinguishable from a harness that
+# was never run.  MISSING names the item (default
 # "6ghz-eht-client", the one this harness fundamentally needs).
 skip_run() {
 	local _missing=${2:-6ghz-eht-client} _dir _run _rec
@@ -344,12 +312,17 @@ skip_no_client() {
 			break
 		done
 	fi
+	_nc_run='sh scripts/wireless/edca-6g-ab.sh --target <STA_IP> --result-dir <DIR>'
+	# The record lives in a subdirectory: a top-level result.json here would
+	# trip the harness's own overwrite guard and block the next real run in
+	# the same --result-dir.  The blocked (OWE) record below shares it.
+	_nc_dir=${RESULT_DIR:-}
+	[ -n "$_nc_dir" ] && _nc_dir=$_nc_dir/no-client
 	if [ -n "$_owe_if" ] && _mm=$(nc_owe_mismatch "$_owe_if"); then
-		nc_owe_mismatch_block "${RESULT_DIR:-}" 43 "$_mm"
+		nc_owe_mismatch_block "$_nc_dir" 43 "$_mm"
 		exit 2
 	fi
-	_nc_run='sh scripts/wireless/edca-6g-ab.sh --target <STA_IP> --result-dir <DIR>'
-	_rec=$(no_client_record "${RESULT_DIR:-}" 43 6ghz-eht-client "$_nc_run" \
+	_rec=$(no_client_record "$_nc_dir" 43 6ghz-eht-client "$_nc_run" \
 		"${1:-no 6G STA}" \
 		"EDCA parameter A/B throughput delta per arm" \
 		"tx_burst / airtime restore verification" \
@@ -378,7 +351,6 @@ skip_no_tool() {
 	say "      missing iperf3; install it (opkg install iperf3) or pass --source CMD"
 	[ -n "$_rec" ] && say "      no-client record: $_rec"
 	log_line "SKIP: $1"
-	[ -n "${RESULT_DIR:-}" ] && write_skip_result "$RESULT_DIR" "$1"
 	exit 0
 }
 
