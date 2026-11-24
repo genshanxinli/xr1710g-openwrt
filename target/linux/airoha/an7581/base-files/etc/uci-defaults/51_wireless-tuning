@@ -39,6 +39,34 @@ uci_set_from() {
 	changed=1
 }
 
+# phy_has <iw phy line>: 0 supported, 1 iw ran and the channel is absent, 2
+# iw is not usable here. "(disabled)" still counts as supported: the phy's
+# band capability is what matters, the regdomain is applied by hostapd later.
+phy_has() {
+	command -v iw >/dev/null 2>&1 || return 2
+	iw phy 2>/dev/null | grep -qF "$1"
+}
+
+# radio_usable <section> <band> <iw phy line>: a fixed channel/width is only
+# promoted when the radio section exists, its own `band` does not contradict
+# the promotion, and (when iw is available) the phy advertises the channel.
+# Without iw the UCI band is the only evidence there is.
+radio_usable() {
+	local section="$1"
+	local band="$2"
+	local phy="$3"
+	local cur
+
+	uci -q get "wireless.$section" >/dev/null 2>&1 || return 1
+
+	cur=$(uci -q get "wireless.$section.band")
+	[ -n "$cur" ] && [ "$cur" != "$band" ] && return 1
+
+	phy_has "$phy"
+	[ $? -eq 1 ] && return 1
+	return 0
+}
+
 case "$(board_name)" in
 gemtek,xr1710g-ubi)
 	# 2.4 GHz: leave the crowded channel 1. Keep 20 MHz -- at 66%
@@ -116,15 +144,30 @@ gemtek,xr1710g-ubi)
 			fi
 			;;
 		esac
-	else
+	elif radio_usable radio1 5g "5745 MHz [149]"; then
 		uci_set_from radio1 channel 36 149
+	else
+		logger -t wireless-tuning \
+			"radio1 has no usable 5 GHz channel 149, leaving the channel alone"
 	fi
 
 	# 6 GHz: channel 37 is a PSC (clients that only scan PSC can find
 	# it) and EHT320 is usable here -- 0.4% airtime, zero neighbour
 	# BSSes.
-	uci_set_from radio2 channel auto 37
-	uci_set_from radio2 htmode EHT80 EHT320
+	# Promote only when the radio really is a 6 GHz one: a board without
+	# the band, or a config that reassigned radio2, still carries the
+	# section, and 37/EHT320 there makes hostapd refuse the BSS instead of
+	# tuning anything. The band option and `iw phy` are the two pieces of
+	# evidence available; with iw missing the band option has to decide.
+	if radio_usable radio2 6g "6135 MHz [37]"; then
+		uci_set_from radio2 channel auto 37
+		# Literal on purpose: scripts/wireless/6g-restore-eht320.sh
+		# parses this exact line.
+		uci_set_from radio2 htmode EHT80 EHT320
+	else
+		logger -t wireless-tuning \
+			"radio2 has no usable 6 GHz channel 37, leaving channel and htmode alone"
+	fi
 
 	# A fixed BSS colour per band. The schema default of 128 means "pick
 	# a random colour on every reload", and a colour that changes on

@@ -266,7 +266,14 @@ fetch() {
         if run_fetch uclient-fetch -T 120 -O "$dst" "$url" 2>"$err"; then return 0; fi
     fi
     if command -v wget >/dev/null 2>&1; then
-        if run_fetch wget -T 120 -t 2 -O "$dst" "$url" 2>"$err"; then return 0; fi
+        # Never pass -t/--tries here: uclient-fetch (installed as /usr/bin/wget
+        # on images without the BusyBox wget applet) and BusyBox wget both reject
+        # it. Retry in the shell so every wget variant sees only -T/-O.
+        wget_try=0
+        while [ "$wget_try" -lt 2 ]; do
+            if run_fetch wget -T 120 -O "$dst" "$url" 2>"$err"; then return 0; fi
+            wget_try=$((wget_try + 1))
+        done
     fi
     if command -v curl >/dev/null 2>&1; then
         if run_fetch curl -fsSL --connect-timeout 15 --max-time 120 -o "$dst" "$url" 2>"$err"; then return 0; fi
