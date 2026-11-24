@@ -73,7 +73,7 @@ shift
 cmd=$*
 case "$cmd" in
 *board_name*) cat "$fix/probe.txt"; exit 0 ;;
-*"dd if=/dev/ubi0_0"*) cat "$fix/slot.bin"; exit 0 ;;
+*"dd if=/dev/ubi0_2"*) cat "$fix/slot.bin"; exit 0 ;;
 *"cat /proc/cmdline; cat /proc/mtd"*) cat "$fix/meta.txt"; exit 0 ;;
 esac
 # An interrupted session: tar has written part of the file when the link dies.
@@ -148,13 +148,15 @@ Amount of available logical eraseblocks: 0
 --- env
 bootargs=console=ttyS0,115200 ubi.block=0,fit
 bootcmd=run boot_ubi || http_recovery
+loadaddr=0x85000000
 --- fitblk
 E
 E fit
 W factory
 --- slot
-%SLOT_SHA%  /dev/ubi0_0
-%SLOT_LEN% /dev/ubi0_0
+fit_id 2
+%SLOT_SHA%  /dev/ubi0_2
+%SLOT_LEN%
 --- kexec
 none
 """

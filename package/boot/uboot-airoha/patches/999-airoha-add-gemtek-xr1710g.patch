@@ -40,7 +40,7 @@ index 11111111111111..22222222222222
 +CONFIG_ENV_OFFSET=0x7c000
 +CONFIG_DM_GPIO=y
 +CONFIG_DEFAULT_DEVICE_TREE="airoha/an7581-xr1710g-ubi"
-+CONFIG_SYS_LOAD_ADDR=0x81800000
++CONFIG_SYS_LOAD_ADDR=0x85000000
 +CONFIG_BUILD_TARGET="u-boot.bin"
 +# CONFIG_EFI_LOADER is not set
 +CONFIG_FIT=y
@@ -144,7 +144,18 @@ index 11111111111111..22222222222222
 +# available LEBs, so the recovery image cannot be stored in UBI.  boot_recovery
 +# keeps that limitation visible; bootmenu_2 boots the recovery image over TFTP.
 +# The volume names here are checked by scripts/check-uboot-ubi-volumes.py.
-+loadaddr=0x81800000
++#
++# loadaddr is the address boot_production reads the FIT to, and bootm then
++# decompresses the kernel out of that copy.  The initramfs recovery kernel is
++# 42,663,936 B (arm64 header image_size 0x28B0000), so it expands
++# 0x80200000..0x82AB0000: the fit volume must be loaded above 0x82AB0000 or
++# U-Boot stops with "ERROR: new format image overwritten - must RESET".  The
++# production kernel ends at 0x81166808, which is why 0x81800000 passed
++# unnoticed.  The safe window is npu-binary@84000000 (10 MiB) .. ramoops@
++# 86ff0000 (64 KiB); 0x85000000 puts the 14.3 MiB FIT copy at
++# 0x85000000..0x85DC0000, clear of both.  scripts/tests/
++# test_recovery_boot_dryrun.py pins the arithmetic.
++loadaddr=0x85000000
 +initaddr=0x89000000
 +ipaddr=192.168.1.1
 +serverip=192.168.1.10

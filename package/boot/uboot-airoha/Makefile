@@ -102,12 +102,21 @@ UBOOT_CUSTOMIZE_CONFIG := \
 	--disable TOOLS_KWBIMAGE \
 	--disable TOOLS_LIBCRYPTO \
 	--disable TOOLS_MKEFICAPSULE \
+	--enable DM_RNG \
+	--enable RNG_AIROHA \
 	--enable SERIAL_RX_BUFFER \
 	--set-val SERIAL_RX_BUFFER_SIZE 256
 
+# The Airoha TRNG driver (patches/112-rng-*) is what turns the DT's
+# rng@1faa1000 node into /chosen/kaslr-seed (boot/fdt_support.c fdt_kaslrseed).
+# RNG_AIROHA is hidden behind "if DM_RNG" and depends on ARCH_AIROHA, so a
+# dropped --enable would silently leave the node dead again: assert the pair.
 define Build/Configure
 	$(call Build/Configure/U-Boot)
 	sed -i 's/CONFIG_TOOLS_LIBCRYPTO=y/# CONFIG_TOOLS_LIBCRYPTO is not set/' $(PKG_BUILD_DIR)/.config
+	grep -q '^CONFIG_RNG_AIROHA=y' $(PKG_BUILD_DIR)/.config || { \
+		echo "uboot-airoha: CONFIG_RNG_AIROHA is not set -- the TRNG patch and the --enable pair drifted apart" >&2; \
+		exit 1; }
 endef
 
 define Build/Compile

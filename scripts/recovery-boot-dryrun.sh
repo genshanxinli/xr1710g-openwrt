@@ -84,7 +84,7 @@ err() { printf '%s\n' "$*" >&2; }
 # shape as scripts/flash-gate.sh so the two logs can be diffed.
 row() {
 	printf '%-30s expected=%-24s actual=%-28s %s\n' "$1" "$2" "$3" "$4"
-	[ "$4" = FAIL ] && CHECK_FAILED=1
+	[ "$4" = FAIL ] && CHECK_FAILED=$((CHECK_FAILED + 1))
 	return 0
 }
 
@@ -111,6 +111,18 @@ ubi_volume_bytes() {
 			sz = $0; sub(/.*\(/, "", sz); sub(/ bytes.*/, "", sz)
 		}
 		$1 == "Name:" && $2 == want { print sz; exit }' "$1"
+}
+
+# ubi_volume_id UBINFO VOLNAME -- the volume number inside /dev/ubi0_<id>.
+# ubinfo -a prints one block per volume, "Volume ID:   2 (on ubi0)" closed by
+# "Name:        fit"; the board layout is ubootenv(0), ubootenv2(1), fit(2),
+# factory(3), so "the first volume" is the 128 KiB U-Boot environment, never
+# the FIT.  Prints nothing when the name is absent; callers must not build a
+# /dev/ubi0_ path from an empty answer.
+ubi_volume_id() {
+	awk -v want="$2" '
+		/^Volume ID:/ { id = $3 }
+		$1 == "Name:" && $2 == want { print id; exit }' "$1"
 }
 
 # need_lebs BYTES LEB_BYTES -- logical eraseblocks a FIT of that size takes.
@@ -144,9 +156,24 @@ if [ "$SELFTEST" = 1 ]; then
 	cat > "$WORK/ubinfo" <<'EOF'
 Volume ID:   0 (on ubi0)
 Alignment:   1
+Size:        32 LEBs (4063232 bytes, 3.9 MiB)
+State:       OK
+Name:        ubootenv
+Volume ID:   1 (on ubi0)
+Alignment:   1
+Size:        32 LEBs (4063232 bytes, 3.9 MiB)
+State:       OK
+Name:        ubootenv2
+Volume ID:   2 (on ubi0)
+Alignment:   1
 Size:        132 LEBs (16760832 bytes, 15.9 MiB)
 State:       OK
 Name:        fit
+Volume ID:   3 (on ubi0)
+Alignment:   1
+Size:        8 LEBs (1015808 bytes, 992.0 KiB)
+State:       OK
+Name:        factory
 Volume ID:   4 (on ubi0)
 Size:        3267 LEBs (414830592 bytes, 395.6 MiB)
 Name:        rootfs_data
@@ -154,6 +181,14 @@ EOF
 	[ "$(ubi_volume_bytes "$WORK/ubinfo" fit)" = 16760832 ] || { err "self-test: ubi_volume_bytes"; exit 1; }
 	[ "$(ubi_volume_bytes "$WORK/ubinfo" rootfs_data)" = 414830592 ] || { err "self-test: ubi_volume_bytes second volume"; exit 1; }
 	[ "$(ubi_volume_bytes "$WORK/ubinfo" provisioning)" = "" ] || { err "self-test: ubi_volume_bytes false match"; exit 1; }
+	# The fixture mirrors target/linux/airoha/dts/an7581-xr1710g-ubi.dts
+	# (ubootenv 0, ubootenv2 1, fit 2, factory 3).  A parser that hands out
+	# volume 0 for "fit" used to pass here and then hash the U-Boot env.
+	[ "$(ubi_volume_id "$WORK/ubinfo" fit)" = 2 ] || { err "self-test: ubi_volume_id fit"; exit 1; }
+	[ "$(ubi_volume_id "$WORK/ubinfo" ubootenv)" = 0 ] || { err "self-test: ubi_volume_id first volume"; exit 1; }
+	[ "$(ubi_volume_id "$WORK/ubinfo" factory)" = 3 ] || { err "self-test: ubi_volume_id factory"; exit 1; }
+	[ "$(ubi_volume_id "$WORK/ubinfo" rootfs_data)" = 4 ] || { err "self-test: ubi_volume_id last volume"; exit 1; }
+	[ "$(ubi_volume_id "$WORK/ubinfo" provisioning)" = "" ] || { err "self-test: ubi_volume_id false match"; exit 1; }
 	[ "$(need_lebs 14417920 126976)" = 114 ] || { err "self-test: need_lebs 14417920"; exit 1; }
 	[ "$(need_lebs 0 126976)" = 0 ] || { err "self-test: need_lebs 0"; exit 1; }
 	cat > "$WORK/dumpimage" <<'EOF'
@@ -179,7 +214,7 @@ EOF
 	[ "$(sums_digest "$WORK/sums" openwrt-airoha-an7581-gemtek_xr1710g-ubi-initramfs-recovery.itb)" = \
 	  cca43cfe0d0dfa5c2dba49665995aabb94e454d915945974b708b95aa6294e49 ] || { err "self-test: sums_digest"; exit 1; }
 	[ "$(sums_digest "$WORK/sums" nope.itb)" = "" ] || { err "self-test: sums_digest miss"; exit 1; }
-	say "self-test: 12 parser checks OK"
+	say "self-test: 17 parser checks OK"
 	exit 0
 fi
 
@@ -218,15 +253,56 @@ else
 fi
 
 # `append-metadata` ends a sysupgrade FIT in a fwtool trailer; KERNEL_INITRAMFS
-# ends this image in pad-to 0x00, so fwtool_check_image
-# (package/base-files/files/lib/upgrade/fwtool.sh:22-39) says "Image metadata not
-# present" and REQUIRE_IMAGE_METADATA=1
-# (target/linux/airoha/an7581/base-files/lib/upgrade/platform.sh:3) turns that
-# into "needs -F".
-if tail -c 4096 "$IMAGE" 2>/dev/null | grep -q FWx0; then
-	row image.metadata "no fwtool trailer" "trailer present" FAIL
+# ends this image in pad-to 0x00, so fwtool_check_image says "Image metadata
+# not present".  The trailer is where compat_version lives, so what that costs
+# depends on the board:
+#
+#   * REQUIRE_IMAGE_METADATA=1 (target/linux/airoha/an7581/base-files/lib/
+#     upgrade/platform.sh:3, the board this script flashes) returns 74
+#     (fwtool.sh:39-42), validate_firmware_image:55-60 maps 74 to
+#     notify_firmware_broken -> forceable=false (:19-22, :89), and
+#     sysupgrade:407-414 then prints "Image check failed." and exits 1
+#     before any write.  -F does not override 74, so "no trailer" is not
+#     "needs -F": it is "this image will not flash".
+#   * a board that does not require metadata keeps the upstream forceable
+#     path (fwtool.sh:43-46): the image is checkable, just not acceptable,
+#     and `-F` is what lets it through.
+#
+# fwtool writes fwimage_trailer.magic with cpu_to_be32 (fwtool.c:192,
+# fwimage.h:18), so a metadata-bearing image ends in a 16-byte trailer whose
+# first four bytes are the big-endian bytes 46 57 78 30 ("FWx0").  Compare
+# that position exactly: the literal "FWx0" may also occur inside the FIT
+# payload and is not a trailer there.
+#
+# hexdump, not od: the XR1710G image ships BusyBox with CONFIG_HEXDUMP=y and no
+# od applet at all (busybox.links has /usr/bin/hexdump, no /bin/od), and the
+# live run printed "recovery-boot-dryrun.sh: line 279: od: not found" (the probe
+# was line 279 before this edit), leaving
+# TRAILER_MAGIC empty so every image read as "no trailer".  `-v -e
+# '1/1 "%02x"'` is the same output on GNU/BSD hexdump and BusyBox 1.38
+# (util-linux/hexdump.c usage: "[-bcdoxCv] [-e FMT] [-f FMT_FILE] [-n LEN]").
+REQUIRE_METADATA=$(awk -F= '$1 == "REQUIRE_IMAGE_METADATA" { print $2; exit }' \
+	"$TOP/target/linux/airoha/an7581/base-files/lib/upgrade/platform.sh" 2>/dev/null)
+[ -n "${REQUIRE_METADATA:-}" ] || REQUIRE_METADATA=0
+TRAILER_MAGIC=$(tail -c 16 "$IMAGE" 2>/dev/null | head -c 4 | hexdump -v -e '1/1 "%02x"')
+# -F on the plan's sysupgrade lines, set whenever the image carries no
+# trailer: harmless on a valid image (FORCE only widens the image-check gate,
+# sysupgrade:409) and the only way past "checkable, not acceptable".
+FORCE_FLAG=''
+METADATA_REFUSED=0
+if [ "$TRAILER_MAGIC" = 46577830 ]; then
+	row image.metadata "append-metadata trailer" "trailer present" PASS
+elif [ "$REQUIRE_METADATA" = 1 ]; then
+	row image.metadata "append-metadata trailer" "absent (rc 74, not forceable)" FAIL
+	METADATA_REFUSED=1
+	FORCE_FLAG=-F
+	err "this image has no fwtool trailer and REQUIRE_IMAGE_METADATA=1: the fwtool.sh in"
+	err "this tree rejects it with rc 74 before any write, and -F cannot override 74"
+	err "(forceable=0).  -F only helps if the box's own validator disagrees, which is"
+	err "what --execute asks with sysupgrade -T and -T -F.  Otherwise add 'append-metadata'."
 else
-	row image.metadata "no fwtool trailer (needs -F)" "tail is 0x00" PASS
+	row image.metadata "no trailer (board accepts -F)" "tail is 0x00" PASS
+	FORCE_FLAG=-F
 fi
 
 # ------------------------------------------------------------- 2. the device
@@ -236,15 +312,24 @@ cat /tmp/sysinfo/board_name
 echo "--- cmdline"; cat /proc/cmdline
 echo "--- mtd"; cat /proc/mtd
 echo "--- ubiinfo"; ubinfo /dev/ubi0 -a
-echo "--- env"; fw_printenv bootargs bootcmd 2>&1
+echo "--- env"; fw_printenv bootargs bootcmd loadaddr 2>&1
 echo "--- fitblk"
 strings -n 1 /sys/firmware/devicetree/base/chosen/rootdisk 2>/dev/null | head -1
 for d in /sys/class/mtd/mtd*/of_node/volumes/*/; do
 	printf "%s %s\n" "$(strings -n 1 "$d/phandle" 2>/dev/null | head -1)" "$(cat "$d/volname" 2>/dev/null)"
 done
 echo "--- slot"
-sha256sum /dev/ubi0_0
-dd if=/dev/ubi0_0 bs=1M 2>/dev/null | wc -c
+fit_id=
+for n in /sys/class/ubi/ubi0_*/name; do
+	vol=$(cat "$n" 2>/dev/null) || continue
+	[ "$vol" = fit ] || continue
+	fit_id=$(basename "$(dirname "$n")"); fit_id=${fit_id#ubi0_}
+done
+echo "fit_id ${fit_id:-missing}"
+if [ -n "$fit_id" ]; then
+	sha256sum "/dev/ubi0_$fit_id"
+	dd if="/dev/ubi0_$fit_id" bs=1M 2>/dev/null | wc -c
+fi
 echo "--- kexec"
 command -v kexec || echo none
 ' 2> "$WORK/ssh.err") || { err "cannot ssh $HOST"; head -3 "$WORK/ssh.err" >&2; exit $EXIT_CHECK; }
@@ -278,10 +363,33 @@ row bootenv.crc "a valid env to read from Linux" \
 	"$(grep -q 'Bad CRC' "$WORK/env.txt" && echo 'Bad CRC, using default environment' || echo 'CRC ok; bootargs readable')" SKIP
 row kexec.binary "absent (kexec path closed)" "$(sed -n '/^--- kexec$/,$p' "$WORK/probe.txt" | sed '1d')" SKIP
 
-SLOT_SHA=$(sed -n '/^--- slot$/{n;s/ .*//;p;q;}' "$WORK/probe.txt")
-SLOT_LEN=$(sed -n '/^--- slot$/{n;n;p;q;}' "$WORK/probe.txt" | awk '{ print $1 }')
-row rollback.source "current $VOL volume, hashed" "${SLOT_SHA:-unreadable} (${SLOT_LEN:-?} bytes)" \
-	$([ -n "$SLOT_SHA" ] && echo PASS || echo FAIL)
+# loadaddr is where boot_production puts the fit volume and where bootm
+# decompresses the kernel out of it.  The recovery kernel-1 is 42,663,936 B
+# (arm64 header image_size 0x28b0000) and loads at 0x80200000, so it expands to
+# 0x82ab0000; a FIT copy below that ends in "new format image overwritten -
+# must RESET the board to recover" (boot/bootm.c).  The production kernel ends
+# at 0x81166808, which is why the old 0x81800000 env booted production happily.
+# Read this back from the board, not from the tree: a box flashed before this
+# fix still carries the old env, and that is the box this plan would flash.
+BOOT_LOADADDR=$(awk '/^loadaddr=/ { print substr($0, 10); exit }' "$WORK/env.txt")
+RECOVERY_KERNEL_END=0x82ab0000
+LOADADDR_OK=0
+[ -n "$BOOT_LOADADDR" ] && [ "$((BOOT_LOADADDR + 0))" -ge "$((RECOVERY_KERNEL_END + 0))" ] && LOADADDR_OK=1
+row bootenv.loadaddr ">= 0x82ab0000 (recovery kernel end)" "${BOOT_LOADADDR:-unreadable}" \
+	$([ "$LOADADDR_OK" = 1 ] && echo PASS || echo FAIL)
+
+# The slot to hash is the volume named fit, and its id is 2 on this layout
+# (ubootenv 0, ubootenv2 1, fit 2, factory 3), never 0.  The probe derives the
+# id from /sys/class/ubi/ubi0_*/name; an empty answer means the read-only probe
+# could not find the volume, so no /dev path is built from it.
+FIT_ID=$(sed -n '/^--- slot$/{n;s/^fit_id //;p;q;}' "$WORK/probe.txt")
+[ "$FIT_ID" = missing ] && FIT_ID=
+row slot.fit.id "a UBI volume named fit" "ubi0_${FIT_ID:-absent}" $([ -n "$FIT_ID" ] && echo PASS || echo FAIL)
+SLOT_SHA=$(sed -n '/^--- slot$/{n;n;p;q;}' "$WORK/probe.txt" | awk '{ print $1 }')
+SLOT_LEN=$(sed -n '/^--- slot$/{n;n;n;p;q;}' "$WORK/probe.txt" | awk '{ print $1 }')
+[ "$SLOT_SHA" = "" ] && SLOT_SHA=
+row rollback.source "current fit volume ($VOL), hashed" "${SLOT_SHA:-unreadable} (${SLOT_LEN:-?} bytes)" \
+	$([ -n "$SLOT_SHA" ] && [ -n "$FIT_ID" ] && echo PASS || echo FAIL)
 
 # --------------------------------------------------------------- 3. the plan
 
@@ -289,6 +397,14 @@ DIR=${DIR:-/home/l1n/projects/.scratch/recovery/recovery-boot-$(date +%Y%m%d-%H%
 say ''
 if [ "$CHECK_FAILED" = 0 ]; then
 	say 'verdict: all preconditions hold, the plan below is runnable'
+elif [ "$EXECUTE" = 1 ] && [ "$METADATA_REFUSED" = 1 ] && [ "$CHECK_FAILED" -le 1 ]; then
+	# The only FAIL above is a prediction about the firmware this tree ships.
+	# --execute is about to ask the box itself (sysupgrade -T, then -T -F on
+	# the pushed copy), so the prediction loses to the device: clear it and
+	# let that probe stop the run.  A second FAILed row (slot, env, digest)
+	# still aborts here.
+	err 'verdict: this tree refuses the image (no fwtool trailer, rc 74); --execute will ask the device'
+	CHECK_FAILED=0
 else
 	err 'verdict: the plan cannot run as-is (a row above FAILed)'; exit $EXIT_CHECK
 fi
@@ -296,16 +412,22 @@ say ''
 say 'plan (each step is the exact command --execute would run):'
 say ' 0. restore point on this host, not tmpfs:'
 say "      mkdir -p $DIR"
-say "      ssh $HOST 'dd if=/dev/ubi0_0 bs=1M' > $DIR/fit-slot.bin   # sha256 $SLOT_SHA, $SLOT_LEN bytes"
+say "      ssh $HOST 'dd if=/dev/ubi0_${FIT_ID} bs=1M' > $DIR/fit-slot.bin   # sha256 $SLOT_SHA, $SLOT_LEN bytes"
 say "      ssh $HOST 'cat /proc/cmdline; cat /proc/mtd; ubinfo /dev/ubi0 -a; fw_printenv bootargs bootcmd' > $DIR/device.txt"
 say ' 1. push the image (device /tmp is tmpfs; 14 MiB fits; the box has no sftp-server):'
 say "      ssh $HOST 'rm -f /tmp/$IMG_NAME /tmp/$NAME'   # a killed push leaves a half file under the original name"
 say "      tar -C $IMG_DIR -cf - $IMG_NAME | ssh $HOST 'tar -C /tmp -xf - && mv -f /tmp/$IMG_NAME /tmp/$NAME'"
 say " 2. prove the pushed bytes: sha256sum /tmp/$NAME == $WANT"
-say ' 3. the image is checkable but not acceptable (no fwtool metadata), so -F is required:'
-say "      ssh $HOST 'sysupgrade -T /tmp/$NAME'   # expect 'Image check failed.'"
+say " 3. sysupgrade's own verdict, on the device, writing nothing:"
+if [ "$METADATA_REFUSED" = 1 ]; then
+	say "      ssh $HOST 'sysupgrade -T /tmp/$NAME'   # expect 'Image check failed.'; rc 74 if the box runs this tree, and -F does not help"
+elif [ "$FORCE_FLAG" = -F ]; then
+	say "      ssh $HOST 'sysupgrade -T /tmp/$NAME'   # expect 'Image check failed.'; -F is honoured (forceable=1)"
+else
+	say "      ssh $HOST 'sysupgrade -T /tmp/$NAME'   # expect no 'Image check failed.'; nothing to force"
+fi
 say ' 4. write it into the boot slot and reboot (the human decides):'
-say "      ssh $HOST 'sysupgrade -F -n /tmp/$NAME'"
+say "      ssh $HOST 'sysupgrade${FORCE_FLAG:+ $FORCE_FLAG} -n /tmp/$NAME'"
 say ' 5. after the reboot the box is the recovery image, running from RAM.'
 say ''
 say 'risk and rollback (read before step 4):'
@@ -323,8 +445,8 @@ say '    the chainloader prompt (ECNT>, U-Boot 2014.04-rc1 AXON 1.6) and loady a
 say '    8.56 kB/s = 28.1 min for 14.4 MB, measured, failed at 43% with'
 say '    "Retry 0: Timeout on sector ACK".  Do not plan on it under a console window.'
 say '  * restoring inside the recovery shell needs the volume recreated first:'
-say "    ubirmvol /dev/ubi0 -n 4; ubirmvol /dev/ubi0 -n 0; ubimkvol /dev/ubi0 -N fit -s $VOL_BYTES;"
-say '    ubimkvol /dev/ubi0 -N rootfs_data -m; ubiupdatevol /dev/ubi0_0 < fit-slot.bin'
+say "    ubirmvol /dev/ubi0 -N rootfs_data; ubirmvol /dev/ubi0 -N fit; ubimkvol /dev/ubi0 -N fit -s $VOL_BYTES;"
+say "    ubimkvol /dev/ubi0 -N rootfs_data -m; ubiupdatevol /dev/ubi0_${FIT_ID} < fit-slot.bin"
 say '  * this proves the image boots on the bootloader this box already has; the path'
 say '    issue #12 describes (tftpboot from the third-party console) stays untested,'
 say '    and so does the case where flash itself is the problem.'
@@ -336,7 +458,7 @@ say '    and so does the case where flash itself is the problem.'
 say ''
 say "execute: writing the restore point to $DIR first"
 mkdir -p "$DIR" || exit $EXIT_RESTORE
-( cd "$DIR" && ssh "$HOST" 'dd if=/dev/ubi0_0 bs=1M' > fit-slot.bin ) || exit $EXIT_RESTORE
+( cd "$DIR" && ssh "$HOST" "dd if=/dev/ubi0_${FIT_ID} bs=1M" > fit-slot.bin ) || exit $EXIT_RESTORE
 HAVE=$(sha256sum "$DIR/fit-slot.bin" | awk '{ print $1 }')
 GOT_BYTES=$(wc -c < "$DIR/fit-slot.bin" | awk '{ print $1 }')
 ssh "$HOST" 'cat /proc/cmdline; cat /proc/mtd; ubinfo /dev/ubi0 -a; fw_printenv bootargs bootcmd' > "$DIR/device.txt" 2>&1 || true
@@ -387,8 +509,30 @@ if [ "$CHECK_FAILED" != 0 ]; then
 fi
 
 say ''
-say 'flashing: sysupgrade -F -n (the box reboots into the recovery image)'
-ssh "$HOST" "sysupgrade -F -n /tmp/$NAME" || row sysupgrade "reboot issued" "command failed" FAIL
+say 'image check: sysupgrade -T on the pushed copy (-T writes nothing), and -T -F when -T rejects it'
+ssh "$HOST" "sysupgrade -T /tmp/$NAME" > "$WORK/sysupgrade-T.log" 2>&1
+TEST_RC=$?
+FORCED_RC=1
+if [ "$TEST_RC" != 0 ] && [ "$FORCE_FLAG" = -F ]; then
+	ssh "$HOST" "sysupgrade -T -F /tmp/$NAME" > "$WORK/sysupgrade-TF.log" 2>&1
+	FORCED_RC=$?
+fi
+if [ "$TEST_RC" = 0 ]; then
+	row sysupgrade.T 0 "$TEST_RC" PASS
+elif [ "$FORCE_FLAG" = -F ] && [ "$FORCED_RC" = 0 ]; then
+	row sysupgrade.T 0 "$TEST_RC (forceable: -F 0)" PASS
+else
+	row sysupgrade.T 0 "$TEST_RC" FAIL
+	ssh "$HOST" "rm -f /tmp/$NAME" 2>/dev/null || true
+	sed 's/^/    /' "$WORK/sysupgrade-T.log" >&2
+	[ -f "$WORK/sysupgrade-TF.log" ] && sed 's/^/    /' "$WORK/sysupgrade-TF.log" >&2
+	err 'sysupgrade rejected the pushed image and -F cannot override it; the slot is untouched'
+	exit $EXIT_IMAGE
+fi
+
+say ''
+say "flashing: sysupgrade${FORCE_FLAG:+ $FORCE_FLAG} -n (the box reboots into the recovery image)"
+ssh "$HOST" "sysupgrade${FORCE_FLAG:+ $FORCE_FLAG} -n /tmp/$NAME" || row sysupgrade "reboot issued" "command failed" FAIL
 say "if the box does not come back at 192.168.1.1: try http://192.168.0.1/ (web recovery,"
 say "PC 192.168.0.10/24) and upload $DIR/fit-slot.bin through /upload/firmware."
 exit 0
