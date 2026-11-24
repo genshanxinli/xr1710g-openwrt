@@ -1,15 +1,133 @@
 --- a/drivers/net/ethernet/airoha/airoha_npu.c
 +++ b/drivers/net/ethernet/airoha/airoha_npu.c
-@@ -203,7 +203,7 @@ static int __airoha_npu_send_msg(struct
+@@ -167,9 +167,28 @@
+ 	DECLARE_FLEX_ARRAY(u8, d);
+ };
+ 
+-static int __airoha_npu_send_msg(struct airoha_npu *npu, int func_id,
+-				 const void *data, int len, void *reply,
+-				 u16 reply_len)
++/* A mailbox round trip takes microseconds, so these bounds exist to give up on
++ * an NPU that stopped answering, not to wait for a slow one. The runtime
++ * callers already hold spin_lock_bh() here (station teardown under
++ * rcu_read_lock() in mt76, flow commit under BH disable in the PPE path), so
++ * the tight bound is what keeps a wedged NPU from stalling a CPU for most of
++ * a second. Probe-time setup keeps the generous bound: a slow firmware
++ * start-up there costs a failed boot instead of a hiccup.
++ */
++#define AIROHA_NPU_MBOX_POLL_US		100
++#define AIROHA_NPU_MBOX_TIMEOUT_US	(20 * USEC_PER_MSEC)
++#define AIROHA_NPU_MBOX_INIT_TIMEOUT_US	(500 * USEC_PER_MSEC)
++
++static u32 airoha_npu_mbox_timeout(gfp_t gfp)
++{
++	return gfpflags_allow_blocking(gfp) ? AIROHA_NPU_MBOX_INIT_TIMEOUT_US :
++					      AIROHA_NPU_MBOX_TIMEOUT_US;
++}
++
++static int
++__airoha_npu_send_msg_timeout(struct airoha_npu *npu, int func_id,
++			      const void *data, int len, void *reply,
++			      u16 reply_len, u32 timeout_us)
+ {
+ 	struct airoha_npu_core *core = &npu->cores[0]; /* FIXME: core */
+ 	u32 val, offset = 0;
+@@ -203,19 +222,46 @@
  	ret = regmap_read_poll_timeout_atomic(npu->regmap,
  					      REG_CR_MBQ0_CTRL(3) + offset,
  					      val, (val & MBOX_MSG_DONE),
--					      100, 1000 * MSEC_PER_SEC);
-+					      100, 500 * MSEC_PER_SEC);
- 	if (!ret && FIELD_GET(MBOX_MSG_STATUS, val) != NPU_MBOX_SUCCESS)
+-					      100, 1000 * USEC_PER_MSEC);
+-	if (!ret && FIELD_GET(MBOX_MSG_STATUS, val) != NPU_MBOX_SUCCESS)
++					      AIROHA_NPU_MBOX_POLL_US,
++					      timeout_us);
++	if (ret) {
++		dev_warn_ratelimited(npu->dev,
++				     "mailbox timed out after %u us (func %#x)\n",
++				     timeout_us, func_id);
++		goto out;
++	}
++
++	if (FIELD_GET(MBOX_MSG_STATUS, val) != NPU_MBOX_SUCCESS)
  		ret = -EINVAL;
  
-@@ -561,29 +561,55 @@ airoha_npu_wlan_set_reserved_memory(stru
+ 	/* Copy the trailing reply_len bytes of the response. */
+ 	if (!ret && reply)
+ 		memcpy(reply, core->buf + len - reply_len, reply_len);
+-
++out:
+ 	spin_unlock_bh(&core->lock);
+ 
+ 	return ret;
+ }
+ 
++static int __airoha_npu_send_msg(struct airoha_npu *npu, int func_id,
++				 const void *data, int len, void *reply,
++				 u16 reply_len)
++{
++	return __airoha_npu_send_msg_timeout(npu, func_id, data, len, reply,
++					     reply_len,
++					     AIROHA_NPU_MBOX_INIT_TIMEOUT_US);
++}
++
++/* Flow commits reach this from the PPE table under rcu_read_lock(), so they
++ * cannot sit in the mailbox for the probe-time budget.
++ */
++static int airoha_npu_send_msg_atomic(struct airoha_npu *npu, int func_id,
++				      void *data, int len)
++{
++	return __airoha_npu_send_msg_timeout(npu, func_id, data, len, data, len,
++					     AIROHA_NPU_MBOX_TIMEOUT_US);
++}
++
+ static int airoha_npu_send_msg(struct airoha_npu *npu, int func_id,
+ 			       void *data, int len)
+ {
+@@ -438,8 +484,8 @@
+ 	ppe_data->set_info.func_id = ppe2 ? PPE2_SRAM_SET_ENTRY
+ 					  : PPE_SRAM_SET_ENTRY;
+ 
+-	err = airoha_npu_send_msg(npu, NPU_FUNC_PPE, ppe_data,
+-				  sizeof(*ppe_data));
++	err = airoha_npu_send_msg_atomic(npu, NPU_FUNC_PPE, ppe_data,
++					 sizeof(*ppe_data));
+ 	if (err)
+ 		goto out;
+ 
+@@ -447,8 +493,8 @@
+ 	ppe_data->set_info.data = hash;
+ 	ppe_data->set_info.size = sizeof(u32);
+ 
+-	err = airoha_npu_send_msg(npu, NPU_FUNC_PPE, ppe_data,
+-				  sizeof(*ppe_data));
++	err = airoha_npu_send_msg_atomic(npu, NPU_FUNC_PPE, ppe_data,
++					 sizeof(*ppe_data));
+ out:
+ 	kfree(ppe_data);
+ 
+@@ -512,7 +558,9 @@
+ 	wlan_data->func_id = func_id;
+ 	memcpy(wlan_data->d, data, data_len);
+ 
+-	err = airoha_npu_send_msg(npu, NPU_FUNC_WIFI, wlan_data, len);
++	err = __airoha_npu_send_msg_timeout(npu, NPU_FUNC_WIFI, wlan_data,
++					    len, wlan_data, len,
++					    airoha_npu_mbox_timeout(gfp));
+ 	kfree(wlan_data);
+ 
+ 	return err;
+@@ -534,8 +582,9 @@
+ 	wlan_data->func_type = NPU_OP_GET;
+ 	wlan_data->func_id = func_id;
+ 
+-	err = __airoha_npu_send_msg(npu, NPU_FUNC_WIFI, wlan_data, len,
+-				    data, data_len);
++	err = __airoha_npu_send_msg_timeout(npu, NPU_FUNC_WIFI, wlan_data,
++					    len, data, data_len,
++					    airoha_npu_mbox_timeout(gfp));
+ 	kfree(wlan_data);
+ 
+ 	return err;
+@@ -561,29 +610,55 @@
  					sizeof(val), GFP_KERNEL);
  }
  
@@ -70,7 +188,7 @@
  	if (err)
  		return err;
  
-@@ -596,8 +622,8 @@ static int airoha_npu_wlan_init_memory(s
+@@ -596,8 +671,8 @@
  	}
  
  	cmd = WLAN_FUNC_SET_WAIT_IS_FORCE_TO_CPU;

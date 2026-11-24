@@ -1,6 +1,28 @@
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -542,6 +542,11 @@
+@@ -535,6 +535,21 @@
+ 			     LRO_RXQ_EN_MASK);
+ }
+ 
++/* LRO is one block per QDMA, not one per net_device: it merges every RX queue
++ * of that QDMA into a single stream, and the aggregate carries the L2 length,
++ * the source GDM and the DSA tag of whichever segment arrived first. Once two
++ * devices share a QDMA there is no way to attribute an aggregate back to the
++ * port it really came from, so the block may only be armed while the QDMA is
++ * private to a single device. On the XR1710G that leaves wan on QDMA1 (alone)
++ * with LRO, while QDMA0 -- cpu and lan2 -- never gets it.
++ */
++static bool airoha_dev_lro_is_blocked(struct airoha_gdm_dev *dev)
++{
++	struct airoha_qdma *qdma = airoha_qdma_deref(dev);
++
++	return qdma->users > 1 && qdma->lro_users;
++}
++
+ static void airoha_dev_lro_enable(struct airoha_gdm_dev *dev)
+ {
+ 	struct airoha_qdma *qdma = airoha_qdma_deref(dev);
+@@ -542,6 +557,11 @@
  	int qdma_id = qdma - &eth->qdma[0];
  	int i, lro_queue_index = 0;
  
@@ -12,7 +34,7 @@
  	if (airoha_fe_lro_is_enabled(eth, qdma_id))
  		return;
  
-@@ -569,6 +574,13 @@
+@@ -569,6 +589,13 @@
  	struct airoha_eth *eth = qdma->eth;
  	int qdma_id = qdma - &eth->qdma[0];
  
@@ -26,44 +48,46 @@
  	if (!airoha_fe_lro_is_enabled(eth, qdma_id))
  		return;
  
-@@ -2177,22 +2189,9 @@
+@@ -2177,23 +2204,15 @@
  	struct airoha_gdm_port *port = dev->port;
  	u32 pse_port = FE_PSE_PORT_PPE1;
  	struct airoha_qdma *qdma;
 -	int qdma_id, err;
-+	int err;
- 
+-
 -	/* LRO is configured on the QDMA and it is shared between all
 -	 * the devices using it. Refuse to open a second device on the
 -	 * same QDMA if LRO is enabled on any device sharing it or if
 -	 * this device has LRO enabled in its feature set.
 -	 */
- 	qdma = airoha_qdma_deref(dev);
+-	qdma = airoha_qdma_deref(dev);
 -	qdma_id = qdma - &qdma->eth->qdma[0];
--
++	int err;
+ 
 -	if (qdma->users > 1 && (airoha_fe_lro_is_enabled(qdma->eth, qdma_id) ||
 -				(netdev->features & NETIF_F_LRO))) {
 -		netdev_warn(netdev, "required to disable LRO on QDMA%d\n",
 -			    qdma_id);
--		return -EBUSY;
--	}
++	if (airoha_dev_lro_is_blocked(dev)) {
++		netdev_warn(netdev, "QDMA is shared, LRO cannot be used on it\n");
+ 		return -EBUSY;
+ 	}
  
++	qdma = airoha_qdma_deref(dev);
++
  	netif_tx_start_all_queues(netdev);
  	err = airoha_set_vip_for_gdm_port(dev, true);
-@@ -2585,13 +2584,6 @@
- static netdev_features_t airoha_dev_fix_features(struct net_device *netdev,
- 						 netdev_features_t features)
- {
--	struct airoha_gdm_dev *dev = netdev_priv(netdev);
--	struct airoha_qdma *qdma;
--
--	qdma = airoha_qdma_deref(dev);
--	if (qdma->users > 1)
--		features &= ~NETIF_F_LRO;
--
- 	return features;
- }
+ 	if (err)
+@@ -2588,6 +2607,10 @@
+ 	struct airoha_gdm_dev *dev = netdev_priv(netdev);
+ 	struct airoha_qdma *qdma;
  
++	/* The LRO block aggregates per QDMA, so on a shared QDMA the merged skb
++	 * cannot be attributed to the device that owns the ingress descriptor.
++	 * Mask the feature rather than let it be armed and misdelivered.
++	 */
+ 	qdma = airoha_qdma_deref(dev);
+ 	if (qdma->users > 1)
+ 		features &= ~NETIF_F_LRO;
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
 @@ -576,6 +576,11 @@

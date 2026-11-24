@@ -6,7 +6,7 @@
  					      REG_CR_MBQ0_CTRL(3) + offset,
  					      val, (val & MBOX_MSG_DONE),
 -					      100, 100 * MSEC_PER_SEC);
-+					      100, 1000 * MSEC_PER_SEC);
++					      100, 1000 * USEC_PER_MSEC);
  	if (!ret && FIELD_GET(MBOX_MSG_STATUS, val) != NPU_MBOX_SUCCESS)
  		ret = -EINVAL;
  

@@ -18,7 +18,8 @@ in a conntrack extension while the connection is not offloaded, and mark the
 connection when a direction shows up on the peer direction's egress port.
 Such connections are never offloaded. A client roaming between two ports of
 the same bridge shows up on a new ingress port as well, but never on the
-peer's egress port, so a roam does not mark the connection. TCP is only
+peer's egress port, sighted before the direction that shows up on it, so a
+roam does not mark the connection. TCP is only
 offloaded once established, so both crossings of the handshake have been
 recorded by then. UDP is offloaded once a reply was seen, so the first packet
 made all its crossings.
@@ -31,9 +32,16 @@ mid-stream) are not offloaded either.
 
 Signed-off-by: Tao Gong <gongtao0607@gmail.com>
 ---
+ include/net/netfilter/nf_conntrack_brxing.h | 49 +++++++++++++++++++++++++++++++++++++++++++++++++
+ include/net/netfilter/nf_conntrack_extend.h | 3 +++
+ net/netfilter/nf_conntrack_extend.c         | 9 ++++++++ -
+ net/netfilter/nf_flow_table_inet.c          | 13 +++++++++++++
+ net/netfilter/nft_flow_offload.c            | 119 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 5 files changed, 192 insertions(+), 1 deletions(-)
+
 --- /dev/null
 +++ b/include/net/netfilter/nf_conntrack_brxing.h
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,49 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +#ifndef _NF_CONNTRACK_BRXING_H
 +#define _NF_CONNTRACK_BRXING_H
@@ -54,13 +62,22 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
 + * the router's other port, which is the port the reply path left through on
 + * its way to the router. Record the first ingress and egress port per
 + * direction; a new ingress port marks the connection as crossing more than
-+ * once only when it is the peer direction's recorded egress port. Ingress
-+ * alone is not enough: a client roaming between two ports of the same bridge
-+ * also shows up on a new ingress port, without anything crossing twice.
++ * once only when it is the peer direction's recorded egress port and the peer
++ * direction was sighted first (the order bytes below). Ingress alone is not
++ * enough: a client roaming between two ports of the same bridge also shows up
++ * on a new ingress port, without anything crossing twice, and a reply leaving
++ * through the port a station roamed to records that port after the first
++ * ingress it would be compared with, so it is no evidence either.
 + */
 +struct nf_conn_brxing {
 +	int	iif[IP_CT_DIR_MAX];
 +	int	outif[IP_CT_DIR_MAX];
++	/* Sighting order of each direction: 1 for the direction recorded
++	 * first, 2 for the one recorded second. The discriminator needs it
++	 * because a port the peer direction recorded after this direction
++	 * was first sighted cannot be where this direction entered.
++	 */
++	u8	order[IP_CT_DIR_MAX];
 +	bool	multi;
 +};
 +
@@ -177,7 +194,7 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
  
  struct nft_flow_offload {
  	struct nft_flowtable	*flowtable;
-@@ -47,12 +49,107 @@
+@@ -47,12 +49,123 @@
  	spin_unlock_bh(&ct->lock);
  }
  
@@ -231,7 +248,15 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
 +
 +	old = cmpxchg(&rec->iif[dir], 0, iif);
 +	cmpxchg(&rec->outif[dir], 0, oif);
-+	if (!old || old == iif || READ_ONCE(rec->multi))
++	if (!old) {
++		/* Stamp this direction after its port pair is in place: the
++		 * discriminator below compares two complete sightings.
++		 */
++		WRITE_ONCE(rec->order[dir], 1 + !!READ_ONCE(rec->order[peer]));
++		return;
++	}
++
++	if (old == iif || READ_ONCE(rec->multi))
 +		return;
 +
 +	/* A new ingress port is a second crossing only if it is where the
@@ -240,6 +265,14 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
 +	 * without moving anywhere near the peer's egress port.
 +	 */
 +	if (iif != READ_ONCE(rec->outif[peer]))
++		return;
++
++	/* ... and only if that peer direction was sighted before this one. A
++	 * station that roams before its first reply makes the reply leave
++	 * through the new port, which is recorded after the first ingress
++	 * compared here: a port recorded later cannot be where we came in.
++	 */
++	if (READ_ONCE(rec->order[peer]) >= READ_ONCE(rec->order[dir]))
 +		return;
 +
 +	WRITE_ONCE(rec->multi, true);
@@ -285,7 +318,7 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
  	struct tcphdr _tcph, *tcph = NULL;
  	struct nf_flow_route route = {};
  	enum ip_conntrack_info ctinfo;
-@@ -68,6 +165,9 @@
+@@ -68,6 +181,9 @@
  	if (!ct)
  		goto out;
  
@@ -295,7 +328,7 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
  	switch (ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple.dst.protonum) {
  	case IPPROTO_TCP:
  		tcph = skb_header_pointer(pkt->skb, nft_thoff(pkt),
-@@ -102,6 +202,9 @@
+@@ -102,6 +218,9 @@
  	if (!nf_ct_is_confirmed(ct))
  		goto out;
  

@@ -27,9 +27,9 @@ PATCH_74 = Path(
         / "99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch",
     )
 )
-PATCH_73 = (
+PATCH_74_PRISTINE = (
     REPO_ROOT
-    / "target/linux/airoha/patches-7.3"
+    / "target/linux/airoha/patches-7.4"
     / "99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch"
 )
 CONDITION = "if (act->police.peakrate_bytes_ps || act->police.avrate ||"
@@ -90,13 +90,10 @@ class MatchallPoliceMtuGate(unittest.TestCase):
     def test_74_patch_drops_mtu_from_the_matchall_guard(self):
         self.assert_patch_drops_mtu(PATCH_74)
 
-    def test_73_patch_drops_mtu_from_the_matchall_guard(self):
-        self.assert_patch_drops_mtu(PATCH_73)
-
     def test_putting_mtu_back_turns_the_check_red(self):
-        # Use 7.3 so the red proof still runs when MATCHALL_POLICE_PATCH
-        # points the 7.4 test at a damaged copy.
-        text = PATCH_73.read_text()
+        # Read the pristine 7.4 patch so the red proof still runs when
+        # MATCHALL_POLICE_PATCH points the guard test at a damaged copy.
+        text = PATCH_74_PRISTINE.read_text()
         mutated = text.replace(
             "+\t    act->police.overhead) {",
             "+\t    act->police.overhead || act->police.mtu) {",

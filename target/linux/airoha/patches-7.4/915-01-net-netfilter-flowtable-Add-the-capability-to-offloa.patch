@@ -1,16 +1,12 @@
- include/net/netfilter/nf_flow_table.h | 2 ++
- net/netfilter/nf_flow_table_ip.c | 14 ++++++++++++++
- net/netfilter/nft_flow_offload.c | 25 +++++++++++++++++++++++++
- net/netfilter/nf_flow_table_offload.c | 5 +++++
- 4 files changed, 46 insertions(+), 0 deletions(-)
- include/net/netfilter/nf_flow_table.h | 2 ++
- net/netfilter/nf_flow_table_ip.c | 14 ++++++++++++++
- net/netfilter/nft_flow_offload.c | 25 +++++++++++++++++++++++++
- net/netfilter/nf_flow_table_offload.c | 5 +++++
- 4 files changed, 46 insertions(+), 0 deletions(-)
+ include/net/netfilter/nf_flow_table.h |    3 +++
+ net/netfilter/nf_flow_table_ip.c      |   15 +++++++++++++++
+ net/netfilter/nf_flow_table_offload.c |    7 +++++++
+ net/netfilter/nft_flow_offload.c      |   26 ++++++++++++++++++++++++++
+ 4 files changed, 51 insertions(+)
+
 --- a/include/net/netfilter/nf_flow_table.h
 +++ b/include/net/netfilter/nf_flow_table.h
-@@ -29,6 +29,7 @@ struct nf_flow_key {
+@@ -30,6 +30,7 @@
  		struct flow_dissector_key_ipv4_addrs	ipv4;
  		struct flow_dissector_key_ipv6_addrs	ipv6;
  	};
@@ -18,17 +14,26 @@
  	struct flow_dissector_key_keyid			enc_key_id;
  	union {
  		struct flow_dissector_key_ipv4_addrs	enc_ipv4;
-@@ -169,6 +170,7 @@ struct flow_offload_tuple {
+@@ -170,6 +171,8 @@
  					tun_num:2,
  					in_vlan_ingress:2;
  	u16				mtu;
-+	u8				dscp;
++	u8				dscp:6,
++					dscp_valid:1;
  	u32				dst_cookie;
  	struct dst_entry		*dst_cache;
  
 --- a/net/netfilter/nf_flow_table_ip.c
 +++ b/net/netfilter/nf_flow_table_ip.c
-@@ -513,6 +513,7 @@ static int nf_flow_offload_forward(struc
+@@ -9,6 +9,7 @@
+ #include <linux/netdevice.h>
+ #include <linux/if_ether.h>
+ #include <linux/if_vlan.h>
++#include <net/dsfield.h>
+ #include <net/gre.h>
+ #include <net/gso.h>
+ #include <net/ip.h>
+@@ -513,6 +514,7 @@
  	struct flow_offload *flow;
  	unsigned int thoff, mtu;
  	struct iphdr *iph;
@@ -36,12 +41,12 @@
  
  	dir = tuplehash->tuple.dir;
  	flow = container_of(tuplehash, struct flow_offload, tuplehash[dir]);
-@@ -547,6 +548,12 @@ static int nf_flow_offload_forward(struc
+@@ -552,6 +554,12 @@
  	iph = ip_hdr(skb);
  	nf_flow_nat_ip(flow, skb, thoff, dir, iph);
  
 +	dscp = FIELD_GET(INET_DSCP_MASK, ipv4_get_dsfield(iph));
-+	if (tuplehash->tuple.dscp != dscp)
++	if (tuplehash->tuple.dscp_valid && tuplehash->tuple.dscp != dscp)
 +		ipv4_change_dsfield(iph, INET_ECN_MASK,
 +				    FIELD_PREP(INET_DSCP_MASK,
 +					       tuplehash->tuple.dscp));
@@ -49,7 +54,7 @@
  	ip_decrease_ttl(iph);
  	skb_clear_tstamp(skb);
  
-@@ -1150,6 +1157,7 @@ static int nf_flow_offload_ipv6_forward(
+@@ -1155,6 +1163,7 @@
  	struct flow_offload *flow;
  	unsigned int thoff, mtu;
  	struct ipv6hdr *ip6h;
@@ -57,12 +62,12 @@
  
  	dir = tuplehash->tuple.dir;
  	flow = container_of(tuplehash, struct flow_offload, tuplehash[dir]);
-@@ -1183,6 +1191,12 @@ static int nf_flow_offload_ipv6_forward(
+@@ -1193,6 +1202,12 @@
  	ip6h = ipv6_hdr(skb);
  	nf_flow_nat_ipv6(flow, skb, dir, ip6h);
  
 +	dscp = FIELD_GET(INET_DSCP_MASK, ipv6_get_dsfield(ip6h));
-+	if (tuplehash->tuple.dscp != dscp)
++	if (tuplehash->tuple.dscp_valid && tuplehash->tuple.dscp != dscp)
 +		ipv6_change_dsfield(ip6h, INET_ECN_MASK,
 +				    FIELD_PREP(INET_DSCP_MASK,
 +					       tuplehash->tuple.dscp));
@@ -72,7 +77,7 @@
  
 --- a/net/netfilter/nft_flow_offload.c
 +++ b/net/netfilter/nft_flow_offload.c
-@@ -9,6 +9,7 @@
+@@ -10,6 +10,7 @@
  #include <linux/spinlock.h>
  #include <linux/netfilter/nf_conntrack_common.h>
  #include <linux/netfilter/nf_tables.h>
@@ -80,7 +85,7 @@
  #include <net/ip.h>
  #include <net/flow.h>
  #include <net/netfilter/nf_tables.h>
-@@ -22,6 +23,27 @@ struct nft_flow_offload {
+@@ -23,6 +24,29 @@
  	struct nft_flowtable	*flowtable;
  };
  
@@ -95,10 +100,12 @@
 +	case htons(ETH_P_IP):
 +		tuple->dscp = FIELD_GET(INET_DSCP_MASK,
 +					ipv4_get_dsfield(ip_hdr(skb)));
++		tuple->dscp_valid = 1;
 +		break;
 +	case htons(ETH_P_IPV6):
 +		tuple->dscp = FIELD_GET(INET_DSCP_MASK,
 +					ipv6_get_dsfield(ipv6_hdr(skb)));
++		tuple->dscp_valid = 1;
 +		break;
 +	default:
 +		break;
@@ -108,19 +115,18 @@
  static bool nft_flow_offload_skip(struct sk_buff *skb, int family)
  {
  	if (skb_sec_path(skb))
-@@ -207,6 +229,9 @@ static void nft_flow_offload_eval(const
+@@ -266,6 +290,8 @@
  	if (!flow)
  		goto err_flow_alloc;
  
 +	nft_flow_set_dscp(pkt, flow, dir);
-+	nft_flow_set_dscp(pkt, flow, !dir);
 +
  	flow_offload_route_init(flow, &route);
  	if (tcph)
  		flow_offload_ct_tcp(ct);
 --- a/net/netfilter/nf_flow_table_offload.c
 +++ b/net/netfilter/nf_flow_table_offload.c
-@@ -105,6 +105,7 @@ static int nf_flow_rule_match(struct nf_
+@@ -105,6 +105,7 @@
  	NF_FLOW_DISSECTOR(match, FLOW_DISSECTOR_KEY_BASIC, basic);
  	NF_FLOW_DISSECTOR(match, FLOW_DISSECTOR_KEY_IPV4_ADDRS, ipv4);
  	NF_FLOW_DISSECTOR(match, FLOW_DISSECTOR_KEY_IPV6_ADDRS, ipv6);
@@ -128,13 +134,15 @@
  	NF_FLOW_DISSECTOR(match, FLOW_DISSECTOR_KEY_TCP, tcp);
  	NF_FLOW_DISSECTOR(match, FLOW_DISSECTOR_KEY_PORTS, tp);
  
-@@ -175,6 +176,10 @@ static int nf_flow_rule_match(struct nf_
+@@ -175,6 +176,12 @@
  	match->dissector.used_keys |= BIT_ULL(key->control.addr_type);
  	mask->basic.n_proto = 0xffff;
  
-+	key->ip.tos = FIELD_PREP(INET_DSCP_MASK, tuple->dscp);
-+	mask->ip.tos = 0xff;
-+	match->dissector.used_keys |= BIT_ULL(FLOW_DISSECTOR_KEY_IP);
++	if (tuple->dscp_valid) {
++		key->ip.tos = FIELD_PREP(INET_DSCP_MASK, tuple->dscp);
++		mask->ip.tos = 0xff;
++		match->dissector.used_keys |= BIT_ULL(FLOW_DISSECTOR_KEY_IP);
++	}
 +
  	switch (tuple->l4proto) {
  	case IPPROTO_TCP:

@@ -23,12 +23,22 @@ group, so the empty ppe/meter dump is not read as a gap.
 The 7.4 and 7.3 queues apply this with -F0 and no fuzz.  Not run on a device:
 the per-ring mode readback still needs one capture on r38242+.
 
+The dump reads the TRTCM parameter window, whose index and value registers
+are shared with every writer of the same meter.  Give the window one
+mutex per device and take it around each index/value navigation, so a
+dump taken while tc re-arms the meter reads a whole parameter instead of
+one half of the next one's.
+
 Signed-off-by: OpenWrt <openwrt@example.org>
 ---
 
+ drivers/net/ethernet/airoha/airoha_eth.c | 249 +++++++++++++++++++++++++------
+ drivers/net/ethernet/airoha/airoha_eth.h |  16 ++
+ 2 files changed, 219 insertions(+), 46 deletions(-)
+
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -753,6 +753,14 @@
+@@ -782,6 +782,14 @@
  }
  
  #ifdef CONFIG_DEBUG_FS
@@ -43,7 +53,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static int airoha_pse_debugfs_show(struct seq_file *m, void *private)
  {
  	struct airoha_eth *eth = m->private;
-@@ -906,6 +914,71 @@
+@@ -934,6 +942,71 @@
  }
  DEFINE_SHOW_ATTRIBUTE(airoha_qdma_debugfs_tx_ring_hist);
  
@@ -115,7 +125,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static void airoha_qdma_debugfs_init(struct airoha_eth *eth)
  {
  	eth->qdma_debugfs_dir = debugfs_create_dir("qdma", NULL);
-@@ -913,6 +986,8 @@
+@@ -941,6 +1014,8 @@
  			    &airoha_qdma_debugfs_napi_weight_fops);
  	debugfs_create_file("tx_ring_hist", 0444, eth->qdma_debugfs_dir, eth,
  			    &airoha_qdma_debugfs_tx_ring_hist_fops);
@@ -124,7 +134,275 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  }
  #else
  static void airoha_pse_debugfs_init(struct airoha_eth *eth) {}
-@@ -3911,6 +3986,19 @@
+@@ -3602,9 +3677,9 @@
+ 	}
+ }
+ 
+-static int airoha_qdma_get_rl_param(struct airoha_qdma *qdma, int queue_id,
+-				    u32 addr, enum trtcm_param_type param,
+-				    u32 *val_low, u32 *val_high)
++static int __airoha_qdma_get_rl_param(struct airoha_qdma *qdma, int queue_id,
++				      u32 addr, enum trtcm_param_type param,
++				      u32 *val_low, u32 *val_high)
+ {
+ 	u32 idx = QDMA_METER_IDX(queue_id), group = QDMA_METER_GROUP(queue_id);
+ 	u32 val, config = FIELD_PREP(RATE_LIMIT_PARAM_TYPE_MASK, param) |
+@@ -3625,9 +3700,32 @@
+ 	return 0;
+ }
+ 
+-static int airoha_qdma_set_rl_param(struct airoha_qdma *qdma, int queue_id,
++/* The TRTCM parameter window is written by two paths that can run at the
++ * same time: tc programming the meter from process context, and the debugfs
++ * dump above reading the same registers.  Both navigate it the same way --
++ * write the index into CFG_PARAM, then use the value/data registers -- so one
++ * window operation has to own the window start to finish.
++ */
++#ifdef CONFIG_DEBUG_FS
++/* Only the qdma/rx_meter dump reads outside the rate-limit paths. */
++static int airoha_qdma_get_rl_param(struct airoha_qdma *qdma, int queue_id,
+ 				    u32 addr, enum trtcm_param_type param,
+-				    u32 val)
++				    u32 *val_low, u32 *val_high)
++{
++	int err;
++
++	mutex_lock(&qdma->eth->trtcm_lock);
++	err = __airoha_qdma_get_rl_param(qdma, queue_id, addr, param,
++					 val_low, val_high);
++	mutex_unlock(&qdma->eth->trtcm_lock);
++
++	return err;
++}
++#endif
++
++static int __airoha_qdma_set_rl_param(struct airoha_qdma *qdma, int queue_id,
++				      u32 addr, enum trtcm_param_type param,
++				      u32 val)
+ {
+ 	u32 idx = QDMA_METER_IDX(queue_id), group = QDMA_METER_GROUP(queue_id);
+ 	u32 config = RATE_LIMIT_PARAM_RW_MASK |
+@@ -3650,15 +3748,21 @@
+ 	u32 val;
+ 	int err;
+ 
+-	err = airoha_qdma_get_rl_param(qdma, queue_id, addr, TRTCM_MISC_MODE,
+-				       &val, NULL);
+-	if (err)
+-		return err;
+-
+-	val = enable ? val | enable_mask : val & ~enable_mask;
++	/* Read the mode and write it back under one lock: a reader of the
++	 * parameter between the two would cost the update, not just see a
++	 * stale value.
++	 */
++	mutex_lock(&qdma->eth->trtcm_lock);
++	err = __airoha_qdma_get_rl_param(qdma, queue_id, addr, TRTCM_MISC_MODE,
++					 &val, NULL);
++	if (!err) {
++		val = enable ? val | enable_mask : val & ~enable_mask;
++		err = __airoha_qdma_set_rl_param(qdma, queue_id, addr,
++						 TRTCM_MISC_MODE, val);
++	}
++	mutex_unlock(&qdma->eth->trtcm_lock);
+ 
+-	return airoha_qdma_set_rl_param(qdma, queue_id, addr, TRTCM_MISC_MODE,
+-					val);
++	return err;
+ }
+ 
+ static int airoha_qdma_set_rl_token_bucket(struct airoha_qdma *qdma,
+@@ -3668,21 +3772,28 @@
+ 	u32 val, config, tick, unit, rate, rate_frac;
+ 	int err;
+ 
+-	err = airoha_qdma_get_rl_param(qdma, queue_id, REG_INGRESS_TRTCM_CFG,
+-				       TRTCM_MISC_MODE, &config, NULL);
+-	if (err)
++	mutex_lock(&qdma->eth->trtcm_lock);
++	err = __airoha_qdma_get_rl_param(qdma, queue_id, REG_INGRESS_TRTCM_CFG,
++					 TRTCM_MISC_MODE, &config, NULL);
++	if (err) {
++		mutex_unlock(&qdma->eth->trtcm_lock);
+ 		return err;
++	}
+ 
+ 	val = airoha_qdma_rr(qdma, REG_INGRESS_TRTCM_CFG);
+ 	tick = FIELD_GET(INGRESS_FAST_TICK_MASK, val);
+ 	if (config & TRTCM_TICK_SEL)
+ 		tick *= FIELD_GET(INGRESS_SLOW_TICK_RATIO_MASK, val);
+-	if (!tick)
++	if (!tick) {
++		mutex_unlock(&qdma->eth->trtcm_lock);
+ 		return -EINVAL;
++	}
+ 
+ 	unit = (config & TRTCM_PKT_MODE) ? 1000000 / tick : 8000 / tick;
+-	if (!unit)
++	if (!unit) {
++		mutex_unlock(&qdma->eth->trtcm_lock);
+ 		return -EINVAL;
++	}
+ 
+ 	rate = rate_val / unit;
+ 	rate_frac = rate_val % unit;
+@@ -3690,18 +3801,23 @@
+ 	rate = FIELD_PREP(TRTCM_TOKEN_RATE_MASK, rate) |
+ 	       FIELD_PREP(TRTCM_TOKEN_RATE_FRACTION_MASK, rate_frac);
+ 
+-	err = airoha_qdma_set_rl_param(qdma, queue_id, REG_INGRESS_TRTCM_CFG,
+-				       TRTCM_TOKEN_RATE_MODE, rate);
+-	if (err)
++	err = __airoha_qdma_set_rl_param(qdma, queue_id, REG_INGRESS_TRTCM_CFG,
++					 TRTCM_TOKEN_RATE_MODE, rate);
++	if (err) {
++		mutex_unlock(&qdma->eth->trtcm_lock);
+ 		return err;
++	}
+ 
+ 	val = bucket_size;
+ 	if (!(config & TRTCM_PKT_MODE))
+ 		val = max_t(u32, val, MIN_TOKEN_SIZE);
+ 	val = min_t(u32, __fls(val), MAX_TOKEN_SIZE_OFFSET);
+ 
+-	return airoha_qdma_set_rl_param(qdma, queue_id, REG_INGRESS_TRTCM_CFG,
+-					TRTCM_BUCKETSIZE_SHIFT_MODE, val);
++	err = __airoha_qdma_set_rl_param(qdma, queue_id, REG_INGRESS_TRTCM_CFG,
++					 TRTCM_BUCKETSIZE_SHIFT_MODE, val);
++	mutex_unlock(&qdma->eth->trtcm_lock);
++
++	return err;
+ }
+ 
+ static int airoha_qdma_init_rl_config(struct airoha_qdma *qdma, int queue_id,
+@@ -3721,10 +3837,10 @@
+ 					 tick_sel, TRTCM_TICK_SEL);
+ }
+ 
+-static int airoha_qdma_get_trtcm_param(struct airoha_qdma *qdma, int channel,
+-				       u32 addr, enum trtcm_param_type param,
+-				       enum trtcm_mode_type mode,
+-				       u32 *val_low, u32 *val_high)
++static int __airoha_qdma_get_trtcm_param(struct airoha_qdma *qdma, int channel,
++					 u32 addr, enum trtcm_param_type param,
++					 enum trtcm_mode_type mode,
++					 u32 *val_low, u32 *val_high)
+ {
+ 	u32 idx = QDMA_METER_IDX(channel), group = QDMA_METER_GROUP(channel);
+ 	u32 val, config = FIELD_PREP(TRTCM_PARAM_TYPE_MASK, param) |
+@@ -3746,9 +3862,9 @@
+ 	return 0;
+ }
+ 
+-static int airoha_qdma_set_trtcm_param(struct airoha_qdma *qdma, int channel,
+-				       u32 addr, enum trtcm_param_type param,
+-				       enum trtcm_mode_type mode, u32 val)
++static int __airoha_qdma_set_trtcm_param(struct airoha_qdma *qdma, int channel,
++					 u32 addr, enum trtcm_param_type param,
++					 enum trtcm_mode_type mode, u32 val)
+ {
+ 	u32 idx = QDMA_METER_IDX(channel), group = QDMA_METER_GROUP(channel);
+ 	u32 config = TRTCM_PARAM_RW_MASK |
+@@ -3775,8 +3891,8 @@
+ 				      true, qdma, REG_TRTCM_CFG_PARAM(addr)))
+ 			continue;
+ 
+-		if (airoha_qdma_get_trtcm_param(qdma, channel, addr, param,
+-						mode, &data, NULL))
++		if (__airoha_qdma_get_trtcm_param(qdma, channel, addr, param,
++						  mode, &data, NULL))
+ 			continue;
+ 
+ 		if (data == val)
+@@ -3791,15 +3907,22 @@
+ 					bool enable, u32 enable_mask)
+ {
+ 	u32 val;
++	int err;
+ 
+-	if (airoha_qdma_get_trtcm_param(qdma, channel, addr, TRTCM_MISC_MODE,
+-					mode, &val, NULL))
++	mutex_lock(&qdma->eth->trtcm_lock);
++	if (__airoha_qdma_get_trtcm_param(qdma, channel, addr, TRTCM_MISC_MODE,
++					  mode, &val, NULL)) {
++		mutex_unlock(&qdma->eth->trtcm_lock);
+ 		return -EINVAL;
++	}
+ 
+ 	val = enable ? val | enable_mask : val & ~enable_mask;
+ 
+-	return airoha_qdma_set_trtcm_param(qdma, channel, addr, TRTCM_MISC_MODE,
+-					   mode, val);
++	err = __airoha_qdma_set_trtcm_param(qdma, channel, addr,
++					    TRTCM_MISC_MODE, mode, val);
++	mutex_unlock(&qdma->eth->trtcm_lock);
++
++	return err;
+ }
+ 
+ static int airoha_qdma_set_trtcm_token_bucket(struct airoha_qdma *qdma,
+@@ -3810,20 +3933,27 @@
+ 	u32 val, config, tick, unit, rate, rate_frac;
+ 	int err;
+ 
+-	if (airoha_qdma_get_trtcm_param(qdma, channel, addr, TRTCM_MISC_MODE,
+-					mode, &config, NULL))
++	mutex_lock(&qdma->eth->trtcm_lock);
++	if (__airoha_qdma_get_trtcm_param(qdma, channel, addr, TRTCM_MISC_MODE,
++					  mode, &config, NULL)) {
++		mutex_unlock(&qdma->eth->trtcm_lock);
+ 		return -EINVAL;
++	}
+ 
+ 	val = airoha_qdma_rr(qdma, addr);
+ 	tick = FIELD_GET(INGRESS_FAST_TICK_MASK, val);
+ 	if (config & TRTCM_TICK_SEL)
+ 		tick *= FIELD_GET(INGRESS_SLOW_TICK_RATIO_MASK, val);
+-	if (!tick)
++	if (!tick) {
++		mutex_unlock(&qdma->eth->trtcm_lock);
+ 		return -EINVAL;
++	}
+ 
+ 	unit = (config & TRTCM_PKT_MODE) ? 1000000 / tick : 8000 / tick;
+-	if (!unit)
++	if (!unit) {
++		mutex_unlock(&qdma->eth->trtcm_lock);
+ 		return -EINVAL;
++	}
+ 
+ 	rate = rate_val / unit;
+ 	rate_frac = rate_val % unit;
+@@ -3831,17 +3961,22 @@
+ 	rate = FIELD_PREP(TRTCM_TOKEN_RATE_MASK, rate) |
+ 	       FIELD_PREP(TRTCM_TOKEN_RATE_FRACTION_MASK, rate_frac);
+ 
+-	err = airoha_qdma_set_trtcm_param(qdma, channel, addr,
+-					  TRTCM_TOKEN_RATE_MODE, mode, rate);
+-	if (err)
++	err = __airoha_qdma_set_trtcm_param(qdma, channel, addr,
++					    TRTCM_TOKEN_RATE_MODE, mode, rate);
++	if (err) {
++		mutex_unlock(&qdma->eth->trtcm_lock);
+ 		return err;
++	}
+ 
+ 	val = max_t(u32, bucket_size, MIN_TOKEN_SIZE);
+ 	val = min_t(u32, __fls(val), MAX_TOKEN_SIZE_OFFSET);
+ 
+-	return airoha_qdma_set_trtcm_param(qdma, channel, addr,
+-					   TRTCM_BUCKETSIZE_SHIFT_MODE,
+-					   mode, val);
++	err = __airoha_qdma_set_trtcm_param(qdma, channel, addr,
++					    TRTCM_BUCKETSIZE_SHIFT_MODE,
++					    mode, val);
++	mutex_unlock(&qdma->eth->trtcm_lock);
++
++	return err;
+ }
+ 
+ static int airoha_qdma_set_tx_rate_limit(struct net_device *netdev,
+@@ -3955,6 +4090,19 @@
  	return err;
  }
  
@@ -144,7 +422,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static int airoha_qdma_set_rx_meter(struct airoha_gdm_dev *dev,
  				    u32 rate, u32 bucket_size,
  				    enum trtcm_unit_type unit_type)
-@@ -3934,6 +4022,14 @@
+@@ -3978,6 +4126,14 @@
  			return err;
  	}
  
@@ -159,9 +437,17 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	return 0;
  }
  
+@@ -4823,6 +4979,7 @@
+ 	strscpy(eth->napi_dev->name, "qdma_eth", sizeof(eth->napi_dev->name));
+ 	platform_set_drvdata(pdev, eth);
+ 	mutex_init(&eth->pse_q_lock);
++	mutex_init(&eth->trtcm_lock);
+ 
+ 	err = airoha_hw_init(pdev, eth);
+ 	if (err)
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -743,6 +743,14 @@
+@@ -744,6 +744,14 @@
  	 * port-derived channel.
  	 */
  	u64 tx_ring_hash_fallback;
@@ -176,3 +462,18 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  };
  
  enum airoha_dev_flags {
+@@ -897,6 +905,14 @@
+ 	 */
+ 	struct mutex pse_q_lock;
+ 
++	/* Serialises the QDMA TRTCM parameter window: its index and value
++	 * registers are navigated by the tc rate-limit paths and by the
++	 * qdma/rx_meter dump, and one window operation has to own both.  One
++	 * lock for the whole device, as every writer reaches it from process
++	 * context and no path takes it twice.
++	 */
++	struct mutex trtcm_lock;
++
+ 	struct airoha_npu __rcu *npu;
+ 
+ 	struct airoha_ppe *ppe;

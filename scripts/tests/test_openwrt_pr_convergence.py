@@ -296,7 +296,7 @@ class KernelTest(unittest.TestCase):
     def test_998_still_hides_the_pinctrl_error(self):
         # The row says `998` is not upstreamable as-is. This asserts the debt is
         # still there, so nobody "converges" by quietly keeping it.
-        patch = AIROHA / "patches-7.3/998-silence-PHY-LED-pinctrl-error.patch"
+        patch = AIROHA / "patches-7.4/998-silence-PHY-LED-pinctrl-error.patch"
         self.assertTrue(patch.is_file())
         body = read(patch)
         self.assertIn("-	if (IS_ERR(pinctrl))", body)

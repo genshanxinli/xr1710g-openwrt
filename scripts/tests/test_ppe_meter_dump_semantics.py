@@ -35,11 +35,6 @@ PATCH_74 = Path(
         / "989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch",
     )
 )
-PATCH_73 = (
-    REPO_ROOT
-    / "target/linux/airoha/patches-7.3"
-    / "989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch"
-)
 
 ENABLED_PRINT = 'seq_printf(m, "enabled=%u groups_total=%u\\n"'
 SHOW_START = "/* Read-only view of the opt-in per-flow meters."
@@ -123,22 +118,6 @@ class PpeMeterDumpSemantics(unittest.TestCase):
             OLD_LIE, body,
             "the comment still claims the register read is what the PPE "
             "actually holds; on AN7581 it is 0xdeadbeef",
-        )
-
-    def test_comment_is_identical_in_both_queues(self):
-        def dump_comment(path):
-            lines = post_image(path.read_text())
-            start = next(
-                i for i, line in enumerate(lines) if line.startswith(SHOW_START)
-            )
-            end = next(
-                i for i, line in enumerate(lines) if line.startswith(SHOW_END)
-            )
-            return lines[start:end]
-
-        self.assertEqual(
-            dump_comment(PATCH_73), dump_comment(PATCH_74),
-            "the 7.3 and 7.4 meter dumps must carry byte-identical text",
         )
 
 
