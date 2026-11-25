@@ -729,14 +729,14 @@ index cf3717e..9b2b0a9 100644
 -#if defined(AN7552)
 +#if defined(EAGLE_DESC_DDR_BASE)
 +	/* eagle v4: the stock v08 ring table at 0x8401dca0, relative to
-+	 * the fixed DDR arena base 0x3E8A2000.  There is no ring5 entry;
-+	 * the host uses 3/4 for the tx rings, 6 for the ind-cmd ring and
-+	 * 7/8/9 for the three MSDU page rings. */
++	 * the fixed DDR arena base 0x3E8A2000, with ring4 moved from
++	 * 0x26040 to 0x28040 so ring2's 0x6000-byte RRO ring does not
++	 * overlap ring4 (0x22020 + 0x6000 + 0x20 guard = 0x28040). */
 +	static const u32 off[9] = {
 +		0x00000,	/* ring1: RRO band0 */
 +		0x22020,	/* ring2: RRO band2 (host never uses band1) */
 +		0x06020,	/* ring3: tx ring band0 */
-+		0x26040,	/* ring4: tx ring band2 */
++		0x28040,	/* ring4: tx ring band2 (after ring2 0x22020+0x6000+0x20) */
 +		0x00000,	/* ring5: not in the stock table, never used */
 +		0x1F020,	/* ring6: ind cmd */
 +		0x18020,	/* ring7: MSDU page band0, 256 x 16 */
@@ -851,7 +851,7 @@ index cf3717e..9b2b0a9 100644
  			return 1;
  		}
  		dbg.refill[band]++;
-@@ -493,66 +577,161 @@ static void eagle_txdone_ring_fill(u32 ring_size)
+@@ -493,66 +577,180 @@ static void eagle_txdone_ring_fill(u32 ring_size)
  	}
  }
  
@@ -861,8 +861,19 @@ index cf3717e..9b2b0a9 100644
 -static u16 msdu_pg_ids[8];
 -static u32 msdu_pg_ring_ridx;
 -static u32 msdu_pg_ring_ready;
-+/* MSDU page ids: one 1024-id pool per band, ring-sized by the host */
++/* MSDU page ids: one disjoint per-band pool, ring-sized by the host */
 +#define MSDU_PG_MAX_IDS 1024
++/* Disjoint per-band MSDU page ID ranges inside eagle_dram_ba_node_addr
++ * (npu_ba = 0x200000 B = 16384 x 128 B pages; MT7996 uses 256+512+1024).
++ * msdu_pg_desc_fill() maps each id to ba_node + (id << 7), so bands
++ * must not share IDs. */
++#if defined(MT7996)
++static const u16 eagle_msdu_pg_id_base[3] __attribute__((used)) = { 0, 256, 768 };
++static const u16 eagle_msdu_pg_id_limit[3] __attribute__((used)) = { 256, 512, 1024 };
++#else
++static const u16 eagle_msdu_pg_id_base[3] __attribute__((used)) = { 0, 8, 16 };
++static const u16 eagle_msdu_pg_id_limit[3] __attribute__((used)) = { 8, 8, 8 };
++#endif
 +static u16 *msdu_pg_pool[3];
 +static u16 msdu_pg_ridx[3], msdu_pg_widx[3];
 +static u16 msdu_pg_alloc_count[3];
@@ -879,15 +890,19 @@ index cf3717e..9b2b0a9 100644
 +
 +#if defined(EAGLE_DESC_DDR_BASE)
 +	pool = sram_buf_alloc(26);
-+	/* type26 is one 0x4000 pool: three 1024-id MSDU page pools at
-+	 * +0x0000..+0x1800, TDMA rx ids share +0x1800..+0x3000. */
++	/* type26 is one 0x4000 pool: three MSDU page ID pools at
++	 * +0x0000..+0x1800, TDMA rx ids share +0x1800..+0x3000.
++	 * Populate each band with its disjoint [base, base + limit) IDs. */
 +	for (band = 0; band < 3; band++) {
++		u16 base = eagle_msdu_pg_id_base[band];
++		u16 count = eagle_msdu_pg_id_limit[band];
++
 +		msdu_pg_pool[band] = (u16 *)(pool + 2048 * band);
-+		for (i = 0; i < MSDU_PG_MAX_IDS; i++)
-+			msdu_pg_pool[band][i] = (u16)i;
++		for (i = 0; i < count; i++)
++			msdu_pg_pool[band][i] = (u16)(base + i);
 +		msdu_pg_ridx[band] = 0;
 +		msdu_pg_widx[band] = 0;
-+		msdu_pg_alloc_count[band] = MSDU_PG_MAX_IDS;
++		msdu_pg_alloc_count[band] = count;
 +		msdu_pg_ring_size[band] = 0;
 +		msdu_pg_ring_ready[band] = 0;
 +	}
@@ -904,14 +919,17 @@ index cf3717e..9b2b0a9 100644
 +	eagle_msdu_pg_desc_base[2] = eagle_ring_desc_base(9);
 +#elif defined(MT7996)
 +	pool = sram_buf_alloc(26);
-+	/* type 26 is 3 x 2048 bytes: one 1024-id pool per band */
++	/* type 26 is 3 x 2048 bytes: one disjoint ID pool per band */
 +	for (band = 0; band < 3; band++) {
++		u16 base = eagle_msdu_pg_id_base[band];
++		u16 count = eagle_msdu_pg_id_limit[band];
++
 +		msdu_pg_pool[band] = (u16 *)(pool + 2048 * band);
-+		for (i = 0; i < MSDU_PG_MAX_IDS; i++)
-+			msdu_pg_pool[band][i] = (u16)i;
++		for (i = 0; i < count; i++)
++			msdu_pg_pool[band][i] = (u16)(base + i);
 +		msdu_pg_ridx[band] = 0;
 +		msdu_pg_widx[band] = 0;
-+		msdu_pg_alloc_count[band] = MSDU_PG_MAX_IDS;
++		msdu_pg_alloc_count[band] = count;
 +		msdu_pg_ring_size[band] = 0;
 +		msdu_pg_ring_ready[band] = 0;
 +	}
@@ -923,15 +941,19 @@ index cf3717e..9b2b0a9 100644
 +	eagle_msdu_pg_desc_base[1] = pool + 0x0000;
 +	eagle_msdu_pg_desc_base[2] = pool + 0x2000;
 +#else
-+	/* MT7992 keeps the original 8-id/0x100-byte layout. */
++	/* MT7992 keeps the original 8-id/0x100-byte layout with disjoint
++	 * per-band ID ranges. */
 +	pool = sram_buf_alloc(26);
 +	for (band = 0; band < 3; band++) {
++		u16 base = eagle_msdu_pg_id_base[band];
++		u16 count = eagle_msdu_pg_id_limit[band];
++
 +		msdu_pg_pool[band] = (u16 *)(pool + 16 * band);
-+		for (i = 0; i < 8; i++)
-+			msdu_pg_pool[band][i] = (u16)i;
++		for (i = 0; i < count; i++)
++			msdu_pg_pool[band][i] = (u16)(base + i);
 +		msdu_pg_ridx[band] = 0;
 +		msdu_pg_widx[band] = 0;
-+		msdu_pg_alloc_count[band] = 8;
++		msdu_pg_alloc_count[band] = count;
 +		msdu_pg_ring_size[band] = 0;
 +		msdu_pg_ring_ready[band] = 0;
 +	}
@@ -977,11 +999,7 @@ index cf3717e..9b2b0a9 100644
 +static int eagle_msdu_pg_ring_init(u32 ring_size, u32 band, u32 again)
  {
  	u32 i, desc;
-+#if defined(MT7996)
-+	u32 limit = band == 0 ? 256 : band == 1 ? 512 : 1024;
-+#else
-+	u32 limit = 8;
-+#endif
++	u32 limit;
  	s32 id;
  
 -	if (ring_size - 1 > 7)
@@ -990,6 +1008,7 @@ index cf3717e..9b2b0a9 100644
 +		npu_printf("ERROR! msdu pg band = %d\n", band);
 +		return 1;
 +	}
++	limit = eagle_msdu_pg_id_limit[band];
 +	if (ring_size == 0 || ring_size > limit) {
 +		npu_printf("ERROR! msdu pg band%d ring_size = %d, limit %d\n",
 +			   band, ring_size, limit);
@@ -1048,7 +1067,7 @@ index cf3717e..9b2b0a9 100644
  	}
  	return 0;
  }
-@@ -571,14 +750,20 @@ static void npu_mbox_init_rxd_wrapper(u32 ring_size, u32 ring)
+@@ -571,14 +769,20 @@ static void npu_mbox_init_rxd_wrapper(u32 ring_size, u32 ring)
  		eagle_queue_init(1);
  		eagle_rx_ring_init(ring_size, 1);
  		break;
@@ -1075,7 +1094,7 @@ index cf3717e..9b2b0a9 100644
  		break;
  	case EAGLE_RING_IND_CMD0:
  		eagle_ind_cmd_desc_base = eagle_ring_desc_base(6);
-@@ -989,46 +1174,59 @@ int eagle_mail_get_dbg_counter(u32 *msg)
+@@ -989,46 +1193,59 @@ int eagle_mail_get_dbg_counter(u32 *msg)
  int eagle_mail_get_rxdesc_base(u32 *msg)
  {
  	u32 ring = msg[0] & 0xF;
@@ -1414,6 +1433,9 @@ SRAM_END = SRAM_BASE + SRAM_SIZE - 2
 
 NPU_PKT_HOST_BASE = 0x8A000000
 NPU_PKT_HOST_END = 0x8CC00000          # 0x8A000000 + 0x2C00000, 44 MB
+NPU_BA_SIZE = 0x200000                 # an7581-npu-wlan.dtsi npu_ba (2 MiB)
+MSDU_PG_ENTRY_SIZE = 128               # msdu_pg_desc_fill(): id << 7
+MSDU_PG_MAX_IDS = 1024                 # per-band pool capacity in type26
 DESC_BASE = 0x3E8A2000                 # stock v08 type256/0x100
 DESC_SIZE = 0x4A040                    # stock v08 type1
 DESC_HOST_BASE = 0x8A0A2000
@@ -1423,13 +1445,21 @@ EXPECTED_RING_OFF = [
     0x00000,   # ring1 RRO band0
     0x22020,   # ring2 RRO band2
     0x06020,   # ring3 tx band0
-    0x26040,   # ring4 tx band2
+    0x28040,   # ring4 tx band2 (after ring2 0x22020+0x6000+0x20 guard)
     0x00000,   # ring5 not in the stock table
     0x1F020,   # ring6 ind cmd
     0x18020,   # ring7 MSDU page band0
     0x19020,   # ring8 MSDU page band1
     0x1B020,   # ring9 MSDU page band2
 ]
+
+RING_EXTENTS = {
+    "qid0": 0x6000, "qid2": 0x6000, "qid5": 0x8000, "qid7": 0x8000,
+    "qid8": 0x3000, "qid10": 0x1000, "qid11": 0x2000, "qid12": 0x4000,
+}
+
+EXPECTED_MSDU_PG_BASES = [0, 256, 768]
+EXPECTED_MSDU_PG_LIMITS = [256, 512, 1024]
 
 # v4 SRAM allocation order after tdma_init/bufid_init and core0 init.
 # type26 is taken at the point type29 used to be and is shared with the
@@ -1519,6 +1549,85 @@ def find_qid_table(raw, text_end, scan_start):
     return None
 
 
+def ring_values_from_offs(offs):
+    return {
+        "qid0": DESC_BASE + offs[0],
+        "qid2": DESC_BASE + offs[1],
+        "qid5": DESC_BASE + offs[2],
+        "qid7": DESC_BASE + offs[3],
+        "qid8": DESC_BASE + offs[5],
+        "qid10": DESC_BASE + offs[6],
+        "qid11": DESC_BASE + offs[7],
+        "qid12": DESC_BASE + offs[8],
+    }
+
+
+def check_ring_non_overlap(values, extents):
+    """Reject any pairwise-overlapping [base, base + extent) DMA rings."""
+    intervals = sorted(
+        (addr, addr + extents[name], name)
+        for name, addr in values.items()
+    )
+    for i in range(len(intervals)):
+        a_start, a_end, a_name = intervals[i]
+        for j in range(i + 1, len(intervals)):
+            b_start, b_end, b_name = intervals[j]
+            if b_start < a_end:
+                overlap = min(a_end, b_end) - b_start
+                raise SystemExit(
+                    "DMA ring overlap: %s [%#x, %#x) overlaps %s [%#x, %#x) "
+                    "by %#x bytes"
+                    % (a_name, a_start, a_end, b_name, b_start, b_end, overlap)
+                )
+
+
+def read_image_bytes(addr, size, raw, dbin, data_size):
+    """Read `size` bytes at ELF address `addr` from npu_rv32.bin or npu_data.bin."""
+    if TEXT_BASE <= addr and addr + size <= TEXT_BASE + len(raw):
+        off = addr - TEXT_BASE
+        return raw[off:off + size]
+    if DATA_BASE <= addr and addr + size <= DATA_BASE + data_size:
+        off = addr - DATA_BASE
+        return dbin[off:off + size]
+    raise SystemExit("symbol address %#x (+%#x) outside .text/.rodata and .data"
+                     % (addr, size))
+
+
+def check_msdu_pg_id_ranges(bases, limits, ba_size=NPU_BA_SIZE):
+    """Reject overlapping or out-of-bounds per-band MSDU page ID ranges."""
+    if len(bases) != 3 or len(limits) != 3:
+        raise SystemExit("expected 3 MSDU page bands, got %d/%d"
+                         % (len(bases), len(limits)))
+    intervals = []
+    for band, (base, lim) in enumerate(zip(bases, limits)):
+        if lim <= 0 or lim > MSDU_PG_MAX_IDS:
+            raise SystemExit("MSDU page band%d limit %d outside 1..%d"
+                             % (band, lim, MSDU_PG_MAX_IDS))
+        end = base + lim
+        if base < 0 or end > 0x7FFF:
+            raise SystemExit("MSDU page band%d ID range [%d, %d) exceeds s16"
+                             % (band, base, end))
+        if end * MSDU_PG_ENTRY_SIZE > ba_size:
+            raise SystemExit(
+                "MSDU page band%d DRAM end %#x exceeds npu_ba size %#x"
+                % (band, end * MSDU_PG_ENTRY_SIZE, ba_size)
+            )
+        intervals.append((base, end, band))
+    intervals.sort()
+    for i in range(len(intervals)):
+        a_start, a_end, a_band = intervals[i]
+        for j in range(i + 1, len(intervals)):
+            b_start, b_end, b_band = intervals[j]
+            if b_start < a_end:
+                overlap = min(a_end, b_end) - b_start
+                raise SystemExit(
+                    "MSDU page ID overlap: band%d [%d, %d) overlaps "
+                    "band%d [%d, %d) by %d IDs (%#x DRAM bytes)"
+                    % (a_band, a_start, a_end, b_band, b_start, b_end,
+                       overlap, overlap * MSDU_PG_ENTRY_SIZE)
+                )
+
+
 def main():
     global CROSS, REPO_ROOT
     if len(sys.argv) not in (2, 4):
@@ -1602,6 +1711,7 @@ def main():
     if offs_sym is None:
         raise SystemExit("eagle ring offset table symbol missing")
     offs = list(struct.unpack_from("<9I", raw, offs_sym - TEXT_BASE))
+    check_ring_non_overlap(ring_values_from_offs(offs), RING_EXTENTS)
     if offs != EXPECTED_RING_OFF:
         raise SystemExit("ring offsets %r, expected %r"
                          % ([hex(x) for x in offs], [hex(x) for x in EXPECTED_RING_OFF]))
@@ -1633,23 +1743,8 @@ def main():
     print("PASS qid table at 0x%x, qid2/7/11/12 distinct, return masked" % (qtab + TEXT_BASE))
 
     # ---- 7. computed qid values and DDR/SRAM bounds ---------------------
-    def qid_addr(off):
-        return DESC_BASE + off
-
-    values = {
-        "qid0": qid_addr(offs[0]),
-        "qid2": qid_addr(offs[1]),
-        "qid5": qid_addr(offs[2]),
-        "qid7": qid_addr(offs[3]),
-        "qid8": qid_addr(offs[5]),
-        "qid10": qid_addr(offs[6]),
-        "qid11": qid_addr(offs[7]),
-        "qid12": qid_addr(offs[8]),
-    }
-    extents = {
-        "qid0": 0x6000, "qid2": 0x6000, "qid5": 0x8000, "qid7": 0x8000,
-        "qid8": 0x3000, "qid10": 0x1000, "qid11": 0x2000, "qid12": 0x4000,
-    }
+    values = ring_values_from_offs(offs)
+    extents = RING_EXTENTS
     arena_end = DESC_BASE + DESC_SIZE
     for name, addr in values.items():
         masked = addr & MASK
@@ -1662,6 +1757,8 @@ def main():
         host = DESC_HOST_BASE + (addr - DESC_BASE)
         print("PASS %-5s NPU %#010x host %#010x ring 0x%x" %
               (name, addr, masked, extents[name]))
+    check_ring_non_overlap(values, extents)
+    print("PASS all %d DMA ring intervals pairwise disjoint" % len(values))
     if DESC_HOST_BASE + DESC_SIZE > NPU_PKT_HOST_END:
         raise SystemExit("DDR descriptor arena crosses npu_pkt end")
     if arena_end > DESC_BASE + DESC_SIZE:
@@ -1702,14 +1799,37 @@ def main():
     print("     type26 %#x..%#x (MSDU ids +0x0000, TDMA ids +0x1800)"
           % (layout[26], t26_end))
 
-    # ---- 9. MSDU page ring limits 256/512/1024 in .data -----------------
-    lim = syms.get("CSWTCH.60")
-    if lim is None or not (DATA_BASE <= lim < DATA_BASE + data_size):
-        raise SystemExit("MSDU page limit table missing")
-    lims = list(struct.unpack_from("<3H", dbin, lim - DATA_BASE))
-    if lims != [256, 512, 1024]:
-        raise SystemExit("MSDU page limits %r" % lims)
-    print("PASS MSDU page limits 256/512/1024, ring spacing 0x1000/0x2000")
+    # ---- 9. MSDU page ring limits & disjoint per-band ID ranges ---------
+    lim_sym = syms.get("eagle_msdu_pg_id_limit")
+    if lim_sym is None:
+        raise SystemExit("eagle_msdu_pg_id_limit table missing")
+    lims = list(struct.unpack_from(
+        "<3H", read_image_bytes(lim_sym, 6, raw, dbin, data_size), 0
+    ))
+    base_sym = syms.get("eagle_msdu_pg_id_base")
+    if base_sym is None:
+        raise SystemExit("eagle_msdu_pg_id_base table missing")
+    bases = list(struct.unpack_from(
+        "<3H", read_image_bytes(base_sym, 6, raw, dbin, data_size), 0
+    ))
+    check_msdu_pg_id_ranges(bases, lims)
+    if lims != EXPECTED_MSDU_PG_LIMITS:
+        raise SystemExit("MSDU page limits %r, expected %r"
+                         % (lims, EXPECTED_MSDU_PG_LIMITS))
+    if bases != EXPECTED_MSDU_PG_BASES:
+        raise SystemExit("MSDU page ID bases %r, expected %r"
+                         % (bases, EXPECTED_MSDU_PG_BASES))
+    if ("<eagle_msdu_pg_id_base>" not in pool and
+            not (re.search(r",\s*(?:256|0x100)\b", pool) and
+                 re.search(r",\s*(?:768|0x300)\b", pool))):
+        raise SystemExit(
+            "eagle_msdu_pg_pool_init does not apply per-band MSDU page ID bases"
+        )
+    print("PASS MSDU page limits %s, disjoint ID bases %s (DRAM 0x%x <= 0x%x)"
+          % ("/".join(str(x) for x in lims),
+             "/".join(str(x) for x in bases),
+             max(b + l for b, l in zip(bases, lims)) * MSDU_PG_ENTRY_SIZE,
+             NPU_BA_SIZE))
 
     # ---- 10. get-wait function table ------------------------------------
     ft = syms.get("get_wait_func_table")
@@ -1799,20 +1919,26 @@ steps
        NDBG block 0x3E906800, magic 0x4E444247
        DDR arena 0x3E8A2000..0x3E8EC040; qid10/11/12 at
          0x3E8BA020/0x3E8BB020/0x3E8BD020 (host 0x1E8BA020/...),
-         qid2 0x3E8C4020 and qid7 0x3E8C8040
-       DDR end <= npu_pkt end 0x8CC00000; every ring fits type1
+         qid2 0x3E8C4020 and qid7 0x3E8CA040
+       DDR end <= npu_pkt end 0x8CC00000; every ring fits type1 and all
+         DMA ring intervals are pairwise disjoint
        SRAM ledger: types 1/29/44 gone, type26=0x4000, type129=0xE5FF,
          type133=0x11000, allocator end below 0x3E877FFE
-       MSDU page ring limits 256/512/1024 x 16 B, spacing 0x1000/0x2000
+       MSDU page ring limits 256/512/1024 x 16 B, spacing 0x1000/0x2000,
+         disjoint per-band MSDU page ID bases 0/256/768 (DRAM 0x38000 <= 0x200000)
        get-wait table 10 entries in .text, image below 2 MB,
          __bss_end below NDBG
 
-expected reference result (this script + GCC 16.2.0):
-  npu_rv32.bin 50766 B md5 8597e7cc58b72bbc1c16ed060ce44e11
-  npu_data.bin   304 B md5 54dbac0cefdcd39546b95b3ca3b762cf
-  firmware.elf 94604 B
+  hashes and sizes are recorded in manifest.txt after build
   no board, no flash, no device write
 EOF
+}
+
+gcc_version_line() {
+	local out
+	out="$("${CROSS}gcc" --version)" || return 1
+	[ -n "$out" ] || return 1
+	printf '%s\n' "${out%%$'\n'*}"
 }
 
 require_tools() {
@@ -1822,7 +1948,7 @@ require_tools() {
 		 "${CROSS}objdump" "${CROSS}nm" "${CROSS}readelf"; do
 		command -v "$t" >/dev/null 2>&1 || die "missing tool: $t"
 	done
-	"${CROSS}gcc" --version | head -n 1 || die "${CROSS}gcc is not usable"
+	gcc_version_line || die "${CROSS}gcc is not usable"
 }
 
 fetch_source() {
@@ -1897,7 +2023,7 @@ write_manifest() {
 		echo "source: ClankerConstruction/ClankerNPU @ $CLANKER_COMMIT"
 		echo "source_patch_sha256: $(sha256sum "$PATCH_FILE" | awk '{print $1}')"
 		echo "build: SOC=AN7581 WIFI=MT7996 CLANKER=0 NPUTX=1 NPUDBG=0 PROF=0 GITREV=$CLANKER_GITREV CROSS=$CROSS"
-		echo "toolchain: $("${CROSS}gcc" --version | head -n 1)"
+		echo "toolchain: $(gcc_version_line)"
 		echo "npu_rv32.bin: $(stat -c '%s' "$rv") B md5 $(md5sum "$rv" | awk '{print $1}') sha256 $(sha256sum "$rv" | awk '{print $1}')"
 		echo "npu_data.bin: $(stat -c '%s' "$data") B md5 $(md5sum "$data" | awk '{print $1}') sha256 $(sha256sum "$data" | awk '{print $1}')"
 		echo "firmware.elf: $(stat -c '%s' "$elf") B md5 $(md5sum "$elf" | awk '{print $1}')"
