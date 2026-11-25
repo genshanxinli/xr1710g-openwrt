@@ -27,6 +27,16 @@
 # in practice - and they carry real traffic, so they are part of the same
 # round-robin rather than left where they are.
 #
+# Not every one of those lines can be moved. The mt7996e vectors are MSI
+# interrupts of pcie-mediatek-gen3, whose MSI domain sets
+# MSI_FLAG_NO_AFFINITY: the IRQ chip has no ->irq_set_affinity, so every
+# write to smp_affinity comes back -EPERM and the vector stays where the
+# kernel put it (issue #66, report N7). That is a property of the controller,
+# not something this script can fix, but it has to be visible - a run that
+# failed every write used to look exactly like a run with nothing to do.
+# Lines that refuse the move are logged, and an MSI function with no affinity
+# support is detected once and its vectors are then skipped by name.
+#
 # The driver registers its handlers as IRQF_SHARED, so an IRQ line can carry
 # other users' actions; only lines whose action list names one of the handlers
 # below are touched, and each line is moved wholesale rather than by rewriting
@@ -86,17 +96,87 @@ qdma_bank0() {
 	echo $((idx / 4))
 }
 
-# Move one IRQ line, logging only when the mask actually changes.
+# /sys/bus/pci/devices/<fn>/msi_irqs/<irq> exists for every MSI vector, which
+# is how a line is traced back to the PCI function that owns it.
+msi_function() {
+	local dir
+
+	for dir in /sys/bus/pci/devices/*/msi_irqs; do
+		[ -e "$dir/$1" ] && { echo "${dir%/msi_irqs}"; return 0; }
+	done
+	return 1
+}
+
+# The MSI functions that cannot be moved at all. A domain that rejects the
+# mask is indistinguishable from one that is busy until something is written,
+# so probe each function once with the mask its first vector already holds: a
+# domain that takes the no-op changes nothing and stays quiet, one without
+# ->irq_set_affinity rejects it with -EPERM and is named once instead of every
+# one of its vectors failing without a word.
+unmovable_msi_functions() {
+	local dir irq cur
+
+	for dir in /sys/bus/pci/devices/*/msi_irqs; do
+		[ -d "$dir" ] || continue
+		for irq in "$dir"/*; do
+			break
+		done
+		irq=${irq##*/}
+		[ -e "/proc/irq/$irq" ] || continue
+		cur=$(cat "/proc/irq/$irq/smp_affinity" 2>/dev/null)
+		echo "$cur" > "/proc/irq/$irq/smp_affinity" 2>/dev/null || \
+			echo "${dir%/msi_irqs}"
+	done
+}
+
+# Move one IRQ line, logging when the mask changes and, as loudly, when the
+# kernel refuses the move. The write is done with stderr captured (and with
+# the redirects in that order) so the shell's own message reaches the log;
+# ->irq_set_affinity missing is a one-way answer, so the line is reported and
+# left alone rather than retried in silence. A rejected write is not a boot
+# failure either: main() feeds these lines from a pipe, so the last status
+# would become the service status.
+# Normalize a hex cpumask string (e.g. "00000001", "1", "0000000f", "F") so
+# comparison matches both 1-digit kernel smp_affinity output on 4-core SoCs and
+# zero-padded 8-digit masks.
+norm_mask() {
+	local m
+
+	m=$(printf '%s' "$1" | tr -d ' \t\r\n,' | tr 'A-F' 'a-f')
+	while [ "${#m}" -gt 1 ]; do
+		case "$m" in
+		0*) m=${m#0} ;;
+		*) break ;;
+		esac
+	done
+	printf '%s' "$m"
+}
+
 pin_irq() {
-	local irq="$1" cpu="$2" mask cur
+	local irq="$1" cpu="$2" mask want cur dev err
 
 	mask=$(printf '%08x' "$((1 << cpu))")
+	want=$(printf '%x' "$((1 << cpu))")
 	cur=$(cat "/proc/irq/$irq/smp_affinity" 2>/dev/null)
-	[ "$cur" = "$mask" ] && return 0
+	[ "$(norm_mask "$cur")" = "$want" ] && return 0
 
-	if echo "$mask" > "/proc/irq/$irq/smp_affinity" 2>/dev/null; then
-		log "irq $irq pinned to cpu$cpu"
+	dev=$(msi_function "$irq") || dev=""
+	if [ -n "$dev" ]; then
+		case " $NO_AFFINITY_MSI " in
+		*" $dev "*)
+			log "irq $irq: skipped, MSI domain of ${dev##*/} has no affinity support (MSI_FLAG_NO_AFFINITY, -EPERM on smp_affinity)"
+			return 0
+			;;
+		esac
 	fi
+
+	if err=$(echo "$mask" 2>&1 > "/proc/irq/$irq/smp_affinity"); then
+		log "irq $irq pinned to cpu$cpu"
+		return 0
+	fi
+
+	log "irq $irq: smp_affinity write to $mask rejected${err:+ ($err)}; leaving the kernel default"
+	return 0
 }
 
 # Print "<irq> <handler> <suffix>" for every line whose action list mentions
@@ -166,6 +246,10 @@ main() {
 	ncpu=$(echo "$CPU_LIST" | wc -w)
 	[ "$ncpu" -gt 0 ] || return 0
 	[ "$ncpu" -lt "$first_shared" ] && first_shared=$ncpu
+
+	# Read by pin_irq, so it stays in the environment of this shell rather
+	# than in a local.
+	NO_AFFINITY_MSI="$(unmovable_msi_functions | tr '\n' ' ')"
 
 	# Hold the list in a variable rather than in /tmp/qdma-irqs.$$, which is
 	# what this used to do and which leaked the file whenever either of the

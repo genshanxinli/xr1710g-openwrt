@@ -43,8 +43,11 @@ uci_set_from() {
 # iw is not usable here. "(disabled)" still counts as supported: the phy's
 # band capability is what matters, the regdomain is applied by hostapd later.
 phy_has() {
+	local iw_out
 	command -v iw >/dev/null 2>&1 || return 2
-	iw phy 2>/dev/null | grep -qF "$1"
+	iw_out=$(iw phy 2>/dev/null) || return 2
+	[ -n "$iw_out" ] || return 2
+	printf '%s\n' "$iw_out" | grep -qF "$1"
 }
 
 # radio_usable <section> <band> <iw phy line>: a fixed channel/width is only

@@ -22,7 +22,7 @@
 #              the per-interface entry count when the bind table names the
 #              netdev; otherwise that count stays unknown.
 #   state      the verdict line: the first segment the path stops at, in that
-#              order - no-netdev, no-pppoe-session, no-carrier,
+#              order - no-netdev, no-carrier, no-pppoe-session,
 #              carrier-unknown, up.  It is derived from the segments above and
 #              never guessed; on this board (proto=dhcp, carrier 0, no PPPoE
 #              session) it prints `state: no-carrier (...)` instead of leaving
@@ -267,22 +267,31 @@ resolve_qdam() {
 ft_json() {
 	# nft pretty-prints its JSON on a stock device ("name": "ft",
 	# {"dev": [...]), so collapse the insignificant whitespace before
-	# matching.  The compact patterns below silently find nothing against
-	# a pretty-printed document, and every flowtable question then answers
-	# "no" instead of "we could not read it".
+	# matching.  Select the inet/ft flowtable specifically rather than
+	# taking head -1 across all flowtables (bridge/fb may appear first),
+	# and extract the device list from that matched object only.
 	flat=$(printf '%s' "$1" | tr '\n\t' '  ' |
 		sed -e 's/: */:/g' -e 's/{ */{/g' -e 's/ *}/}/g' \
 		    -e 's/, */,/g' -e 's/\[ */[/g' -e 's/ *\]/]/g')
-	obj=$(printf '%s' "$flat" | grep -o '"flowtable":{[^}]*}' | head -1)
-	[ -n "$obj" ] || return 1
+	objs=$(printf '%s' "$flat" | grep -o '"flowtable":{[^}]*}')
+	[ -n "$objs" ] || return 1
+	obj=$(printf '%s\n' "$objs" | grep -F '"family":"inet"' | grep -F '"name":"ft"' | head -1)
+	if [ -z "$obj" ]; then
+		FT_MEMBER=no
+		return 0
+	fi
 	FT_NAME=$(printf '%s' "$obj" | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')
 	FT_FAM=$(printf '%s' "$obj" | sed -n 's/.*"family":"\([^"]*\)".*/\1/p')
 	# nft >= 1.1 names the device list "dev", older releases name it
-	# "devices".  Two plain greps rather than one optional-group regex,
-	# because BRE's optional group is a GNU extension.
-	devs=$(printf '%s' "$flat" | grep -o '"devices":\[[^]]*\]' | head -1)
-	[ -n "$devs" ] || devs=$(printf '%s' "$flat" | grep -o '"dev":\[[^]]*\]' | head -1)
-	if printf '%s' "$devs" | grep -q "\"$PHYS\""; then
+	# "devices", and a single-device flowtable may serialize as a plain
+	# JSON string ("dev":"wan") instead of a 1-element array.  Strip the
+	# key prefix before matching "$PHYS" so a device name never matches
+	# the JSON key itself.
+	devs=$(printf '%s' "$obj" | grep -o '"devices":\[[^]]*\]' | head -1)
+	[ -n "$devs" ] || devs=$(printf '%s' "$obj" | grep -o '"dev":\[[^]]*\]' | head -1)
+	[ -n "$devs" ] || devs=$(printf '%s' "$obj" | grep -o '"devices":"[^"]*"' | head -1)
+	[ -n "$devs" ] || devs=$(printf '%s' "$obj" | grep -o '"dev":"[^"]*"' | head -1)
+	if [ -n "$devs" ] && printf '%s' "${devs#*:}" | grep -qF "\"$PHYS\""; then
 		FT_MEMBER=yes
 	else
 		FT_MEMBER=no
@@ -292,14 +301,74 @@ ft_json() {
 
 ft_text() {
 	[ -n "$1" ] || { FT_MEMBER=no; return 0; }
-	FT_FAM=$(printf '%s' "$1" | awk '/^table / { print $2; exit }')
-	FT_NAME=$(printf '%s' "$1" | awk '/^[[:space:]]*flowtable / { print $2; exit }')
-	if printf '%s' "$1" | grep -Eq "devices *= *\\{[^}]*\"$PHYS\"" ||
-		printf '%s' "$1" | grep -Eq "devices *= *\\{[^}]*([ {])$PHYS([ ,}])"; then
+	res=$(printf '%s\n' "$1" | awk -v phys="$PHYS" '
+		/^table[ \t]+/ {
+			fam = $2
+			in_ft = 0
+			in_devs = 0
+			next
+		}
+		fam == "inet" && /^[ \t]*flowtable[ \t]+ft([ \t]|\{|$)/ {
+			in_ft = 1
+			in_devs = 0
+			found = 1
+			next
+		}
+		in_ft && !in_devs && /^[ \t]*\}/ {
+			in_ft = 0
+			next
+		}
+		in_ft && /devices[ \t]*=[ \t]*\{/ {
+			in_devs = 1
+			line = $0
+			sub(/.*devices[ \t]*=[ \t]*\{/, "", line)
+			if (index(line, "}")) {
+				sub(/\}.*/, "", line)
+				in_devs = 0
+			}
+			n = split(line, parts, /[ ,\t]+/)
+			for (i = 1; i <= n; i++) {
+				t = parts[i]
+				gsub(/^"|"$/, "", t)
+				if (t == phys) member = 1
+			}
+			next
+		}
+		in_ft && in_devs {
+			line = $0
+			if (index(line, "}")) {
+				sub(/\}.*/, "", line)
+				in_devs = 0
+			}
+			n = split(line, parts, /[ ,\t]+/)
+			for (i = 1; i <= n; i++) {
+				t = parts[i]
+				gsub(/^"|"$/, "", t)
+				if (t == phys) member = 1
+			}
+			next
+		}
+		END {
+			if (!found) print "none"
+			else if (member) print "yes"
+			else print "no"
+		}
+	')
+	case "$res" in
+	yes)
+		FT_FAM=inet
+		FT_NAME=ft
 		FT_MEMBER=yes
-	else
+		;;
+	no)
+		FT_FAM=inet
+		FT_NAME=ft
 		FT_MEMBER=no
-	fi
+		;;
+	*)
+		FT_MEMBER=no
+		;;
+	esac
 }
 
 resolve_flowtable() {
@@ -341,10 +410,23 @@ resolve_ppe() {
 	PPE_UNBOUND=$(num_field "$usage" unbound)
 
 	# The 5-tuple dump has no netdev field on this SoC; only a bind table that
-	# literally names the netdev can attribute entries to this interface.
+	# literally names the netdev as a whole token can attribute entries to
+	# this interface.
 	b="$WP_DEBUGFS/ppe/bind"
-	if [ -r "$b" ] && grep -q "$PHYS" "$b" 2>/dev/null; then
-		PPE_IF_ENTRIES=$(grep -c "$PHYS" "$b" 2>/dev/null)
+	if [ -r "$b" ]; then
+		cnt=$(awk -v p="$PHYS" '
+			{
+				for (i = 1; i <= NF; i++) {
+					if ($i == p) { c++; break }
+				}
+			}
+			END { print c + 0 }
+		' "$b" 2>/dev/null)
+		if [ "${cnt:-0}" -gt 0 ]; then
+			PPE_IF_ENTRIES=$cnt
+		else
+			add_unknown ppe_interface_entries
+		fi
 	else
 		add_unknown ppe_interface_entries
 	fi
@@ -360,10 +442,10 @@ resolve_ppe() {
 resolve_state() {
 	if [ "$PRESENT" != true ]; then
 		STATE=no-netdev
-	elif [ "$PROTO" = pppoe ] && [ "$PPP_SESS" != true ]; then
-		STATE=no-pppoe-session
 	elif [ "$CARRIER" = no ]; then
 		STATE=no-carrier
+	elif [ "$PROTO" = pppoe ] && [ "$PPP_SESS" != true ]; then
+		STATE=no-pppoe-session
 	elif [ "$CARRIER" != yes ]; then
 		STATE=carrier-unknown
 	else

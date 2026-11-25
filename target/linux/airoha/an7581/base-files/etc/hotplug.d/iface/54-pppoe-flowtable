@@ -122,7 +122,30 @@ fi
 		exit 0
 	}
 
-	printf '%s\n' "$LIST" | grep -qF "\"$DEV\"" && exit 0
+	# Match DEV whether nft printed it quoted ("pppoe-wan") or unquoted (ppp0),
+	# requiring an exact device token so ppp0 never matches ppp01.
+	if printf '%s\n' "$LIST" | awk -v dev="$DEV" '
+		/devices[ \t]*=[ \t]*\{/ {
+			in_devs = 1
+			sub(/.*devices[ \t]*=[ \t]*\{/, "")
+		}
+		in_devs {
+			line = $0
+			if (index(line, "}")) {
+				sub(/\}.*/, "", line)
+				in_devs = 0
+			}
+			n = split(line, parts, /[ ,\t]+/)
+			for (i = 1; i <= n; i++) {
+				t = parts[i]
+				gsub(/^"|"$/, "", t)
+				if (t == dev) found = 1
+			}
+		}
+		END { exit(found ? 0 : 1) }
+	'; then
+		exit 0
+	fi
 
 	FLAGS=""
 	case "$LIST" in

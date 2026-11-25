@@ -15,6 +15,11 @@
 
 BRIDGE="${BR_HW_BRIDGE:-br-lan}"
 SYS_NET="${BR_HW_SYS_NET:-/sys/class/net}"
+# The lock is shared with hotplug.d/iface/51-bridge-hw-offload, so the live
+# default has to stay on /var/lock.  BRIDGE_HW_OFFLOAD_LOCK is a test hook that
+# lets scripts/tests/test_bridge_hw_offload_lock.py run on hosts whose
+# /var/lock is read-only; nothing in the image sets it.
+LOCK_FILE="${BRIDGE_HW_OFFLOAD_LOCK:-/var/lock/bridge-hw-offload.lock}"
 
 case "$ACTION" in
 	add|remove) ;;
@@ -30,10 +35,10 @@ if [ -L "${SYS_NET}/${DEVICENAME}/master" ] || [ -e "${SYS_NET}/${DEVICENAME}/ma
 	[ "${master##*/}" = "$BRIDGE" ] || exit 0
 fi
 
-mkdir -p /var/lock 2>/dev/null
+[ "${LOCK_FILE%/*}" != "$LOCK_FILE" ] && [ -n "${LOCK_FILE%/*}" ] && mkdir -p "${LOCK_FILE%/*}" 2>/dev/null
 
 (
-	exec 9>/var/lock/bridge-hw-offload.lock
+	exec 9>"$LOCK_FILE"
 	# The lock serialises reloads, it does not mean "drop the second caller".
 	# A member arriving while the boot-time settle loop in
 	# hotplug.d/iface/51 still runs must queue up, not be silently ignored.

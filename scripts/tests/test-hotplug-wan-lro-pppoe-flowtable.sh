@@ -23,7 +23,7 @@ HOTPLUG_DIR="$REPO_ROOT/target/linux/airoha/an7581/base-files/etc/hotplug.d/ifac
 # has to fail on it; that is the only way a stubbed test can claim it would have
 # caught the defect it was written for.
 LRO="${WAN_LRO_SCRIPT:-$HOTPLUG_DIR/52-wan-lro}"
-PPPFT="${PPPFT_SCRIPT:-$HOTPLUG_DIR/54-pppoe-flowtable}"
+PPPFT="${PPPFT_UNDER_TEST:-${PPPFT_SCRIPT:-$HOTPLUG_DIR/54-pppoe-flowtable}}"
 
 fail() {
 	printf 'FAIL: %s\n' "$*" >&2
@@ -53,7 +53,7 @@ REAL_FLOCK=$(command -v flock) || fail "no flock on this host; the lock cases ne
 cat >"$STUBS/ubus" <<'STUB'
 #!/bin/sh
 # ubus call network.interface.<iface> status
-printf '%s' "$*" >>"$FAKE_LOG"
+printf 'ubus %s\n' "$*" >>"$FAKE_LOG"
 echo "$*" | grep -q '^call network.interface.' || exit 0
 if [ -n "${FAKE_STATUS:-}" ]; then
 	cat "$FAKE_STATUS"
@@ -129,7 +129,7 @@ STUB
 
 cat >"$STUBS/logger" <<'STUB'
 #!/bin/sh
-printf '%s\n' "$*" >>"$FAKE_LOG"
+printf 'logger %s\n' "$*" >>"$FAKE_LOG"
 STUB
 
 # busybox's flock, because that is the only flock a stock image has:
@@ -288,6 +288,26 @@ table inet fw4 {
 	}
 }
 N
+cat >"$WORK/ft-withppp-unquoted" <<'N'
+table inet fw4 {
+	flowtable ft {
+		hook ingress priority filter
+		devices = { lan2, lan3, lan4, wan, ppp0 }
+		flags offload
+		counter
+	}
+}
+N
+cat >"$WORK/ft-withppp01" <<'N'
+table inet fw4 {
+	flowtable ft {
+		hook ingress priority filter
+		devices = { lan2, wan, ppp01 }
+		flags offload
+		counter
+	}
+}
+N
 
 mkdir -p "$SYSNET/wan" "$SYSNET/pppoe-wan"
 
@@ -390,8 +410,10 @@ reset_case
 export FAKE_STATUS="$WORK/dhcp.json" FAKE_FLOWTABLE="$WORK/ft-nowan"
 run_pppft ifup wan
 expect_nft_add 0
-grep -q 'logger' "$FAKE_LOG" &&
-	fail "pppft-dhcp-wan-untouched: a non-PPPoE WAN reached the flowtable code"
+# Strip the expected ubus proto lookup; nothing else (no nft, no logger) may run.
+non_ubus=$(grep -v '^ubus ' "$FAKE_LOG" || true)
+[ -n "$non_ubus" ] &&
+	fail "pppft-dhcp-wan-untouched: a non-PPPoE WAN reached the flowtable code: $non_ubus"
 
 CASE=pppft-no-flowtable
 reset_case
@@ -417,6 +439,21 @@ export FAKE_STATUS="$WORK/pppoe-generic.json" FAKE_FLOWTABLE="$WORK/ft-nowan"
 run_pppft ifup wan
 expect_nft_add 1
 grep -q 'devices = { "ppp0" }' "$FAKE_NFT_ADD" || fail "pppft-generic-ppp0: no ppp0 in the add"
+
+CASE=pppft-ifupdate-idempotent-unquoted-ppp0
+reset_case
+# nft prints simple alphanumeric device names like ppp0 without quotes; the
+# idempotency check must recognise unquoted ppp0 and skip nft add.
+export FAKE_STATUS="$WORK/pppoe-generic.json" FAKE_FLOWTABLE="$WORK/ft-withppp-unquoted"
+run_pppft ifupdate wan
+expect_nft_add 0
+
+CASE=pppft-ifup-ppp0-not-shadowed-by-ppp01
+reset_case
+# Exact token matching: ppp01 in the flowtable must NOT suppress adding ppp0.
+export FAKE_STATUS="$WORK/pppoe-generic.json" FAKE_FLOWTABLE="$WORK/ft-withppp01"
+run_pppft ifup wan
+expect_nft_add 1
 rm -rf "$SYSNET/ppp0"
 mkdir -p "$SYSNET/pppoe-wan"
 

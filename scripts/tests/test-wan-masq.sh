@@ -25,10 +25,19 @@ MASQ="${WAN_MASQ_UNDER_TEST:-$REPO_ROOT/target/linux/airoha/an7581/base-files/us
 BASE_FILES="$REPO_ROOT/target/linux/airoha/an7581/base-files"
 
 FAILED=0
+CASE=""
+CASE_FAILED=0
 
 fail() {
 	printf 'FAIL: %s\n' "$*" >&2
 	FAILED=1
+	CASE_FAILED=1
+}
+
+finish_case() {
+	if [ -n "$CASE" ] && [ "$CASE_FAILED" = 0 ]; then
+		printf 'ok   %s\n' "$CASE"
+	fi
 }
 
 [ -f "$MASQ" ] || fail "$MASQ is missing"
@@ -116,10 +125,13 @@ STUB
 
 cat >"$STUBS/nft" <<'STUB'
 #!/bin/sh
-# nft stub: only "list chain inet fw4 srcnat_wan" is modelled.  The chain body
-# comes from FAKE_NFT_CHAIN (one rule per line); an empty value means the chain
-# does not exist, which is what `nft list chain` reports as an error.
+# nft stub: models "list table inet fw4" and "list chain inet fw4 srcnat_wan".
+# FAKE_NFT_TABLE_RC controls whether table inet fw4 can be read at all;
+# FAKE_NFT_CHAIN holds the chain rules (empty means the chain is absent).
 printf '%s\n' "$*" >>"$FAKE_LOG"
+if [ "${1:-}" = list ] && [ "${2:-}" = table ] && [ "${3:-}" = inet ] && [ "${4:-}" = fw4 ]; then
+	exit "${FAKE_NFT_TABLE_RC:-0}"
+fi
 [ "${1:-}" = list ] && [ "${5:-}" = srcnat_wan ] || exit 1
 [ -n "${FAKE_NFT_CHAIN:-}" ] || exit 1
 printf 'table inet fw4 {\n\tchain srcnat_wan {\n%s\n\t}\n}\n' "$FAKE_NFT_CHAIN"
@@ -171,9 +183,10 @@ reset_case() {
 	FAKE_FW_RELOAD_RC=0
 	# Live ruleset seen by the nft stub: one IPv4 masquerade rule in
 	# srcnat_wan, i.e. the state the store above describes.
+	FAKE_NFT_TABLE_RC=0
 	FAKE_NFT_CHAIN='		meta nfproto ipv4 masquerade'
 	unset WM_NFT
-	export FAKE_PROTO FAKE_UBUS_EMPTY FAKE_FW_RELOAD_RC FAKE_NFT_CHAIN
+	export FAKE_PROTO FAKE_UBUS_EMPTY FAKE_FW_RELOAD_RC FAKE_NFT_TABLE_RC FAKE_NFT_CHAIN
 }
 
 # run <args...>: captures stdout/stderr and the exit status in RC.
@@ -184,8 +197,9 @@ run() {
 }
 
 begin() {
+	finish_case
 	CASE=$1
-	printf 'ok   %s\n' "$CASE"
+	CASE_FAILED=0
 }
 
 expect_rc() {
@@ -261,7 +275,18 @@ FAKE_PROTO=pppoe
 export WM_NFT="$WORK/no-such-nft"
 run status
 expect_rc 0
-expect_out 'live:  unknown (cannot run'
+expect_out 'live:  unknown (cannot read table inet fw4)'
+
+begin status-live-unknown-when-table-unreadable
+reset_case
+# nft exists in PATH, but cannot read table inet fw4 (e.g. non-root EPERM or
+# fw4 table absent): must report unknown rather than falsely claiming off.
+FAKE_PROTO=pppoe
+FAKE_NFT_TABLE_RC=1
+FAKE_NFT_CHAIN=""
+run status
+expect_rc 0
+expect_out 'live:  unknown (cannot read table inet fw4)'
 
 begin status-unset
 reset_case
@@ -462,6 +487,17 @@ run off --reload
 expect_rc 0
 expect_out 'firewall reloaded'
 
+begin reload-off-fails-when-table-unreadable
+reset_case
+# If nft cannot read table inet fw4, "off --reload" must not misread an empty
+# chain listing as verified "off".
+FAKE_PROTO=pppoe
+FAKE_NFT_TABLE_RC=1
+FAKE_NFT_CHAIN=""
+run off --reload
+expect_rc 6
+expect_err 'cannot verify the live ruleset'
+
 begin reload-mismatch-off-is-reported
 reset_case
 FAKE_PROTO=pppoe
@@ -510,6 +546,7 @@ expect_err 'usage: wan-masq status'
 run bogus
 expect_rc 2
 
+finish_case
 [ "$FAILED" = 0 ] || {
 	printf 'wan-masq cases failed\n' >&2
 	exit 1

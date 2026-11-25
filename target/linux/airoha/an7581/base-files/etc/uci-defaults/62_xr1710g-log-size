@@ -1,0 +1,41 @@
+#!/bin/sh
+#
+# Raise the syslog ring on the Gemtek XR1710G from the OpenWrt default
+# 128 KiB to 512 KiB.
+#
+# The r20 live review found logd -S 128 with the stock
+# system.@system[0].log_size=128, and everything before 19:03:55 - about
+# nine minutes after boot - already evicted.  At the time all 980 hostapd
+# lines were one unsolicited RRM report, which
+# 820-AP-lower-unsolicited-link-measurement-report-to-debug.patch now logs
+# at MSG_EXCESSIVE; this script keeps the next noisy daemon from eating
+# the boot log in the same way.
+#
+# Only the stock default is rewritten, so an operator choice (or a config
+# restored from a backup) always wins.  Plain UCI, reversible with
+# `uci revert system; reboot`; nothing here touches the EEPROM, the regdb,
+# the SKU table or the calibration data.
+#
+# Runs from /etc/init.d/boot (START=10) before log starts, which is where
+# logd reads log_size from.
+
+. /lib/functions.sh
+
+case "$(board_name)" in
+gemtek,xr1710g-ubi) ;;
+*) exit 0 ;;
+esac
+
+cur=$(uci -q get system.@system[0].log_size)
+[ -n "$cur" ] || cur=128
+[ "$cur" = "128" ] || exit 0
+
+uci -q set system.@system[0].log_size='512'
+uci -q commit system
+# logd only starts at START=12, after this START=10 hook, so `logger` would
+# write to a /dev/log nobody listens on yet and the line would be lost. Put it
+# in the kernel ring buffer instead (readable with `dmesg`), best effort: an
+# unwritable /dev/kmsg must not fail the boot hook.
+[ -e /dev/kmsg ] && printf 'xr1710g-log-size: raised system log_size from 128 to 512 KiB (boot log was lost in 9 min)\n' > /dev/kmsg 2>/dev/null
+
+exit 0

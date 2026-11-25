@@ -128,6 +128,7 @@ wan_proto() {
 # answer cannot be known at all; an absent chain simply means "off".
 live_masq() {
 	command -v "$NFT" >/dev/null 2>&1 || return 1
+	"$NFT" list table inet fw4 >/dev/null 2>&1 || return 1
 	"$NFT" list chain inet fw4 "srcnat_$ZONE" 2>/dev/null |
 		grep -Eq 'nfproto ipv4[[:space:]]+(masquerade|fullcone)' && echo on ||
 		echo off
@@ -149,7 +150,7 @@ do_status() {
 	if l=$(live_masq); then
 		printf 'live:  masquerade %s\n' "$l"
 	else
-		printf 'live:  unknown (cannot run %s)\n' "$NFT"
+		printf 'live:  unknown (cannot read table inet fw4)\n'
 	fi
 	if [ -e "$BAK" ]; then
 		printf 'backup: %s\n' "$BAK"

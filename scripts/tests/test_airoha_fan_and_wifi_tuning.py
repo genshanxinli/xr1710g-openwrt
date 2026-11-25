@@ -17,11 +17,26 @@ Two defects, both observed on the board:
 
 What is asserted, offline and without hardware:
 
-  * ``boot()`` logs the tachometer/mode line, logs a missing hwmon once, and
-    leaves the curve alone when the LuCI app is installed;
-  * the monitor pins ``pwm1_enable=1`` + ``pwm1=255`` after three hot
-    samples with a stalled tach, logs exactly once per stall, and touches
-    nothing when the board is cool or the fan is spinning;
+  * ``boot()`` logs the tachometer, ``pwm1`` and ``pwm1_enable`` line, logs a
+    missing hwmon once, and leaves the curve alone when the LuCI app is
+    installed;
+  * the monitor confirms a single ``fan1_input=0`` with a re-read before it
+    counts as a stall: with ``FAILSAFE_SAMPLES=1`` and a tach that answers
+    0 once and 900 on the re-read, nothing is forced; three confirmed hot
+    samples still pin ``pwm1_enable=1`` + ``pwm1=255``, log exactly once per
+    stall with ``pwm1``/``pwm1_enable``, and one or two confirmed samples
+    write nothing at all;
+  * a hot manual ``pwm1=0`` is the stopped fan #380 measured, so the monitor
+    forces 255 once, but only after the supervision slot has had its sample;
+    a cool manual 0 is still "0 = Off" and left alone;
+  * one shot after two samples the monitor re-applies the stock curve when
+    the selected mode is not manual and ``pwm1_enable`` is not 2 (or ``pwm1``
+    is 0), reads the mode back and logs it; manual mode is never touched, and
+    an auto-selected curve that never landed (``pwm1_enable=1``, ``pwm1=0``,
+    hot) is healed instead of being misread as a manual zero;
+  * both force paths read ``pwm1`` back: a force whose write did not land
+    (read-only attributes) logs the mismatch, does not latch the episode,
+    and tries again on the next sample;
   * the monitor reports a missing hwmon once, not on every sample;
   * ``51_wireless-tuning`` promotes radio2 only when the section exists, its
     ``band`` is ``6g`` (or unset) and ``iw phy`` lists 6135 MHz; promotes
@@ -30,9 +45,12 @@ What is asserted, offline and without hardware:
 
 Red half: the fixed scripts are read through ``AIROHA_FAN_UNDER_TEST`` and
 ``WIRELESS_DEFAULTS_UNDER_TEST``.  Run this file against copies with the old
-bodies (``git show HEAD:...``) and it fails on the first assertion that
-matters: no hwmon log line, no 0-rpm fail-safe, and radio2 promoted on a
-2.4 GHz radio.
+bodies (``git show HEAD:<path> > /tmp/airoha_fan``, then
+``AIROHA_FAN_UNDER_TEST=/tmp/airoha_fan``) and it fails on the first
+assertion that matters: no ``pwm1`` in the boot log, no
+hot manual-zero force, no stock-curve re-apply and read-back (so a hot
+``pwm1_enable=1 pwm1=0`` stays manual instead of healing), a lone 0 forced
+when ``FAILSAFE_SAMPLES=1``, and radio2 promoted on a 2.4 GHz radio.
 
 Run from the repository root:
 
@@ -73,6 +91,34 @@ while [ $# -gt 1 ]; do
 	esac
 done
 printf '%s %s\n' "$tag" "$*" >> "$MOCK_LOGGER_LOG"
+'''
+
+MOCK_UCI_MODE = r'''#!/bin/sh
+[ "$1" = "-q" ] && shift
+[ "$1" = "get" ] && [ "$2" = "fan.settings.mode" ] || exit 1
+cat "$MOCK_FAN_MODE"
+'''
+
+# Makes every first read of fan1_input return 0 and the confirmation read
+# return 900, so a lone 0 sample is distinguishable from a confirmed stall.
+MOCK_CAT = r'''#!/bin/sh
+case "$1" in
+*/fan1_input)
+	n=0
+	[ -f "$MOCK_TACH_COUNTER" ] && read -r n < "$MOCK_TACH_COUNTER"
+	n=${n:-0}
+	n=$((n + 1))
+	echo "$n" > "$MOCK_TACH_COUNTER"
+	if [ $((n % 2)) -eq 1 ]; then
+		echo 0
+	else
+		echo 900
+	fi
+	;;
+*)
+	exec @REAL_CAT@ "$@"
+	;;
+esac
 '''
 
 MOCK_UCI = r'''#!/usr/bin/env python3
@@ -158,8 +204,11 @@ class FanHarness:
         self.bin = self.tmp / "bin"
         self.bin.mkdir()
         write_exec(self.bin / "logger", MOCK_LOGGER)
+        write_exec(self.bin / "uci", MOCK_UCI_MODE)
         self.log = self.tmp / "logger.log"
         self.log.write_text("")
+        self.mode_file = self.tmp / "fan.mode"
+        self.tach_counter = self.tmp / "tach.counter"
         self.hwmon_root = self.tmp / "hwmon"
         self.hwmon_root.mkdir()
         self.luci_init = self.tmp / "fan"
@@ -183,20 +232,30 @@ class FanHarness:
             (device / ("pwm1_auto_point%d_pwm" % index)).write_text("0\n")
         return device
 
-    def install_luci(self):
-        write_exec(self.luci_init, "#!/bin/sh\n")
+    def install_luci(self, body="#!/bin/sh\n"):
+        write_exec(self.luci_init, body)
 
-    def run(self, action, samples=0):
+    def set_mode(self, mode):
+        self.mode_file.write_text(mode + "\n")
+
+    def set_alternating_tach(self):
+        real_cat = shutil.which("cat") or "/bin/cat"
+        write_exec(self.bin / "cat", MOCK_CAT.replace("@REAL_CAT@", real_cat))
+
+    def run(self, action, samples=0, failsafe_samples=3, zero_confirm_sleep=0):
         env = dict(os.environ)
         env.update({
             "PATH": "%s:%s" % (self.bin, os.environ.get("PATH", "/usr/bin:/bin")),
             "MOCK_LOGGER_LOG": str(self.log),
+            "MOCK_FAN_MODE": str(self.mode_file),
+            "MOCK_TACH_COUNTER": str(self.tach_counter),
             "AIROHA_FAN_HWMON_ROOT": str(self.hwmon_root),
             "AIROHA_FAN_LUCI_INIT": str(self.luci_init),
             "AIROHA_FAN_MONITOR_MAX_SAMPLES": str(samples),
-            "AIROHA_FAN_FAILSAFE_SAMPLES": "3",
+            "AIROHA_FAN_FAILSAFE_SAMPLES": str(failsafe_samples),
             "AIROHA_FAN_FAILSAFE_INTERVAL": "0",
             "AIROHA_FAN_FAILSAFE_TEMP": "45000",
+            "AIROHA_FAN_ZERO_CONFIRM_SLEEP": str(zero_confirm_sleep),
         })
         program = "board_name() { echo %s; }; . \"%s\"; %s" % (BOARD, self.script, action)
         return subprocess.run(
@@ -222,6 +281,7 @@ class FanTest(unittest.TestCase):
         logs = "\n".join(self.fan.log_lines())
         self.assertIn("temp1_input=51000", logs)
         self.assertIn("fan1_input=0", logs)
+        self.assertIn("pwm1=54", logs)
         self.assertIn("pwm1_enable=2", logs)
         self.assertEqual((device / "pwm1_enable").read_text().strip(), "2")
         self.assertEqual((device / "pwm1_auto_point1_temp").read_text().strip(),
@@ -256,7 +316,22 @@ class FanTest(unittest.TestCase):
         forcing = [line for line in self.fan.log_lines()
                    if "forcing pwm1=255" in line]
         self.assertEqual(len(forcing), 1, self.fan.log_lines())
+        self.assertIn("pwm1_enable=2", forcing[0])
+        self.assertIn("pwm1=54", forcing[0])
         self.assertEqual(len(self.fan.log_lines()), 1, "one line per stall")
+
+    def test_monitor_waits_for_several_samples_before_forcing(self):
+        # Probe B: one or two confirmed hot samples are not a stall yet.  The
+        # once-per-episode test above would stay green if the monitor went
+        # back to forcing on the first sample; this one pins the timing.
+        device = self.fan.add_hwmon(temp="52000", fan="0", pwm_enable="2",
+                                    pwm="54")
+        for samples in (1, 2):
+            self.fan.run("monitor_fan 0", samples=samples)
+            self.assertEqual((device / "pwm1").read_text().strip(), "54",
+                             "forced after %d sample(s)" % samples)
+            self.assertEqual(self.fan.log_lines(), [],
+                             "logged after %d sample(s)" % samples)
 
     def test_monitor_leaves_a_cool_stalled_fan_alone(self):
         device = self.fan.add_hwmon(temp="30000", fan="0", pwm_enable="2",
@@ -280,20 +355,310 @@ class FanTest(unittest.TestCase):
         self.fan.run("monitor_fan 0", samples=3)
         self.assertEqual(len(self.fan.log_lines()), 1, self.fan.log_lines())
 
-    def test_monitor_leaves_a_commanded_zero_pwm_alone(self):
-        # LuCI's manual_pwm=0 ("0 = Off") is a commanded stop: a 0 tach above
-        # 45 C must not be read as a stall and latched to full PWM.
+    def test_monitor_forces_a_hot_manual_zero_once(self):
+        # LuCI's manual_pwm=0 ("0 = Off") is a commanded stop at a cool
+        # board, but above 45 C a commanded 0 is exactly the stopped fan
+        # #380 captured: force 255 once, never once per sample.
+        self.fan.set_mode("manual")
         device = self.fan.add_hwmon(temp="46000", fan="0", pwm_enable="1",
                                     pwm="0")
         result = self.fan.run("monitor_fan 0", samples=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((device / "pwm1_enable").read_text().strip(), "1")
+        self.assertEqual((device / "pwm1").read_text().strip(), "255")
+        forcing = [line for line in self.fan.log_lines()
+                   if "manual zero" in line]
+        self.assertEqual(len(forcing), 1, self.fan.log_lines())
+        self.assertIn("pwm1_enable=1", forcing[0])
+        self.assertIn("pwm1=0", forcing[0])
+        self.assertIn("forcing pwm1=255", forcing[0])
+        self.assertEqual(len(self.fan.log_lines()), 1, self.fan.log_lines())
+
+    def test_monitor_defers_the_manual_zero_force_to_the_second_sample(self):
+        # A manual zero on the first sample is also what an auto curve that
+        # never landed looks like, and at boot it may be the pre-S99fan
+        # transient.  The force waits for the supervision slot, then fires.
+        self.fan.set_mode("manual")
+        device = self.fan.add_hwmon(temp="46000", fan="0", pwm_enable="1",
+                                    pwm="0")
+        self.fan.run("monitor_fan 0", samples=1)
+        self.assertEqual((device / "pwm1").read_text().strip(), "0",
+                         "forced on the first sample")
+        self.assertEqual(self.fan.log_lines(), [])
+        self.fan.run("monitor_fan 0", samples=2)
+        self.assertEqual((device / "pwm1").read_text().strip(), "255")
+        self.assertEqual(
+            len([line for line in self.fan.log_lines()
+                 if "manual zero" in line]), 1, self.fan.log_lines())
+
+    def test_monitor_retries_when_the_force_write_does_not_land(self):
+        # Probe D: read-only pwm1_enable/pwm1 turn both echoes into no-ops.
+        # The force must neither claim success nor latch the episode: every
+        # later sample reports the mismatch and tries again.
+        if os.geteuid() == 0:
+            self.skipTest("0444 does not stop root from writing")
+        self.fan.set_mode("manual")
+        device = self.fan.add_hwmon(temp="46000", fan="0", pwm_enable="1",
+                                    pwm="0")
+        (device / "pwm1_enable").chmod(0o444)
+        (device / "pwm1").chmod(0o444)
+        result = self.fan.run("monitor_fan 0", samples=3)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((device / "pwm1").read_text().strip(), "0")
+        retried = [line for line in self.fan.log_lines()
+                   if "force write did not land" in line]
+        self.assertGreaterEqual(len(retried), 2, self.fan.log_lines())
+        for line in retried:
+            self.assertIn("will retry", line)
+            self.assertIn("pwm1=0", line)
+        self.assertNotIn("forcing pwm1=255", "\n".join(self.fan.log_lines()))
+
+    def test_monitor_leaves_a_cool_manual_zero_alone(self):
+        self.fan.set_mode("manual")
+        device = self.fan.add_hwmon(temp="30000", fan="0", pwm_enable="1",
+                                    pwm="0")
+        self.fan.run("monitor_fan 0", samples=10)
+        self.assertEqual((device / "pwm1_enable").read_text().strip(), "1")
         self.assertEqual((device / "pwm1").read_text().strip(), "0")
         self.assertEqual(self.fan.log_lines(), [])
 
+    def test_monitor_reapplies_the_stock_curve_when_auto_never_landed(self):
+        # LuCI writes enable=2 at its own S99; if that write did not land the
+        # controller stays in manual.  Once the board warms above FAILSAFE_TEMP
+        # and after a couple of samples, the monitor re-applies the stock curve
+        # (when /etc/init.d/fan is absent) and reads the mode back.
+        self.fan.set_mode("auto")
+        device = self.fan.add_hwmon(temp="48000", fan="826", pwm_enable="1",
+                                    pwm="0")
+        result = self.fan.run("monitor_fan 0", samples=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((device / "pwm1_enable").read_text().strip(), "2")
+        self.assertEqual((device / "pwm1_auto_point1_temp").read_text().strip(),
+                         "40000")
+        self.assertEqual((device / "pwm1_auto_point4_pwm").read_text().strip(),
+                         "199")
+        reapply = [line for line in self.fan.log_lines()
+                   if "re-applying the stock curve" in line]
+        self.assertEqual(len(reapply), 1, self.fan.log_lines())
+        self.assertIn("pwm1_enable=1", reapply[0])
+        self.assertIn("pwm1=0", reapply[0])
+        readback = [line for line in self.fan.log_lines()
+                    if "stock curve re-applied" in line]
+        self.assertEqual(len(readback), 1, self.fan.log_lines())
+        self.assertIn("pwm1_enable=2", readback[0])
+
+    def test_monitor_preserves_cool_quiet_curve_with_zero_pwm(self):
+        # Cold boot or quiet curves legitimately command pwm1=0 below
+        # FAILSAFE_TEMP (45 C).  Supervision must wait until temp > FAILSAFE_TEMP
+        # so it never clobbers a cool curve with the stock curve.
+        self.fan.set_mode("auto")
+        device = self.fan.add_hwmon(temp="38000", fan="0", pwm_enable="2",
+                                    pwm="0")
+        (device / "pwm1_auto_point1_temp").write_text("42000\n")
+        result = self.fan.run("monitor_fan 0", samples=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((device / "pwm1_auto_point1_temp").read_text().strip(),
+                         "42000", "cool quiet curve was overwritten")
+        self.assertEqual((device / "pwm1_enable").read_text().strip(), "2")
+        self.assertEqual(self.fan.log_lines(), [])
+
+    def test_monitor_supervision_prefers_luci_fan_reload_before_stock_curve(self):
+        # When /etc/init.d/fan is executable, supervision must try its reload
+        # first so the user's configured UCI curve wins over the stock curve.
+        self.fan.set_mode("auto")
+        device = self.fan.add_hwmon(temp="50000", fan="826", pwm_enable="1",
+                                    pwm="0")
+        reload_log = self.fan.tmp / "luci-reload.log"
+        self.fan.install_luci(
+            "#!/bin/sh\n"
+            f'echo "$1" >> "{reload_log}"\n'
+            f'echo 42000 > "{device}/pwm1_auto_point1_temp"\n'
+            f'echo 69 > "{device}/pwm1"\n'
+            f'echo 2 > "{device}/pwm1_enable"\n'
+        )
+        result = self.fan.run("monitor_fan 0", samples=4)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(reload_log.exists(), "/etc/init.d/fan reload was not called")
+        self.assertEqual(reload_log.read_text().strip(), "reload")
+        self.assertEqual((device / "pwm1_enable").read_text().strip(), "2")
+        self.assertEqual((device / "pwm1_auto_point1_temp").read_text().strip(),
+                         "42000", "stock curve clobbered LuCI curve after successful reload")
+        self.assertNotIn("stock curve re-applied", "\n".join(self.fan.log_lines()))
+
+    def test_monitor_supervision_falls_back_to_stock_curve_when_luci_reload_fails(self):
+        # If /etc/init.d/fan reload fails or does not restore auto mode,
+        # supervision falls back to apply_stock_curve.
+        self.fan.set_mode("auto")
+        device = self.fan.add_hwmon(temp="50000", fan="826", pwm_enable="1",
+                                    pwm="0")
+        reload_log = self.fan.tmp / "luci-reload-fail.log"
+        self.fan.install_luci(
+            "#!/bin/sh\n"
+            f'echo "$1" >> "{reload_log}"\n'
+            "exit 1\n"
+        )
+        result = self.fan.run("monitor_fan 0", samples=4)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(reload_log.exists(), "/etc/init.d/fan reload was not called")
+        self.assertEqual(reload_log.read_text().strip(), "reload")
+        self.assertEqual((device / "pwm1_enable").read_text().strip(), "2")
+        self.assertEqual((device / "pwm1_auto_point1_temp").read_text().strip(),
+                         "40000")
+        self.assertIn("stock curve re-applied", "\n".join(self.fan.log_lines()))
+
+    def test_monitor_applies_stock_curve_on_late_bound_nct7802(self):
+        # Minimal image (no /etc/init.d/fan): if nct7802 was absent during
+        # boot() (reported_missing=1) and binds later while cool, monitor_fan
+        # must apply the stock curve immediately on the first sample it appears
+        # instead of leaving the chip unconfigured.
+        device = self.fan.add_hwmon(temp="35000", fan="800", pwm_enable="1",
+                                    pwm="0")
+        result = self.fan.run("monitor_fan 1", samples=1)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((device / "pwm1_enable").read_text().strip(), "2")
+        self.assertEqual((device / "pwm1_auto_point1_temp").read_text().strip(),
+                         "40000")
+        self.assertEqual((device / "pwm1_auto_point4_pwm").read_text().strip(),
+                         "199")
+
+    def test_monitor_late_bind_runs_luci_reload_when_installed(self):
+        # With /etc/init.d/fan executable, late-bound nct7802 must invoke
+        # `/etc/init.d/fan reload` first (preserving LuCI curve) and mark
+        # healed=1 so supervision does not overwrite it on the same sample.
+        device = self.fan.add_hwmon(temp="50000", fan="800", pwm_enable="1",
+                                    pwm="0")
+        reload_log = self.fan.tmp / "late-luci.log"
+        self.fan.install_luci(
+            "#!/bin/sh\n"
+            f'echo "$1" >> "{reload_log}"\n'
+            f'echo 43000 > "{device}/pwm1_auto_point1_temp"\n'
+            f'echo 60 > "{device}/pwm1"\n'
+            f'echo 2 > "{device}/pwm1_enable"\n'
+        )
+        result = self.fan.run("monitor_fan 1", samples=1)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(reload_log.exists(), "late-bind did not call /etc/init.d/fan reload")
+        self.assertEqual(reload_log.read_text().strip(), "reload")
+        self.assertEqual((device / "pwm1_enable").read_text().strip(), "2")
+        self.assertEqual((device / "pwm1_auto_point1_temp").read_text().strip(),
+                         "43000")
+
+    def test_monitor_late_bind_falls_back_to_stock_when_luci_reload_fails(self):
+        device = self.fan.add_hwmon(temp="35000", fan="800", pwm_enable="1",
+                                    pwm="0")
+        reload_log = self.fan.tmp / "late-luci-fail.log"
+        self.fan.install_luci(
+            "#!/bin/sh\n"
+            f'echo "$1" >> "{reload_log}"\n'
+            "exit 1\n"
+        )
+        result = self.fan.run("monitor_fan 1", samples=1)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(reload_log.exists(), "late-bind did not try /etc/init.d/fan reload")
+        self.assertEqual((device / "pwm1_enable").read_text().strip(), "2")
+        self.assertEqual((device / "pwm1_auto_point1_temp").read_text().strip(),
+                         "40000")
+
+    def test_monitor_forces_full_pwm_when_hot_auto_stays_zero_pwm_and_zero_rpm(self):
+        # Minimal image (no LuCI): if temp > FAILSAFE_TEMP in auto mode and
+        # pwm1 stays 0 alongside fan1_input=0 even after supervision, the
+        # failsafe must NOT skip the stall check because pwm1=0.
+        device = self.fan.add_hwmon(temp="52000", fan="0", pwm_enable="2",
+                                    pwm="0")
+        result = self.fan.run("monitor_fan 0", samples=6, failsafe_samples=3)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((device / "pwm1_enable").read_text().strip(), "1")
+        self.assertEqual((device / "pwm1").read_text().strip(), "255")
+        self.assertIn("forcing pwm1=255", "\n".join(self.fan.log_lines()))
+
+    def test_monitor_heals_a_hot_auto_zero_without_a_manual_force(self):
+        # Probe A: the exact #380 shape at boot -- pwm1_enable=1, pwm1=0 and
+        # the selected mode is auto.  The first sample cannot tell this from
+        # a manual zero, so the force waits; the second sample heals the
+        # curve, and no "manual zero" line is ever written.
+        self.fan.set_mode("auto")
+        device = self.fan.add_hwmon(temp="52000", fan="0", pwm_enable="1",
+                                    pwm="0")
+        result = self.fan.run("monitor_fan 0", samples=4)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((device / "pwm1_enable").read_text().strip(), "2")
+        self.assertEqual((device / "pwm1_auto_point1_temp").read_text().strip(),
+                         "40000")
+        self.assertEqual((device / "pwm1_auto_point4_pwm").read_text().strip(),
+                         "199")
+        logs = "\n".join(self.fan.log_lines())
+        self.assertIn("stock curve re-applied", logs)
+        self.assertNotIn("manual zero", logs)
+        self.assertNotIn("forcing pwm1=255", logs)
+
+    def test_monitor_does_not_touch_the_curve_in_manual_mode(self):
+        self.fan.set_mode("manual")
+        device = self.fan.add_hwmon(temp="30000", fan="900", pwm_enable="1",
+                                    pwm="60")
+        self.fan.run("monitor_fan 0", samples=10)
+        self.assertEqual((device / "pwm1_enable").read_text().strip(), "1")
+        self.assertEqual((device / "pwm1").read_text().strip(), "60")
+        self.assertEqual(self.fan.log_lines(), [])
+
+    def test_read_tach_confirms_a_lone_zero_with_a_reread(self):
+        # fan1_input alternates 0/900 on successive reads: the first read of
+        # fan1_input is 0 and the confirmation read is 900, so read_tach must
+        # report 900.  A lone 0 sample is not a stall.
+        self.fan.set_alternating_tach()
+        device = self.fan.add_hwmon(temp="52000", fan="0", pwm_enable="2",
+                                    pwm="54")
+        result = self.fan.run('read_tach "%s"' % device, samples=0)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "900")
+        self.assertEqual(result.stderr, "")
+
+    def test_read_tach_keeps_a_confirmed_zero(self):
+        self.fan.add_hwmon(temp="52000", fan="0", pwm_enable="2", pwm="54")
+        result = self.fan.run('read_tach "%s/hwmon0"' % self.fan.hwmon_root,
+                              samples=0)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "0")
+
+    def test_monitor_does_not_count_a_lone_zero_as_a_stall(self):
+        # The tach answers 0 on the first read and 900 on the confirmation
+        # read, so every sample is healthy.  FAILSAFE_SAMPLES=1 makes a
+        # single unconfirmed zero enough to force, which is exactly what the
+        # pre-fix body does; the fixed monitor sees 900 and touches nothing.
+        self.fan.set_alternating_tach()
+        device = self.fan.add_hwmon(temp="52000", fan="0", pwm_enable="2",
+                                    pwm="54")
+        result = self.fan.run("monitor_fan 0", samples=4, failsafe_samples=1)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((device / "pwm1_enable").read_text().strip(), "2")
+        self.assertEqual((device / "pwm1").read_text().strip(), "54")
+        self.assertEqual(self.fan.log_lines(), [])
+
+    def test_read_tach_sleeps_between_zero_confirm_reads(self):
+        # Without a pause between re-reads, nct7802 returns the same cached 0
+        # sample.  read_tach must sleep ZERO_CONFIRM_SLEEP (default 1 s) before
+        # each confirmation read.
+        self.assertIn("AIROHA_FAN_ZERO_CONFIRM_SLEEP:-1", FAN.read_text())
+        sleep_log = self.fan.tmp / "sleep.log"
+        write_exec(
+            self.fan.bin / "sleep",
+            f'#!/bin/sh\necho "$*" >> "{sleep_log}"\n',
+        )
+        self.fan.add_hwmon(temp="52000", fan="0", pwm_enable="2", pwm="54")
+        result = self.fan.run(
+            'read_tach "%s/hwmon0"' % self.fan.hwmon_root,
+            samples=0,
+            zero_confirm_sleep=1,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "0")
+        self.assertTrue(sleep_log.exists(), "read_tach did not sleep between zero confirm reads")
+        self.assertEqual(sleep_log.read_text().splitlines(), ["1", "1"])
+
     def test_boot_starts_only_one_monitor(self):
         spawn_log = self.fan.tmp / "spawn.log"
-        sleeper = subprocess.Popen(["sleep", "10"])
+        sleeper = subprocess.Popen(
+            ["python3", "-c", "import time; time.sleep(10)", "airoha_fan"]
+        )
         self.addCleanup(sleeper.wait)
         self.addCleanup(sleeper.terminate)
         self.fan.pidfile.write_text("%d\n" % sleeper.pid)
@@ -303,6 +668,24 @@ class FanTest(unittest.TestCase):
             samples=0)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(spawn_log.exists(), "a second loop was started")
+
+    def test_boot_restarts_monitor_when_pidfile_reused_by_unrelated_process(self):
+        # A live PID whose /proc/<pid>/cmdline is NOT airoha_fan means the
+        # kernel recycled the PID after a crash; boot() must start a fresh monitor.
+        spawn_log = self.fan.tmp / "spawn.log"
+        unrelated = subprocess.Popen(["sleep", "10"])
+        self.addCleanup(unrelated.wait)
+        self.addCleanup(unrelated.terminate)
+        self.fan.pidfile.write_text("%d\n" % unrelated.pid)
+        self.fan.add_hwmon()
+        result = self.fan.run(
+            'monitor_fan() { echo spawned >> "%s"; }; boot; wait' % spawn_log,
+            samples=0)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(
+            spawn_log.exists() and spawn_log.read_text().count("spawned") == 1,
+            "boot() treated a recycled unrelated PID as a live airoha_fan monitor",
+        )
 
     def test_boot_restarts_the_monitor_when_the_pidfile_is_stale(self):
         spawn_log = self.fan.tmp / "spawn.log"
@@ -322,7 +705,8 @@ class FanTest(unittest.TestCase):
         self.assertTrue(self.fan.pidfile.exists())
 
     def test_stop_kills_the_monitor_and_removes_the_pidfile(self):
-        action = 'sleep 10 & p=$!; echo $p > "%s"; stop; wait $p; ' \
+        action = 'python3 -c "import time; time.sleep(10)" airoha_fan & p=$!; ' \
+                 'echo $p > "%s"; stop; wait $p; ' \
                  'echo "rc=$?"; [ -f "%s" ] && echo pidfile=present || ' \
                  'echo pidfile=removed' % (self.fan.pidfile, self.fan.pidfile)
         result = self.fan.run(action, samples=0)
@@ -334,6 +718,43 @@ class FanTest(unittest.TestCase):
         result = self.fan.run('stop; echo "rc=$?"', samples=0)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("rc=0", result.stdout)
+
+    def test_stop_rejects_zero_negative_and_unrelated_pids(self):
+        # A corrupted pidfile containing 0 or -1 must never pass pid_is_monitor
+        # (where `kill 0` kills the process group and `kill -1` kills all
+        # processes); a live PID belonging to another command must also be
+        # spared while the stale pidfile is removed.
+        for bad_pid in ("0", "-1", "00", "abc"):
+            with self.subTest(bad_pid=bad_pid):
+                kill_log = self.fan.tmp / f"kill-{bad_pid}.log"
+                self.fan.pidfile.write_text(f"{bad_pid}\n")
+                action = (
+                    f'kill() {{ echo "$*" >> "{kill_log}"; return 0; }}; '
+                    f'if pid_is_monitor "{bad_pid}"; then echo match=yes; else echo match=no; fi; '
+                    'stop'
+                )
+                result = self.fan.run(action, samples=0)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("match=no", result.stdout,
+                              f"pid_is_monitor accepted invalid pid {bad_pid!r}")
+                self.assertFalse(
+                    kill_log.exists(),
+                    f"kill was invoked for invalid pid {bad_pid!r}: "
+                    f"{kill_log.read_text() if kill_log.exists() else ''}",
+                )
+                self.assertFalse(self.fan.pidfile.exists())
+
+        unrelated = subprocess.Popen(["sleep", "10"])
+        self.addCleanup(unrelated.wait)
+        self.addCleanup(unrelated.terminate)
+        self.fan.pidfile.write_text(f"{unrelated.pid}\n")
+        result = self.fan.run("stop", samples=0)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIsNone(
+            unrelated.poll(),
+            "stop() killed an unrelated live process whose PID was in the pidfile",
+        )
+        self.assertFalse(self.fan.pidfile.exists())
 
 
 class WirelessHarness:
@@ -375,6 +796,13 @@ class WirelessHarness:
         fixture.write_text(phy_text)
         write_exec(self.bin / "iw", MOCK_IW)
         self._phy = fixture
+
+    def add_iw_status(self, rc=0, stdout=""):
+        write_exec(
+            self.bin / "iw",
+            f"#!/bin/sh\nprintf '%s' '{stdout}'\nexit {rc}\n",
+        )
+        self._phy = ""
 
     def config_sections(self, sections):
         self.state.write_text(json.dumps({"sections": {
@@ -506,6 +934,31 @@ class WirelessTuningTest(unittest.TestCase):
                                            radio1__band=None))
         self.run_tuning()
         self.assertEqual(self.wifi.options("radio1")["channel"], "149")
+
+    def test_radios_promoted_when_iw_phy_exits_nonzero(self):
+        # If `iw phy` fails (e.g. nl80211 not ready at S10 boot), phy_has()
+        # must return 2 ("iw unavailable") rather than collapsing into grep's
+        # exit 1 ("channel absent") and skipping 5/6 GHz tuning permanently.
+        self.wifi.add_iw_status(rc=1, stdout="")
+        self.wifi.config_sections(sections(radio1__channel="36",
+                                           radio1__band="5g",
+                                           radio2__band="6g"))
+        self.run_tuning()
+        self.assertEqual(self.wifi.options("radio1")["channel"], "149")
+        self.assertEqual(self.wifi.options("radio2")["channel"], "37")
+        self.assertEqual(self.wifi.options("radio2")["htmode"], "EHT320")
+
+    def test_radios_promoted_when_iw_phy_output_is_empty(self):
+        # Empty `iw phy` output (rc=0, no wiphy registered yet on first boot)
+        # is also inconclusive and must return 2 rather than "channel absent".
+        self.wifi.add_iw_status(rc=0, stdout="")
+        self.wifi.config_sections(sections(radio1__channel="36",
+                                           radio1__band="5g",
+                                           radio2__band="6g"))
+        self.run_tuning()
+        self.assertEqual(self.wifi.options("radio1")["channel"], "149")
+        self.assertEqual(self.wifi.options("radio2")["channel"], "37")
+        self.assertEqual(self.wifi.options("radio2")["htmode"], "EHT320")
 
 
 if __name__ == "__main__":

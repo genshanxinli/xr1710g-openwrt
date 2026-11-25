@@ -19,14 +19,22 @@ START=99
 # luci-app-airoha-fancontrol; this script does not create it.
 #
 # What both paths lacked is a tachometer check: the live board read
-# fan1_input = 0 at temp1_input = 51 C (#B5) while #74 read 826-830 rpm on
-# the same hardware, and the only thing that reacts to a stopped fan is the
-# 120 C critical trip. So a monitor runs from here even when the LuCI app
-# owns the curve: it re-resolves the hwmon device on every sample (the LuCI
-# script resolves HWMON once at source time and gives up if the device is
-# late), and pins the fan to full PWM when the board is hot and the tach has
-# read zero for several samples in a row. A full PWM is never lowered again
-# automatically; the next boot re-applies the configured curve.
+# fan1_input = 0 at temp1_input = 51 C (#380) while another boot on the same
+# hardware read 826-830 rpm, and the only thing that reacts to a stopped fan
+# is the 120 C critical trip. So a monitor runs from here even when the LuCI
+# app owns the curve: it re-resolves the hwmon device on every sample (the
+# LuCI script resolves HWMON once at source time and gives up if the device
+# is late), confirms a lone 0 rpm with a re-read, and pins the fan to full
+# PWM when the board is hot and the tach has stayed at zero for several
+# confirmed samples. A full PWM is never lowered again automatically; the
+# next boot re-applies the configured curve.
+#
+# The monitor also supervises once: if the selected mode is not manual and
+# the controller is not in auto (pwm1_enable != 2) or auto is asking for
+# pwm1 = 0, the curve the user picked never landed, so the stock curve is
+# re-applied and the mode is read back into logread. A manual preset is left
+# alone -- except that a manual pwm1 = 0 ("0 = Off") above 45 C is a stopped
+# fan at a temperature that needs one, so it is forced to 255 once.
 #
 # There is exactly one monitor: boot() records its pid in MONITOR_PIDFILE and
 # refuses to start a second loop, and stop() kills it, so `restart` replaces
@@ -53,6 +61,20 @@ FAILSAFE_TEMP=${AIROHA_FAN_FAILSAFE_TEMP:-45000}
 FAILSAFE_SAMPLES=${AIROHA_FAN_FAILSAFE_SAMPLES:-5}
 FAILSAFE_INTERVAL=${AIROHA_FAN_FAILSAFE_INTERVAL:-10}
 
+# One-shot supervision: from the second sample (~10 s after start) check
+# that the configured curve actually took effect. LuCI's /etc/init.d/fan owns
+# the curve when installed and writes it at its own S99; a failed or lost
+# write leaves the controller in manual with nobody to correct it.
+SUPERVISE_AFTER=${AIROHA_FAN_SUPERVISE_AFTER:-2}
+
+# fan1_input = 0 is a legal "no pulses" reading, but one sample is not proof
+# of a stall: a single read can land while the chip is updating. Re-read the
+# tach this many times (pausing ZERO_CONFIRM_SLEEP seconds between reads so
+# nct7802's 1 s register cache refreshes) and keep the first nonzero answer
+# before a 0 counts toward FAILSAFE_SAMPLES.
+ZERO_CONFIRM_READS=${AIROHA_FAN_ZERO_CONFIRM_READS:-2}
+ZERO_CONFIRM_SLEEP=${AIROHA_FAN_ZERO_CONFIRM_SLEEP:-1}
+
 # ponytail: test hook, production leaves this empty and watches forever.
 MONITOR_MAX_SAMPLES=${AIROHA_FAN_MONITOR_MAX_SAMPLES:-}
 
@@ -67,6 +89,26 @@ find_nct7802() {
 
 read_hwmon() {
 	cat "$1/$2" 2>/dev/null
+}
+
+# read_tach HWMON
+#
+# Confirm a 0 rpm sample before the fail-safe trusts it. A persistent stall
+# still reads 0 on every re-read; a lone bad or not-yet-updated sample
+# usually does not. Prints the raw reading (empty when the attribute cannot
+# be read), so the caller keeps its "missing attribute means 'should be
+# spinning'" gate.
+read_tach() {
+	local rpm tries=0 recheck
+
+	rpm=$(read_hwmon "$1" fan1_input)
+	while [ "$rpm" = "0" ] && [ "$tries" -lt "$ZERO_CONFIRM_READS" ]; do
+		tries=$((tries + 1))
+		[ "$ZERO_CONFIRM_SLEEP" -gt 0 ] && sleep "$ZERO_CONFIRM_SLEEP"
+		recheck=$(read_hwmon "$1" fan1_input)
+		[ -n "$recheck" ] && [ "$recheck" != "0" ] && rpm=$recheck
+	done
+	echo "$rpm"
 }
 
 apply_stock_curve() {
@@ -88,6 +130,34 @@ apply_stock_curve() {
 	echo 2 > "$hwmon/pwm1_enable" 2>/dev/null
 }
 
+# force_full_pwm HWMON LABEL TEMP FAN PWM_ENABLE PWM
+#
+# Both force paths write the same two attributes, in the same order: manual
+# first, then full duty. Neither may report a success it cannot see. The
+# whole premise of #380 is that a write can silently not land (read-only
+# attribute, a raced sysfs update), and a force that logs victory over a
+# stopped fan locks the episode shut until the 120 C trip.
+#
+# So read pwm1 back. Return 0 and log the one line per episode only when the
+# readback is 255; otherwise log the mismatch and return 1 -- the caller
+# leaves its latch clear and the next sample (10 s later) tries again.
+force_full_pwm() {
+	local hwmon="$1" label="$2" temp="$3" fan="$4" enable="$5" pwm="$6"
+	local readback
+
+	echo 1 > "$hwmon/pwm1_enable" 2>/dev/null
+	echo 255 > "$hwmon/pwm1" 2>/dev/null
+	readback=$(read_hwmon "$hwmon" pwm1)
+	if [ "$readback" = "255" ]; then
+		logger -t airoha_fan \
+			"temp1_input=$temp fan1_input=$fan pwm1_enable=${enable:-?} pwm1=${pwm:-?} $label, forcing pwm1=255"
+		return 0
+	fi
+	logger -t airoha_fan \
+		"temp1_input=$temp fan1_input=$fan pwm1_enable=${enable:-?} pwm1=${pwm:-?} $label, force write did not land (pwm1=${readback:-?}), will retry"
+	return 1
+}
+
 # monitor_fan [already_reported_missing]
 #
 # Watches the tachometer regardless of who owns the curve. Re-resolving the
@@ -96,11 +166,15 @@ apply_stock_curve() {
 # for the rest of the boot if the NCT7802 was not bound yet.
 monitor_fan() {
 	local reported_missing="${1:-0}"
-	local hwmon temp rpm pwm samples=0 zero=0 forced=0
+	local hwmon temp rpm enable pwm mode
+	local samples=0 zero=0 forced=0 manual_forced=0 engaged=0 recovered=0
+	local late_bind_applied=0 healed=0
 
 	[ "$MONITOR_MAX_SAMPLES" = "0" ] && return 0
 
 	while :; do
+		samples=$((samples + 1))
+		healed=0
 		hwmon="$(find_nct7802)"
 
 		if [ -z "$hwmon" ]; then
@@ -109,20 +183,110 @@ monitor_fan() {
 				reported_missing=1
 			fi
 		else
-			reported_missing=0
+			if [ "$reported_missing" -eq 1 ]; then
+				reported_missing=0
+				if [ "$late_bind_applied" -eq 0 ]; then
+					late_bind_applied=1
+					healed=1
+					if [ -x "$LUCI_FAN_INIT" ]; then
+						logger -t airoha_fan "$hwmon appeared late, running $LUCI_FAN_INIT reload"
+						if ! "$LUCI_FAN_INIT" reload >/dev/null 2>&1; then
+							logger -t airoha_fan "$LUCI_FAN_INIT reload failed after late bind, applying stock curve"
+							apply_stock_curve "$hwmon"
+						fi
+					else
+						logger -t airoha_fan "$hwmon appeared late, applying stock curve"
+						apply_stock_curve "$hwmon"
+					fi
+				fi
+			fi
 			temp=$(read_hwmon "$hwmon" temp1_input)
-			rpm=$(read_hwmon "$hwmon" fan1_input)
+			rpm=$(read_tach "$hwmon")
 			pwm=$(read_hwmon "$hwmon" pwm1)
+			enable=$(read_hwmon "$hwmon" pwm1_enable)
 
-			# A tach of 0 that the controller itself asked for is a
-			# commanded stop, not a stall: the LuCI app accepts
-			# manual_pwm=0 ("0 = Off") and then leaves the fan stopped
-			# indefinitely. In auto mode the curve never asks for 0
-			# above 45 C (it asks for 69/95/199), so a real stall still
-			# trips. ${pwm:-1} keeps a missing attribute on the
-			# "should be spinning" side.
+			# One-shot supervision, gated on temp > FAILSAFE_TEMP so cold boot
+			# and quiet curves that legitimately command pwm1 = 0 below 45 C
+			# are never clobbered. When hot and non-manual mode still shows
+			# pwm1_enable != 2 or pwm1 = 0, try /etc/init.d/fan reload first
+			# (when installed) to preserve the user's UCI curve before falling
+			# back to apply_stock_curve.
+			if [ "$recovered" -eq 0 ] && [ "$engaged" -eq 0 ] &&
+			   [ "$healed" -eq 0 ] &&
+			   [ "$samples" -ge "$SUPERVISE_AFTER" ] &&
+			   [ -n "$temp" ] && [ "$temp" -gt "$FAILSAFE_TEMP" ]; then
+				recovered=1
+				mode=$(uci -q get fan.settings.mode 2>/dev/null)
+				if [ "$mode" != "manual" ] &&
+				   { [ "$enable" != "2" ] || [ "${pwm:-0}" = "0" ]; }; then
+					healed=1
+					if [ -x "$LUCI_FAN_INIT" ]; then
+						logger -t airoha_fan \
+							"curve not in effect (pwm1_enable=${enable:-?} pwm1=${pwm:-?} temp1_input=$temp), trying $LUCI_FAN_INIT reload"
+						"$LUCI_FAN_INIT" reload >/dev/null 2>&1
+						enable=$(read_hwmon "$hwmon" pwm1_enable)
+						pwm=$(read_hwmon "$hwmon" pwm1)
+						if [ "$enable" = "2" ] && [ "${pwm:-0}" != "0" ]; then
+							logger -t airoha_fan \
+								"$LUCI_FAN_INIT reload restored curve: pwm1_enable=$enable pwm1=$pwm temp1_input=$temp"
+						fi
+					fi
+					if [ "$enable" != "2" ] || [ "${pwm:-0}" = "0" ]; then
+						logger -t airoha_fan \
+							"curve not in effect (pwm1_enable=${enable:-?} pwm1=${pwm:-?} temp1_input=$temp), re-applying the stock curve"
+						apply_stock_curve "$hwmon"
+						enable=$(read_hwmon "$hwmon" pwm1_enable)
+						pwm=$(read_hwmon "$hwmon" pwm1)
+						if [ "$enable" = "2" ]; then
+							logger -t airoha_fan \
+								"stock curve re-applied: pwm1_enable=$enable pwm1=${pwm:-?} temp1_input=$temp"
+						else
+							logger -t airoha_fan \
+								"stock curve read-back mismatch: pwm1_enable=${enable:-?} (wrote 2) temp1_input=$temp"
+						fi
+					fi
+				fi
+			fi
+
+			# A tach of 0 that the controller itself asked for is a commanded
+			# stop, not a stall: the LuCI app accepts manual_pwm = 0
+			# ("0 = Off") and then leaves the fan stopped. At a cool board
+			# that is a valid choice; above 45 C a commanded 0 is the
+			# stopped-fan state #380 captured, so force it once instead of
+			# waiting for the 120 C trip. A manual pwm1 != 0 is still
+			# checked by the stall branch below.
+			#
+			# Let the supervision slot pass first: an auto-selected curve
+			# that never landed reads exactly the same way on the first
+			# sample (pwm1_enable=1, pwm1=0), and forcing 255 there would
+			# lock the controller in manual before the stock curve ever got
+			# its one chance to heal it.
 			if [ -n "$temp" ] && [ "$temp" -gt "$FAILSAFE_TEMP" ] &&
-			   [ -n "$rpm" ] && [ "$rpm" -eq 0 ] && [ "${pwm:-1}" != "0" ]; then
+			   [ "$enable" = "1" ] && [ "${pwm:-0}" = "0" ] &&
+			   [ "$samples" -ge "$SUPERVISE_AFTER" ]; then
+				if [ "$manual_forced" -eq 0 ]; then
+					if force_full_pwm "$hwmon" "manual zero" \
+					   "$temp" "$rpm" "$enable" "$pwm"; then
+						manual_forced=1
+						zero=0
+						engaged=1
+						# The episode is now reported at full PWM; do not
+						# repeat it while the tach stays at 0.
+						forced=1
+					fi
+				fi
+			else
+				manual_forced=0
+			fi
+
+			# In auto mode the curve never asks for 0 above 45 C (it asks for
+			# 69/95/199), so a confirmed 0 rpm there is a stall even if pwm1
+			# reads 0. Only manual zero (pwm1_enable=1, pwm1=0, handled above)
+			# and the recovery sample itself (giving the fan one interval to
+			# spin up) are excluded here.
+			if [ "$healed" -eq 0 ] && [ -n "$temp" ] && [ "$temp" -gt "$FAILSAFE_TEMP" ] &&
+			   [ -n "$rpm" ] && [ "$rpm" -eq 0 ] &&
+			   ! { [ "$enable" = "1" ] && [ "${pwm:-0}" = "0" ]; }; then
 				zero=$((zero + 1))
 			else
 				zero=0
@@ -130,22 +294,40 @@ monitor_fan() {
 			fi
 
 			if [ "$zero" -ge "$FAILSAFE_SAMPLES" ] && [ "$forced" -eq 0 ]; then
-				echo 1 > "$hwmon/pwm1_enable" 2>/dev/null
-				echo 255 > "$hwmon/pwm1" 2>/dev/null
-				logger -t airoha_fan \
-					"temp1_input=$temp fan1_input=0, forcing pwm1=255"
-				zero=0
-				# One line per stall episode: while the tach stays at 0
-				# the fan is already at full PWM and repeating does not
-				# help anyone reading logread.
-				forced=1
+				if force_full_pwm "$hwmon" "tach zero" \
+				   "$temp" "0" "$enable" "$pwm"; then
+					zero=0
+					engaged=1
+					# One line per stall episode: while the tach stays at 0
+					# the fan is already at full PWM and repeating does not
+					# help anyone reading logread. A write that did not land
+					# logs its own mismatch and is retried next sample.
+					forced=1
+				fi
 			fi
 		fi
 
-		samples=$((samples + 1))
 		[ -n "$MONITOR_MAX_SAMPLES" ] && [ "$samples" -ge "$MONITOR_MAX_SAMPLES" ] && return 0
 		[ "$FAILSAFE_INTERVAL" -gt 0 ] && sleep "$FAILSAFE_INTERVAL"
 	done
+}
+
+# Verify a pidfile refers to a live airoha_fan monitor rather than a PID
+# recycled by an unrelated process.
+pid_is_monitor() {
+	local pid="$1" cmd
+
+	case "$pid" in
+	''|*[!0-9]*|0*) return 1 ;;
+	esac
+	kill -0 "$pid" 2>/dev/null || return 1
+	[ -r /proc/self/cmdline ] || return 0
+	[ -r "/proc/$pid/cmdline" ] || return 1
+	cmd=$(tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
+	case "$cmd" in
+	*airoha_fan*) return 0 ;;
+	*) return 1 ;;
+	esac
 }
 
 boot() {
@@ -154,17 +336,19 @@ boot() {
 	*) return 0 ;;
 	esac
 
-	local hwmon log_missing=0
+	local hwmon log_missing=0 pid
 	hwmon="$(find_nct7802)"
 
-	# One line per boot with the three numbers #B5 needs: a silent 0 rpm
-	# must be distinguishable from a fan nobody programmed.
+	# One line per boot with the numbers #380 needs: a silent 0 rpm must be
+	# distinguishable from a fan nobody programmed, so the pwm value and the
+	# mode are recorded too. pwm1_enable=1 alone does not say whether the
+	# controller is asking for 0 or has simply not switched to auto yet.
 	if [ -z "$hwmon" ]; then
 		logger -t airoha_fan "nct7802 not found, leaving the fan unmanaged"
 		log_missing=1
 	else
 		logger -t airoha_fan \
-			"$hwmon: temp1_input=$(read_hwmon "$hwmon" temp1_input) fan1_input=$(read_hwmon "$hwmon" fan1_input) pwm1_enable=$(read_hwmon "$hwmon" pwm1_enable)"
+			"$hwmon: temp1_input=$(read_hwmon "$hwmon" temp1_input) fan1_input=$(read_hwmon "$hwmon" fan1_input) pwm1=$(read_hwmon "$hwmon" pwm1) pwm1_enable=$(read_hwmon "$hwmon" pwm1_enable)"
 	fi
 
 	# luci-app-airoha-fancontrol owns the hardware once installed.
@@ -173,11 +357,13 @@ boot() {
 	fi
 
 	# One loop only: a second boot (rcS re-run, `start` after `stop`) must not
-	# stack another loop. A pidfile naming a dead process is stale -- the
-	# loop exited, or /var was cleared -- so start again.
-	if [ -f "$MONITOR_PIDFILE" ] &&
-	   kill -0 "$(cat "$MONITOR_PIDFILE" 2>/dev/null)" 2>/dev/null; then
-		return 0
+	# stack another loop. A pidfile naming a dead process or a recycled PID
+	# belonging to another command is stale, so start again.
+	if [ -f "$MONITOR_PIDFILE" ]; then
+		pid=$(cat "$MONITOR_PIDFILE" 2>/dev/null)
+		if pid_is_monitor "$pid"; then
+			return 0
+		fi
 	fi
 
 	monitor_fan "$log_missing" >/dev/null 2>&1 &
@@ -189,7 +375,9 @@ start() {
 }
 
 stop() {
+	local pid
 	[ -f "$MONITOR_PIDFILE" ] || return 0
-	kill "$(cat "$MONITOR_PIDFILE" 2>/dev/null)" 2>/dev/null
+	pid=$(cat "$MONITOR_PIDFILE" 2>/dev/null)
+	pid_is_monitor "$pid" && kill "$pid" 2>/dev/null
 	rm -f "$MONITOR_PIDFILE"
 }

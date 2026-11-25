@@ -18,7 +18,7 @@
 set -eu
 
 ROOT=$(cd -- "$(dirname -- "$0")/../.." && pwd)
-SCRIPT=${WAN_PATH_SCRIPT:-$ROOT/target/linux/airoha/an7581/base-files/usr/sbin/wan-path}
+SCRIPT=${WAN_PATH_UNDER_TEST:-${WAN_PATH_SCRIPT:-$ROOT/target/linux/airoha/an7581/base-files/usr/sbin/wan-path}}
 # Real output captured read-only from an XR1710G running r38047-a86ce12e27
 # (nft 1.1.7).  The last two scenarios replay those bytes instead of
 # hand-written ones, so the parsers are checked against what the device
@@ -342,6 +342,189 @@ expect_grep '"physical_device":"wan"' "$outfile" ubus-fallback
 expect_grep '"member":true' "$outfile" ubus-fallback
 expect_grep '"name":"ft"' "$outfile" ubus-fallback
 expect_no_mutation ubus-fallback
+
+# --- scenario 7: PPPoE with physical link down -> no-carrier first ----------
+#
+# When carrier is 0 on a PPPoE WAN, the link died at the PHY before PPPoE can
+# even dial; reporting no-pppoe-session hides the real root cause (no-carrier).
+
+tree_reset
+add_netdev wan -1 unknown 0
+printf 'Id       Address              Device\n' > "$TREE/proc/net/pppoe"
+FAKE_PROTO=pppoe FAKE_DEVICE=wan
+FAKE_ETHTOOL='Settings for wan:
+	Speed: Unknown!
+	Duplex: Unknown! (255)
+	Link detected: no'
+FAKE_NFT_JSON=''
+FAKE_NFT_TEXT=''
+add_dt_node wan
+if out=$(run_script --json); then rc=0; else rc=$?; fi
+outfile=$TMP/out.7
+printf '%s\n' "$out" > "$outfile"
+expect_rc "$rc" 1 pppoe-no-carrier
+expect_grep '"state":"no-carrier"' "$outfile" pppoe-no-carrier
+expect_no_mutation pppoe-no-carrier
+
+# --- scenario 8: bridge/fb listed before inet/ft in nft -j JSON -------------
+#
+# ft_json must select the inet/ft flowtable specifically (and read devices
+# from that object) instead of taking head -1 across all flowtables.
+
+tree_reset
+add_netdev wan 10000 full 1
+FAKE_PROTO=dhcp FAKE_DEVICE=wan
+FAKE_ETHTOOL='Settings for wan:
+	Speed: 10000Mb/s
+	Duplex: Full
+	Link detected: yes'
+FAKE_NFT_JSON='{"nftables":[{"metainfo":{"json_schema_version":1}},{"flowtable":{"family":"bridge","name":"fb","table":"fw4","dev":["lan2","lan3"]}},{"flowtable":{"family":"inet","name":"ft","table":"fw4","dev":["lan2","wan"]}}]}'
+FAKE_NFT_TEXT=''
+add_dt_node wan
+if out=$(run_script --json); then rc=0; else rc=$?; fi
+outfile=$TMP/out.8
+printf '%s\n' "$out" > "$outfile"
+expect_grep '"family":"inet"' "$outfile" json-bridge-first
+expect_grep '"name":"ft"' "$outfile" json-bridge-first
+expect_grep '"member":true' "$outfile" json-bridge-first
+expect_no_mutation json-bridge-first
+
+# --- scenario 9: bridge/fb listed before inet/ft in nft text ----------------
+#
+# Same ordering reversal against the text fallback parser.
+
+tree_reset
+add_netdev wan 10000 full 1
+FAKE_PROTO=dhcp FAKE_DEVICE=wan
+FAKE_ETHTOOL='Settings for wan:
+	Speed: 10000Mb/s
+	Duplex: Full
+	Link detected: yes'
+FAKE_NFT_JSON=''
+FAKE_NFT_TEXT='table bridge fw4 {
+	flowtable fb {
+		hook ingress priority filter
+		devices = { "lan2", "lan3" }
+		flags offload
+	}
+}
+table inet fw4 {
+	flowtable ft {
+		hook ingress priority filter
+		devices = { "lan2", "wan" }
+		flags offload
+	}
+}'
+add_dt_node wan
+if out=$(run_script --json); then rc=0; else rc=$?; fi
+outfile=$TMP/out.9
+printf '%s\n' "$out" > "$outfile"
+expect_grep '"family":"inet"' "$outfile" text-bridge-first
+expect_grep '"name":"ft"' "$outfile" text-bridge-first
+expect_grep '"member":true' "$outfile" text-bridge-first
+expect_no_mutation text-bridge-first
+
+# --- scenario 10: PPE bind lookup requires exact token match ----------------
+#
+# Substring/regex grep would count "wan2", "pppoe-wan", or "eth0X2" (dot as
+# wildcard for "eth0.2") as entries belonging to the physical WAN netdev.
+
+tree_reset
+add_netdev wan 10000 full 1
+FAKE_PROTO=dhcp FAKE_DEVICE=wan
+FAKE_ETHTOOL='Settings for wan:
+	Speed: 10000Mb/s
+	Duplex: Full
+	Link detected: yes'
+FAKE_NFT_JSON='{"nftables":[{"flowtable":{"family":"inet","name":"ft","dev":["wan"]}}]}'
+add_dt_node wan
+printf '2\n' > "$TREE/dt/soc/ethernet@1fb50000/qdam-id"
+mkdir -p "$TREE/debugfs/ppe"
+printf 'entries 32768 (sram 16384, dram 16384)\nbound 2 (0%%) unbound 0\n' \
+	> "$TREE/debugfs/ppe/usage"
+printf 'gdm2 wan2\ngdm2 pppoe-wan\n' > "$TREE/debugfs/ppe/bind"
+if out=$(run_script --json); then rc=0; else rc=$?; fi
+outfile=$TMP/out.10a
+printf '%s\n' "$out" > "$outfile"
+expect_grep '"interface_entries":null' "$outfile" ppe-substring-no-match
+
+tree_reset
+add_netdev eth0.2 10000 full 1
+FAKE_PROTO=dhcp FAKE_DEVICE=eth0.2
+FAKE_ETHTOOL='Settings for eth0.2:
+	Speed: 10000Mb/s
+	Duplex: Full
+	Link detected: yes'
+FAKE_NFT_JSON='{"nftables":[{"flowtable":{"family":"inet","name":"ft","dev":["eth0.2"]}}]}'
+add_dt_node eth0.2
+printf '2\n' > "$TREE/dt/soc/ethernet@1fb50000/qdam-id"
+mkdir -p "$TREE/debugfs/ppe"
+printf 'entries 32768 (sram 16384, dram 16384)\nbound 1 (0%%) unbound 0\n' \
+	> "$TREE/debugfs/ppe/usage"
+printf 'gdm2 eth0X2\n' > "$TREE/debugfs/ppe/bind"
+if out=$(run_script --json); then rc=0; else rc=$?; fi
+outfile=$TMP/out.10b
+printf '%s\n' "$out" > "$outfile"
+expect_grep '"interface_entries":null' "$outfile" ppe-dot-literal
+
+# --- scenario 11: single-device JSON string ("dev":"wan") -------------------
+#
+# nft -j emits a plain JSON string ("dev":"wan") instead of an array when a
+# flowtable holds only one device; ft_json must parse it without matching keys.
+
+tree_reset
+add_netdev wan 10000 full 1
+FAKE_PROTO=dhcp FAKE_DEVICE=wan
+FAKE_ETHTOOL='Settings for wan:
+	Speed: 10000Mb/s
+	Duplex: Full
+	Link detected: yes'
+FAKE_NFT_JSON='{"nftables":[{"flowtable":{"family":"inet","name":"ft","table":"fw4","dev":"wan"}}]}'
+FAKE_NFT_TEXT=''
+add_dt_node wan
+if out=$(run_script --json); then rc=0; else rc=$?; fi
+outfile=$TMP/out.11a
+printf '%s\n' "$out" > "$outfile"
+expect_grep '"family":"inet"' "$outfile" json-single-dev-str
+expect_grep '"name":"ft"' "$outfile" json-single-dev-str
+expect_grep '"member":true' "$outfile" json-single-dev-str
+
+FAKE_NFT_JSON='{"nftables":[{"flowtable":{"family":"inet","name":"ft","table":"fw4","dev":"lan2"}}]}'
+if out=$(run_script --json); then rc=0; else rc=$?; fi
+outfile=$TMP/out.11b
+printf '%s\n' "$out" > "$outfile"
+expect_grep '"member":false' "$outfile" json-single-dev-str-other
+
+# --- scenario 12: multi-line devices = { ... } block in nft text ------------
+#
+# nft list flowtables can wrap devices across lines; ft_text must track
+# in_devs until the closing brace of the device set without ending flowtable.
+
+tree_reset
+add_netdev wan 10000 full 1
+FAKE_PROTO=dhcp FAKE_DEVICE=wan
+FAKE_ETHTOOL='Settings for wan:
+	Speed: 10000Mb/s
+	Duplex: Full
+	Link detected: yes'
+FAKE_NFT_JSON=''
+FAKE_NFT_TEXT='table inet fw4 {
+	flowtable ft {
+		hook ingress priority filter
+		devices = {
+			"lan2",
+			"wan"
+		}
+		flags offload
+	}
+}'
+add_dt_node wan
+if out=$(run_script --json); then rc=0; else rc=$?; fi
+outfile=$TMP/out.12
+printf '%s\n' "$out" > "$outfile"
+expect_grep '"family":"inet"' "$outfile" text-multiline-devs
+expect_grep '"name":"ft"' "$outfile" text-multiline-devs
+expect_grep '"member":true' "$outfile" text-multiline-devs
 
 if [ "$FAILED" -ne 0 ]; then
 	printf '\nwan-path-test: FAILED\n' >&2
