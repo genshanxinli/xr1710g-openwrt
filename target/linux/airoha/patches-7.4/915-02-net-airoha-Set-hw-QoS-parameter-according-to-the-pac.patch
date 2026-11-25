@@ -1,5 +1,17 @@
- drivers/net/ethernet/airoha/airoha_ppe.c |   33 +++++++++++++++++++++++++++----
- 1 file changed, 29 insertions(+), 4 deletions(-)
+From b9870ade9498f4119d3f8f8368fcd13e1fa0c7c9 Mon Sep 17 00:00:00 2001
+Message-ID: <b9870ade9498f4119d3f8f8368fcd13e1fa0c7c9.1779086987.git.lorenzo@kernel.org>
+In-Reply-To: <6408cdca652b1f85e5b8582c283203d11f4dedcb.1779086987.git.lorenzo@kernel.org>
+References: <6408cdca652b1f85e5b8582c283203d11f4dedcb.1779086987.git.lorenzo@kernel.org>
+From: Lorenzo Bianconi <lorenzo@kernel.org>
+Date: Mon, 18 May 2026 08:36:20 +0200
+Subject: [PATCH net-next 2/2] net: airoha: Set hw QoS parameter according to
+ the packet dscp
+
+Introduce the capability to hw offload via netfilter flowtable APIs the
+IP TOS info in order to configure hw queue and dscp field.
+
+Signed-off-by: Lorenzo Bianconi <lorenzo@kernel.org>
+---
 
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c

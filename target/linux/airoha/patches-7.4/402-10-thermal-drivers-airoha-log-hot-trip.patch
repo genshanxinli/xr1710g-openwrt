@@ -1,0 +1,34 @@
+From: OpenWrt <openwrt@example.org>
+Date: Wed, 25 Nov 2026 18:00:00 +0800
+Subject: [PATCH] thermal/drivers/airoha: log when the EN7581 hot trip is reached
+
+en7581_thdev_ops wires only .get_temp and .set_trips.  When a thermal zone
+crosses a THERMAL_TRIP_HOT trip point, thermal_core's handle_critical_trips()
+invokes tz->ops.hot(tz) if present and does nothing otherwise, so reaching
+the hot trip leaves no kernel log message (issue #379).
+
+Implement en7581_thermal_hot() and wire it to en7581_thdev_ops.hot so the
+driver emits a dev_crit() warning naming the thermal zone via
+thermal_zone_device() and thermal_zone_device_type().
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+--- a/drivers/thermal/airoha_thermal.c
++++ b/drivers/thermal/airoha_thermal.c
+@@ -468,9 +468,16 @@
+ 	return 0;
+ }
+ 
++static void en7581_thermal_hot(struct thermal_zone_device *tz)
++{
++	dev_crit(thermal_zone_device(tz), "%s: hot trip temperature reached\n",
++		 thermal_zone_device_type(tz));
++}
++
+ static const struct thermal_zone_device_ops en7581_thdev_ops = {
+ 	.get_temp = en7581_thermal_get_temp,
+ 	.set_trips = en7581_thermal_set_trips,
++	.hot = en7581_thermal_hot,
+ };
+ 
+ static irqreturn_t en7581_thermal_irq(int irq, void *data)

@@ -16,9 +16,9 @@ driver:
 - reads rate_bytes_ps and burst (packet-rate police is refused);
 - allocates one of the 63 meter groups (0..62) with a bitmap and a
   refcount;
-- programs the PPE group register at FE + 0x200c + 16 * group with the
-  vendor SDK byte-mode encoding, and the matching QDMA0 ingress TRTCM
-  index at QDMA0 + 0x70 with the same rate and bucket;
+- programs the matching QDMA0 ingress TRTCM index at QDMA0 + 0x70 with
+  the requested rate and bucket (writes to FE + 0x200c + 16 * group are
+  skipped because that window collides with live AN7581 FE registers);
 - writes the group number into AIROHA_FOE_SHAPER_ID instead of 0x7f;
 - releases the group in airoha_ppe_foe_flow_remove_entry(), which
   covers tc delete, flow expiry through FLOW_CLS_DESTROY and the
@@ -54,20 +54,19 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  3 files changed, 463 insertions(+), 4 deletions(-)
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -397,6 +397,36 @@ struct airoha_foe_mac_info {
+@@ -397,6 +397,35 @@ struct airoha_foe_mac_info {
  #define AIROHA_FOE_METER_GRP3			GENMASK(8, 5)
  #define AIROHA_FOE_METER_GRP2			GENMASK(4, 0)
  
 +/* Per-flow meter groups.  An FOE entry names one through
 + * AIROHA_FOE_SHAPER_ID; 0x7f, the value the driver used to hardcode, is
-+ * the vendor's "no meter" sentinel.  The group configuration register
-+ * lives in the frame-engine window at 0x200c + 16 * group, and its bit
-+ * positions are the vendor SDK's PPE_GRP_Meter_CNT()/METER_BASE2 and
-+ * METER_REG_BYTE_* definitions, not a guess: mode bit 0, trtcm bit 1,
-+ * tick bit 2, 14-bit token rate at bit 3 and a 2-bit bucket code at bit
-+ * 17.  The QDMA0 ingress TRTCM block (0x1fb54070) has the same 0..62
-+ * index space; it is programmed next to the PPE register, see
-+ * airoha_ppe_meter_hw_config().
++ * the vendor's "no meter" sentinel.  The vendor SDK's
++ * PPE_GRP_Meter_CNT()/METER_BASE2 register layout lives at 0x200c +
++ * 16 * group (mode bit 0, trtcm bit 1, tick bit 2, 14-bit token rate at
++ * bit 3, 2-bit bucket code at bit 17), but on AN7581 that FE window
++ * collides with live FE registers and reads 0xdeadbeef, so the driver
++ * skips FE writes and only programs the QDMA0 ingress TRTCM block
++ * (0x1fb54070, 0..62 index space), see airoha_ppe_meter_hw_config().
 + */
 +#define AIROHA_PPE_METER_NUM		63
 +#define AIROHA_PPE_METER_NONE		0x7f
@@ -131,15 +130,13 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  struct airoha_ppe {
  	struct airoha_ppe_dev dev;
  	struct airoha_eth *eth;
-@@ -720,6 +769,16 @@ struct airoha_ppe {
+@@ -720,6 +769,14 @@ struct airoha_ppe {
  	u32 bind_rate_l3;
  	u32 bind_rate_l2b;
  
 +	/* tc police flow state.  Only touched while airoha_ppe_meter is
-+	 * enabled; allocation, the register writes and release are
-+	 * serialized by flow_offload_mutex in airoha_ppe.c.  The
-+	 * debugfs snapshot reads without it, so a dump can race a
-+	 * concurrent tc change.
++	 * enabled; allocation, the register writes, release and the debugfs
++	 * dump are serialized by flow_offload_mutex in airoha_ppe.c.
 +	 */
 +	DECLARE_BITMAP(meter_bitmap, AIROHA_PPE_METER_NUM);
 +	struct airoha_ppe_meter meter[AIROHA_PPE_METER_NUM];
@@ -150,7 +147,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -61,6 +61,300 @@ static const struct rhashtable_params ai
+@@ -61,6 +61,295 @@ static const struct rhashtable_params ai
  	.automatic_shrinking = true,
  };
  
@@ -165,13 +162,13 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +MODULE_PARM_DESC(airoha_ppe_meter,
 +		 "Offload tc police flows onto the PPE/QDMA meter groups");
 +
-+/* A per-flow meter has two ends: the PPE group register selected by the
-+ * FOE entry's SHAPER_ID and the QDMA0 ingress TRTCM index with the same
-+ * number.  The PPE register layout and byte-mode rate units (16 kbit/s
-+ * below 1 Mbit/s, 128 kbit/s above) are the vendor SDK's
-+ * ppeMeterRegConfig()/METER_REG_BYTE_* definitions; the QDMA side uses
-+ * the parameter register and byte-mode unit scheme already driven by
-+ * the mainline HTB and RX-ring paths in airoha_eth.c.
++/* A per-flow meter pairs an FOE entry's SHAPER_ID group number with the
++ * QDMA0 ingress TRTCM index of the same number.  The QDMA side uses the
++ * parameter register and byte-mode unit scheme already driven by the
++ * mainline HTB and RX-ring paths in airoha_eth.c; writes to the vendor
++ * SDK's FE + 0x200c + 16 * group window are skipped on AN7581 because
++ * that range reads 0xdeadbeef and collides with live FE registers
++ * (REG_FE_GDM4_RMBI_FRAG at 0x202c, REG_SP_DFT_CPORT(3) at 0x20ec).
 + */
 +static u32 airoha_ppe_meter_qdma_param_word(u8 group,
 +					    enum trtcm_param_type type)
@@ -238,13 +235,11 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +	struct airoha_qdma *qdma = &eth->qdma[0];
 +	u32 misc = 0;
 +
-+	/* The group is described by the register itself, so zeroing it
-+	 * is enough to stop any stale entry from metering; no entry may
-+	 * still reference it because the flow table entry is already
-+	 * gone when this runs.
++	/* Do not write AIROHA_PPE_METER_GROUP(group) in the FE window:
++	 * 0x200c + 16 * group reads 0xdeadbeef on AN7581 and collides
++	 * with live FE registers (group 2 = REG_FE_GDM4_RMBI_FRAG at
++	 * 0x202c, group 14 = REG_SP_DFT_CPORT(3) at 0x20ec).
 +	 */
-+	airoha_fe_wr(eth, AIROHA_PPE_METER_GROUP(group), 0);
-+
 +	if (airoha_ppe_meter_qdma_get(qdma, group, REG_INGRESS_TRTCM_CFG,
 +				      TRTCM_MISC_MODE, &misc))
 +		return;
@@ -257,16 +252,22 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +}
 +
 +static int airoha_ppe_meter_hw_config(struct airoha_eth *eth, u8 group,
-+				      u32 rate_bps, u32 burst)
++				      u64 rate_bytes_ps, u64 burst)
 +{
 +	struct airoha_qdma *qdma = &eth->qdma[0];
++	u64 rate_bits_ps, rate_kbps, rate64;
 +	u32 config, fast_tick, slow_ratio, tick_us, unit;
-+	u32 rate_kbps, rate, frac, rate_val, bucket, misc;
++	u32 rate, frac, rate_val, bucket, misc, burst_u32;
 +	bool slow_tick;
 +	int err;
 +
-+	if (!rate_bps || !burst)
++	if (!rate_bytes_ps || !burst)
 +		return -EINVAL;
++	if (rate_bytes_ps > (U64_MAX - 999) / 8)
++		return -ERANGE;
++
++	rate_bits_ps = rate_bytes_ps * 8;
++	burst_u32 = min_t(u64, burst, U32_MAX);
 +
 +	/* The ingress TRTCM index space is shared with the per-RX-ring
 +	 * matchall meters (rings 0..7).  This PoC uses the PPE group
@@ -288,7 +289,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +
 +	fast_tick = FIELD_GET(INGRESS_FAST_TICK_MASK, config);
 +	slow_ratio = FIELD_GET(INGRESS_SLOW_TICK_RATIO_MASK, config);
-+	slow_tick = rate_bps < 100000000; /* vendor: 100 Mbit/s threshold */
++	slow_tick = rate_bits_ps < 100000000ULL; /* vendor: 100 Mbit/s */
 +	tick_us = slow_tick ? fast_tick * slow_ratio : fast_tick;
 +	if (!tick_us)
 +		return -EINVAL;
@@ -296,22 +297,19 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +	if (!unit)
 +		return -EINVAL;
 +
-+	rate_kbps = div_u64((u64)rate_bps, 1000) * 8;
-+	rate = div_u64(rate_kbps, unit);
-+	frac = rate_kbps % unit;
++	rate_kbps = DIV_ROUND_UP_ULL(rate_bits_ps, 1000);
++	rate64 = div_u64_rem(rate_kbps, unit, &frac);
 +	frac = FIELD_PREP(TRTCM_TOKEN_RATE_MASK, frac) / unit;
-+	/* The PPE half saturates at 0x3fff * 128 kbit/s (~2.1 Gbit/s):
-+	 * faster rules still get the full rate in the QDMA index, but
-+	 * the PPE meter can only enforce up to that ceiling.
-+	 */
-+	if (rate > (TRTCM_TOKEN_RATE_MASK >> 6)) {
++	if (rate64 > (TRTCM_TOKEN_RATE_MASK >> 6)) {
 +		rate = TRTCM_TOKEN_RATE_MASK >> 6;
 +		frac = 0;
++	} else {
++		rate = rate64;
 +	}
 +	rate_val = FIELD_PREP(TRTCM_TOKEN_RATE_MASK, rate) |
 +		   FIELD_PREP(TRTCM_TOKEN_RATE_FRACTION_MASK, frac);
 +
-+	bucket = max_t(u32, burst, MIN_TOKEN_SIZE);
++	bucket = max_t(u32, burst_u32, MIN_TOKEN_SIZE);
 +	bucket = min_t(u32, __fls(bucket), MAX_TOKEN_SIZE_OFFSET);
 +
 +	if (airoha_ppe_meter_qdma_get(qdma, group, REG_INGRESS_TRTCM_CFG,
@@ -329,26 +327,22 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +	err = airoha_ppe_meter_qdma_set(qdma, group, REG_INGRESS_TRTCM_CFG,
 +					TRTCM_TOKEN_RATE_MODE, rate_val);
 +	if (err)
-+		return err;
++		goto err_disable_qdma;
 +	err = airoha_ppe_meter_qdma_set(qdma, group, REG_INGRESS_TRTCM_CFG,
 +					TRTCM_BUCKETSIZE_SHIFT_MODE, bucket);
 +	if (err)
-+		return err;
++		goto err_disable_qdma;
 +
-+	/* PPE side: byte mode, single rate, the group's own bucket code. */
-+	unit = rate_bps <= 1000000 ? 16000 : 128000;
-+	rate = min_t(u32, DIV_ROUND_UP_ULL(rate_bps, unit),
-+		     AIROHA_PPE_METER_TOKEN_RATE_MAX);
-+	bucket = burst <= 4 * 1024 ? AIROHA_PPE_METER_BUCKET_4K :
-+		 burst <= 16 * 1024 ? AIROHA_PPE_METER_BUCKET_16K :
-+		 burst <= 32 * 1024 ? AIROHA_PPE_METER_BUCKET_32K :
-+		 AIROHA_PPE_METER_BUCKET_64K;
-+	airoha_fe_wr(eth, AIROHA_PPE_METER_GROUP(group),
-+		     FIELD_PREP(AIROHA_PPE_METER_TICK, rate_bps <= 1000000) |
-+		     FIELD_PREP(AIROHA_PPE_METER_RATE, rate) |
-+		     FIELD_PREP(AIROHA_PPE_METER_BUCKET, bucket));
-+
++	/* Skip writing FE + AIROHA_PPE_METER_GROUP(group): on AN7581 that
++	 * window reads 0xdeadbeef and collides with live FE registers
++	 * (group 2 = REG_FE_GDM4_RMBI_FRAG, group 14 = REG_SP_DFT_CPORT(3)).
++	 */
 +	return 0;
++
++err_disable_qdma:
++	airoha_ppe_meter_qdma_set(qdma, group, REG_INGRESS_TRTCM_CFG,
++				  TRTCM_MISC_MODE, misc & ~TRTCM_METER_MODE);
++	return err;
 +}
 +
 +static int airoha_ppe_meter_validate(const struct flow_action_entry *act,
@@ -412,10 +406,8 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +
 +	err = airoha_ppe_meter_hw_config(ppe->eth, id, act->police.rate_bytes_ps,
 +					 act->police.burst);
-+	if (err) {
-+		airoha_ppe_meter_hw_disable(ppe->eth, id);
++	if (err)
 +		return err;
-+	}
 +
 +	set_bit(id, ppe->meter_bitmap);
 +	ppe->meter[id].refcount = 1;
@@ -567,7 +559,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	foe_size = ppe_num_entries * sizeof(struct airoha_foe_entry);
 --- a/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe_debugfs.c
-@@ -470,6 +470,70 @@ static const struct file_operations airo
+@@ -470,6 +470,72 @@ static const struct file_operations airo
  	.write		= airoha_ppe_debugfs_flush_write,
  };
  
@@ -575,8 +567,8 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 + * what tc requested.  reg is the frame-engine word returned at
 + * FE + 0x200c + 16 * group; on AN7581 that read returns 0xdeadbeef, so
 + * hw_rate and hw_bucket derived from it are not the rate the PPE holds.
-+ * The driver writes at most bits 2..18 there (AIROHA_PPE_METER_TICK bit 2,
-+ * AIROHA_PPE_METER_RATE bits 16..3, AIROHA_PPE_METER_BUCKET bits 18..17),
++ * FE writes are skipped on AN7581 (and the vendor layout uses only bits
++ * 2..18: TICK bit 2, RATE bits 16..3, BUCKET bits 18..17),
 + * so a word with bit 31 set cannot be that write coming back.  The three
 + * register columns stay so a vendor-SDK dump can be compared once silicon
 + * answers at this offset.
@@ -602,6 +594,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +	seq_printf(m, "enabled=%u groups_total=%u\n", ppe->meter_enabled,
 +		   AIROHA_PPE_METER_NUM);
 +
++	mutex_lock(&flow_offload_mutex);
 +	for (i = 0; i < AIROHA_PPE_METER_NUM; i++) {
 +		const struct airoha_ppe_meter *meter = &ppe->meter[i];
 +		u32 reg, bucket, rate;
@@ -630,6 +623,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 +		seq_printf(m, " hw_rate %llu hw_bucket %uK reg %08x\n",
 +			   hw_rate, bucket_kb[bucket & 3], reg);
 +	}
++	mutex_unlock(&flow_offload_mutex);
 +
 +	return 0;
 +}

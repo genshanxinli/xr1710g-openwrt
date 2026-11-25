@@ -1,3 +1,24 @@
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: npu: add a read-only tunnel mailbox probe
+
+debugfs npu/tunnel_probe exposes the mailbox state that carries tunnel
+mails without writing a single register.  Function slot 1 is the tunnel
+handler and it is dispatched on core 0's mailbox queue, so the probe
+reads MBQ0 CTRL0..3 and prints them with the CTRL3 status bits, the
+version string embedded in the rv32 firmware image and the tunnel packet
+counter when the running image publishes one.
+
+The doorbell (CTRL2) is never touched and no register is programmed, so
+the probe cannot queue a mail, change tunnel state or disturb the live
+mailbox.  It is the read-only first step for the tunnel offload work:
+on a stock v08 unit it shows whether slot 1 exists before any VXLAN,
+SRv6, MAP-T or L4S handling is considered.  The tunnel counter lives in
+the NDBG block of the Clanker firmware; stock v08 does not publish that
+block, so the count is reported as unavailable rather than as zero.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+
 --- a/drivers/net/ethernet/airoha/airoha_npu.c
 +++ b/drivers/net/ethernet/airoha/airoha_npu.c
 @@ -34,6 +34,17 @@

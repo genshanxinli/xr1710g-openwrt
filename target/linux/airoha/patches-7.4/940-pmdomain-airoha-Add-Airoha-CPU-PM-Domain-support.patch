@@ -20,7 +20,7 @@ Signed-off-by: Ulf Hansson <ulf.hansson@linaro.org>
 ---
 --- a/drivers/pmdomain/mediatek/airoha-cpu-pmdomain.c
 +++ b/drivers/pmdomain/mediatek/airoha-cpu-pmdomain.c
-@@ -3,37 +3,92 @@
+@@ -3,60 +3,312 @@
  #include <linux/arm-smccc.h>
  #include <linux/bitfield.h>
  #include <linux/clk-provider.h>
@@ -69,8 +69,19 @@ Signed-off-by: Ulf Hansson <ulf.hansson@linaro.org>
 +#define MCUCFG_CK_SEL_MASK		GENMASK(10, 9)
 +#define MCUCFG_CK_SEL_ARMPLL		1
 +#define MCUCFG_CK_SEL_PLL2		3
++
++/*
++ * CPU OPP states of cpu_smcc_opp_table in an7581.dtsi (smcc_opp0..smcc_opp14).
++ * State N maps to 500 + N * 50 MHz, so state 0 = 500 MHz, state 14 = 1200 MHz.
++ * Keep in sync with the DTS: a different base or step would program a
++ * frequency the OPP table does not describe.
++ */
++#define AIROHA_CPU_MIN_FREQ_MHZ		500
++#define AIROHA_CPU_FREQ_STEP_MHZ	50
++#define AIROHA_CPU_MAX_OPP_STATE	14
  
  struct airoha_cpu_pmdomain_priv {
++	struct device *dev;
  	struct clk_hw hw;
  	struct generic_pm_domain pd;
 +	bool use_smc;
@@ -125,12 +136,60 @@ Signed-off-by: Ulf Hansson <ulf.hansson@linaro.org>
  static int airoha_cpu_pmdomain_clk_is_enabled(struct clk_hw *hw)
  {
  	return true;
-@@ -45,18 +100,135 @@ static const struct clk_ops airoha_cpu_p
+ }
+ 
++/*
++ * The CPU power domain is a single instance per SoC. The cpufreq driver needs
++ * the OPP state the CPU currently runs at, but a genpd consumer has no handle
++ * to resolve its provider, so publish the instance here instead.
++ */
++static struct airoha_cpu_pmdomain_priv *airoha_cpu_pmdomain;
++
+ static const struct clk_ops airoha_cpu_pmdomain_clk_ops = {
+ 	.recalc_rate = airoha_cpu_pmdomain_clk_get,
+ 	.is_enabled = airoha_cpu_pmdomain_clk_is_enabled,
  	.determine_rate = clk_determine_rate_noop,
  };
  
 -static int airoha_cpu_pmdomain_set_performance_state(struct generic_pm_domain *domain,
 -						     unsigned int state)
++/* Only used here and by the airoha cpufreq driver, which declares it too */
++int airoha_cpu_pmdomain_get_state(void);
++
++/*
++ * OPP state matching the frequency the CPU runs at right now.
++ *
++ * Consumers seed their cached genpd performance state with this: both the
++ * genpd and the per-device cache start at state 0 while the bootloader may
++ * leave the CPU at a higher OPP, and a request for a state equal to the
++ * cached one is dropped by genpd without ever reaching the hardware.
++ */
++int airoha_cpu_pmdomain_get_state(void)
++{
++	struct airoha_cpu_pmdomain_priv *priv = smp_load_acquire(&airoha_cpu_pmdomain);
++	unsigned int freq_mhz, state;
++	unsigned long freq_hz;
++
++	if (!priv)
++		return -ENODEV;
++
++	freq_hz = airoha_cpu_pmdomain_clk_get(&priv->hw, 0);
++	if (freq_hz < AIROHA_CPU_MIN_FREQ_MHZ * 1000000UL ||
++	    freq_hz > 2000000000UL)
++		return -EINVAL;
++
++	freq_mhz = freq_hz / 1000000;
++	if ((freq_mhz - AIROHA_CPU_MIN_FREQ_MHZ) % AIROHA_CPU_FREQ_STEP_MHZ)
++		return -EINVAL;
++
++	state = (freq_mhz - AIROHA_CPU_MIN_FREQ_MHZ) / AIROHA_CPU_FREQ_STEP_MHZ;
++	if (state > AIROHA_CPU_MAX_OPP_STATE)
++		return -EINVAL;
++
++	return state;
++}
++EXPORT_SYMBOL_GPL(airoha_cpu_pmdomain_get_state);
++
 +/* Set CPU frequency via SMC */
 +static int airoha_cpu_smc_set_freq(unsigned int state)
  {
@@ -171,7 +230,7 @@ Signed-off-by: Ulf Hansson <ulf.hansson@linaro.org>
 + * Set CPU PLL frequency directly via register programming.
 + * Used as fallback when ATF SMC is not available.
 + *
-+ * OPP table: state 0 = 500 MHz, state N = (500 + N*50) MHz.
++ * OPP table: state N = AIROHA_CPU_MIN_FREQ_MHZ + N * AIROHA_CPU_FREQ_STEP_MHZ.
 + * PLL VCO must stay >= 1000 MHz:
 + *   < 1000 MHz: posdiv=1 (VCO/2), pcw = freq/25
 + *   >= 1000 MHz: posdiv=0 (VCO/1), pcw = freq/50
@@ -180,10 +239,16 @@ Signed-off-by: Ulf Hansson <ulf.hansson@linaro.org>
 +				   unsigned int state)
 +{
 +	void __iomem *base = priv->pll_base;
-+	unsigned int freq_mhz = 700 + state * 50;
++	unsigned int freq_mhz = AIROHA_CPU_MIN_FREQ_MHZ +
++				state * AIROHA_CPU_FREQ_STEP_MHZ;
 +	unsigned int posdiv, pcw_int;
 +	unsigned long flags;
-+	u32 val, old_chg, cleared;
++	u32 val, old_chg, old_pcw, cleared, pcw_read = 0;
++	int ret = 0;
++
++	/* Nothing to program when the PLL already runs at this state */
++	if (airoha_cpu_pll_clk_get(priv) == (unsigned long)freq_mhz * 1000000UL)
++		return 0;
 +
 +	if (freq_mhz < 1000) {
 +		posdiv = 1;
@@ -203,11 +268,19 @@ Signed-off-by: Ulf Hansson <ulf.hansson@linaro.org>
 +	writel((val & ~PLLRG_PROTECT_MASK) | PLLRG_PROTECT_KEY,
 +	       base + PLLRG_PROTECT);
 +
-+	/* Write new PCW integer value */
-+	val = readl(base + CPUPLL_SDM_PCW);
-+	val &= ~CPUPLL_PCW_INT_MASK;
++	/* Write new PCW integer value, keeping the old one for rollback */
++	old_pcw = readl(base + CPUPLL_SDM_PCW);
++	val = old_pcw & ~CPUPLL_PCW_INT_MASK;
 +	val |= FIELD_PREP(CPUPLL_PCW_INT_MASK, pcw_int);
 +	writel(val, base + CPUPLL_SDM_PCW);
++
++	/* Verify the write landed before the PLL is switched in */
++	pcw_read = FIELD_GET(CPUPLL_PCW_INT_MASK, readl(base + CPUPLL_SDM_PCW));
++	if (pcw_read != pcw_int) {
++		writel(old_pcw, base + CPUPLL_SDM_PCW);
++		ret = -EIO;
++		goto out;
++	}
 +
 +	/* Write posdiv and toggle CHG bit */
 +	old_chg = readl(base + CPUPLL_SDM_PCW_CHG);
@@ -220,8 +293,9 @@ Signed-off-by: Ulf Hansson <ulf.hansson@linaro.org>
 +		       CPUPLL_CHG_BIT, base + CPUPLL_SDM_PCW_CHG);
 +
 +	/* Wait for PLL to lock */
-+	udelay(20);
++	udelay(50);
 +
++out:
 +	/* Switch CPU back to ARM PLL */
 +	airoha_cpu_clock_switch(base, priv->mcucfg, MCUCFG_CK_SEL_ARMPLL);
 +
@@ -235,7 +309,11 @@ Signed-off-by: Ulf Hansson <ulf.hansson@linaro.org>
 +
 +	local_irq_restore(flags);
 +
-+	return 0;
++	if (ret)
++		dev_err(priv->dev, "PLL PCW write failed (want %u, read %u)\n",
++			pcw_int, pcw_read);
++
++	return ret;
 +}
 +
 +static int airoha_cpu_pmdomain_set_performance_state(
@@ -243,6 +321,12 @@ Signed-off-by: Ulf Hansson <ulf.hansson@linaro.org>
 +{
 +	struct airoha_cpu_pmdomain_priv *priv =
 +		container_of(domain, struct airoha_cpu_pmdomain_priv, pd);
++
++	/* cpu_smcc_opp_table only describes smcc_opp0..smcc_opp14 */
++	if (state > AIROHA_CPU_MAX_OPP_STATE) {
++		dev_err(priv->dev, "invalid performance state: %u\n", state);
++		return -EINVAL;
++	}
 +
 +	if (priv->use_smc)
 +		return airoha_cpu_smc_set_freq(state);
@@ -264,7 +348,7 @@ Signed-off-by: Ulf Hansson <ulf.hansson@linaro.org>
  static int airoha_cpu_pmdomain_probe(struct platform_device *pdev)
  {
  	struct airoha_cpu_pmdomain_priv *priv;
-@@ -64,18 +236,45 @@ static int airoha_cpu_pmdomain_probe(str
+@@ -64,18 +316,47 @@
  	const struct clk_init_data init = {
  		.name = "cpu",
  		.ops = &airoha_cpu_pmdomain_clk_ops,
@@ -280,6 +364,8 @@ Signed-off-by: Ulf Hansson <ulf.hansson@linaro.org>
  		return -ENOMEM;
  
 -	/* Init and register a get-only clk for Cpufreq */
++	priv->dev = dev;
++
 +	/* Try ATF SMC first */
 +	if (airoha_cpu_smc_available()) {
 +		priv->use_smc = true;
@@ -312,7 +398,15 @@ Signed-off-by: Ulf Hansson <ulf.hansson@linaro.org>
  	ret = devm_clk_hw_register(dev, &priv->hw);
  	if (ret)
  		return ret;
-@@ -100,12 +299,10 @@ static int airoha_cpu_pmdomain_probe(str
+@@ -95,17 +376,19 @@
+ 	if (ret)
+ 		return ret;
+ 
++	/* Publish before the provider: attaching consumers read the state */
++	smp_store_release(&airoha_cpu_pmdomain, priv);
++
+ 	ret = of_genpd_add_provider_simple(dev->of_node, pd);
+ 	if (ret)
  		goto err_add_provider;
  
  	platform_set_drvdata(pdev, priv);
@@ -320,8 +414,17 @@ Signed-off-by: Ulf Hansson <ulf.hansson@linaro.org>
  	return 0;
  
  err_add_provider:
++	smp_store_release(&airoha_cpu_pmdomain, NULL);
  	pm_genpd_remove(pd);
 -
  	return ret;
  }
  
+@@ -115,6 +398,7 @@
+ 
+ 	of_genpd_del_provider(pdev->dev.of_node);
+ 	pm_genpd_remove(&priv->pd);
++	smp_store_release(&airoha_cpu_pmdomain, NULL);
+ }
+ 
+ static const struct of_device_id airoha_cpu_pmdomain_of_match[] = {

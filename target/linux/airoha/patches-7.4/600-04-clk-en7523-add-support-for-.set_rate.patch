@@ -1,3 +1,22 @@
+From fe71e8f734a5c9b808a68b8abaa0156de605df4f Mon Sep 17 00:00:00 2001
+From: Christian Marangi <ansuelsmth@gmail.com>
+Date: Tue, 17 Jun 2025 12:28:41 +0200
+Subject: [PATCH 04/10] clk: en7523: add support for .set_rate
+
+Add support for EN7523 driver to configure rate. The SoC expose both
+base clock selector and clock divisor hence it's possible to change the
+rate.
+
+This will be especially needed for new SoC AN7583 that require changes
+for the MDIO and the eMMC.
+
+The clock were assumed correctly configured by the bootloader but this
+goes against the rule of "kernel should not depend on external
+configuration".
+
+Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
+---
+
 --- a/drivers/clk/clk-en7523.c
 +++ b/drivers/clk/clk-en7523.c
 @@ -126,6 +126,12 @@ struct en_clk_gate {

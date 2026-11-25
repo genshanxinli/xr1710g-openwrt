@@ -1,11 +1,30 @@
- drivers/net/ethernet/airoha/airoha_eth.h | 9 +++++++++
- drivers/net/ethernet/airoha/airoha_ppe.c | 38 ++++++++++++++++++++++++++++++++++++++
- drivers/net/ethernet/airoha/airoha_ppe_debugfs.c | 59 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- 3 files changed, 101 insertions(+), 5 deletions(-)
- drivers/net/ethernet/airoha/airoha_eth.h | 9 +++++++++
- drivers/net/ethernet/airoha/airoha_ppe.c | 38 ++++++++++++++++++++++++++++++++++++++
- drivers/net/ethernet/airoha/airoha_ppe_debugfs.c | 59 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- 3 files changed, 101 insertions(+), 5 deletions(-)
+From: OpenWrt <openwrt@example.org>
+Date: Sat, 24 Oct 2026 09:00:00 +0800
+Subject: [PATCH] net: airoha: make the PPE bind rate a runtime knob
+
+The PPE promotes an UNBIND entry to BIND once it sustains
+REG_PPE_BIND_RATE packets per second.  The driver hardcodes 30, which is
+what MediaTek's SDK and upstream mtk_ppe use, and there was no way to
+measure what a different value does: the register is not reachable from
+userspace (no /dev/mem, no devmem, no debugfs register window) and the
+driver is built in, so a new threshold meant a new kernel.
+
+Split the two halves of the register into ppe->bind_rate_l3 and
+ppe->bind_rate_l2b, route the write through airoha_ppe_apply_bind_rate(),
+and expose it as /sys/kernel/debug/ppe/bind_rate ("l3 [l2b]").
+
+Having measured, lower the default from 30 to 10.  Sampling while the
+flows are still alive, at 30 a 15-, 20- or 30-packet flow binds 0 of 15
+and at 10 all 15 do; from 60 packets up both rates bind everything.
+Those short flows are most of what a home network forwards -- DNS,
+mDNS, DHCP renewals, TCP handshakes -- so at 30 none of them reach the
+hardware.  Going lower is not free: at 5, 400 six-packet micro-flows
+bind 400 of 400 and fill the table with entries that will never see a
+second packet; at 10 they bind 1 of 400.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
 @@ -709,6 +709,14 @@ struct airoha_ppe {

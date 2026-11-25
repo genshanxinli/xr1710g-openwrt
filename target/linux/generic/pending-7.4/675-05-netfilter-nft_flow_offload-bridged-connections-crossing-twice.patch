@@ -194,7 +194,7 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
  
  struct nft_flow_offload {
  	struct nft_flowtable	*flowtable;
-@@ -47,12 +49,123 @@
+@@ -47,12 +49,126 @@
  	spin_unlock_bh(&ct->lock);
  }
  
@@ -206,10 +206,13 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
 +static int nft_flow_offload_bridge_oif(const struct nft_pktinfo *pkt)
 +{
 +#if IS_ENABLED(CONFIG_BRIDGE_NETFILTER)
-+	return nf_bridge_get_physoutif(pkt->skb);
-+#else
-+	return 0;
++	int oif = nf_bridge_get_physoutif(pkt->skb);
++
++	if (oif)
++		return oif;
 +#endif
++	return (nft_pf(pkt) == NFPROTO_BRIDGE && nft_out(pkt)) ?
++	       nft_out(pkt)->ifindex : 0;
 +}
 +
 +/* Record the ports of each crossing of a bridged connection, see struct
@@ -247,11 +250,10 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
 +	}
 +
 +	old = cmpxchg(&rec->iif[dir], 0, iif);
-+	cmpxchg(&rec->outif[dir], 0, oif);
 +	if (!old) {
-+		/* Stamp this direction after its port pair is in place: the
-+		 * discriminator below compares two complete sightings.
-+		 */
++		WRITE_ONCE(rec->outif[dir], oif);
++		/* Publish outif before order becomes non-zero (with smp_rmb). */
++		smp_wmb();
 +		WRITE_ONCE(rec->order[dir], 1 + !!READ_ONCE(rec->order[peer]));
 +		return;
 +	}
@@ -259,11 +261,12 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
 +	if (old == iif || READ_ONCE(rec->multi))
 +		return;
 +
-+	/* A new ingress port is a second crossing only if it is where the
-+	 * peer direction left the bridge, i.e. where the packet this one
-+	 * answers went out. A roaming endpoint changes its ingress port
-+	 * without moving anywhere near the peer's egress port.
++	/* Wait for both order stamps; pair with smp_wmb() so outif[peer] is
++	 * visible once order[peer] is non-zero, and never treat 0 as first.
 +	 */
++	if (!READ_ONCE(rec->order[peer]) || !READ_ONCE(rec->order[dir]))
++		return;
++	smp_rmb();
 +	if (iif != READ_ONCE(rec->outif[peer]))
 +		return;
 +
@@ -318,7 +321,7 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
  	struct tcphdr _tcph, *tcph = NULL;
  	struct nf_flow_route route = {};
  	enum ip_conntrack_info ctinfo;
-@@ -68,6 +181,9 @@
+@@ -68,6 +184,9 @@
  	if (!ct)
  		goto out;
  
@@ -328,7 +331,7 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
  	switch (ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple.dst.protonum) {
  	case IPPROTO_TCP:
  		tcph = skb_header_pointer(pkt->skb, nft_thoff(pkt),
-@@ -102,6 +218,9 @@
+@@ -102,6 +221,9 @@
  	if (!nf_ct_is_confirmed(ct))
  		goto out;
  

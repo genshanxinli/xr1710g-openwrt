@@ -1,9 +1,26 @@
- drivers/net/ethernet/airoha/airoha_eth.c | 44 ++++++++++++++++++++++++++++++++++++++++++++
- drivers/net/ethernet/airoha/airoha_eth.h | 2 ++
- 2 files changed, 46 insertions(+), 0 deletions(-)
- drivers/net/ethernet/airoha/airoha_eth.c | 44 ++++++++++++++++++++++++++++++++++++++++++++
- drivers/net/ethernet/airoha/airoha_eth.h | 2 ++
- 2 files changed, 46 insertions(+), 0 deletions(-)
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: expose the PSE packet buffer in debugfs
+
+The PSE pools the packet buffer that every GDM and CDM port draws from:
+2 MiB in 128-byte pages, 16384 in total.  Each egress queue gets a
+guaranteed reserve and everything above the sum of those reserves is
+shared.  On the XR1710G the reserves alone claim 4320 pages, 26.4% of the
+pool, and GDM4 - the port with only two queues - gets 8 KiB of it.
+
+None of this is visible at runtime.  When a burst outruns the pool the
+frames are dropped and the only evidence is a throughput ceiling; the
+per-queue register values that would explain it cannot be read without a
+debugger, and the shared-pool thresholds are computed in software from
+fq_limit - all_rsv - headroom, so their values are not obvious either.
+
+Add /sys/kernel/debug/pse/usage next to the existing ppe/ directory,
+reporting the pool size, the reserve, the remainder actually available
+for sharing, and the three share-used thresholds.  That turns "why does
+this port cap out below line rate" into a single file read.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
 @@ -651,6 +651,47 @@ static void airoha_dev_lro_disable(struc

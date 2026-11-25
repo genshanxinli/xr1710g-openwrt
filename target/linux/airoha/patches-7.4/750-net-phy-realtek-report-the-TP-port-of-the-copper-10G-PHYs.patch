@@ -1,0 +1,81 @@
+From: OpenWrt <openwrt@example.org>
+Date: Wed, 25 Nov 2026 09:00:00 +0800
+Subject: [PATCH] net: phy: realtek: report the TP port on the copper 10G PHYs
+
+The C45 ability reader genphy_c45_pma_read_abilities() fills the supported
+link-mode mask with Autoneg and the speeds but leaves the TP/MII port bits
+alone; only the C22 genphy_read_abilities() sets them.  ethtool derives
+"Supported ports" from those bits, not from phydev->port, so a C45-only PHY
+that never adds them reports an empty list while "Port: Twisted Pair" is
+correct - the port type comes from the phy core's medium - and the two
+lines contradict each other.
+
+On the XR1710G both 10G ports are RTL8261BE (mdio 08 and 05, both driven by
+rtl826x_get_features()) and both report
+
+    Supported ports: [ ]
+
+next to a full 100M/1G/2.5G/5G/10G speed list.  rtl822x_c45_get_features()
+already sets the TP bit after the same C45 read; the RTL8261 helpers never
+did.
+
+Every part on rtl826x_get_features() (RTL8261BE, RTL8261N, RTL8264,
+RTL8264B) and on rtl8261x_get_features() (RTL8261C/D/CE) is copper, so set
+ETHTOOL_LINK_MODE_TP_BIT once the abilities are known.  The supported speed
+mask, the advertisement, MDI/X and the data path are untouched.
+
+Check after flashing: ethtool wan | grep 'Supported ports' -> [ TP ], and
+the "Supported link modes" list is the same as before.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+
+---
+--- a/drivers/net/phy/realtek/realtek_main.c
++++ b/drivers/net/phy/realtek/realtek_main.c
+@@ -520,16 +520,22 @@
+ 
+ static int rtl8261x_get_features(struct phy_device *phydev)
+ {
+ 	int ret;
+ 
+ 	ret = genphy_c45_pma_read_abilities(phydev);
+ 	if (ret)
+ 		return ret;
++
++	/* RTL8261C/D/CE are copper as well; the C45 abilities carry no port
++	 * type and the common helper does not add one.
++	 */
++	linkmode_set_bit(ETHTOOL_LINK_MODE_TP_BIT, phydev->supported);
++
+ 	/*
+ 	 * Supplement Multi-Gig speeds that may not be automatically detected
+ 	 * RTL8261X supports 2.5G/5G in addition to standard 10G
+ 	 */
+ 	linkmode_set_bit(ETHTOOL_LINK_MODE_2500baseT_Full_BIT,
+ 			 phydev->supported);
+ 	linkmode_set_bit(ETHTOOL_LINK_MODE_5000baseT_Full_BIT,
+ 			 phydev->supported);
+@@ -3997,16 +4003,23 @@
+ static int rtl826x_get_features(struct phy_device *phydev)
+ {
+ 	int ret;
+ 
+ 	ret = genphy_c45_pma_read_abilities(phydev);
+ 	if (ret)
+ 		return ret;
+ 
++	/* genphy_c45_pma_read_abilities() reports no port type: the C45
++	 * helper sets Autoneg and the speeds only, unlike the C22
++	 * genphy_read_abilities(). Every part driven by this helper is
++	 * copper, so say so and let ethtool print "Supported ports: [ TP ]".
++	 */
++	linkmode_set_bit(ETHTOOL_LINK_MODE_TP_BIT, phydev->supported);
++
+ 	/* not support 10M modes */
+ 	linkmode_clear_bit(ETHTOOL_LINK_MODE_10baseT_Half_BIT,
+ 			   phydev->supported);
+ 	linkmode_clear_bit(ETHTOOL_LINK_MODE_10baseT_Full_BIT,
+ 			   phydev->supported);
+ 
+ 	return 0;
+ }

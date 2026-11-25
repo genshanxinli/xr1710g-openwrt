@@ -1,3 +1,16 @@
+From 1bfe1cc581ffba2462580496507497840aa018aa Mon Sep 17 00:00:00 2001
+From: Christian Marangi <ansuelsmth@gmail.com>
+Date: Wed, 19 Mar 2025 15:23:50 +0100
+Subject: [PATCH 06/10] phy: move Airoha PCIe PHY driver to dedicated directory
+
+To keep the generic PHY directory tidy, move the PCIe PHY driver to a
+dedicated directory.
+
+This is also in preparation for support of the Airoha USB PHY driver.
+
+Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
+---
+
 --- a/drivers/phy/Kconfig
 +++ b/drivers/phy/Kconfig
 @@ -46,16 +46,6 @@ config GENERIC_PHY_MIPI_DPHY

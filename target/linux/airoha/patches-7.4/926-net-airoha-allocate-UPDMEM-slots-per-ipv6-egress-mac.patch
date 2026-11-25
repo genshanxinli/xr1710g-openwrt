@@ -1,9 +1,51 @@
- drivers/net/ethernet/airoha/airoha_eth.h | 18 ++++++++++++++++++
- drivers/net/ethernet/airoha/airoha_ppe.c | 203 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- 2 files changed, 202 insertions(+), 19 deletions(-)
- drivers/net/ethernet/airoha/airoha_eth.h | 18 ++++++++++++++++++
- drivers/net/ethernet/airoha/airoha_ppe.c | 203 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- 2 files changed, 202 insertions(+), 19 deletions(-)
+From: Gilly <gilroyscott1970@gmail.com>
+Subject: [PATCH] net: airoha: allocate UPDMEM slots per IPv6 egress source MAC
+
+Routed IPv6 Foe entries do not carry a source MAC.  They carry a 4-bit
+smac_id, and the hardware resolves it through the UPDMEM table, so the
+entry is bound to whatever address happens to be in that slot when the
+frame leaves.  The driver only ever programmed one slot per GDM port, in
+airoha_set_macaddr(), which is the right thing for a flow whose egress
+netdev is that same port -- but not for the others the same port can
+carry.  A VLAN upper, a bridged client or a service VLAN on a PON link
+can each route with their own address on one GDM port, and they all
+shared the single slot.  IPv4 keeps working throughout because it writes
+the address inline, which is what makes this look like an IPv6-only
+fault: flows egress with whichever MAC was programmed last, and a
+MAC-bound ISP black-holes them.
+
+Slots 0xf is "keep the frame's own source address" and slots below
+AIROHA_MAX_NUM_GDM_PORTS belong to the GDM ports themselves, so the
+addresses have to be packed into the remaining ones (5..14 on a board
+that registers ports 1..4, the lower ones being poolable only when the
+matching port is not registered at all).  Allocate a slot per distinct
+egress MAC, refcount it by the number of flows using it, and keep the
+address in the slot -- a slot is only reprogrammed once its last flow is
+gone, so a live flow can never be repointed at a different MAC.  When
+the slots run out, decline the offload with -EOPNOTSUPP so the flow
+stays in the software path and keeps working, which is the correct
+failure direction: the alternative is offloading it onto a wrong MAC.
+
+The slot index is stored inside the Foe entry, so it has to be released
+with the entry rather than with the flow descriptor, and every failure
+path between taking a slot and handing the entry to the rhashtable has
+to release it too -- the entry is not tracked yet at that point, so
+nothing else will.  airoha_ppe_flow_offload_replace() grows a put_smac
+label for that.
+
+UPDMEM is a single register pair, so the write itself is now under a
+spinlock; that also closes the race between flow setup and
+ndo_set_mac_address, which previously could interleave two writes to the
+same DATA/CTRL pair.
+
+Not exercised on-device: this needs a PON or VLAN setup where two
+addresses on one GDM port are routed at the same time.
+
+Link: https://github.com/Gilly1970/Gemtek-W1700K-6.18
+Signed-off-by: Gilly <gilroyscott1970@gmail.com>
+Signed-off-by: airola <airola@example.org>
+---
+
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
 @@ -655,6 +655,9 @@ struct airoha_gdm_port {

@@ -1,13 +1,22 @@
- drivers/net/ethernet/airoha/Kconfig | 1 +
- drivers/net/ethernet/airoha/airoha_eth.c | 191 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- drivers/net/ethernet/airoha/airoha_eth.h | 7 +++++++
- drivers/net/ethernet/airoha/airoha_regs.h | 12 ++++++++++++
- 4 files changed, 205 insertions(+), 6 deletions(-)
- drivers/net/ethernet/airoha/Kconfig | 1 +
- drivers/net/ethernet/airoha/airoha_eth.c | 191 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- drivers/net/ethernet/airoha/airoha_eth.h | 7 +++++++
- drivers/net/ethernet/airoha/airoha_regs.h | 12 ++++++++++++
- 4 files changed, 205 insertions(+), 6 deletions(-)
+From beb56181a370b003b12f657239b510435cae2c9d Mon Sep 17 00:00:00 2001
+From: Christian Marangi <ansuelsmth@gmail.com>
+Date: Fri, 17 Jan 2025 13:23:13 +0100
+Subject: [PATCH] net: airoha: add phylink support
+
+Add phylink support for each GDM port. For GDM1 add the internal interface
+mode as the only supported mode. For GDM2/3/4 add the required
+configuration of the PCS to make the external PHY or attached SFP cage
+work.
+
+These needs to be defined in the GDM port node using the pcs-handle
+property.
+
+Update and provide a .get/set_link_ksettings function that use phylink
+for ethtool OPs now that we fully support phylink.
+
+Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
+---
+
 --- a/drivers/net/ethernet/airoha/Kconfig
 +++ b/drivers/net/ethernet/airoha/Kconfig
 @@ -20,6 +20,7 @@ config NET_AIROHA

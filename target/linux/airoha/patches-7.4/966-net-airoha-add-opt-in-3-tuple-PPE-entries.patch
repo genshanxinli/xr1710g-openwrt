@@ -1,7 +1,44 @@
- drivers/net/ethernet/airoha/airoha_ppe.c | 57 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- 1 files changed, 51 insertions(+), 6 deletions(-)
- drivers/net/ethernet/airoha/airoha_ppe.c | 57 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- 1 files changed, 51 insertions(+), 6 deletions(-)
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: add opt-in 3-tuple PPE entries
+
+The flow offload API reports FLOW_DISSECTOR_KEY_PORTS only for flows whose
+L4 protocol has ports.  An ICMP, ESP or GRE flow therefore reaches
+airoha_ppe_flow_offload_replace() without that key while the driver has
+already picked a 5-tuple packet type, and the missing-port check rejects
+it: these flows never reach the PPE at all.
+
+The hardware has 3-tuple types for exactly this case.  Add the
+airoha_ppe_3t module parameter (default 0).  When it is enabled and the
+rule carries no ports, pick PPE_PKT_TYPE_IPV4_ROUTE (type 1, IPv4 NAT) for
+IPv4 and PPE_PKT_TYPE_IPV6_ROUTE_3T (type 4) for IPv6 instead of the
+5-tuple types.  The entry builder already fills the 0xa5a5a5xx port word
+for both types, so the protocol stays part of the key.  A rule that
+carries ports keeps the existing 5-tuple type even with the parameter on.
+
+The parser has to accept the packet types before it can match them.  Turn
+on the existing PPE_FLOW_CFG enable bits IP4_NAT (bit 12) and IP6_3T_ROUTE
+(bit 8) when the parameter is on; the NPU firmware normally sets both, but
+the driver should not depend on that.  With the parameter off the register
+is left alone.
+
+An IPv4 3-tuple HNAT entry keeps the pre-NAT addresses in the first tuple
+and the rewrite in the second one.  airoha_ppe_foe_entry_set_ipv4_tuple()
+put the egress addresses into the same tuple as the ingress ones for type
+1, which would have lost the original address of a NAT flow; write the
+egress half to new_tuple instead.  Type 1 is only reachable with the
+parameter on, so the default path is unchanged.
+
+Packet type names are already present in the debugfs table, so ppe/foe and
+ppe/usage report the new entries as "IPv4 3T" and "IPv6 3T" without
+further changes.
+
+Hardware forwarding correctness is not validated here; this only lands the
+selection behind a default-off knob.  NAT behaviour, PPE table capacity,
+QoS, PPPoE and multicast are untouched.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
 @@ -6,6 +6,7 @@

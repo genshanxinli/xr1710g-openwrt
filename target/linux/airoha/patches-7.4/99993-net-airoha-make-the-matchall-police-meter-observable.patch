@@ -477,3 +477,73 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  	struct airoha_npu __rcu *npu;
  
  	struct airoha_ppe *ppe;
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -249,15 +249,15 @@ static void airoha_ppe_meter_hw_disable(
+ 	 * with live FE registers (group 2 = REG_FE_GDM4_RMBI_FRAG at
+ 	 * 0x202c, group 14 = REG_SP_DFT_CPORT(3) at 0x20ec).
+ 	 */
+-	if (airoha_ppe_meter_qdma_get(qdma, group, REG_INGRESS_TRTCM_CFG,
+-				      TRTCM_MISC_MODE, &misc))
+-		return;
+-	if (!(misc & TRTCM_METER_MODE))
+-		return;
+-
+-	misc &= ~TRTCM_METER_MODE;
+-	airoha_ppe_meter_qdma_set(qdma, group, REG_INGRESS_TRTCM_CFG,
+-				  TRTCM_MISC_MODE, misc);
++	mutex_lock(&eth->trtcm_lock);
++	if (!airoha_ppe_meter_qdma_get(qdma, group, REG_INGRESS_TRTCM_CFG,
++				       TRTCM_MISC_MODE, &misc) &&
++	    (misc & TRTCM_METER_MODE)) {
++		misc &= ~TRTCM_METER_MODE;
++		airoha_ppe_meter_qdma_set(qdma, group, REG_INGRESS_TRTCM_CFG,
++					  TRTCM_MISC_MODE, misc);
++	}
++	mutex_unlock(&eth->trtcm_lock);
+ }
+ 
+ static int airoha_ppe_meter_hw_config(struct airoha_eth *eth, u8 group,
+@@ -321,18 +321,21 @@ static int airoha_ppe_meter_hw_config(st
+ 	bucket = max_t(u32, burst_u32, MIN_TOKEN_SIZE);
+ 	bucket = min_t(u32, __fls(bucket), MAX_TOKEN_SIZE_OFFSET);
+ 
++	mutex_lock(&eth->trtcm_lock);
+ 	if (airoha_ppe_meter_qdma_get(qdma, group, REG_INGRESS_TRTCM_CFG,
+-				      TRTCM_MISC_MODE, &misc))
+-		return -EINVAL;
++				      TRTCM_MISC_MODE, &misc)) {
++		err = -EINVAL;
++		goto out_unlock;
++	}
+ 	misc &= ~(TRTCM_PKT_MODE | TRTCM_TICK_SEL);
+ 	misc |= TRTCM_METER_MODE;
+ 	if (slow_tick)
+ 		misc |= TRTCM_TICK_SEL;
+ 
+ 	err = airoha_ppe_meter_qdma_set(qdma, group, REG_INGRESS_TRTCM_CFG,
+ 					TRTCM_MISC_MODE, misc);
+ 	if (err)
+-		return err;
++		goto out_unlock;
+ 	err = airoha_ppe_meter_qdma_set(qdma, group, REG_INGRESS_TRTCM_CFG,
+ 					TRTCM_TOKEN_RATE_MODE, rate_val);
+ 	if (err)
+@@ -342,6 +345,8 @@ static int airoha_ppe_meter_hw_config(st
+ 	if (err)
+ 		goto err_disable_qdma;
+ 
++	mutex_unlock(&eth->trtcm_lock);
++
+ 	/* Skip writing FE + AIROHA_PPE_METER_GROUP(group): on AN7581 that
+ 	 * window reads 0xdeadbeef and collides with live FE registers
+ 	 * (group 2 = REG_FE_GDM4_RMBI_FRAG, group 14 = REG_SP_DFT_CPORT(3)).
+@@ -351,6 +356,8 @@ static int airoha_ppe_meter_hw_config(st
+ err_disable_qdma:
+ 	airoha_ppe_meter_qdma_set(qdma, group, REG_INGRESS_TRTCM_CFG,
+ 				  TRTCM_MISC_MODE, misc & ~TRTCM_METER_MODE);
++out_unlock:
++	mutex_unlock(&eth->trtcm_lock);
+ 	return err;
+ }
+ 

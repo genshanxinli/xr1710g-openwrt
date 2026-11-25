@@ -1,0 +1,114 @@
+From: OpenWrt <openwrt@example.org>
+Date: Wed, 25 Nov 2026 08:28:00 +0800
+Subject: [PATCH] watchdog: airoha: log the NP-SCU reset-cause bitmap
+
+The driver never reads the NP-SCU power-management status register, so
+bootstatus stays a structural zero on this board: airoha_wdt_probe() has
+no reset-cause source at all.  The PMC bitmap at 0x080 is the only
+evidence that survives a reboot here -- ATF's system reset arms the
+watchdog without recording anything, and U-Boot neither reads nor clears
+PMC.
+
+Log the raw value, including both vendor-defined bits, and leave the
+register untouched.  The bit layout is taken from vendor EN7581 code and
+has not been confirmed on AN7581 silicon, and the register is
+write-1-to-clear: acting on it now would advertise a capability the board
+may not have and destroy the only evidence of the previous reset.  A
+later change can map the bits once cold-boot, clean-reboot and
+watchdog-bite captures agree.
+
+The phandle is optional, so existing device trees keep working; a missing
+or not-yet-probed SCU only costs the diagnostic line, never the watchdog.
+The DT resource is widened to 0x3c in the platform dtsi because
+WDT_RELOAD lives at 0x38 and the old size ended one register early, and
+the binding gains the property so the dtsi stays schema-clean.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+
+ drivers/watchdog/airoha_wdt.c                                     | 30 ++++++++++++++++++++++++++++++
+ Documentation/devicetree/bindings/watchdog/airoha,en7581-wdt.yaml |  7 +++++++
+ 2 files changed, 37 insertions(+)
+--- a/drivers/watchdog/airoha_wdt.c
++++ b/drivers/watchdog/airoha_wdt.c
+@@ -21,6 +21,8 @@
+ #include <linux/platform_device.h>
+ #include <linux/watchdog.h>
+ #include <linux/stringify.h>
++#include <linux/mfd/syscon.h>
++#include <linux/regmap.h>
+ 
+ /* Base address of timer and watchdog registers */
+ #define TIMER_CTRL			0x0
+@@ -34,6 +36,15 @@
+ #define WDT_RELOAD			0x38
+ #define   WDT_RLD			BIT(0)
+ 
++/*
++ * NP-SCU power-management status: reset-source bitmap, write-1-to-clear.
++ * The layout comes from vendor EN7581 code and is not confirmed on AN7581
++ * silicon yet, so this driver only reads it.
++ */
++#define AIROHA_SCU_PMC			0x080
++#define   AIROHA_SCU_PMC_WDG_RST_R	BIT(31)
++#define   AIROHA_SCU_PMC_SYS_RST_R	BIT(30)
++
+ /* Airoha watchdog structure description */
+ struct airoha_wdt_desc {
+ 	struct watchdog_device wdog_dev;
+@@ -131,6 +142,8 @@
+ 	struct watchdog_device *wdog_dev;
+ 	struct device *dev = &pdev->dev;
+ 	struct clk *bus_clk;
++	struct regmap *scu;
++	u32 pmc;
+ 	int ret;
+ 
+ 	airoha_wdt = devm_kzalloc_obj(dev, *airoha_wdt);
+@@ -163,6 +176,23 @@
+ 	wdog_dev->min_timeout = 1;
+ 	wdog_dev->parent = dev;
+ 
++	/*
++	 * Read-only diagnostic.  The NP-SCU PMC bitmap is the only reset-cause
++	 * evidence that survives a reboot on this boot chain: ATF does not write
++	 * it and U-Boot neither reads nor clears it.  Log the raw value and leave
++	 * the bits alone; the EN7581 layout above is not confirmed on AN7581
++	 * silicon yet, and clearing it would destroy the evidence.
++	 */
++	scu = syscon_regmap_lookup_by_phandle(dev->of_node, "airoha,scu");
++	if (IS_ERR(scu))
++		dev_info(dev, "no SCU reset-cause regmap: %ld\n", PTR_ERR(scu));
++	else if (regmap_read(scu, AIROHA_SCU_PMC, &pmc))
++		dev_warn(dev, "failed to read SCU PMC\n");
++	else
++		dev_info(dev, "SCU PMC=0x%08x WDG_RST_R=%u SYS_RST_R=%u\n",
++			 pmc, !!(pmc & AIROHA_SCU_PMC_WDG_RST_R),
++			 !!(pmc & AIROHA_SCU_PMC_SYS_RST_R));
++
+ 	watchdog_set_drvdata(wdog_dev, airoha_wdt);
+ 	watchdog_set_nowayout(wdog_dev, nowayout);
+ 	watchdog_stop_on_unregister(wdog_dev);
+--- a/Documentation/devicetree/bindings/watchdog/airoha,en7581-wdt.yaml
++++ b/Documentation/devicetree/bindings/watchdog/airoha,en7581-wdt.yaml
+@@ -30,6 +30,12 @@
+   clock-names:
+     const: bus
+ 
++  airoha,scu:
++    $ref: /schemas/types.yaml#/definitions/phandle
++    description:
++      Phandle to the NP-SCU syscon that holds the reset-cause status
++      register.
++
+ required:
+   - compatible
+   - reg
+@@ -45,6 +51,7 @@
+     watchdog@1fbf0100 {
+         compatible = "airoha,en7581-wdt";
+         reg = <0x1fbf0100 0x3c>;
++        airoha,scu = <&scuclk>;
+ 
+         clocks = <&scuclk EN7523_CLK_BUS>;
+         clock-names = "bus";

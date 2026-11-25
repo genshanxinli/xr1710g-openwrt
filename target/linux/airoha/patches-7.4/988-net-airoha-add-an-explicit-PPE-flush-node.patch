@@ -1,9 +1,61 @@
- drivers/net/ethernet/airoha/airoha_ppe.c | 66 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- drivers/net/ethernet/airoha/airoha_ppe_debugfs.c | 55 +++++++++++++++++++++++++++++++++++++++++++++++++++++++
- 2 files changed, 121 insertions(+), 0 deletions(-)
- drivers/net/ethernet/airoha/airoha_ppe.c | 66 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- drivers/net/ethernet/airoha/airoha_ppe_debugfs.c | 55 +++++++++++++++++++++++++++++++++++++++++++++++++++++++
- 2 files changed, 121 insertions(+), 0 deletions(-)
+From: OpenWrt <openwrt@example.org>
+Date: Sun, 15 Nov 2026 10:45:00 +0800
+Subject: [PATCH] net: airoha: add a write-only debugfs node that flushes the
+ PPE tables
+
+The PPE tables are filled from userspace through the flowtable, but there
+is no way to empty them again after probe: airoha_ppe_flush_sram_entries()
+runs once from airoha_ppe_init(), and every file under
+/sys/kernel/debug/ppe/ is either read-only or a single-value knob.  A
+repeated fill experiment therefore starts each round on top of the
+previous round's entries: the D2 fill arm's bound cannot be compared
+across rounds even though the instrument itself is sound.
+
+The residue covers both halves of the hash space.  The SRAM half holds
+hardware entries that can outlive the driver's bookkeeping; the DRAM half
+is the coherent buffer the PPE reads its entries from and is never zeroed
+again once probe is over.  Clearing only one half leaves
+/sys/kernel/debug/ppe/usage counting the other as bound.
+
+Expose /sys/kernel/debug/ppe/flush, write-only (mode 0200).  Writing "1"
+returns both tables to their post-probe state:
+
+ - the SRAM half is cleared through the same per-entry control-register
+   handshake the probe-time clear uses, with the live geometry, so with
+   flow counters in use each PPE contributes its real 4096 entries and no
+   write ever names an entry the hardware does not have;
+ - the DRAM half is zeroed in the coherent buffer, which is the table the
+   PPE walks.
+
+The flush takes flow_offload_mutex so the live geometry cannot change under
+it (airoha_ppe_hw_init() reprograms the per-PPE SRAM size once the NPU
+accepts flow counters, and it runs under that mutex), and ppe_lock so an
+offload cannot land between two commits.  A failed handshake stops the
+flush, names the PPE and the entry in the kernel log and returns -EIO;
+nothing reports success for a table it did not clear.  Any value other
+than "1" is refused with -EINVAL, so a typo cannot clear the hardware in
+the middle of an experiment.
+
+The node clears the tables, not the flows.  It does not clear conntrack:
+flows offloaded into the flowtable keep their IPS_OFFLOAD bit and their
+packets are still handed to the PPE instead of being forwarded in
+software, so the node has to be paired with
+
+    nft flush flowtable inet fw4 ft
+
+On its own it turns those flows into silent drops.  It is a manual
+experiment knob and must never be driven by a script; nothing calls it
+automatically, and a kernel that never writes the file behaves exactly as
+before.
+
+The intended order is: stop the flows (netwatchdog hold), flush the
+flowtable, write the node, replay the traffic, sample.  Build-tested with
+the OpenWrt arm64 7.3 kernel (airoha_ppe.o and airoha_ppe_debugfs.o); the
+"bound back to 0" readback needs the board and belongs to the bench.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
 @@ -20,6 +20,11 @@

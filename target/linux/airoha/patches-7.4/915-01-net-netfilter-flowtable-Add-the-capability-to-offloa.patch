@@ -1,8 +1,16 @@
- include/net/netfilter/nf_flow_table.h |    3 +++
- net/netfilter/nf_flow_table_ip.c      |   15 +++++++++++++++
- net/netfilter/nf_flow_table_offload.c |    7 +++++++
- net/netfilter/nft_flow_offload.c      |   26 ++++++++++++++++++++++++++
- 4 files changed, 51 insertions(+)
+From 6408cdca652b1f85e5b8582c283203d11f4dedcb Mon Sep 17 00:00:00 2001
+Message-ID: <6408cdca652b1f85e5b8582c283203d11f4dedcb.1779086987.git.lorenzo@kernel.org>
+From: Lorenzo Bianconi <lorenzo@kernel.org>
+Date: Sun, 17 May 2026 21:11:27 +0200
+Subject: [PATCH net-next 1/2] net: netfilter: flowtable: Add the capability to
+ offload dscp field
+
+Introduce the capability to hw offload via netfilter flowtable APIs the
+IP TOS info. Implement the sw offloading for DSCP field via the
+netfilter flowtable APIs.
+
+Signed-off-by: Lorenzo Bianconi <lorenzo@kernel.org>
+---
 
 --- a/include/net/netfilter/nf_flow_table.h
 +++ b/include/net/netfilter/nf_flow_table.h

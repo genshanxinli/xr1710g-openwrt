@@ -1,7 +1,34 @@
- drivers/net/ethernet/airoha/airoha_ppe.c | 33 +++++++++++++++++++++++++++++++++
- 1 files changed, 30 insertions(+), 3 deletions(-)
- drivers/net/ethernet/airoha/airoha_ppe.c | 33 +++++++++++++++++++++++++++++++++
- 1 files changed, 30 insertions(+), 3 deletions(-)
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: do not decrement TTL on flows bridged within one bridge
+
+A frame that enters and leaves through two ports of the same bridge is
+L2-forwarded and must keep its IP TTL.  The flowtable fast path only
+decrements TTL for routed flows; the PPE was not making that distinction,
+because a bridged flow reaches the inet flowtable through br_netfilter and
+is encoded as PPE_PKT_TYPE_IPV4_HNAPT, indistinguishable by address type
+from a routed one.
+
+Patch 960 tried to fix this by clearing AIROHA_FOE_IB1_BIND_TTL for
+PPE_PKT_TYPE_BRIDGE, but that type is only reachable from a tc-flower rule
+that matches on ethernet addresses explicitly; the nft flowtable never
+emits one, so bridged flows kept the bit set and the hardware decremented
+the TTL.  Measured on a Gemtek XR1710G: a frame entering lan2 with TTL 5
+left phy0.0-ap0 with TTL 4.
+
+Decide it from the devices instead: if the egress device is a bridge port
+and the ingress device is a port of the same bridge, the flow stays in L2
+and BIND_TTL is cleared.  Routed flows keep decrementing, which also keeps
+the previous behaviour for flows that enter or leave the bridge.
+
+Note this covers the hardware path only.  nf_flow_offload_ipv4_forward()
+still calls ip_decrease_ttl() unconditionally, so flows that are not (yet)
+bound to the PPE are still decremented by software.  Fixing that needs a
+flowtable-family test in the generic fast path and is left for a separate
+change.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
 @@ -587,7 +587,7 @@ static int airoha_ppe_foe_entry_prepare(

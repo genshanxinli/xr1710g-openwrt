@@ -215,6 +215,16 @@
 	hwmon@2e {
 		compatible = "nuvoton,nct7802";
 		reg = <0x2e>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		/* RTD2 has no external thermal diode wired on XR1710G (reads 127.875 C open). */
+		channel@2 {
+			reg = <2>;
+			sensor-type = "temperature";
+			temperature-mode = "thermal-diode";
+			status = "disabled";
+		};
 	};
 };
 
@@ -326,7 +336,7 @@
 	phy-handle = <&phy8>;
 	phy-mode = "usxgmii";
 
-	nvmem-cells = <&wan_mac 0>;
+	nvmem-cells = <&wan_mac>;
 	nvmem-cell-names = "mac-address";
 	openwrt,netdev-name = "wan";
 };
@@ -430,6 +440,7 @@
 
 &gsw_phy1 {
 	status = "okay";
+	interrupts = <1>;
 
 	pinctrl-names = "gbe-led";
 	pinctrl-0 = <&gswp1_led0_pins>, <&gswp1_led1_pins>;
@@ -460,6 +471,7 @@
 
 &gsw_phy2 {
 	status = "okay";
+	interrupts = <2>;
 
 	pinctrl-names = "gbe-led";
 	pinctrl-0 = <&gswp2_led0_pins>, <&gswp2_led1_pins>;

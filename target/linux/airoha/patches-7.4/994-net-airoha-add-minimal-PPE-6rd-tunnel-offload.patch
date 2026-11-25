@@ -106,17 +106,22 @@ Signed-off-by: OpenWrt <openwrt@example.org>
  static const struct rhashtable_params airoha_flow_table_params = {
  	.head_offset = offsetof(struct airoha_flow_table_entry, node),
  	.key_offset = offsetof(struct airoha_flow_table_entry, cookie),
-@@ -1515,7 +1531,9 @@ static void airoha_ppe_foe_flow_stats_up
+@@ -1505,6 +1521,15 @@ static void airoha_ppe_foe_flow_stats_up
+ 	if (pse_port == FE_PSE_PORT_CDM4)
+ 		return;
  
- 	val = *ib2 & (AIROHA_FOE_IB2_NBQ | AIROHA_FOE_IB2_PSE_PORT |
- 		      AIROHA_FOE_IB2_PSE_QOS | AIROHA_FOE_IB2_FAST_PATH);
--	*meter |= FIELD_PREP(AIROHA_FOE_TUNNEL_MTU, val);
-+	/* For a marked 6rd entry the word is tunnel_mtu, not scratch. */
-+	if (!(*data & AIROHA_FOE_TUNNEL))
-+		*meter |= FIELD_PREP(AIROHA_FOE_TUNNEL_MTU, val);
++	/* The counter path below stores the IB2 routing bits in the entry's
++	 * tunnel_mtu word and redirects the entry to the NPU.  A marked 6rd
++	 * entry owns that word for its real tunnel MTU, so keep it off the
++	 * hardware counters instead of corrupting the MTU or leaving the NPU
++	 * without saved IB2 routing bits.
++	 */
++	if (*data & AIROHA_FOE_TUNNEL)
++		return;
++
+ 	airoha_ppe_foe_flow_stat_entry_reset(ppe, npu, index);
  
- 	nbq = pse_port == 1 ? 6 : 5;
- 	*ib2 &= ~(AIROHA_FOE_IB2_NBQ | AIROHA_FOE_IB2_PSE_PORT |
+ 	val = FIELD_GET(AIROHA_FOE_CHANNEL | AIROHA_FOE_QID, *data);
 @@ -2222,6 +2240,120 @@ static bool airoha_ppe_dslite_flow(struc
  	return ret;
  }

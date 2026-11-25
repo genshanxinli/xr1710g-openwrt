@@ -18,7 +18,7 @@ Signed-off-by: Viresh Kumar <viresh.kumar@linaro.org>
 ---
 --- a/drivers/cpufreq/airoha-cpufreq.c
 +++ b/drivers/cpufreq/airoha-cpufreq.c
-@@ -12,7 +12,8 @@
+@@ -12,12 +12,20 @@
  
  struct airoha_cpufreq_priv {
  	int opp_token;
@@ -28,7 +28,19 @@ Signed-off-by: Viresh Kumar <viresh.kumar@linaro.org>
  	struct platform_device *cpufreq_dt;
  };
  
-@@ -29,24 +30,19 @@ static int airoha_cpufreq_config_clks_no
+ static struct platform_device *cpufreq_pdev;
+ 
++/*
++ * Current CPU OPP state, exported by the Airoha CPU PM domain driver
++ * (drivers/pmdomain/mediatek/airoha-cpu-pmdomain.c). Declared here to keep
++ * the change local instead of touching include/linux/pm_domain.h.
++ */
++int airoha_cpu_pmdomain_get_state(void);
++
+ /* NOP function to disable OPP from setting clock */
+ static int airoha_cpufreq_config_clks_nop(struct device *dev,
+ 					  struct opp_table *opp_table,
+@@ -29,24 +37,19 @@
  }
  
  static const char * const airoha_cpufreq_clk_names[] = { "cpu", NULL };
@@ -55,11 +67,11 @@ Signed-off-by: Viresh Kumar <viresh.kumar@linaro.org>
 +		.clk_names = airoha_cpufreq_clk_names,
 +		.config_clks = airoha_cpufreq_config_clks_nop,
 +	};
-+	int ret, i, num_devs;
++	int ret, i, num_devs, state;
  
  	/* CPUs refer to the same OPP table */
  	cpu_dev = get_cpu_device(0);
-@@ -62,17 +58,66 @@ static int airoha_cpufreq_probe(struct p
+@@ -62,17 +65,88 @@
  	if (priv->opp_token < 0)
  		return dev_err_probe(dev, priv->opp_token, "Failed to set OPP config\n");
  
@@ -119,6 +131,28 @@ Signed-off-by: Viresh Kumar <viresh.kumar@linaro.org>
 +			}
 +		}
 +
++		/*
++		 * genpd and per-device caches start at state 0 while the
++		 * bootloader may leave the CPU at a higher OPP. Seed them with
++		 * the state the CPU actually runs at, otherwise the first
++		 * request for a lower state is dropped as already applied and
++		 * the CPU never leaves the boot OPP.
++		 */
++		state = airoha_cpu_pmdomain_get_state();
++		if (state < 0) {
++			dev_warn(dev, "failed to read CPU performance state: %d\n",
++				 state);
++		} else {
++			for (i = 0; i < num_devs; i++) {
++				ret = dev_pm_genpd_set_performance_state(
++							virt_devs[i], state);
++				if (ret)
++					dev_warn(dev,
++						 "failed to sync %s performance state: %d\n",
++						 airoha_cpufreq_pd_names[i], ret);
++			}
++		}
++
 +		priv->virt_devs = virt_devs;
 +		priv->num_virt_devs = num_devs;
 +	}
@@ -132,7 +166,7 @@ Signed-off-by: Viresh Kumar <viresh.kumar@linaro.org>
  	}
  
  	priv->cpufreq_dt = cpufreq_dt;
-@@ -80,9 +125,15 @@ static int airoha_cpufreq_probe(struct p
+@@ -80,9 +154,15 @@
  
  	return 0;
  
@@ -151,7 +185,7 @@ Signed-off-by: Viresh Kumar <viresh.kumar@linaro.org>
  	dev_pm_opp_clear_config(priv->opp_token);
  
  	return ret;
-@@ -91,12 +142,18 @@ clear_opp_config:
+@@ -91,12 +171,18 @@
  static void airoha_cpufreq_remove(struct platform_device *pdev)
  {
  	struct airoha_cpufreq_priv *priv = platform_get_drvdata(pdev);
@@ -172,7 +206,7 @@ Signed-off-by: Viresh Kumar <viresh.kumar@linaro.org>
  }
  
  static struct platform_driver airoha_cpufreq_driver = {
-@@ -110,6 +167,7 @@ static struct platform_driver airoha_cpu
+@@ -110,6 +196,7 @@
  static const struct of_device_id airoha_cpufreq_match_list[] __initconst = {
  	{ .compatible = "airoha,an7583" },
  	{ .compatible = "airoha,en7581" },
@@ -182,7 +216,7 @@ Signed-off-by: Viresh Kumar <viresh.kumar@linaro.org>
  MODULE_DEVICE_TABLE(of, airoha_cpufreq_match_list);
 --- a/drivers/cpufreq/cpufreq-dt-platdev.c
 +++ b/drivers/cpufreq/cpufreq-dt-platdev.c
-@@ -108,6 +108,7 @@ static const struct of_device_id allowli
+@@ -108,6 +108,7 @@
  static const struct of_device_id blocklist[] __initconst = {
  	{ .compatible = "airoha,an7583", },
  	{ .compatible = "airoha,en7581", },
@@ -190,3 +224,13 @@ Signed-off-by: Viresh Kumar <viresh.kumar@linaro.org>
  
  	{ .compatible = "allwinner,sun50i-a100" },
  	{ .compatible = "allwinner,sun50i-h6", },
+--- a/drivers/cpufreq/Kconfig.arm
++++ b/drivers/cpufreq/Kconfig.arm
+@@ -18,6 +18,7 @@
+ config ARM_AIROHA_SOC_CPUFREQ
+ 	tristate "Airoha EN7581 SoC CPUFreq support"
+ 	depends on ARCH_AIROHA || COMPILE_TEST
++	depends on AIROHA_CPU_PM_DOMAIN
+ 	depends on OF
+ 	select PM_OPP
+ 	default ARCH_AIROHA

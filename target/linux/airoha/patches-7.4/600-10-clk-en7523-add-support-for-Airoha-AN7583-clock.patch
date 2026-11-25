@@ -1,3 +1,17 @@
+From 3c5cd99f894c23650accf19fef18b5b9bbe83941 Mon Sep 17 00:00:00 2001
+From: Christian Marangi <ansuelsmth@gmail.com>
+Date: Sat, 8 Feb 2025 00:43:27 +0100
+Subject: [PATCH 10/10] clk: en7523: add support for Airoha AN7583 clock
+
+Add support for Airoha AN7583 clock and reset.
+
+Airoha AN7583 SoC have the same register address of EN7581 but implement
+different bits and additional base clocks. Also reset are different with
+the introduction of 2 dedicated MDIO line and drop of some reset lines.
+
+Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
+---
+
 --- a/drivers/clk/clk-en7523.c
 +++ b/drivers/clk/clk-en7523.c
 @@ -16,6 +16,7 @@

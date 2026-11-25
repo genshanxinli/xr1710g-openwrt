@@ -41,7 +41,7 @@ PATCHES = {
         / f"target/linux/airoha/patches-{ver}"
         / "99993-net-airoha-make-the-matchall-police-meter-observable.patch"
     )
-    for ver in ("7.4", "7.3")
+    for ver in ("7.4",)
 }
 NODE = 'debugfs_create_file("rx_meter", 0444, eth->qdma_debugfs_dir, eth,'
 COMMENT = "deliberately takes no ppe->meter[]"

@@ -1,8 +1,39 @@
- drivers/net/ethernet/airoha/airoha_npu.c | 9 +++++++++
- drivers/net/ethernet/airoha/airoha_eth.h | 6 ++++++
- drivers/net/ethernet/airoha/airoha_regs.h | 5 +++++
- drivers/net/ethernet/airoha/airoha_ppe.c | 41 +++++++++++++++++++++++++++++++++++++++++
- 4 files changed, 58 insertions(+), 3 deletions(-)
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: keep PPE offload when the NPU refuses flow stats
+
+With CONFIG_NET_AIROHA_FLOW_STATS enabled, airoha_ppe_offload_setup()
+asks the NPU firmware for the counter region and treats any failure as
+fatal:
+
+	err = npu->ops.ppe_init_stats(npu, ppe->foe_stats_dma,
+				      ppe_num_stats_entries);
+	if (err)
+		goto error_npu_put;
+
+so a firmware that does not implement PPE_FUNC_SET_WAIT_FLOW_STATS_SETUP
+ends up with no offload at all - the feature that is the whole point of
+the driver - instead of offload without counters.
+
+The firmware also reports success with a zero npu_stats_addr when its
+internal SRAM pool is exhausted, and that zero address was being handed
+to devm_ioremap().
+
+Treat flow statistics as the optional capability they are: warn and
+continue without them, remember the decision in a new foe_stats_enabled
+flag so the statistics paths become no-ops, and reject a zero counter
+address as a refusal.
+
+While the counters are in use the counted flows are steered to port 6
+(the CDM3 path to the NPU), which is flow controlled separately from the
+other ports; clear PSE_PORT6_SHARE_DIS so that port takes part in the
+shared-buffer flow control.  Without counters the port is left alone.
+
+Based on the upstream "[PATCH net v3] net: airoha: keep PPE offload when
+NPU refuses flow stats" by Chad Monroe / Sayantan Nandy.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+
 --- a/drivers/net/ethernet/airoha/airoha_npu.c
 +++ b/drivers/net/ethernet/airoha/airoha_npu.c
 @@ -450,6 +450,15 @@ static int airoha_npu_ppe_stats_setup(st
