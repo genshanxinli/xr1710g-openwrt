@@ -111,12 +111,15 @@ UBOOT_CUSTOMIZE_CONFIG := \
 # rng@1faa1000 node into /chosen/kaslr-seed (boot/fdt_support.c fdt_kaslrseed).
 # RNG_AIROHA is hidden behind "if DM_RNG" and depends on ARCH_AIROHA, so a
 # dropped --enable would silently leave the node dead again: assert the pair.
+# The call site also skips fdt_kaslrseed() when MEASURED_BOOT or
+# ARMV8_SEC_FIRMWARE_SUPPORT is enabled, so those must stay off.
 define Build/Configure
 	$(call Build/Configure/U-Boot)
 	sed -i 's/CONFIG_TOOLS_LIBCRYPTO=y/# CONFIG_TOOLS_LIBCRYPTO is not set/' $(PKG_BUILD_DIR)/.config
-	grep -q '^CONFIG_RNG_AIROHA=y' $(PKG_BUILD_DIR)/.config || { \
-		echo "uboot-airoha: CONFIG_RNG_AIROHA is not set -- the TRNG patch and the --enable pair drifted apart" >&2; \
-		exit 1; }
+	grep -q "^CONFIG_DM_RNG=y" $(PKG_BUILD_DIR)/.config || { echo "uboot-airoha: CONFIG_DM_RNG is not set -- fdt_kaslrseed() would be a no-op" >&2; exit 1; }
+	grep -q "^CONFIG_RNG_AIROHA=y" $(PKG_BUILD_DIR)/.config || { echo "uboot-airoha: CONFIG_RNG_AIROHA is not set -- fdt_kaslrseed() would be a no-op" >&2; exit 1; }
+	if grep -q "^CONFIG_MEASURED_BOOT=y" $(PKG_BUILD_DIR)/.config; then echo "uboot-airoha: CONFIG_MEASURED_BOOT=y suppresses fdt_kaslrseed()" >&2; exit 1; fi
+	if grep -q "^CONFIG_ARMV8_SEC_FIRMWARE_SUPPORT=y" $(PKG_BUILD_DIR)/.config; then echo "uboot-airoha: CONFIG_ARMV8_SEC_FIRMWARE_SUPPORT=y suppresses fdt_kaslrseed()" >&2; exit 1; fi
 endef
 
 define Build/Compile

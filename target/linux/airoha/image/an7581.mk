@@ -91,7 +91,7 @@ define Device/gemtek-ubi-common
   KERNEL_IN_UBI := 1
   KERNEL := kernel-bin | gzip
   KERNEL_INITRAMFS := kernel-bin | lzma | \
-	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb with-initrd | pad-to 128k
+	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb with-initrd | pad-to 128k | append-metadata
   KERNEL_INITRAMFS_SUFFIX := -recovery.itb
   IMAGES := sysupgrade.itb
   IMAGE/sysupgrade.itb := append-kernel | fit gzip $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb external-static-with-rootfs | append-metadata
@@ -131,10 +131,13 @@ define Device/gemtek_xr1710g-ubi
   DEVICE_ALT0_VENDOR := Brightspeed
   DEVICE_ALT0_MODEL := XR1710G
   DEVICE_ALT0_VARIANT := UBI
+  # bridge is executed on-device by the flowsense rpcd backend and by
+  # scripts/wireless/lib/port-detach.sh; base64 is the console file-transfer
+  # primitive (issue #375).  Both are packages, so the image manifest proves them.
   DEVICE_PACKAGES += kmod-br-netfilter wpad-mbedtls usteer ethtool-full \
 		    luci-app-airoha-npu luci-app-airoha-flowsense \
 		    luci-app-airoha-fancontrol luci-app-wifi7 luci-app-mlo \
-		    luci-app-traffic-chart \
+		    luci-app-traffic-chart ip-bridge coreutils-base64 \
 		    luci
   ARTIFACT/chainload-uboot.itb := an7581-chainloader gemtek_xr1710g
 endef
@@ -188,7 +191,7 @@ define Device/nokia_xg-040g-md-ubi
   KERNEL_IN_UBI := 1
   KERNEL := kernel-bin | gzip
   KERNEL_INITRAMFS := kernel-bin | lzma | \
-	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb with-initrd | pad-to 128k
+	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb with-initrd | pad-to 128k | append-metadata
   KERNEL_INITRAMFS_SUFFIX := -recovery.itb
   IMAGES := sysupgrade.itb
   IMAGE/sysupgrade.itb := append-kernel | \
@@ -220,7 +223,7 @@ define Device/quantum_q1000k-ubi
   KERNEL_IN_UBI := 1
   KERNEL := kernel-bin | gzip
   KERNEL_INITRAMFS := kernel-bin | lzma | \
-	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb with-initrd | pad-to 128k
+	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb with-initrd | pad-to 128k | append-metadata
   KERNEL_INITRAMFS_SUFFIX := -recovery.itb
   IMAGES := sysupgrade.itb
   # Match the Q1000K HTTP recovery upload buffer (256 MiB).

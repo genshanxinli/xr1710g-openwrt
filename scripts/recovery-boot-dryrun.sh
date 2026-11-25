@@ -46,15 +46,20 @@
 #                      *-initramfs-recovery.itb)
 #   -H, --host HOST    ssh target (default root@192.168.1.1)
 #   -d, --dir DIR      restore-point directory (default
-#                      /home/l1n/projects/.scratch/recovery/<timestamp>)
+#                      <repo>/.scratch/recovery/recovery-boot-<timestamp>)
 #       --execute      write the restore point, then flash (refuses on FAIL)
 #       --self-test    exercise the parsers with fixtures, touch nothing
 #   -h, --help         this text
 #
+# Environment:
+#   RB_IMAGE_SHA256   expected digest for --image when sha256sums lists none
+#                     (same role as flash-gate.sh's FG_IMAGE_SHA256; a readable
+#                     sha256sums still wins over it)
+#
 # Exit status:
 #   0  plan ready / execute finished      4  a check FAILed (nothing written)
 #   2  usage                              5  restore point did not verify
-#   6  image push or on-device digest mismatch
+#   6  image push, on-device digest mismatch, validation, or sysupgrade failed
 
 set -u
 
@@ -76,6 +81,8 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
 CHECK_FAILED=0
+# Space-padded list of failing row names, " row.name row.name ...".
+FAILED_ROWS=''
 
 say() { printf '%s\n' "$*"; }
 err() { printf '%s\n' "$*" >&2; }
@@ -84,7 +91,10 @@ err() { printf '%s\n' "$*" >&2; }
 # shape as scripts/flash-gate.sh so the two logs can be diffed.
 row() {
 	printf '%-30s expected=%-24s actual=%-28s %s\n' "$1" "$2" "$3" "$4"
-	[ "$4" = FAIL ] && CHECK_FAILED=$((CHECK_FAILED + 1))
+	if [ "$4" = FAIL ]; then
+		CHECK_FAILED=$((CHECK_FAILED + 1))
+		FAILED_ROWS="$FAILED_ROWS $1"
+	fi
 	return 0
 }
 
@@ -134,6 +144,51 @@ need_lebs() {
 # phandle_name ID PAIRS -- "E" over a "E fit / W factory" list -> fit.
 phandle_name() {
 	printf '%s\n' "$2" | awk -v want="$1" '$1 == want { print $2; exit }'
+}
+
+# probe_section FILE NAME -- lines after "--- NAME" up to the next "--- " or EOF.
+probe_section() {
+	awk -v sec="--- $2" '
+		$0 == sec { inside = 1; next }
+		inside && /^--- / { exit }
+		inside { print }
+	' "$1"
+}
+
+# is_valid_addr VALUE -- true iff VALUE is a plain 0x<hex> or non-octal decimal
+# integer that fits safely inside signed 64-bit POSIX $((...)) arithmetic
+# (significant hex digits <= 15, decimal digits <= 18).
+is_valid_addr() {
+	case "$1" in
+	0x*|0X*)
+		_hex=${1#??}
+		[ -n "$_hex" ] || return 1
+		case "$_hex" in
+		*[!0-9a-fA-F]*) return 1 ;;
+		esac
+		while :; do
+			case "$_hex" in
+			0*) _hex=${_hex#0} ;;
+			*) break ;;
+			esac
+		done
+		[ "${#_hex}" -le 15 ] || return 1
+		return 0
+		;;
+	0)
+		return 0
+		;;
+	[1-9]*)
+		case "$1" in
+		*[!0-9]*) return 1 ;;
+		esac
+		[ "${#1}" -le 18 ] || return 1
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
 }
 
 # ---------------------------------------------------------------- arguments
@@ -214,7 +269,17 @@ EOF
 	[ "$(sums_digest "$WORK/sums" openwrt-airoha-an7581-gemtek_xr1710g-ubi-initramfs-recovery.itb)" = \
 	  cca43cfe0d0dfa5c2dba49665995aabb94e454d915945974b708b95aa6294e49 ] || { err "self-test: sums_digest"; exit 1; }
 	[ "$(sums_digest "$WORK/sums" nope.itb)" = "" ] || { err "self-test: sums_digest miss"; exit 1; }
-	say "self-test: 17 parser checks OK"
+	is_valid_addr 0x85000000 || { err "self-test: is_valid_addr hex"; exit 1; }
+	is_valid_addr 0x0000000085000000 || { err "self-test: is_valid_addr padded hex"; exit 1; }
+	is_valid_addr 0 || { err "self-test: is_valid_addr zero"; exit 1; }
+	! is_valid_addr 0xZZ || { err "self-test: is_valid_addr bad hex"; exit 1; }
+	! is_valid_addr 0850 || { err "self-test: is_valid_addr bad octal"; exit 1; }
+	! is_valid_addr "1+1" || { err "self-test: is_valid_addr expr"; exit 1; }
+	! is_valid_addr "" || { err "self-test: is_valid_addr empty"; exit 1; }
+	! is_valid_addr 0x8000000000000000 || { err "self-test: is_valid_addr int64 sign bit"; exit 1; }
+	! is_valid_addr 0x10000000000000000 || { err "self-test: is_valid_addr int64 hex overflow"; exit 1; }
+	! is_valid_addr 99999999999999999999 || { err "self-test: is_valid_addr int64 dec overflow"; exit 1; }
+	say "self-test: 27 parser checks OK"
 	exit 0
 fi
 
@@ -230,10 +295,54 @@ IMG_BYTES=$(wc -c < "$IMAGE" | awk '{ print $1 }')
 NAME=$(echo "$IMG_NAME" | sed 's/.*gemtek_xr1710g-ubi-//')
 say "image: $IMG_DIR/$IMG_NAME ($IMG_BYTES bytes)"
 
-WANT=$(sums_digest "$IMG_DIR/sha256sums" "$IMG_NAME")
+# The list beside the image is one source of the expected digest; the other is
+# RB_IMAGE_SHA256, the same seam flash-gate.sh has as FG_IMAGE_SHA256.  Without
+# it an image whose directory holds no sha256sums -- the default state of this
+# tree, CONFIG_BUILDBOT is not set -- could not produce a plan at all.  A
+# readable list still wins: a digest named in the environment is evidence about
+# this file, but it does not hide what the list says.
+WANT=''
+if [ -r "$IMG_DIR/sha256sums" ]; then
+	WANT=$(sums_digest "$IMG_DIR/sha256sums" "$IMG_NAME")
+fi
+WANT=${WANT:-${RB_IMAGE_SHA256:-}}
 GOT=$(sha256sum "$IMAGE" | awk '{ print $1 }')
 row image.sha256 "${WANT:-none in sha256sums}" "${GOT:-unreadable}" \
 	$([ -n "$WANT" ] && [ "$WANT" = "$GOT" ] && echo PASS || echo FAIL)
+
+# An incremental build rewrites the .itb and not the sha256sums, and then the
+# digest above compares this image against the *previous* one: either it FAILs
+# (and the operator sees "sha256 mismatch", which points at the image) or, on a
+# byte-identical rebuild, it PASSes on a file the list never described.  The
+# list's mtime is the only signal that exists for "it describes something
+# else", so say it.  `-ot` is the portable test (BusyBox test supports it); a
+# same-second tie counts as fresh, because that is what a correct build
+# produces.
+#
+# The mtime is a diagnosis, not a verdict: when the digest still matches, the
+# bytes have been proved and refusing them would keep a good image out on the
+# strength of a timestamp.  `cp -p`, `rsync -t` and a CI artifact download all
+# preserve the list's mtime while copying both files byte-for-byte, so that
+# false positive is a daily path, not a corner.  Only a stale list whose digest
+# *disagrees* is a FAIL -- it is then the most likely explanation for the
+# mismatch above, and the reason is printed with the fix.
+SUMS="$IMG_DIR/sha256sums"
+if [ ! -r "$SUMS" ]; then
+	row image.sums.fresh "sha256sums present" "absent" SKIP
+elif [ "$SUMS" -ot "$IMAGE" ]; then
+	if [ -n "$WANT" ] && [ "$WANT" = "$GOT" ]; then
+		row image.sums.fresh "sha256sums at least as new as the image" "stale, digest matches" SKIP
+	else
+		row image.sums.fresh "sha256sums at least as new as the image" "stale (older than the image)" FAIL
+		err "stale sha256sums: $SUMS is older than $IMG_NAME, so the list above describes"
+		err "an earlier build of that file -- a rebuild does not rewrite it.  recompute it:"
+		err "    ( cd $IMG_DIR && sha256sum $IMG_NAME > sums.new &&"
+		err "      grep -v -- $IMG_NAME sha256sums >> sums.new && mv sums.new sha256sums )"
+		err "or re-run the build."
+	fi
+else
+	row image.sums.fresh "sha256sums at least as new as the image" "current" PASS
+fi
 
 DUMPIMAGE=$(command -v dumpimage || true)
 if [ -n "$DUMPIMAGE" ]; then
@@ -284,25 +393,19 @@ fi
 REQUIRE_METADATA=$(awk -F= '$1 == "REQUIRE_IMAGE_METADATA" { print $2; exit }' \
 	"$TOP/target/linux/airoha/an7581/base-files/lib/upgrade/platform.sh" 2>/dev/null)
 [ -n "${REQUIRE_METADATA:-}" ] || REQUIRE_METADATA=0
-TRAILER_MAGIC=$(tail -c 16 "$IMAGE" 2>/dev/null | head -c 4 | hexdump -v -e '1/1 "%02x"')
-# -F on the plan's sysupgrade lines, set whenever the image carries no
-# trailer: harmless on a valid image (FORCE only widens the image-check gate,
-# sysupgrade:409) and the only way past "checkable, not acceptable".
-FORCE_FLAG=''
-METADATA_REFUSED=0
+TRAILER_MAGIC=''
+if [ "$IMG_BYTES" -ge 16 ]; then
+	TRAILER_MAGIC=$(tail -c 16 "$IMAGE" 2>/dev/null | head -c 4 | hexdump -v -e '1/1 "%02x"')
+fi
 if [ "$TRAILER_MAGIC" = 46577830 ]; then
 	row image.metadata "append-metadata trailer" "trailer present" PASS
 elif [ "$REQUIRE_METADATA" = 1 ]; then
 	row image.metadata "append-metadata trailer" "absent (rc 74, not forceable)" FAIL
-	METADATA_REFUSED=1
-	FORCE_FLAG=-F
 	err "this image has no fwtool trailer and REQUIRE_IMAGE_METADATA=1: the fwtool.sh in"
 	err "this tree rejects it with rc 74 before any write, and -F cannot override 74"
-	err "(forceable=0).  -F only helps if the box's own validator disagrees, which is"
-	err "what --execute asks with sysupgrade -T and -T -F.  Otherwise add 'append-metadata'."
+	err "(forceable=0).  Rebuild the recovery image with 'append-metadata'; -F is forbidden."
 else
-	row image.metadata "no trailer (board accepts -F)" "tail is 0x00" PASS
-	FORCE_FLAG=-F
+	row image.metadata "no trailer (metadata not required)" "tail is 0x00" PASS
 fi
 
 # ------------------------------------------------------------- 2. the device
@@ -313,6 +416,7 @@ echo "--- cmdline"; cat /proc/cmdline
 echo "--- mtd"; cat /proc/mtd
 echo "--- ubiinfo"; ubinfo /dev/ubi0 -a
 echo "--- env"; fw_printenv bootargs bootcmd loadaddr 2>&1
+echo "--- fw_env"; cat /etc/fw_env.config 2>/dev/null || true
 echo "--- fitblk"
 strings -n 1 /sys/firmware/devicetree/base/chosen/rootdisk 2>/dev/null | head -1
 for d in /sys/class/mtd/mtd*/of_node/volumes/*/; do
@@ -358,9 +462,39 @@ RESOLVED=$(phandle_name "$ROOTDISK" "$PAIRS")
 row fitblk.volume "$VOL" "${RESOLVED:-unresolved}" $([ "$RESOLVED" = "$VOL" ] && echo PASS || echo FAIL)
 row fitblk.method ubi "$([ "$RESOLVED" = "$VOL" ] && echo ubi)" $([ "$RESOLVED" = "$VOL" ] && echo PASS || echo FAIL)
 
-sed -n '/^--- env$/,/^--- fitblk$/p' "$WORK/probe.txt" | sed '1d;$d' > "$WORK/env.txt"
-row bootenv.crc "a valid env to read from Linux" \
-	"$(grep -q 'Bad CRC' "$WORK/env.txt" && echo 'Bad CRC, using default environment' || echo 'CRC ok; bootargs readable')" SKIP
+probe_section "$WORK/probe.txt" env > "$WORK/env.txt"
+probe_section "$WORK/probe.txt" fw_env > "$WORK/fw_env.txt"
+FW_ENV_PROBED=0
+grep -q '^--- fw_env$' "$WORK/probe.txt" && FW_ENV_PROBED=1
+awk '!/^[ 	]*#/ && NF >= 3 { print $3 }' "$WORK/fw_env.txt" > "$WORK/fw_env_sizes.txt"
+FW_ENV_COUNT=0
+FW_ENV_BAD=''
+while IFS= read -r _sz; do
+	[ -n "$_sz" ] || continue
+	FW_ENV_COUNT=$((FW_ENV_COUNT + 1))
+	if is_valid_addr "$_sz" && [ "$((_sz + 0))" -eq 16384 ]; then
+		:
+	else
+		FW_ENV_BAD="${FW_ENV_BAD:+$FW_ENV_BAD,}$_sz"
+	fi
+done < "$WORK/fw_env_sizes.txt"
+
+# "Bad CRC, using default environment" is fw_printenv's answer to an unreadable
+# env volume, and what follows the warning is not the board's stored env: it is
+# uboot-tools' compile-time default (tools/env/fw_env.c, the `default_environment`
+# table: bootcmd=run distro_bootcmd, loadaddr=0x0).  When /etc/fw_env.config
+# agrees with CONFIG_ENV_SIZE=0x4000, an empty env is a legal state; when
+# /etc/fw_env.config uses another envsize (e.g. legacy 0x1f000), fw_printenv
+# checksummed the wrong length and Bad CRC hides whatever loadaddr is stored.
+ENV_DEFAULT=0
+grep -q 'Bad CRC' "$WORK/env.txt" && ENV_DEFAULT=1
+if [ "$ENV_DEFAULT" = 1 ]; then
+	row bootenv.crc "env with a valid CRC" "uninitialized (Bad CRC, default env)" SKIP
+	row bootenv.source "env volume holds the board's env" "default (tool defaults, not stored)" SKIP
+else
+	row bootenv.crc "env with a valid CRC" "CRC ok; bootargs readable" SKIP
+	row bootenv.source "env volume holds the board's env" "env" SKIP
+fi
 row kexec.binary "absent (kexec path closed)" "$(sed -n '/^--- kexec$/,$p' "$WORK/probe.txt" | sed '1d')" SKIP
 
 # loadaddr is where boot_production puts the fit volume and where bootm
@@ -373,15 +507,46 @@ row kexec.binary "absent (kexec path closed)" "$(sed -n '/^--- kexec$/,$p' "$WOR
 # fix still carries the old env, and that is the box this plan would flash.
 BOOT_LOADADDR=$(awk '/^loadaddr=/ { print substr($0, 10); exit }' "$WORK/env.txt")
 RECOVERY_KERNEL_END=0x82ab0000
-LOADADDR_OK=0
-[ -n "$BOOT_LOADADDR" ] && [ "$((BOOT_LOADADDR + 0))" -ge "$((RECOVERY_KERNEL_END + 0))" ] && LOADADDR_OK=1
-row bootenv.loadaddr ">= 0x82ab0000 (recovery kernel end)" "${BOOT_LOADADDR:-unreadable}" \
-	$([ "$LOADADDR_OK" = 1 ] && echo PASS || echo FAIL)
+if [ "$ENV_DEFAULT" = 1 ]; then
+	if [ -n "$FW_ENV_BAD" ] || { [ "$FW_ENV_PROBED" = 1 ] && [ "$FW_ENV_COUNT" -eq 0 ]; }; then
+		row bootenv.envsize "0x4000 (CONFIG_ENV_SIZE)" "${FW_ENV_BAD:-missing}" FAIL
+		err "bootenv: fw_printenv reported 'Bad CRC' while /etc/fw_env.config has envsize=${FW_ENV_BAD:-missing}"
+		err "(expected 0x4000 for CONFIG_ENV_SIZE).  fw_printenv checksummed the wrong length, so the"
+		err "stored environment cannot be assumed uninitialized; fix /etc/fw_env.config first."
+	else
+		[ "$FW_ENV_COUNT" -gt 0 ] && row bootenv.envsize "0x4000 (CONFIG_ENV_SIZE)" "0x4000" PASS
+		# 0x0 here is uboot-tools' default, not a value the box ever stored: judging
+		# it as "the board's env is too old to rescue from" reports a host-tool
+		# constant as a board fault and sends the operator after a variable that
+		# does not exist on the box.  The plan does not depend on it either --
+		# boot_production issues `ubi read ${loadaddr} fit` and this tree's defenv
+		# (patch 999) sets 0x85000000; the TFTP path uses its own initaddr.
+		row bootenv.loadaddr ">= 0x82ab0000 (recovery kernel end)" \
+			"unknown (env uninitialized; ${BOOT_LOADADDR:-none} is the tool default)" SKIP
+		err "bootenv: fw_printenv reported 'Bad CRC, using default environment', so the env volume"
+		err "is uninitialized and the values above it (loadaddr=${BOOT_LOADADDR:-none} included) are"
+		err "uboot-tools' compile-time defaults, not anything stored on this box.  An empty env is"
+		err "legal on a fresh board; there is no board env to fix before flashing, and this tree's"
+		err "defenv sets loadaddr=0x85000000 itself."
+	fi
+else
+	if [ -n "$FW_ENV_BAD" ]; then
+		row bootenv.envsize "0x4000 (CONFIG_ENV_SIZE)" "$FW_ENV_BAD" FAIL
+	elif [ "$FW_ENV_COUNT" -gt 0 ]; then
+		row bootenv.envsize "0x4000 (CONFIG_ENV_SIZE)" "0x4000" PASS
+	fi
+	LOADADDR_OK=0
+	if is_valid_addr "$BOOT_LOADADDR"; then
+		[ "$((BOOT_LOADADDR + 0))" -ge "$((RECOVERY_KERNEL_END + 0))" ] && LOADADDR_OK=1
+	fi
+	row bootenv.loadaddr ">= 0x82ab0000 (recovery kernel end)" "${BOOT_LOADADDR:-unreadable}" \
+		$([ "$LOADADDR_OK" = 1 ] && echo PASS || echo FAIL)
+fi
 
-# The slot to hash is the volume named fit, and its id is 2 on this layout
-# (ubootenv 0, ubootenv2 1, fit 2, factory 3), never 0.  The probe derives the
-# id from /sys/class/ubi/ubi0_*/name; an empty answer means the read-only probe
-# could not find the volume, so no /dev path is built from it.
+# The slot to hash is the UBI volume named fit; its numeric ID is not fixed
+# across layouts or after ubirmvol/ubimkvol, so never hardcode a volume ID.
+# The probe derives the ID dynamically from /sys/class/ubi/ubi0_*/name; an
+# empty answer means the volume could not be found, so no /dev path is built.
 FIT_ID=$(sed -n '/^--- slot$/{n;s/^fit_id //;p;q;}' "$WORK/probe.txt")
 [ "$FIT_ID" = missing ] && FIT_ID=
 row slot.fit.id "a UBI volume named fit" "ubi0_${FIT_ID:-absent}" $([ -n "$FIT_ID" ] && echo PASS || echo FAIL)
@@ -393,18 +558,10 @@ row rollback.source "current fit volume ($VOL), hashed" "${SLOT_SHA:-unreadable}
 
 # --------------------------------------------------------------- 3. the plan
 
-DIR=${DIR:-/home/l1n/projects/.scratch/recovery/recovery-boot-$(date +%Y%m%d-%H%M%S)}
+DIR=${DIR:-$TOP/.scratch/recovery/recovery-boot-$(date +%Y%m%d-%H%M%S)}
 say ''
 if [ "$CHECK_FAILED" = 0 ]; then
 	say 'verdict: all preconditions hold, the plan below is runnable'
-elif [ "$EXECUTE" = 1 ] && [ "$METADATA_REFUSED" = 1 ] && [ "$CHECK_FAILED" -le 1 ]; then
-	# The only FAIL above is a prediction about the firmware this tree ships.
-	# --execute is about to ask the box itself (sysupgrade -T, then -T -F on
-	# the pushed copy), so the prediction loses to the device: clear it and
-	# let that probe stop the run.  A second FAILed row (slot, env, digest)
-	# still aborts here.
-	err 'verdict: this tree refuses the image (no fwtool trailer, rc 74); --execute will ask the device'
-	CHECK_FAILED=0
 else
 	err 'verdict: the plan cannot run as-is (a row above FAILed)'; exit $EXIT_CHECK
 fi
@@ -419,15 +576,9 @@ say "      ssh $HOST 'rm -f /tmp/$IMG_NAME /tmp/$NAME'   # a killed push leaves 
 say "      tar -C $IMG_DIR -cf - $IMG_NAME | ssh $HOST 'tar -C /tmp -xf - && mv -f /tmp/$IMG_NAME /tmp/$NAME'"
 say " 2. prove the pushed bytes: sha256sum /tmp/$NAME == $WANT"
 say " 3. sysupgrade's own verdict, on the device, writing nothing:"
-if [ "$METADATA_REFUSED" = 1 ]; then
-	say "      ssh $HOST 'sysupgrade -T /tmp/$NAME'   # expect 'Image check failed.'; rc 74 if the box runs this tree, and -F does not help"
-elif [ "$FORCE_FLAG" = -F ]; then
-	say "      ssh $HOST 'sysupgrade -T /tmp/$NAME'   # expect 'Image check failed.'; -F is honoured (forceable=1)"
-else
-	say "      ssh $HOST 'sysupgrade -T /tmp/$NAME'   # expect no 'Image check failed.'; nothing to force"
-fi
+say "      ssh $HOST 'sysupgrade -T /tmp/$NAME'   # expect no 'Image check failed.'; -F is never used"
 say ' 4. write it into the boot slot and reboot (the human decides):'
-say "      ssh $HOST 'sysupgrade${FORCE_FLAG:+ $FORCE_FLAG} -n /tmp/$NAME'"
+say "      ssh $HOST 'sysupgrade -n /tmp/$NAME'"
 say ' 5. after the reboot the box is the recovery image, running from RAM.'
 say ''
 say 'risk and rollback (read before step 4):'
@@ -445,8 +596,8 @@ say '    the chainloader prompt (ECNT>, U-Boot 2014.04-rc1 AXON 1.6) and loady a
 say '    8.56 kB/s = 28.1 min for 14.4 MB, measured, failed at 43% with'
 say '    "Retry 0: Timeout on sector ACK".  Do not plan on it under a console window.'
 say '  * restoring inside the recovery shell needs the volume recreated first:'
-say "    ubirmvol /dev/ubi0 -N rootfs_data; ubirmvol /dev/ubi0 -N fit; ubimkvol /dev/ubi0 -N fit -s $VOL_BYTES;"
-say "    ubimkvol /dev/ubi0 -N rootfs_data -m; ubiupdatevol /dev/ubi0_${FIT_ID} < fit-slot.bin"
+say "    ubirmvol /dev/ubi0 -N rootfs_data; ubirmvol /dev/ubi0 -N fit && ubimkvol /dev/ubi0 -N fit -n $FIT_ID -s $VOL_BYTES &&"
+say "    ubimkvol /dev/ubi0 -N rootfs_data -m && ubiupdatevol /dev/ubi0_${FIT_ID} fit-slot.bin"
 say '  * this proves the image boots on the bootloader this box already has; the path'
 say '    issue #12 describes (tftpboot from the third-party console) stays untested,'
 say '    and so does the case where flash itself is the problem.'
@@ -502,37 +653,40 @@ push_image || {
 	exit $EXIT_IMAGE
 }
 GOT_REMOTE=$(ssh "$HOST" "sha256sum /tmp/$NAME" 2>/dev/null | awk '{ print $1 }')
-row pushed.sha256 "$WANT" "${GOT_REMOTE:-missing}" $([ "$GOT_REMOTE" = "$WANT" ] && echo PASS || echo FAIL)
+# The same empty-WANT guard image.sha256 has: without it an empty expected
+# digest and a remote `sha256sum` that printed nothing compare equal, the row
+# says PASS, and the one check whose job is "prove the bytes that arrived are
+# the image" passes in the state where nothing at all was proved.
+row pushed.sha256 "${WANT:-none in sha256sums}" "${GOT_REMOTE:-missing}" \
+	$([ -n "$WANT" ] && [ -n "$GOT_REMOTE" ] && [ "$WANT" = "$GOT_REMOTE" ] && echo PASS || echo FAIL)
 if [ "$CHECK_FAILED" != 0 ]; then
 	ssh "$HOST" "rm -f /tmp/$NAME" 2>/dev/null || true
 	exit $EXIT_IMAGE
 fi
 
 say ''
-say 'image check: sysupgrade -T on the pushed copy (-T writes nothing), and -T -F when -T rejects it'
+say 'image check: sysupgrade -T on the pushed copy (-T writes nothing; -F is never used)'
 ssh "$HOST" "sysupgrade -T /tmp/$NAME" > "$WORK/sysupgrade-T.log" 2>&1
 TEST_RC=$?
-FORCED_RC=1
-if [ "$TEST_RC" != 0 ] && [ "$FORCE_FLAG" = -F ]; then
-	ssh "$HOST" "sysupgrade -T -F /tmp/$NAME" > "$WORK/sysupgrade-TF.log" 2>&1
-	FORCED_RC=$?
-fi
 if [ "$TEST_RC" = 0 ]; then
 	row sysupgrade.T 0 "$TEST_RC" PASS
-elif [ "$FORCE_FLAG" = -F ] && [ "$FORCED_RC" = 0 ]; then
-	row sysupgrade.T 0 "$TEST_RC (forceable: -F 0)" PASS
 else
 	row sysupgrade.T 0 "$TEST_RC" FAIL
 	ssh "$HOST" "rm -f /tmp/$NAME" 2>/dev/null || true
 	sed 's/^/    /' "$WORK/sysupgrade-T.log" >&2
-	[ -f "$WORK/sysupgrade-TF.log" ] && sed 's/^/    /' "$WORK/sysupgrade-TF.log" >&2
-	err 'sysupgrade rejected the pushed image and -F cannot override it; the slot is untouched'
+	err 'sysupgrade -T rejected the pushed image (-F is forbidden); the slot is untouched'
 	exit $EXIT_IMAGE
 fi
 
 say ''
-say "flashing: sysupgrade${FORCE_FLAG:+ $FORCE_FLAG} -n (the box reboots into the recovery image)"
-ssh "$HOST" "sysupgrade${FORCE_FLAG:+ $FORCE_FLAG} -n /tmp/$NAME" || row sysupgrade "reboot issued" "command failed" FAIL
+say "flashing: sysupgrade -n (the box reboots into the recovery image)"
+SYS_RC=0
+ssh "$HOST" "sysupgrade -n /tmp/$NAME" || SYS_RC=$?
+if [ "$SYS_RC" != 0 ]; then
+	row sysupgrade "reboot issued" "command failed (rc $SYS_RC)" FAIL
+	err "sysupgrade -n failed with exit status $SYS_RC; restore point kept in $DIR/fit-slot.bin"
+	exit $EXIT_IMAGE
+fi
 say "if the box does not come back at 192.168.1.1: try http://192.168.0.1/ (web recovery,"
 say "PC 192.168.0.10/24) and upload $DIR/fit-slot.bin through /upload/firmware."
 exit 0

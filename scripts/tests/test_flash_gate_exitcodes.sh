@@ -23,6 +23,7 @@
 # Usage: scripts/tests/test_flash_gate_exitcodes.sh
 
 set -u
+unset FG_DEVICE_COMPAT FG_SYSTEM_CONFIG
 
 REPO_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 GATE="${FLASH_GATE_UNDER_TEST:-$REPO_ROOT/scripts/flash-gate.sh}"
@@ -120,7 +121,7 @@ head -c 262144 /dev/zero >"$DEV/mtd3ro"
 IMAGE="$WORK/image.itb"
 printf '\320\015\376\355' >"$IMAGE"
 head -c 4096 /dev/zero >>"$IMAGE"
-printf '{"supported_devices":["gemtek,xr1710g-ubi"]}' >>"$IMAGE"
+printf '{"compat_version":"2.0","supported_devices":["gemtek,xr1710g-ubi"]}' >>"$IMAGE"
 # The digest the gate compares against: the file the build writes beside every
 # image, in the same shape (digest, star, basename).
 ( cd "$WORK" && sha256sum image.itb >sha256sums )

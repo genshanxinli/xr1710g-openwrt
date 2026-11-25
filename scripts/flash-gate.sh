@@ -62,7 +62,7 @@
 #                         $FLASH_GATE_BACKUP_DIR, else /tmp/flash-gate)
 #   -n, --head-kb N       kilobytes read from each partition (default 256)
 #       --no-backup       skip the backup (the gate then never passes with -F)
-#       --no-sysupgrade   do not run "sysupgrade -T"
+#       --no-sysupgrade   do not run "sysupgrade -T" (forbidden with --run/-F)
 #       --no-layout       do not compare /proc/mtd against the board table
 #       --run             exec sysupgrade once the gate has passed
 #   -h, --help            this text
@@ -90,13 +90,22 @@
 #   FG_IMAGE_SHA256   digest --image must have, instead of looking for it beside
 #                     the image.  Needed because no other row can see a single
 #                     changed byte: FIT magic, the metadata device list and
-#                     sysupgrade -T all still pass on a rewritten image.
+#                     sysupgrade -T all still pass on a rewritten image.  It is
+#                     also evidence that overrides the list beside the image:
+#                     the way past a sha256sums with no entry for this file, or
+#                     one whose digest disagrees.  A list older than the image
+#                     that still names this file's digest is only a stale row --
+#                     the bytes were proved, so its mtime cannot refuse them.
 #                     (default: unset, then <image dir>/sha256sums -- the file
 #                     bin/targets/... emits next to every image.)
 #   FG_SYSUPGRADE     sysupgrade binary to run instead of the one on PATH.
 #                     Needed because an offline proof has no /sbin/sysupgrade and
 #                     must still exercise the -T row.
 #                     (default: sysupgrade)
+#   FG_DEVICE_COMPAT  device compat_version instead of uci / board compat table
+#                     (default: uci when /etc/config/system is readable, else board table)
+#   FG_SYSTEM_CONFIG  system uci config file gating uci compat_version lookup
+#                     (default: /etc/config/system)
 
 set -u
 
@@ -121,7 +130,10 @@ PROC_MTD=${FG_PROC_MTD:-/proc/mtd}
 MTD_DEV_DIR=${FG_MTD_DEV_DIR:-/dev}
 UBI_DIR=${FG_UBI_DIR:-/sys/class/ubi}
 DIGEST=${FG_IMAGE_SHA256:-}
+SUMS_STALE=0
 SYSUPGRADE=${FG_SYSUPGRADE:-sysupgrade}
+DEVICE_COMPAT=${FG_DEVICE_COMPAT:-}
+SYSTEM_CFG=${FG_SYSTEM_CONFIG:-/etc/config/system}
 
 WORK=''
 
@@ -251,6 +263,15 @@ else
 	row force.consent plain-flash plain-flash PASS
 fi
 
+if [ "$DO_SYSUPGRADE" = 0 ] && [ "$RUN" = 1 ]; then
+	row sysupgrade.required "sysupgrade -T" "--no-sysupgrade with --run" FAIL
+	die "$EXIT_USAGE" "--no-sysupgrade cannot be combined with --run; refusing to flash without sysupgrade -T"
+fi
+if [ "$DO_SYSUPGRADE" = 0 ] && [ "$FORCE" = 1 ]; then
+	row sysupgrade.required "sysupgrade -T" "--no-sysupgrade with --force" FAIL
+	die "$EXIT_USAGE" "--no-sysupgrade cannot be combined with -F/--force; refusing a forced run without sysupgrade -T"
+fi
+
 # ----------------------------------------------------------- 2. flash layout
 # Expected layout per board.  Sizes are the /proc/mtd 8-hex form, lowercase.
 layout_for() {
@@ -262,6 +283,14 @@ chainloader 00100000
 ubi 1b700000
 reserved_bmt 04200000
 LAYOUT
+		;;
+	esac
+}
+
+compat_for() {
+	case "$1" in
+	gemtek,xr1710g-ubi|gemtek,w1700k-ubi)
+		printf '%s\n' 2.0
 		;;
 	esac
 }
@@ -361,7 +390,7 @@ if [ "$PROBE" = 0 ]; then
 	[ -n "$IMAGE" ] || die "$EXIT_USAGE" "no image given (use --image PATH, or --probe for a read-only layout check)"
 	[ -f "$IMAGE" ] || die "$EXIT_USAGE" "image not found: $IMAGE"
 
-	MAGIC=$(head -c 4 "$IMAGE" | od -An -tx1 | tr -d ' \n')
+	MAGIC=$(hexdump -v -n 4 -e '4/1 "%02x"' "$IMAGE" 2>/dev/null | tr -d ' \n')
 	if [ "$MAGIC" = d00dfeed ]; then
 		row image.fit d00dfeed "$MAGIC" PASS
 	else
@@ -373,9 +402,13 @@ if [ "$PROBE" = 0 ]; then
 	# tree the file claims to hold.  A copy that was cut short still starts with
 	# d00dfeed, so the row above passes on it; this one does not.
 	FSIZE=$(wc -c <"$IMAGE" | tr -d ' ')
-	FIT_TOTAL=$(od -An -tu1 -j4 -N4 "$IMAGE" 2>/dev/null |
+	FIT_TOTAL=$(hexdump -v -s 4 -n 4 -e '4/1 "%u "' "$IMAGE" 2>/dev/null |
 		awk 'NF == 4 { printf "%d", ($1 * 16777216) + ($2 * 65536) + ($3 * 256) + $4 }')
-	if [ -n "$FIT_TOTAL" ] && [ "$FIT_TOTAL" -gt 0 ] && [ "$FSIZE" -lt "$FIT_TOTAL" ]; then
+	if [ "$FSIZE" -lt 8 ] || [ -z "$FIT_TOTAL" ]; then
+		row image.size ">= 8 (FIT header)" "$FSIZE bytes" FAIL
+		die "$EXIT_COMPAT" "$IMAGE is truncated: file is too short to hold a FIT totalsize header ($FSIZE bytes)"
+	fi
+	if [ "$FIT_TOTAL" -gt 0 ] && [ "$FSIZE" -lt "$FIT_TOTAL" ]; then
 		row image.size "$FIT_TOTAL" "$FSIZE" FAIL
 		die "$EXIT_COMPAT" "$IMAGE is truncated: its FIT header declares $FIT_TOTAL bytes and the file holds $FSIZE"
 	fi
@@ -405,6 +438,20 @@ if [ "$PROBE" = 0 ]; then
 		if [ -r "$SUMS" ]; then
 			DIGEST=$(awk -v n="$_name" \
 				'($2 == n || $2 == "*" n) { print $1; exit }' "$SUMS")
+			# A list written before the image may describe an earlier build:
+			# incremental targets rewrite the .itb and not the sha256sums.
+			# Record it, and let the digest decide -- a stale list whose digest
+			# still matches has proved this file's bytes, and refusing it on an
+			# mtime would keep a good image out.  `cp -p`, `rsync -t` and a CI
+			# artifact download preserve the list's mtime while copying both
+			# files, so that false positive is a daily path, not a corner.
+			# `-ot` is portable to BusyBox test; a same-second tie counts as
+			# fresh, which is what a correct build produces.
+			if [ "$SUMS" -ot "$IMAGE" ]; then
+				SUMS_STALE=1
+			else
+				row image.sums.fresh "sha256sums at least as new as the image" "current" PASS
+			fi
 		fi
 	fi
 	if [ -z "$DIGEST" ]; then
@@ -414,30 +461,46 @@ if [ "$PROBE" = 0 ]; then
 	GOT_SHA=$(sha256sum "$IMAGE" | awk '{ print $1 }')
 	if [ "$GOT_SHA" = "$DIGEST" ]; then
 		row image.sha256 "$DIGEST" "$GOT_SHA" PASS
+		if [ "$SUMS_STALE" = 1 ]; then
+			row image.sums.fresh "sha256sums at least as new as the image" "stale, digest matches" SKIP
+		fi
 	else
 		row image.sha256 "$DIGEST" "$GOT_SHA" FAIL
+		if [ "$SUMS_STALE" = 1 ]; then
+			row image.sums.fresh "sha256sums at least as new as the image" "stale (older than the image)" FAIL
+			die "$EXIT_COMPAT" "sha256 mismatch for $IMAGE: expected $DIGEST, got $GOT_SHA -- and $SUMS is older than $_name, so that expected value may describe an earlier build; recompute it (drop the old $_name line from $SUMS, then: cd $_dir && sha256sum $_name >> sha256sums) or pass the digest with FG_IMAGE_SHA256"
+		fi
 		die "$EXIT_COMPAT" "sha256 mismatch for $IMAGE: expected $DIGEST, got $GOT_SHA -- one changed byte is enough to make the box unflashable"
 	fi
 
 	META=$(extract_metadata "$IMAGE")
+	META_FLAT=$(printf '%s' "$META" | tr '\r\n' '  ')
 	# supported_devices entries can carry a " - <reason>" suffix: that is how
 	# fwtool spells a compat_version mismatch inside the list (the bench image
 	# has exactly that, plus a clean new_supported_devices list), so compare the
-	# part before the separator.  Anchored on the list itself rather than on the
-	# whole line, because the trailer is not a line of JSON once binary follows.
-	SDEV=$(printf '%s' "$META" |
-		grep -ao 'supported_devices": *\[[^]]*\]' | head -n 1 |
-		sed 's/^[^[]*\[//; s/\]$//; s/", *"/\n/g; s/"//g; s/ - .*$//')
+	# part before the separator.  Anchor the exact JSON key name, prefer a
+	# non-empty "new_supported_devices" list over "supported_devices", split
+	# entries onto separate lines first, strip " - .*$" per line, and drop
+	# empty lines.
+	extract_json_list() {
+		printf '%s' "$1" |
+			grep -ao "\"$2\"[ 	]*:[ 	]*\[[^]]*\]" | head -n 1 |
+			sed 's/^[^[]*\[//; s/\]$//; s/"[ 	]*,[ 	]*"/\
+/g' | sed 's/^[ 	]*"//; s/"[ 	]*$//; s/ - .*$//; s/^[ 	]*//; s/[ 	]*$//' |
+			sed '/^$/d'
+	}
+	SDEV=$(extract_json_list "$META_FLAT" new_supported_devices)
+	[ -n "$SDEV" ] || SDEV=$(extract_json_list "$META_FLAT" supported_devices)
 	if [ -n "$SDEV" ]; then
 		# One device per line: board names contain a comma, so split on the
 		# quoted separator, not on ','.
-		if printf '%s' "$SDEV" | sed 's/", *"/\n/g; s/"//g' | grep -qx "$BOARD_NAME"; then
+		if printf '%s\n' "$SDEV" | grep -F -qx -- "$BOARD_NAME"; then
 			row image.device "$BOARD_NAME" "supported_devices lists it" PASS
 		else
-			row image.device "$BOARD_NAME" "$(printf '%s' "$SDEV" | tr -d '"')" FAIL
+			row image.device "$BOARD_NAME" "$(printf '%s' "$SDEV" | tr '\n' ',' | tr -d '"')" FAIL
 			die "$EXIT_COMPAT" "image is built for another board; -F must not cross-flash it"
 		fi
-	elif printf '%s\n' "$META" | grep -q "\"$BOARD_NAME\""; then
+	elif printf '%s\n' "$META" | grep -Fq -- "\"$BOARD_NAME\""; then
 		row image.device "$BOARD_NAME" "device field matches" PASS
 	else
 		# No metadata at all: fall back to the FDT description the platform
@@ -454,6 +517,44 @@ if [ "$PROBE" = 0 ]; then
 			die "$EXIT_COMPAT" "cannot verify that $IMAGE is built for $BOARD_NAME"
 		fi
 	fi
+
+	# compat_version gate: parse directly from $META and hard-fail on missing
+	# or major-mismatched compat_version so --force --i-know --run can never
+	# invoke `sysupgrade -F` across a flash-layout boundary (e.g. 1.0 vs 2.0).
+	# Device compat lookup: FG_DEVICE_COMPAT override -> uci (only when
+	# /etc/config/system is readable, so a build host with uci on PATH never
+	# defaults to 1.0) -> board compat table.
+	if [ -z "$DEVICE_COMPAT" ]; then
+		if [ -r "$SYSTEM_CFG" ] && command -v uci >/dev/null 2>&1; then
+			DEVICE_COMPAT=$(uci -q get system.@system[0].compat_version 2>/dev/null || true)
+			[ -n "$DEVICE_COMPAT" ] || DEVICE_COMPAT=1.0
+		else
+			DEVICE_COMPAT=$(compat_for "$BOARD_NAME")
+		fi
+	fi
+	case "$DEVICE_COMPAT" in
+	''|*[!0-9.]*|.*|*.|*.*.*)
+		row image.compat "valid device compat_version" "${DEVICE_COMPAT:-unknown}" FAIL
+		die "$EXIT_COMPAT" "cannot determine device compat_version for '$BOARD_NAME'; refusing an unverifiable image"
+		;;
+	esac
+	DEV_COMPAT_MAJOR=${DEVICE_COMPAT%%.*}
+
+	IMG_COMPAT=$(printf '%s' "$META_FLAT" |
+		grep -ao '"compat_version"[ 	]*:[ 	]*"[^"]*"' | head -n 1 |
+		sed 's/^[^:]*:[ 	]*"//; s/"$//')
+	case "$IMG_COMPAT" in
+	''|*[!0-9.]*|.*|*.|*.*.*)
+		row image.compat "major ${DEV_COMPAT_MAJOR}.x (device $DEVICE_COMPAT)" "${IMG_COMPAT:-missing}" FAIL
+		die "$EXIT_COMPAT" "image metadata has missing or invalid compat_version ('${IMG_COMPAT:-missing}'); refusing to flash (-F cannot override a missing compat_version)"
+		;;
+	esac
+	IMG_COMPAT_MAJOR=${IMG_COMPAT%%.*}
+	if [ "$IMG_COMPAT_MAJOR" != "$DEV_COMPAT_MAJOR" ]; then
+		row image.compat "major ${DEV_COMPAT_MAJOR}.x (device $DEVICE_COMPAT)" "$IMG_COMPAT" FAIL
+		die "$EXIT_COMPAT" "compat_version major mismatch: device is $DEVICE_COMPAT, image is $IMG_COMPAT -- different flash layout; -F cannot override this"
+	fi
+	row image.compat "major ${DEV_COMPAT_MAJOR}.x (device $DEVICE_COMPAT)" "$IMG_COMPAT" PASS
 
 	# The stock validator, run exactly as sysupgrade runs it.  This is the same
 	# check -F bypasses, so its verdict is reported separately from the gate's
@@ -488,6 +589,10 @@ if [ "$PROBE" = 0 ]; then
 				die "$EXIT_IMAGE" "sysupgrade -T rejected the image and -F cannot override this rejection"
 			fi
 		else
+			if [ "$RUN" = 1 ] || [ "$FORCE" = 1 ]; then
+				row sysupgrade.T 0 "sysupgrade missing" FAIL
+				die "$EXIT_IMAGE" "sysupgrade is missing; refusing --run or --force without sysupgrade -T"
+			fi
 			row sysupgrade.T 0 "sysupgrade missing" SKIP
 		fi
 	fi

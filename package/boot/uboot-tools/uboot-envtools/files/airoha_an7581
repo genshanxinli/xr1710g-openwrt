@@ -2,20 +2,106 @@
 # Copyright (C) 2025 OpenWrt.org
 #
 
-[ -e /etc/config/ubootenv ] && exit 0
+# /etc/config/ubootenv and /etc/fw_env.config are conffiles, so an upgrade
+# keeps whatever the previous uboot-envtools wrote.  Older versions hardcoded
+# envsize=0x1f000 for the UBI environment while the Gemtek U-Boot is built with
+# CONFIG_ENV_SIZE=0x4000.  fw_env then checksums 0x1f000-5 bytes instead of
+# 0x4000-5, so fw_setenv reports success but stores a blob U-Boot cannot read
+# and the board silently falls back to the default environment next boot.
+# Rewrite both views in place; only configuration files are touched.
+_is_ubi_vol_dev() {
+	case "$1" in
+	/dev/ubi[0-9]*_[0-9]*)
+		case "${1#/dev/ubi}" in
+		*[!0-9_]*) return 1 ;;
+		*_*_*) return 1 ;;
+		*) return 0 ;;
+		esac
+		;;
+	esac
+	return 1
+}
 
-touch /etc/config/ubootenv
+migrate_gemtek_envsize() {
+	local idx dev envubi vol1 vol2 envdev envdev2
 
-. /lib/uboot-envtools.sh
+	[ -e /etc/config/ubootenv ] || [ -s /etc/fw_env.config ] || return 0
+
+	envdev=
+	envdev2=
+	[ -r /lib/upgrade/nand.sh ] && . /lib/upgrade/nand.sh
+	if command -v nand_find_ubi >/dev/null 2>&1 &&
+	   command -v nand_find_volume >/dev/null 2>&1; then
+		envubi=$(nand_find_ubi ubi 2>/dev/null)
+		if [ -n "$envubi" ]; then
+			vol1=$(nand_find_volume "$envubi" ubootenv 2>/dev/null)
+			vol2=$(nand_find_volume "$envubi" ubootenv2 2>/dev/null)
+			[ -n "$vol1" ] && envdev="/dev/$vol1"
+			[ -n "$vol2" ] && envdev2="/dev/$vol2"
+		fi
+	fi
+
+	if [ -e /etc/config/ubootenv ]; then
+		# The board writes two sections; four indexes leave slack and keep the
+		# loop finite without depending on a uci "count" command.
+		for idx in 0 1 2 3; do
+			dev=$(uci -q get "ubootenv.@ubootenv[$idx].dev")
+			[ -n "$dev" ] || continue
+			if [ -n "$envdev" ] && [ -n "$envdev2" ]; then
+				[ "$dev" = "$envdev" ] || [ "$dev" = "$envdev2" ] || continue
+			else
+				_is_ubi_vol_dev "$dev" || continue
+			fi
+			[ "$(uci -q get "ubootenv.@ubootenv[$idx].envsize")" = "0x1f000" ] || continue
+			uci -q set "ubootenv.@ubootenv[$idx].envsize=0x4000"
+			uci -q set "ubootenv.@ubootenv[$idx].secsize=0x1f000"
+			uci -q set "ubootenv.@ubootenv[$idx].numsec=1"
+		done
+		uci -q commit ubootenv
+	fi
+
+	[ -s /etc/fw_env.config ] || return 0
+	if awk -v d1="$envdev" -v d2="$envdev2" '
+		(d1 != "" && d2 != "" ? ($1 == d1 || $1 == d2) : ($1 ~ /^\/dev\/ubi[0-9]+_[0-9]+$/)) && $3 == "0x1f000" {
+			print $1, $2, "0x4000", "0x1f000", "1"
+			next
+		}
+		{ print }
+	' /etc/fw_env.config > /etc/fw_env.config.new; then
+		mv /etc/fw_env.config.new /etc/fw_env.config
+	else
+		rm -f /etc/fw_env.config.new
+	fi
+
+	return 0
+}
+
 . /lib/functions.sh
 
 board=$(board_name)
 
 case "$board" in
-gemtek,w1700k-ubi|\
 gemtek,xr1710g-ubi|\
+gemtek,w1700k-ubi)
+	migrate_gemtek_envsize
+	;;
+esac
+
+[ -e /etc/config/ubootenv ] && exit 0
+
+touch /etc/config/ubootenv
+
+. /lib/uboot-envtools.sh
+
+case "$board" in
+gemtek,xr1710g-ubi|\
+gemtek,w1700k-ubi)
+	# U-Boot: CONFIG_ENV_SIZE=0x4000; the UBI LEB stays at 0x1f000.
+	ubootenv_add_ubi_default "0x4000" "0x1f000" "1"
+	;;
 nokia,xg-040g-md-ubi)
-	ubootenv_add_ubi_default
+	# U-Boot: no CONFIG_ENV_SIZE override, i.e. the 0x1f000 Kconfig default.
+	ubootenv_add_ubi_default "0x1f000" "0x1f000" "1"
 	;;
 nokia,xg-040g-md)
 	ubootenv_add_mtd "u-boot-env" "0x1c000" "0x4000" "0x4000"

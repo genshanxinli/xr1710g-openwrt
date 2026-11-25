@@ -26,6 +26,7 @@
 #        FLASH_GATE_UNDER_TEST=/path/to/copy sh scripts/tests/...   (red runs)
 
 set -u
+unset FG_DEVICE_COMPAT FG_SYSTEM_CONFIG
 
 REPO_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 GATE="${FLASH_GATE_UNDER_TEST:-$REPO_ROOT/scripts/flash-gate.sh}"
@@ -94,8 +95,10 @@ STUB
 cat >"$STUBS/sysupgrade" <<'STUB'
 #!/bin/sh
 printf '%s\n' "$*" >>"${FAKE_SYS_LOG:-/dev/null}"
-[ "${1:-}" = -T ] || exit 1
-[ "${FAKE_SYS_RC:-0}" = 0 ] || { echo "Image check failed." >&2; exit "${FAKE_SYS_RC}"; }
+if [ "${1:-}" = -T ]; then
+	[ "${FAKE_SYS_RC:-0}" = 0 ] || { echo "Image check failed." >&2; exit "${FAKE_SYS_RC}"; }
+	exit 0
+fi
 exit 0
 STUB
 
@@ -103,8 +106,8 @@ chmod +x "$STUBS/dd" "$STUBS/fwtool" "$STUBS/dumpimage" "$STUBS/sysupgrade"
 
 # BusyBox applets on the device take a leading "--" as a NAME, not as an
 # option terminator: "dirname -- /x/img" prints "." there.  The gate must not
-# rely on GNU dirname/basename, so every run below sees this stub first.  On a
-# GNU host the real tools would hide the bug entirely (issue A08-F9).
+# rely on GNU dirname/basename or on `od` (not shipped in XR1710G BusyBox), so
+# every run below sees these stubs first (issues A08-F9 and F2).
 DIRNAME_STUBS="$WORK/dirname-stubs"
 mkdir -p "$DIRNAME_STUBS"
 REAL_DIRNAME=$(command -v dirname)
@@ -119,7 +122,12 @@ cat >"$DIRNAME_STUBS/basename" <<STUB
 [ "\${1:-}" = "--" ] && exit 1
 exec "$REAL_BASENAME" "\$@"
 STUB
-chmod +x "$DIRNAME_STUBS/dirname" "$DIRNAME_STUBS/basename"
+cat >"$DIRNAME_STUBS/od" <<'STUB'
+#!/bin/sh
+echo "od: not found" >&2
+exit 127
+STUB
+chmod +x "$DIRNAME_STUBS/dirname" "$DIRNAME_STUBS/basename" "$DIRNAME_STUBS/od"
 
 # --- fixtures ---------------------------------------------------------------
 
@@ -149,10 +157,16 @@ UBICLASS="$WORK/ubi"
 mkdir -p "$UBICLASS/ubi0" "$UBICLASS/ubi0_0"
 printf '2\n' >"$UBICLASS/ubi0/mtd_num"
 
-printf '{"metadata_version":1,"device":"gemtek,xr1710g-ubi","supported_devices":["gemtek,xr1710g-ubi"]}\n' \
+printf '{"metadata_version":1,"compat_version":"2.0","device":"gemtek,xr1710g-ubi","supported_devices":["gemtek,xr1710g-ubi"]}\n' \
 	>"$WORK/meta-ok.json"
-printf '{"metadata_version":1,"device":"gemtek,w1700k-ubi","supported_devices":["gemtek,w1700k-ubi"]}\n' \
+printf '{"metadata_version":1,"compat_version":"2.0","device":"gemtek,w1700k-ubi","supported_devices":["gemtek,w1700k-ubi"]}\n' \
 	>"$WORK/meta-other.json"
+printf '{"metadata_version":1,"compat_version":"1.0","device":"gemtek,xr1710g-ubi","supported_devices":["gemtek,xr1710g-ubi"]}\n' \
+	>"$WORK/meta-compat1.json"
+printf '{"metadata_version":1,"device":"gemtek,xr1710g-ubi","supported_devices":["gemtek,xr1710g-ubi"]}\n' \
+	>"$WORK/meta-nocompat.json"
+printf '{"metadata_version":1,"compat_version":"2.0","supported_devices":["other,board - Image version mismatch: image 2.0, device 1.0","gemtek,xr1710g-ubi - Image version mismatch: image 2.0, device 1.0"]}\n' \
+	>"$WORK/meta-multiline.json"
 
 # A 4 KiB FIT tree, exactly like the bench itb (header totalsize 4096, payload
 # appended past it) but with the payload replaced by the metadata trailer.
@@ -166,7 +180,7 @@ make_image() {
 		printf "\\$(printf '%03o' $(( (total >> 8) & 255 )))"
 		printf "\\$(printf '%03o' $(( total & 255 )))"
 		head -c 4096 /dev/zero
-		printf '{"supported_devices":["gemtek,xr1710g-ubi"]}'
+		printf '{"compat_version":"2.0","supported_devices":["gemtek,xr1710g-ubi"]}'
 	} >"$out"
 }
 
@@ -324,6 +338,43 @@ if [ "$n" = 1 ]; then
 fi
 grep -q -- '-F' "$WORK/sysupgrade-11.log" 2>/dev/null &&
 	fail "happy: -F reached the stub without --force"
+
+# --- 12: compat_version major mismatch refused even with -F --i-know --run --
+
+MEANS='a major compat_version mismatch reached sysupgrade -F'
+FAKE_META="$WORK/meta-compat1.json" run_gate compat-mismatch 4 'compat_version' \
+	--image "$IMAGE" -F --i-know --run --backup-dir "$WORK/backup-compat1"
+[ -s "$WORK/sysupgrade-12.log" ] &&
+	fail "compat-mismatch: sysupgrade was invoked despite major compat mismatch"
+
+# --- 13: missing compat_version refused even with -F --i-know --run ---------
+
+MEANS='an image missing compat_version reached sysupgrade -F'
+FAKE_META="$WORK/meta-nocompat.json" run_gate compat-missing 4 'compat_version' \
+	--image "$IMAGE" -F --i-know --run --backup-dir "$WORK/backup-nocompat"
+[ -s "$WORK/sysupgrade-13.log" ] &&
+	fail "compat-missing: sysupgrade was invoked despite missing compat_version"
+
+# --- 14: --no-sysupgrade forbidden with --run -------------------------------
+
+MEANS='--no-sysupgrade --run bypassed sysupgrade -T and flashed'
+run_gate nosys-run 2 '--no-sysupgrade' --image "$IMAGE" --no-sysupgrade --run \
+	--backup-dir "$WORK/backup-nosys-run"
+[ -s "$WORK/sysupgrade-14.log" ] &&
+	fail "nosys-run: sysupgrade was invoked with --no-sysupgrade --run"
+
+# --- 15: --no-sysupgrade forbidden with -F --i-know -------------------------
+
+MEANS='--no-sysupgrade -F bypassed sysupgrade -T'
+run_gate nosys-force 2 '--no-sysupgrade' --image "$IMAGE" --no-sysupgrade -F --i-know \
+	--backup-dir "$WORK/backup-nosys-force"
+
+# --- 16: multi-line supported_devices strips " - ..." per line --------------
+
+MEANS='multi-line supported_devices lost the board entry after the first " - " suffix'
+FAKE_META="$WORK/meta-multiline.json" run_gate multiline-sdev 0 '' \
+	--image "$IMAGE" --backup-dir "$WORK/backup-multiline"
+grep -q 'GATE PASS' "$OUT" || fail "multiline-sdev: no GATE PASS"
 
 printf '%s\n' "cases: $CASES"
 [ "$FAILED" = 0 ] || {

@@ -7,8 +7,7 @@ Two defects, both proved on paper before hardware:
 
 P0  ``loadaddr=0x81800000``.  The recovery ITB's kernel-1 is an lzma payload
     that decompresses from 0x80200000 to 0x82AB0000 (42,663,936 B by the
-    arm64 header, see ``.scratch/goal-20261124/reports/bootloader_recovery_audit.md``
-    §4.1).  ``boot_production`` reads the FIT to ``$loadaddr`` and ``bootm``
+    arm64 header).  ``boot_production`` reads the FIT to ``$loadaddr`` and ``bootm``
     then decompresses that kernel *on top of the FIT copy*; U-Boot stops with
     ``ERROR: new format image overwritten - must RESET the board to recover``
     (``boot/bootm.c``).  The production sysupgrade kernel ends at 0x81166808,
@@ -37,8 +36,8 @@ N1 (second half)  The dry-run reported a metadata-free recovery ITB PASS
     ``REQUIRE_IMAGE_METADATA=1`` board absent metadata is rc 74
     (fwtool.sh:39-42), validate_firmware_image:55-60 makes it non-forceable,
     and sysupgrade:407-414 exits 1 before any write: -F does not override it.
-    The row now FAILs with that reason and the plan withholds -F unless the
-    board keeps the forceable path (fwtool.sh:43-46).
+    The row now FAILs with that reason, and the script never arms ``-F``
+    (planning plain ``sysupgrade -n`` only, never ``sysupgrade -F``).
 
 ``RECOVERY_DRYRUN_UNDER_TEST`` and ``XR1710G_UBOOT_PATCH_UNDER_TEST`` name
 copies, the same convention scripts/tests/test_recovery_transfer.py:47 and
@@ -76,7 +75,7 @@ PATCH = Path(
     or REPO_ROOT / "package/boot/uboot-airoha/patches/999-airoha-add-gemtek-xr1710g.patch"
 )
 
-# Recovery ITB facts (bootloader_recovery_audit.md §4.1, artifact of 2026-11-23).
+# Recovery ITB layout facts measured from the 2026-11-23 recovery artifact.
 KERNEL_LOAD = 0x80200000
 KERNEL_IMAGE_SIZE = 0x28B0000  # arm64 header image_size of the recovery kernel-1
 KERNEL_END = KERNEL_LOAD + KERNEL_IMAGE_SIZE  # 0x82AB0000
@@ -144,6 +143,24 @@ class LoadAddr(unittest.TestCase):
     def test_boot_production_reads_the_fit_at_loadaddr(self) -> None:
         self.assertIn("ubi read $loadaddr fit", self.env["ubi_read_production"])
         self.assertIn("bootm $loadaddr#$bootconf", self.env["boot_production"])
+
+    def test_bootcmd_and_bootmenu_are_well_formed(self) -> None:
+        self.assertEqual(self.env["bootcmd"], "run boot_ubi")
+        self.assertIn("ubi part ubi", self.env["bootmenu_0"])
+        self.assertIn("run boot_production", self.env["bootmenu_0"])
+        self.assertLess(
+            self.env["bootmenu_0"].index("ubi part ubi"),
+            self.env["bootmenu_0"].index("run boot_production"),
+        )
+        self.assertNotIn("34m", self.env["bootmenu_title"])
+        self.assertNotIn("mOpenWrt", self.env["bootmenu_title"])
+        # CONFIG_SYS_MAXARGS=8: boot_recovery's echo message must be quoted
+        # so U-Boot receives 2 args instead of 14.
+        self.assertTrue(
+            self.env["boot_recovery"].startswith('echo "')
+            and self.env["boot_recovery"].endswith('"'),
+            f"boot_recovery exceeds CONFIG_SYS_MAXARGS=8 unless quoted: {self.env['boot_recovery']!r}",
+        )
 
 
 class FitVolume(unittest.TestCase):
@@ -347,9 +364,8 @@ class FwtoolTrailer(unittest.TestCase):
         self.assertNotIn("plan (each step", run.stdout, run.stdout + run.stderr)
         self.assertNotIn("sysupgrade -F -n", run.stdout, run.stdout + run.stderr)
 
-    def test_board_without_the_requirement_keeps_the_forceable_path(self) -> None:
-        """REQUIRE_IMAGE_METADATA unset: fwtool.sh:43-46 stays forceable, so
-        the same metadata-free image is a legitimate -F case."""
+    def test_board_without_the_requirement_accepts_no_trailer_without_force(self) -> None:
+        """REQUIRE_IMAGE_METADATA unset: fwtool.sh:43-46 returns 0 without -F."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             image = self.fixture(root, trailer=False)
@@ -357,23 +373,21 @@ class FwtoolTrailer(unittest.TestCase):
             run = self.plan(image, root, script=script)
         self.assertEqual(self.verdict(run.stdout), "PASS", run.stdout + run.stderr)
 
-    def test_force_is_planned_only_where_the_firmware_honours_it(self) -> None:
+    def test_sysupgrade_force_and_metadata_bypass_are_removed(self) -> None:
+        """P0-1: recovery-boot-dryrun.sh must never invoke sysupgrade -F or bypass metadata."""
         text = SCRIPT.read_text()
         self.assertNotIn(
             "no fwtool trailer (needs -F)",
             text,
             "the stale PASS verdict N1 quotes is back in the script",
         )
-        self.assertIn(
-            'sysupgrade${FORCE_FLAG:+ $FORCE_FLAG} -n',
-            text,
-            "the plan no longer conditions -F on the image being forceable",
-        )
-        self.assertIn(
-            'sysupgrade -T -F',
-            text,
-            "the execute path does not ask the validator a second time with -F",
-        )
+        self.assertNotIn("FORCE_FLAG=-F", text, "FORCE_FLAG=-F must not be armed")
+        self.assertNotIn("METADATA_REFUSED", text, "METADATA_REFUSED bypass must not exist")
+        self.assertNotIn("sysupgrade -T -F", text, "sysupgrade -T -F must not be invoked")
+        self.assertNotIn("sysupgrade -F", text, "sysupgrade -F must not be invoked")
+        self.assertIn("sysupgrade -n /tmp/$NAME", text)
+        self.assertNotIn("/home/l1n/", text, "hardcoded personal home path remains")
+        self.assertNotIn("ubiupdatevol /dev/ubi0_${FIT_ID} < fit-slot.bin", text)
 
     def test_payload_word_fwx0_is_not_a_trailer(self) -> None:
         """A literal "FWx0" inside the FIT payload must not read as metadata.

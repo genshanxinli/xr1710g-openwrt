@@ -55,7 +55,9 @@
 #   VFI_UNDER_TEST     validator to test    (default: this tree's copy)
 #   FWTOOL_UNDER_TEST  lib/upgrade/fwtool.sh (default: this tree's copy)
 #   JSHN_SH / JSHN_BIN libubox shell lib + helper (default: this tree's
-#                      staging_dir, else its build_dir)
+#                      staging_dir, else its build_dir; falls back to an
+#                      in-sandbox python3-backed stub on an unbuilt tree)
+#   JSHN_FORCE_FALLBACK=1  force the fallback stub even on a built tree
 
 set -u
 
@@ -93,17 +95,43 @@ find_jshn() {
 	done | head -n 1
 }
 
-JSHN_SH=$(find_jshn sh)
-JSHN_BIN=$(find_jshn bin)
+USE_JSHN_FALLBACK=0
+if [ "${JSHN_FORCE_FALLBACK:-0}" = 1 ]; then
+	USE_JSHN_FALLBACK=1
+else
+	if [ -n "${JSHN_SH:-}" ] && [ ! -f "$JSHN_SH" ]; then
+		printf 'FAIL: JSHN_SH=%s does not exist.\n' "$JSHN_SH" >&2
+		exit 1
+	fi
+	if [ -n "${JSHN_BIN:-}" ] && [ ! -f "$JSHN_BIN" ]; then
+		printf 'FAIL: JSHN_BIN=%s does not exist.\n' "$JSHN_BIN" >&2
+		exit 1
+	fi
+	[ -n "${JSHN_SH:-}" ] || JSHN_SH=$(find_jshn sh)
+	[ -n "${JSHN_BIN:-}" ] || JSHN_BIN=$(find_jshn bin)
+	if [ -z "$JSHN_SH" ] || [ ! -f "$JSHN_SH" ] || [ -z "$JSHN_BIN" ] || [ ! -f "$JSHN_BIN" ]; then
+		USE_JSHN_FALLBACK=1
+	fi
+fi
 
-for f in "$VFI_SRC" "$FWTOOL_SRC" "$JSHN_SH" "$JSHN_BIN"; do
+for f in "$VFI_SRC" "$FWTOOL_SRC"; do
 	[ -n "$f" ] && [ -f "$f" ] || {
-		printf 'FAIL: %s is missing.\n' "${f:-a libubox piece}" >&2
-		printf 'This test runs the shipped scripts, so it needs one built tree. Build the\n' >&2
-		printf 'host libubox first, or point JSHN_SH and JSHN_BIN at a jshn.sh and jshn.\n' >&2
+		printf 'FAIL: %s is missing.\n' "${f:-a required script}" >&2
 		exit 1
 	}
 done
+
+if [ "$USE_JSHN_FALLBACK" = 1 ]; then
+	command -v python3 >/dev/null 2>&1 || {
+		printf 'FAIL: libubox jshn is absent and python3 is unavailable for the fallback stub.\n' >&2
+		exit 1
+	}
+	if [ "${JSHN_FORCE_FALLBACK:-0}" = 1 ]; then
+		printf 'NOTE: JSHN_FORCE_FALLBACK=1; using python3-backed fallback jshn stub\n' >&2
+	else
+		printf 'NOTE: libubox jshn.sh/jshn not found (unbuilt tree); using python3-backed fallback jshn stub\n' >&2
+	fi
+fi
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT INT TERM
@@ -138,11 +166,358 @@ rewrite "$BASE/lib/functions/system.sh" >"$SBX/lib/functions/system.sh"
 rewrite "$FWTOOL_SRC" >"$SBX/lib/upgrade/fwtool.sh"
 rewrite "$VFI_SRC" >"$SBX/usr/libexec/validate_firmware_image"
 rewrite "$BASE/sbin/sysupgrade" >"$SBX/sbin/sysupgrade"
-# dash rejects `export -n`; bash would un-export JSON_SEQ, which json_dump
-# hands to the jshn helper.
-sed 's|export -n ${JSON_PREFIX}JSON_SEQ=0|: ${JSON_PREFIX}JSON_SEQ=0|' \
-	"$JSHN_SH" >"$SBX/usr/share/libubox/jshn.sh"
-cp "$JSHN_BIN" "$SBX/bin/jshn"
+if [ "$USE_JSHN_FALLBACK" = 1 ]; then
+	# Clean-CI fallback when host libubox is not built: implements the
+	# libubox jshn.sh shell API + python3-backed `jshn` helper so the real
+	# fwtool.sh, validate_firmware_image, and sysupgrade compat logic still
+	# runs end-to-end without requiring a compiled staging_dir.
+	cat >"$SBX/usr/share/libubox/jshn.sh" <<'JSHN_SH_STUB'
+# Minimal libubox jshn.sh fallback for unbuilt CI trees (runs under bash).
+
+_json_get_var() {
+	eval "$1=\"\${${JSON_PREFIX:-}$2:-}\""
+}
+
+_json_set_var() {
+	local ___val="$2"
+	eval "${JSON_PREFIX:-}$1=\"\$___val\""
+}
+
+_jshn_append() {
+	local _a_value="$2"
+	eval "${JSON_PREFIX:-}$1=\"\${${JSON_PREFIX:-}$1:-}\${${JSON_PREFIX:-}$1:+ }\$_a_value\""
+}
+
+_set_var() {
+	local __val="$2"
+	eval "$1=\"\$__val\""
+}
+
+_json_inc() {
+	local _v
+	eval "_v=\${${JSON_PREFIX:-}$1:-0}"
+	_v=$((_v + 1))
+	eval "${JSON_PREFIX:-}$1=\$_v; $2=\$_v"
+}
+
+_json_add_generic() {
+	local var
+	if [ "${4%%[0-9]*}" = "J_A" ]; then
+		_json_inc "S_$4" var
+	else
+		var="${2//[^a-zA-Z0-9_]/_}"
+		[ "$var" = "$2" ] || export -- "${JSON_PREFIX:-}N_${4}_${var}=$2"
+	fi
+	export -- \
+		"${JSON_PREFIX:-}${4}_$var=$3" \
+		"${JSON_PREFIX:-}T_${4}_$var=$1"
+	_jshn_append "JSON_UNSET" "${4}_$var"
+	_jshn_append "K_$4" "$var"
+	export -- "${JSON_PREFIX:-}K_$4"
+}
+
+_json_add_table() {
+	local cur seq table
+	_json_get_var cur JSON_CUR
+	_json_inc JSON_SEQ seq
+	table="J_$3$seq"
+	_json_set_var "U_$table" "$cur"
+	export -- "${JSON_PREFIX:-}K_$table="
+	unset "${JSON_PREFIX:-}S_$table"
+	_json_set_var JSON_CUR "$table"
+	_jshn_append "JSON_UNSET" "$table"
+	_json_add_generic "$2" "$1" "$table" "$cur"
+}
+
+_json_close_table() {
+	local _s_cur
+	_json_get_var _s_cur JSON_CUR
+	_json_get_var "${JSON_PREFIX:-}JSON_CUR" "U_$_s_cur"
+}
+
+json_set_namespace() {
+	local _new="$1"
+	local _old="${2:-}"
+	[ -n "$_old" ] && _set_var "$_old" "${JSON_PREFIX:-}"
+	JSON_PREFIX="$_new"
+}
+
+json_cleanup() {
+	local unset_list tmp
+	_json_get_var unset_list JSON_UNSET
+	for tmp in $unset_list J_V; do
+		unset \
+			"${JSON_PREFIX:-}U_$tmp" \
+			"${JSON_PREFIX:-}K_$tmp" \
+			"${JSON_PREFIX:-}S_$tmp" \
+			"${JSON_PREFIX:-}T_$tmp" \
+			"${JSON_PREFIX:-}N_$tmp" \
+			"${JSON_PREFIX:-}$tmp"
+	done
+	unset \
+		"${JSON_PREFIX:-}JSON_SEQ" \
+		"${JSON_PREFIX:-}JSON_CUR" \
+		"${JSON_PREFIX:-}JSON_UNSET"
+}
+
+json_init() {
+	json_cleanup
+	eval "${JSON_PREFIX:-}JSON_SEQ=0"
+	export -- \
+		"${JSON_PREFIX:-}JSON_CUR=J_V" \
+		"${JSON_PREFIX:-}K_J_V="
+}
+
+json_add_object() { _json_add_table "$1" object T; }
+json_close_object() { _json_close_table; }
+json_add_array() { _json_add_table "$1" array A; }
+json_close_array() { _json_close_table; }
+
+json_add_string() {
+	local cur
+	_json_get_var cur JSON_CUR
+	_json_add_generic string "$1" "$2" "$cur"
+}
+
+json_add_int() {
+	local cur
+	_json_get_var cur JSON_CUR
+	_json_add_generic int "$1" "$2" "$cur"
+}
+
+json_add_boolean() {
+	local cur
+	_json_get_var cur JSON_CUR
+	_json_add_generic boolean "$1" "$2" "$cur"
+}
+
+json_add_double() {
+	local cur
+	_json_get_var cur JSON_CUR
+	_json_add_generic double "$1" "$2" "$cur"
+}
+
+json_add_null() {
+	local cur
+	_json_get_var cur JSON_CUR
+	_json_add_generic null "$1" "" "$cur"
+}
+
+# Match real libubox jshn.sh verbatim: eval on empty stdout from a failed
+# `jshn -r` returns 0 in bash, so Case 12 (metadata-corrupt) exercises the same
+# fwtool.sh json_select fall-through as native libubox.
+json_load() {
+	eval "$(jshn -r "$1")"
+}
+
+json_load_file() {
+	eval "$(jshn -R "$1")"
+}
+
+json_dump() {
+	jshn "$@" ${JSON_PREFIX:+-p "$JSON_PREFIX"} ${JSON_NONEWLINE:+-n} ${JSON_INDENT:+-i} -w
+}
+
+json_get_type() {
+	local __dest="$1" __cur __var
+	_json_get_var __cur JSON_CUR
+	__var="${JSON_PREFIX:-}T_${__cur}_${2//[^a-zA-Z0-9_]/_}"
+	eval "export -- \"$__dest=\${$__var:-}\"; [ -n \"\${$__var+x}\" ]"
+}
+
+json_get_keys() {
+	local __dest="$1" _tbl_cur __var
+	if [ -n "${2:-}" ]; then
+		json_get_var _tbl_cur "$2"
+	else
+		_json_get_var _tbl_cur JSON_CUR
+	fi
+	__var="${JSON_PREFIX:-}K_${_tbl_cur}"
+	eval "export -- \"$__dest=\${$__var:-}\"; [ -n \"\${$__var+x}\" ]"
+}
+
+json_get_var() {
+	local __dest="$1" __cur __var
+	_json_get_var __cur JSON_CUR
+	__var="${JSON_PREFIX:-}${__cur}_${2//[^a-zA-Z0-9_]/_}"
+	if [ "$#" -ge 3 ]; then
+		eval "export -- \"$__dest=\${$__var:-$3}\""
+		return 0
+	fi
+	eval "export -- \"$__dest=\${$__var:-}\"; [ -n \"\${$__var+x}\" ]"
+}
+
+json_select() {
+	local target="${1:-}" type cur
+	if [ -z "$target" ]; then
+		_json_set_var JSON_CUR "J_V"
+		return 0
+	fi
+	if [ "$target" = ".." ]; then
+		_json_get_var cur JSON_CUR
+		_json_get_var cur "U_$cur"
+		_json_set_var JSON_CUR "$cur"
+		return 0
+	fi
+	json_get_type type "$target" || type=""
+	case "$type" in
+		object|array)
+			json_get_var cur "$target"
+			_json_set_var JSON_CUR "$cur"
+			return 0
+			;;
+		*)
+			[ -n "${_json_no_warning:-}" ] ||
+				echo "WARNING: Variable '$target' does not exist or is not an array/object" >&2
+			return 1
+			;;
+	esac
+}
+
+json_is_a() {
+	local type
+	json_get_type type "$1" || return 1
+	[ "$type" = "$2" ]
+}
+JSHN_SH_STUB
+
+	cat >"$SBX/bin/jshn" <<'JSHN_BIN_STUB'
+#!/usr/bin/env python3
+import json
+import os
+import sys
+
+
+def sh_quote(val):
+    return "'" + str(val).replace("'", "'\\''") + "'"
+
+
+def emit_value(key, val, out):
+    if isinstance(val, bool):
+        out.append("json_add_boolean %s %d;" % (sh_quote(key), 1 if val else 0))
+    elif val is None:
+        out.append("json_add_null %s;" % sh_quote(key))
+    elif isinstance(val, int):
+        out.append("json_add_int %s %d;" % (sh_quote(key), val))
+    elif isinstance(val, float):
+        out.append("json_add_double %s %s;" % (sh_quote(key), repr(val)))
+    elif isinstance(val, str):
+        out.append("json_add_string %s %s;" % (sh_quote(key), sh_quote(val)))
+    elif isinstance(val, dict):
+        out.append("json_add_object %s;" % sh_quote(key))
+        for k, v in val.items():
+            emit_value(k, v, out)
+        out.append("json_close_object;")
+    elif isinstance(val, list):
+        out.append("json_add_array %s;" % sh_quote(key))
+        for idx, item in enumerate(val):
+            emit_value(str(idx), item, out)
+        out.append("json_close_array;")
+
+
+def read_mode(raw):
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        sys.stderr.write("Failed to parse message data\n")
+        return 1
+    if not isinstance(data, dict):
+        sys.stderr.write("Failed to parse message data\n")
+        return 1
+    out = ["json_init;"]
+    for k, v in data.items():
+        emit_value(k, v, out)
+    sys.stdout.write("\n".join(out) + "\n")
+    return 0
+
+
+def build_table(prefix, tbl, is_array):
+    keys = os.environ.get("%sK_%s" % (prefix, tbl), "").split()
+    if is_array:
+        res = []
+        for k in keys:
+            res.append(decode_var(prefix, tbl, k))
+        return res
+    res = {}
+    for k in keys:
+        real_k = os.environ.get("%sN_%s_%s" % (prefix, tbl, k), k)
+        res[real_k] = decode_var(prefix, tbl, k)
+    return res
+
+
+def decode_var(prefix, tbl, k):
+    vtype = os.environ.get("%sT_%s_%s" % (prefix, tbl, k), "")
+    raw = os.environ.get("%s%s_%s" % (prefix, tbl, k), "")
+    if vtype == "object":
+        return build_table(prefix, raw, False)
+    if vtype == "array":
+        return build_table(prefix, raw, True)
+    if vtype == "boolean":
+        return raw not in ("", "0", "false", "False")
+    if vtype == "int":
+        return int(raw)
+    if vtype == "double":
+        return float(raw)
+    if vtype == "null":
+        return None
+    return raw
+
+
+def write_mode(prefix, indent, nonewline):
+    root = build_table(prefix, "J_V", False)
+    if indent:
+        text = json.dumps(root, indent="\t")
+    else:
+        text = json.dumps(root, separators=(",", ":"))
+    sys.stdout.write(text + ("" if nonewline else "\n"))
+    return 0
+
+
+def main(argv):
+    prefix = ""
+    indent = False
+    nonewline = False
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "-r" and i + 1 < len(argv):
+            return read_mode(argv[i + 1])
+        if arg == "-R" and i + 1 < len(argv):
+            try:
+                with open(argv[i + 1], encoding="utf-8") as handle:
+                    raw = handle.read()
+            except (OSError, UnicodeDecodeError):
+                sys.stderr.write("Failed to parse message data\n")
+                return 1
+            return read_mode(raw)
+        if arg == "-p" and i + 1 < len(argv):
+            prefix = argv[i + 1]
+            i += 2
+            continue
+        if arg == "-i":
+            indent = True
+            i += 1
+            continue
+        if arg == "-n":
+            nonewline = True
+            i += 1
+            continue
+        if arg == "-w":
+            return write_mode(prefix, indent, nonewline)
+        i += 1
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
+JSHN_BIN_STUB
+else
+	# dash rejects `export -n`; bash would un-export JSON_SEQ, which json_dump
+	# hands to the jshn helper.
+	sed 's|export -n ${JSON_PREFIX}JSON_SEQ=0|: ${JSON_PREFIX}JSON_SEQ=0|' \
+		"$JSHN_SH" >"$SBX/usr/share/libubox/jshn.sh"
+	cp "$JSHN_BIN" "$SBX/bin/jshn"
+fi
 
 # fwtool: -q -i OUTFILE IMAGE hands out the image metadata, -q -s OUTFILE IMAGE
 # reports whether the image carries a signature.  No other call is made below.

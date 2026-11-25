@@ -37,6 +37,7 @@ copy of the script -- that env var is how the red proof is taken:
 import hashlib
 import os
 import shutil
+import struct
 import subprocess
 import tempfile
 import unittest
@@ -51,6 +52,7 @@ SCRIPT = Path(
 IMG_NAME = "openwrt-airoha-an7581-gemtek_xr1710g-ubi-initramfs-recovery.itb"
 NAME = "initramfs-recovery.itb"
 HOST = "root@192.168.1.1"
+EXIT_CHECK = 4
 EXIT_IMAGE = 6
 
 # A device-shaped ssh.  The read-only probes answer from fixtures; every other
@@ -149,6 +151,9 @@ Amount of available logical eraseblocks: 0
 bootargs=console=ttyS0,115200 ubi.block=0,fit
 bootcmd=run boot_ubi || http_recovery
 loadaddr=0x85000000
+--- fw_env
+/dev/ubi0_0 0x0 0x4000 0x1f000 1
+/dev/ubi0_1 0x0 0x4000 0x1f000 1
 --- fitblk
 E
 E fit
@@ -177,9 +182,10 @@ class TransferTest(unittest.TestCase):
         self.sh = shutil.which("sh")
         self.assertIsNotNone(self.sh)
 
-        # 1 MiB of bytes that are neither 0x00 nor the "FWx0" tail marker.
+        # 1 MiB image ending with a valid 16-byte big-endian FWx0 trailer (#387).
         image = bytes(range(0x41, 0x41 + 26)) * 40330
         image = image[: 1024 * 1024]
+        image = image + struct.pack(">IIB3xI", 0x46577830, 0, 1, 16 + len(image))
         self.image_sha = hashlib.sha256(image).hexdigest()
         (self.imgdir / IMG_NAME).write_bytes(image)
         (self.imgdir / "sha256sums").write_text(
@@ -264,10 +270,9 @@ class TransferTest(unittest.TestCase):
             "the device side must end with exactly the pushed name",
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn(
-            "sysupgrade -F -n",
-            (self.fix / "sysupgrade.log").read_text(),
-        )
+        sys_log = (self.fix / "sysupgrade.log").read_text()
+        self.assertIn("sysupgrade -n", sys_log)
+        self.assertNotIn("-F", sys_log, "sysupgrade must not use -F:\n%s" % sys_log)
 
     def test_interrupted_push_leaves_no_half_image(self):
         result = self.run_script(SSH_TRUNCATE=NAME)
@@ -293,6 +298,72 @@ class TransferTest(unittest.TestCase):
             (self.fix / "sysupgrade.log").exists(),
             "nothing may be flashed when the image did not arrive",
         )
+
+    # -- W28-CI-04: a digest input for an image no list describes ------------
+
+    def strip_sums(self):
+        """The default state of this tree: CONFIG_BUILDBOT is not set, so no
+        per-image sha256sums is written next to the image at all."""
+        (self.imgdir / "sha256sums").unlink()
+
+    def test_no_sums_and_no_digest_has_no_plan(self):
+        self.strip_sums()
+        result = self.run_script()
+        self.assertEqual(
+            result.returncode,
+            EXIT_CHECK,
+            "an image whose bytes cannot be accounted for must exit %d, got "
+            "%d:\n%s%s"
+            % (EXIT_CHECK, result.returncode, result.stdout, result.stderr),
+        )
+        image_row = [
+            line for line in result.stdout.splitlines()
+            if line.startswith("image.sha256")
+        ]
+        self.assertTrue(image_row, result.stdout)
+        self.assertEqual(image_row[0].split()[-1], "FAIL", image_row[0])
+        self.assertEqual(
+            sorted(p.name for p in self.dev.iterdir()),
+            [],
+            "nothing may be pushed without a digest to compare it against",
+        )
+        self.assertFalse((self.fix / "sysupgrade.log").exists())
+
+    def test_rb_image_sha256_stands_in_for_a_missing_list(self):
+        """RB_IMAGE_SHA256 is the seam flash-gate has as FG_IMAGE_SHA256.
+
+        Without the list the recovery path used to be unusable in the tree's
+        default configuration -- no digest, no plan -- while flash-gate could
+        carry on with a named digest.
+        """
+        self.strip_sums()
+        result = self.run_script(RB_IMAGE_SHA256=self.image_sha)
+        self.assertEqual(
+            result.returncode,
+            0,
+            "RB_IMAGE_SHA256 did not let a missing sha256sums through:\n%s%s"
+            % (result.stdout, result.stderr),
+        )
+        image_row = [
+            line for line in result.stdout.splitlines()
+            if line.startswith("image.sha256")
+        ]
+        self.assertTrue(image_row, result.stdout)
+        self.assertEqual(image_row[0].split()[-1], "PASS", image_row[0])
+        pushed = self.dev / NAME
+        self.assertTrue(
+            pushed.exists(),
+            "the plan was printed but the image was never pushed:\n%s%s"
+            % (result.stdout, result.stderr),
+        )
+        self.assertEqual(
+            hashlib.sha256(pushed.read_bytes()).hexdigest(),
+            self.image_sha,
+            "the pushed bytes must still be the image",
+        )
+        sys_log = (self.fix / "sysupgrade.log").read_text()
+        self.assertIn("sysupgrade -n", sys_log)
+        self.assertNotIn("-F", sys_log, "sysupgrade must not use -F:\n%s" % sys_log)
 
 
 if __name__ == "__main__":
