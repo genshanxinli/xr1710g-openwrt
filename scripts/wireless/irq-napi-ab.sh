@@ -57,8 +57,11 @@
 #   0  all requested arms ran and the saved state was restored, or a clean
 #      dry run (even when prerequisites are missing)
 #   1  setup/run/rollback failure (the trap has still tried to restore)
-#   2  invalid arguments, or a missing prerequisite / blocked association
-#      (nothing was written and the saved state was not touched)
+#   2  invalid arguments, configuration block (OWE mismatch), read-only
+#      --irq-map under --run, all arms skipped, or a missing non-hardware
+#      prerequisite (nothing was changed)
+#   3  missing hardware (no client associated, or station disappeared during
+#      measurement)
 #
 # Examples:
 #   # read-only plan, safe on a build host (always exits 0)
@@ -88,6 +91,18 @@ PROG=${0##*/}
 NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
 # shellcheck source=lib/no-client.sh
 [ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
+if ! command -v nc_cause_exit >/dev/null 2>&1; then
+	nc_cause_exit() {
+		case ${1:-} in
+		missing-hardware) printf '3\n' ;;
+		missing-tool | config-block | permission | environment | output-collision)
+			printf '2\n' ;;
+		precondition-mismatch) printf '4\n' ;;
+		interrupted) printf '130\n' ;;
+		*) printf '1\n' ;;
+		esac
+	}
+fi
 
 # Defaults.  Every value can also be set from the environment; the command
 # line wins.  The window is kept in integer milliseconds (WINDOW_MS) because
@@ -151,6 +166,8 @@ SYS_CLASS_NET=${SYS_CLASS_NET:-/sys/class/net}
 # that moves IRQs while the masks still steer the softirq measures nothing,
 # so it is skipped unless --with-rps moves the masks too.
 WITH_RPS=${WITH_RPS:-0}
+RPS_MASK_OPT=${RPS_MASK_OPT:-}
+ALLOW_UNKNOWN_RPS=${ALLOW_UNKNOWN_RPS:-0}
 RPS_SKIP_REASON='SKIP: softirq hotspot is decided by rps_cpus, not by mt76-npu irq affinity'
 RUN=${RUN:-0}
 
@@ -220,6 +237,9 @@ RPS_SAVED=
 SPLIT_RPS_BLOCKS=0
 NPU_IRQ_RATES=not-sampled
 NPU_BEACON_LIKE=not-sampled
+ARM_CONTRAST_LIST=
+ACCEPTANCE_VERDICT=incomplete
+ACCEPTANCE_COMPARISONS='[]'
 
 note() {
 	printf '%s: %s\n' "$PROG" "$*" >&2
@@ -376,6 +396,11 @@ Options:
                         arm (default off; RPS decides the softirq hotspot,
                         so an IRQ-only split is skipped when the masks are
                         not all zero)
+  --rps-mask HEX        explicit hex rps_cpus mask written during the split
+                        and combined arms (accepts 0 or hex CPU masks; implies
+                        --with-rps, saved and restored automatically)
+  --allow-unknown-rps   allow the split arm to run when rps_cpus cannot be
+                        probed (default is fail-closed)
   --sys-class-net DIR   alternate /sys/class/net (default /sys/class/net;
                         for tests)
   --irq-map IRQ:CPU,..  explicit split mapping; only the listed IRQs are
@@ -396,8 +421,9 @@ Options:
 
 Arms whose prerequisite is missing are reported and skipped: threaded and
 combined need a writable napi_threaded file, split needs at least one
-writable candidate IRQ.  A real run with missing mandatory prerequisites
-exits 1; a dry run still exits 0 on a build host without the board.
+writable candidate IRQ.  A real run with missing prerequisites exits 2 (or
+3 for missing hardware / station-missing); a dry run still exits 0 on a
+build host without the board.
 
 Throughput is the station tx-byte delta over the measured window:
 gbps = tx_delta_bytes * 8 / measured_seconds / 1e9.  It counts L2 bytes
@@ -450,6 +476,8 @@ parse_args() {
 		--sys-class-net)	[ $# -ge 2 ] || die "$1 needs a value"; SYS_CLASS_NET=$2; shift 2 ;;
 		--debugfs-root)		[ $# -ge 2 ] || die "$1 needs a value"; DEBUGFS_ROOT=$2; shift 2 ;;
 		--with-rps)		WITH_RPS=1; shift ;;
+		--rps-mask)		[ $# -ge 2 ] || die "$1 needs a value"; RPS_MASK_OPT=$2; WITH_RPS=1; shift 2 ;;
+		--allow-unknown-rps)	ALLOW_UNKNOWN_RPS=1; shift ;;
 		--run)			RUN=1; shift ;;
 		--dry-run)		RUN=0; shift ;;
 		--help|-h)		usage; exit 0 ;;
@@ -496,6 +524,14 @@ parse_args() {
 	0|1)	THREADED_VALUE_OPT=$THREADED_VALUE ;;
 	*) die "--threaded-value must be 0 or 1" ;;
 	esac
+	if [ -n "$RPS_MASK_OPT" ]; then
+		case $RPS_MASK_OPT in
+		''|*[!0-9a-fA-F,]*|,*|*,|*,,*)
+			die "--rps-mask '$RPS_MASK_OPT' is not a hex CPU mask (e.g. 0, 4, e, f)"
+			;;
+		esac
+		RPS_MASK_OPT=$(printf '%s' "$RPS_MASK_OPT" | tr 'A-F' 'a-f')
+	fi
 	[ -n "$PROC_ROOT" ] || die "--proc-root must not be empty"
 	[ -n "$DEBUGFS_ROOT" ] || die "--debugfs-root must not be empty"
 	[ -d "$PROC_ROOT" ] || die "proc root '$PROC_ROOT' is not a directory"
@@ -974,6 +1010,7 @@ rps_probe() {
 	fi
 	if [ ! -d "$base/$dev/queues" ]; then
 		RPS_PROBE=unavailable
+		[ "${ALLOW_UNKNOWN_RPS:-0}" -eq 1 ] || SPLIT_RPS_BLOCKS=1
 		return 1
 	fi
 	RPS_DEV=$dev
@@ -996,6 +1033,7 @@ rps_probe() {
 	done
 	[ -n "$values" ] || {
 		RPS_PROBE=unavailable
+		[ "${ALLOW_UNKNOWN_RPS:-0}" -eq 1 ] || SPLIT_RPS_BLOCKS=1
 		return 1
 	}
 	RPS_CPUS="[$values]"
@@ -1019,7 +1057,7 @@ rps_save() {
 }
 
 rps_set_cpu() {
-	local cpu="$1" mask f
+	local cpu="$1" mask f cur
 
 	# An empty or non-numeric CPU used to fall through to 2^"" = 1, i.e.
 	# mask 1, and wrote every queue to cpu0 without a word.
@@ -1029,6 +1067,8 @@ rps_set_cpu() {
 	[ -n "$mask" ] || return 1
 	for f in "$SYS_CLASS_NET/$RPS_DEV/queues/rx-"*/rps_cpus; do
 		[ -w "$f" ] || continue
+		cur=$(tr -d ' \t\r\n' < "$f" 2>/dev/null | tr 'A-F' 'a-f' || :)
+		[ "$cur" = "$mask" ] && continue
 		if printf '%s\n' "$mask" > "$f" 2>/dev/null; then
 			WRITE_COUNT=$((WRITE_COUNT + 1))
 		else
@@ -1036,6 +1076,31 @@ rps_set_cpu() {
 		fi
 	done
 	return 0
+}
+
+rps_set_mask() {
+	local mask="$1" f cur wrote=0
+
+	case $mask in
+	''|*[!0-9a-fA-F,]*|,*|*,|*,,*) return 1 ;;
+	esac
+	mask=$(printf '%s' "$mask" | tr 'A-F' 'a-f')
+	[ -n "$RPS_DEV" ] || return 1
+	for f in "$SYS_CLASS_NET/$RPS_DEV/queues/rx-"*/rps_cpus; do
+		[ -w "$f" ] || continue
+		cur=$(tr -d ' \t\r\n' < "$f" 2>/dev/null | tr 'A-F' 'a-f' || :)
+		if [ "$cur" = "$mask" ]; then
+			wrote=1
+			continue
+		fi
+		if printf '%s\n' "$mask" > "$f" 2>/dev/null; then
+			WRITE_COUNT=$((WRITE_COUNT + 1))
+			wrote=1
+		else
+			return 1
+		fi
+	done
+	[ "$wrote" -eq 1 ]
 }
 
 rps_restore() {
@@ -1226,29 +1291,60 @@ irq_line_exists() {
 		"$PROC_ROOT/interrupts" 2>/dev/null
 }
 
-# With no associated STA the NPU lines irq40/irq41 still tick at the beacon
-# interval (20.0/s and 6.9/s over a 13 s sample, issue #316).  A rate outside
-# 10..40/s and 2..15/s means the sample says nothing about the NPU, so the
-# harness warns instead of failing.  The rates go into result.json.
+# With no associated STA the NPU lines still tick at the beacon interval
+# (20.0/s and 6.9/s over a 13 s sample, issue #316).  Discover the mt76-npu
+# IRQs dynamically from $IRQ_RECORDS (or from the snapshot file when called in
+# isolation) instead of hardcoding 40/41, since kernel IRQ numbers shift across
+# builds.  A rate outside 10..40/s and 2..15/s warns instead of failing.
 npu_beacon_rate() {
-	local before="$1" after="$2" secs="${3:-1}" r40 r41 p40 p41 like=yes
+	local before="$1" after="$2" secs="${3:-1}" irqs='' i first='' second='' r1 r2 p1 p2 like=yes rates=''
 
 	[ "$secs" -ge 1 ] 2>/dev/null || secs=1
-	r40=$(irq_total_delta "$before" "$after" 40)
-	r41=$(irq_total_delta "$before" "$after" 41)
-	p40=$(awk -v n="$r40" -v s="$secs" 'BEGIN { printf "%.1f", n / s }')
-	p41=$(awk -v n="$r41" -v s="$secs" 'BEGIN { printf "%.1f", n / s }')
-	awk -v a="$p40" -v b="$p41" \
-		'BEGIN { exit !(a >= 10 && a <= 40 && b >= 2 && b <= 15) }' ||
-		like=no
-	NPU_IRQ_RATES="irq40=$p40/s irq41=$p41/s"
-	NPU_BEACON_LIKE=$like
-	if [ "$like" = no ]; then
-		say "WARN: npu irq rate is not beacon-like"
-		note "irq40=$p40/s irq41=$p41/s outside beacon band 10..40/s and 2..15/s"
+	if [ -n "${IRQ_RECORDS:-}" ]; then
+		irqs=$(printf '%s\n' "$IRQ_RECORDS" |
+			awk -F'|' '($2 == "mt76-npu" || $3 ~ /mt76-npu/) && $1 ~ /^[0-9]+$/ { print $1 }')
 	fi
-	printf 'npu_irq irq40=%s/s irq41=%s/s beacon_like=%s\n' \
-		"$p40" "$p41" "$like"
+	if [ -z "$irqs" ] && [ -r "$before" ]; then
+		irqs=$(awk '$0 ~ /mt76-npu/ { n = $1; sub(/:$/, "", n); if (n ~ /^[0-9]+$/) print n }' "$before")
+	fi
+	[ -n "$irqs" ] || return 0
+	for i in $irqs; do
+		if [ -z "$first" ]; then
+			first=$i
+		elif [ -z "$second" ]; then
+			second=$i
+		fi
+	done
+	if [ -n "$first" ] && [ -n "$second" ]; then
+		r1=$(irq_total_delta "$before" "$after" "$first")
+		r2=$(irq_total_delta "$before" "$after" "$second")
+		p1=$(awk -v n="$r1" -v s="$secs" 'BEGIN { printf "%.1f", n / s }')
+		p2=$(awk -v n="$r2" -v s="$secs" 'BEGIN { printf "%.1f", n / s }')
+		awk -v a="$p1" -v b="$p2" \
+			'BEGIN { exit !(a >= 10 && a <= 40 && b >= 2 && b <= 15) }' ||
+			like=no
+		rates="irq${first}=$p1/s irq${second}=$p2/s"
+		NPU_IRQ_RATES=$rates
+		NPU_BEACON_LIKE=$like
+		if [ "$like" = no ]; then
+			say "WARN: npu irq rate is not beacon-like"
+			note "$rates outside beacon band 10..40/s and 2..15/s"
+		fi
+		printf 'npu_irq %s beacon_like=%s\n' "$rates" "$like"
+	else
+		r1=$(irq_total_delta "$before" "$after" "$first")
+		p1=$(awk -v n="$r1" -v s="$secs" 'BEGIN { printf "%.1f", n / s }')
+		awk -v a="$p1" 'BEGIN { exit !(a >= 10 && a <= 40) }' ||
+			like=no
+		rates="irq${first}=$p1/s"
+		NPU_IRQ_RATES=$rates
+		NPU_BEACON_LIKE=$like
+		if [ "$like" = no ]; then
+			say "WARN: npu irq rate is not beacon-like"
+			note "$rates outside beacon band 10..40/s"
+		fi
+		printf 'npu_irq %s beacon_like=%s\n' "$rates" "$like"
+	fi
 }
 
 softirq_label_percpu() {
@@ -1668,7 +1764,7 @@ preflight() {
 				add_missing "irq-$irq"
 		done
 	fi
-	if [ "$NEED_SPLIT" -eq 1 ] && [ "$IRQ_COUNT" -eq 0 ]; then
+	if [ "$NEED_SPLIT" -eq 1 ] && [ "$IRQ_COUNT" -eq 0 ] && [ -z "$IRQ_MAP_REQUEST" ]; then
 		add_missing "irq-candidates"
 	fi
 
@@ -1704,6 +1800,37 @@ preflight() {
 		done <<EOF
 $IRQ_RECORDS
 EOF
+	fi
+	# Also probe any IRQs explicitly requested in --irq-map even when they do
+	# not match --irq-names, so writable explicit IRQs are not misclassified
+	# as read-only (issue #66 F2).
+	if [ -n "$IRQ_MAP_REQUEST" ]; then
+		local req_rec req_irq
+		for req_rec in $IRQ_MAP_REQUEST; do
+			req_irq=${req_rec%%:*}
+			contains_word "$req_irq" "$IRQ_WRITABLE" && continue
+			case " $IRQ_EXCLUDED " in
+			*" $req_irq:"*) continue ;;
+			esac
+			aff=$(read_affinity "$req_irq")
+			if [ -z "$aff" ]; then
+				IRQ_EXCLUDED="$IRQ_EXCLUDED $req_irq:no-affinity"
+				note "irq $req_irq: no readable smp_affinity; excluded"
+				continue
+			fi
+			if ! affinity_mode_writable "$req_irq"; then
+				IRQ_EXCLUDED="$IRQ_EXCLUDED $req_irq:read-only"
+				note "irq $req_irq: smp_affinity is read-only (managed IRQ?); excluded"
+				continue
+			fi
+			if [ "$RUN" -eq 1 ] && ! probe_affinity "$req_irq" "$aff"; then
+				IRQ_EXCLUDED="$IRQ_EXCLUDED $req_irq:probe-failed"
+				note "irq $req_irq: same-value write probe failed; excluded"
+				continue
+			fi
+			SAVED_AFF="$SAVED_AFF $req_irq:$aff"
+			IRQ_WRITABLE="$IRQ_WRITABLE $req_irq"
+		done
 	fi
 	if [ "$NEED_SPLIT" -eq 1 ] && [ -z "$IRQ_WRITABLE" ]; then
 		add_missing irq-writable
@@ -1796,9 +1923,13 @@ EOF
 		rps_save
 	fi
 
-	# No associated STA: the NPU IRQs should still tick at beacon rate.  This
-	# is a baseline sanity check, not a pass/fail condition (issue #316).
-	if [ "$STATION_OK" -ne 1 ] && irq_line_exists 40 && irq_line_exists 41; then
+	# No associated STA: the discovered mt76-npu IRQs should still tick at
+	# beacon rate.  This is a baseline sanity check, not a pass/fail
+	# condition (issue #316 / #66 F6).
+	local npu_irqs
+	npu_irqs=$(printf '%s\n' "$IRQ_RECORDS" |
+		awk -F'|' '($2 == "mt76-npu" || $3 ~ /mt76-npu/) && $1 ~ /^[0-9]+$/ { print $1 }')
+	if [ "$STATION_OK" -ne 1 ] && [ -n "$npu_irqs" ]; then
 		local before after
 		before=${TMPDIR:-/tmp}/irq-napi-ab.$$.irq-before
 		after=${TMPDIR:-/tmp}/irq-napi-ab.$$.irq-after
@@ -1812,8 +1943,9 @@ EOF
 	# Build or validate the split map.  An explicit map is used as-is (only
 	# those IRQs move).  When it names an IRQ this kernel exposes as
 	# read-only (-r--r--r--, typical for the mt7996e-managed lines 49..57 on
-	# the XR1710G image), the run does not fail: the whole invocation
-	# degrades to a read-only report of every requested IRQ and exits 0.
+	# the XR1710G image), the invocation degrades to a read-only report of
+	# every requested IRQ (exit 0 under --dry-run; write result.json with
+	# mode="read-only" and exit 2 under --run).
 	if [ -n "$SPLIT_MAP" ]; then
 		local map_ok='' rec m_irq m_cpu
 		for rec in $SPLIT_MAP; do
@@ -1874,8 +2006,9 @@ EOF
 	fi
 
 	if [ "$IRQ_MAP_READONLY" -eq 1 ]; then
-		# Report only: no write, no traffic, no refusal.  main() exits 0
-		# right after printing this.
+		# Report only: no write, no traffic.  main() exits 0 under
+		# --dry-run, or writes mode="read-only" result.json and exits 2
+		# under --run.
 		note "irq map is read-only on this kernel; reporting instead of running"
 	elif [ "$NEED_SPLIT" -eq 1 ] && [ -z "$SPLIT_MAP" ]; then
 		add_missing split-map
@@ -1908,7 +2041,7 @@ report_irq_map_readonly() {
 		say "  irq $irq requested_cpu=$cpu affinity=${aff:-unavailable} mode=${perm:-unavailable} writable=$writable counts=${counts:-unavailable}"
 	done
 	write_result_json
-	say "$PROG: read-only report complete (rc=0)"
+	say "$PROG: read-only report complete (rc=$([ "$RUN" -eq 1 ] && echo 2 || echo 0))"
 }
 
 report_plan() {
@@ -1953,7 +2086,9 @@ EOF
 	fi
 	if [ "$RPS_PROBE" = ok ]; then
 		say "$PROG: rps_cpus: dev=$RPS_DEV queues=$(printf '%s' "$RPS_CPUS" | awk -F, '{print NF}') nonzero=$RPS_NONZERO_QUEUES masks=$RPS_CPUS"
-		if [ "$SPLIT_RPS_BLOCKS" -eq 1 ]; then
+		if [ -n "$RPS_MASK_OPT" ]; then
+			say "$PROG: --rps-mask: the split arm also writes rps_cpus mask $RPS_MASK_OPT"
+		elif [ "$SPLIT_RPS_BLOCKS" -eq 1 ]; then
 			if [ "$WITH_RPS" -eq 1 ]; then
 				say "$PROG: --with-rps: the split arm also writes rps_cpus to cpu${SPLIT_CHOSEN_CPU:-?}"
 			else
@@ -1962,7 +2097,11 @@ EOF
 			fi
 		fi
 	else
-		say "$PROG: rps_cpus: unavailable under $SYS_CLASS_NET/$RPS_DEV (cannot prove what steers the softirq)"
+		if [ "$SPLIT_RPS_BLOCKS" -eq 1 ]; then
+			say "$PROG: rps_cpus: unavailable under $SYS_CLASS_NET/${RPS_DEV:-cpu} (cannot prove what steers the softirq; split arm blocked unless --allow-unknown-rps)"
+		else
+			say "$PROG: rps_cpus: unavailable under $SYS_CLASS_NET/${RPS_DEV:-cpu} (--allow-unknown-rps set; split arm allowed)"
+		fi
 	fi
 	if [ "$NPU_IRQ_RATES" != not-sampled ]; then
 		say "$PROG: npu irq rate: $NPU_IRQ_RATES beacon_like=$NPU_BEACON_LIKE"
@@ -2273,6 +2412,18 @@ measure_arm() {
 	APPLIED_NAPI=
 	APPLIED_AFF=
 	BASELINE_UNCHANGED=n/a
+	GBPS=unavailable
+	AP_TX_DELTA_BYTES=unavailable
+	AP_TX_DELTA_PACKETS=unavailable
+	AP_TX_RETRIES_DELTA=unavailable
+	SOFTIRQ_PCT_PERCPU=
+	SOFTIRQ_NET_TX_DELTA=unavailable
+	SOFTIRQ_NET_RX_DELTA=unavailable
+	SOFTIRQ_HI_DELTA=unavailable
+	SOFTIRQ_TASKLET_DELTA=unavailable
+	SOFTIRQ_HI_PERCPU=
+	SOFTIRQ_TASKLET_PERCPU=
+	WINDOW_MS_MEASURED=0
 	mkdir -p "$ARM_DIR" 2>/dev/null || {
 		note "cannot create $ARM_DIR"
 		ARM_STATUS=fail
@@ -2297,10 +2448,16 @@ measure_arm() {
 
 	case $arm in
 	split|combined)
-		if [ "$SPLIT_RPS_BLOCKS" -eq 1 ] && [ "$WITH_RPS" -ne 1 ]; then
-			say "$RPS_SKIP_REASON"
-			ARM_STATUS=skipped
-			ARM_REASON=rps-decides-hotspot
+		if [ "$SPLIT_RPS_BLOCKS" -eq 1 ] && { [ "$WITH_RPS" -ne 1 ] || [ "$RPS_PROBE" != ok ]; }; then
+			if [ "$RPS_PROBE" = unavailable ]; then
+				say "SKIP: rps_cpus is unavailable; pass --allow-unknown-rps to run split without RPS visibility"
+				ARM_STATUS=skipped
+				ARM_REASON=rps-unavailable
+			else
+				say "$RPS_SKIP_REASON"
+				ARM_STATUS=skipped
+				ARM_REASON=rps-decides-hotspot
+			fi
 			return 2
 		fi
 		if [ -z "$SPLIT_MAP" ]; then
@@ -2321,17 +2478,28 @@ measure_arm() {
 			APPLIED_SPLIT="$APPLIED_SPLIT $irq:$cpu"
 		done
 		APPLIED_SPLIT=${APPLIED_SPLIT# }
-		if [ "$WITH_RPS" -eq 1 ]; then
-			if ! rps_set_cpu "$SPLIT_CHOSEN_CPU"; then
-				note "$arm: failed to write rps_cpus to cpu${SPLIT_CHOSEN_CPU:-none}"
-				restore_state >/dev/null 2>&1 || :
-				ARM_STATUS=fail
-				ARM_REASON='rps-write'
-				return 1
-			fi
-			APPLIED_SPLIT="$APPLIED_SPLIT rps:$SPLIT_CHOSEN_CPU"
-		fi
 		[ "$WRITE_COUNT" -gt "$split_writes_start" ] && split_changed=1
+		if [ "$WITH_RPS" -eq 1 ]; then
+			if [ -n "$RPS_MASK_OPT" ]; then
+				if ! rps_set_mask "$RPS_MASK_OPT"; then
+					note "$arm: failed to write rps_cpus mask $RPS_MASK_OPT"
+					restore_state >/dev/null 2>&1 || :
+					ARM_STATUS=fail
+					ARM_REASON='rps-write'
+					return 1
+				fi
+				APPLIED_SPLIT="$APPLIED_SPLIT rps_mask:$RPS_MASK_OPT"
+			else
+				if ! rps_set_cpu "$SPLIT_CHOSEN_CPU"; then
+					note "$arm: failed to write rps_cpus to cpu${SPLIT_CHOSEN_CPU:-none}"
+					restore_state >/dev/null 2>&1 || :
+					ARM_STATUS=fail
+					ARM_REASON='rps-write'
+					return 1
+				fi
+				APPLIED_SPLIT="$APPLIED_SPLIT rps:$SPLIT_CHOSEN_CPU"
+			fi
+		fi
 		;;
 	esac
 
@@ -2418,9 +2586,10 @@ measure_arm() {
 	if [ "$AP_TX_DELTA_BYTES" = unavailable ]; then
 		note "$arm: no station tx-byte delta (client left?)"
 		restore_state >/dev/null 2>&1 || :
-		ARM_STATUS=fail
+		ARM_STATUS=blocked
 		ARM_REASON=station-missing
-		return 1
+		record_arm_result
+		return 3
 	fi
 
 	# Undo the intervention before reporting, so a report failure cannot
@@ -2448,6 +2617,15 @@ measure_arm() {
 		fi
 		BASELINE_UNCHANGED=$unchanged
 	fi
+
+	local contrasted=false
+	case $arm in
+	baseline) contrasted=true ;;
+	split) [ "$SPLIT_CHANGED" -eq 1 ] || [ "$ARM_RPS_CHANGED" = true ] && contrasted=true ;;
+	threaded) [ "$NAPI_CHANGED" -eq 1 ] && contrasted=true ;;
+	combined) [ "$SPLIT_CHANGED" -eq 1 ] || [ "$NAPI_CHANGED" -eq 1 ] || [ "$ARM_RPS_CHANGED" = true ] && contrasted=true ;;
+	esac
+	ARM_CONTRAST_LIST="$ARM_CONTRAST_LIST $arm:$contrasted"
 
 	print_arm_summary
 	return 0
@@ -2523,10 +2701,20 @@ collect_arm() {
 	SOFTIRQ_NET_RX_DELTA=$(delta_uint \
 		"$(softirq_label_total "$be" NET_RX)" \
 		"$(softirq_label_total "$ae" NET_RX)")
+	SOFTIRQ_HI_DELTA=$(delta_uint \
+		"$(softirq_label_total "$be" HI)" \
+		"$(softirq_label_total "$ae" HI)")
+	SOFTIRQ_TASKLET_DELTA=$(delta_uint \
+		"$(softirq_label_total "$be" TASKLET)" \
+		"$(softirq_label_total "$ae" TASKLET)")
 	SOFTIRQ_TOTAL_DELTA=$(softirq_total_delta "$be" "$ae")
 	SOFTIRQ_NET_TX_PERCPU=$(softirq_label_percpu "$be" "$ae" NET_TX \
 		2>/dev/null || :)
 	SOFTIRQ_NET_RX_PERCPU=$(softirq_label_percpu "$be" "$ae" NET_RX \
+		2>/dev/null || :)
+	SOFTIRQ_HI_PERCPU=$(softirq_label_percpu "$be" "$ae" HI \
+		2>/dev/null || :)
+	SOFTIRQ_TASKLET_PERCPU=$(softirq_label_percpu "$be" "$ae" TASKLET \
 		2>/dev/null || :)
 	SOFTIRQ_TOTAL_PERCPU=$(softirq_total_percpu "$be" "$ae" 2>/dev/null || :)
 	SOFTIRQ_PCT_PERCPU=$(procstat_pct_percpu "$bp" "$ap" 8 2>/dev/null || :)
@@ -2574,9 +2762,13 @@ print_arm_summary() {
 	s="$s iface_gbps=$IFACE_GBPS iface_tx_delta_bytes=$IFACE_TX_DELTA_BYTES iface_tx_delta_packets=$IFACE_TX_DELTA_PACKETS"
 	s="$s softirq_net_tx_delta=$SOFTIRQ_NET_TX_DELTA"
 	s="$s softirq_net_rx_delta=$SOFTIRQ_NET_RX_DELTA"
+	s="$s softirq_hi_delta=${SOFTIRQ_HI_DELTA:-unavailable}"
+	s="$s softirq_tasklet_delta=${SOFTIRQ_TASKLET_DELTA:-unavailable}"
 	s="$s softirq_total_delta=$SOFTIRQ_TOTAL_DELTA"
 	s="$s softirq_net_tx_percpu=${SOFTIRQ_NET_TX_PERCPU:-none}"
 	s="$s softirq_net_rx_percpu=${SOFTIRQ_NET_RX_PERCPU:-none}"
+	s="$s softirq_hi_percpu=${SOFTIRQ_HI_PERCPU:-none}"
+	s="$s softirq_tasklet_percpu=${SOFTIRQ_TASKLET_PERCPU:-none}"
 	s="$s softirq_total_percpu=${SOFTIRQ_TOTAL_PERCPU:-none}"
 	s="$s softirq_pct_percpu=${SOFTIRQ_PCT_PERCPU:-none}"
 	s="$s irq_pct_percpu=${IRQ_PCT_PERCPU:-none}"
@@ -2607,7 +2799,11 @@ $IRQ_RECORDS
 EOF
 	say ""
 
-	RESULT_RECORDS="$RESULT_RECORDS$CURRENT_ARM|$GBPS|$AP_TX_RETRIES_DELTA|${SOFTIRQ_PCT_PERCPU:-none}|$SOFTIRQ_NET_TX_DELTA|$SOFTIRQ_NET_RX_DELTA|$ARM_STATUS|${ARM_REASON:-none}|$WINDOW_MS_MEASURED|${APPLIED_NAPI:-none}|${APPLIED_SPLIT:-none}|$AP_TX_DELTA_BYTES|$AP_TX_DELTA_PACKETS|$ARM_RPS_BEFORE|$ARM_RPS_AFTER|$ARM_RPS_CHANGED
+	record_arm_result
+}
+
+record_arm_result() {
+	RESULT_RECORDS="$RESULT_RECORDS$CURRENT_ARM|${GBPS:-unavailable}|${AP_TX_RETRIES_DELTA:-unavailable}|${SOFTIRQ_PCT_PERCPU:-none}|${SOFTIRQ_NET_TX_DELTA:-unavailable}|${SOFTIRQ_NET_RX_DELTA:-unavailable}|$ARM_STATUS|${ARM_REASON:-none}|${WINDOW_MS_MEASURED:-0}|${APPLIED_NAPI:-none}|${APPLIED_SPLIT:-none}|${AP_TX_DELTA_BYTES:-unavailable}|${AP_TX_DELTA_PACKETS:-unavailable}|${ARM_RPS_BEFORE:-[]}|${ARM_RPS_AFTER:-[]}|${ARM_RPS_CHANGED:-false}|${SOFTIRQ_HI_DELTA:-unavailable}|${SOFTIRQ_TASKLET_DELTA:-unavailable}|${SOFTIRQ_HI_PERCPU:-none}|${SOFTIRQ_TASKLET_PERCPU:-none}
 "
 }
 
@@ -2647,19 +2843,111 @@ EOF2
 }
 
 arm_json_records() {
-	local arm gbps retries soft nettx netrx status reason wms napi split tdx tdp rb ra rc sep=''
+	local arm gbps retries soft nettx netrx status reason wms napi split tdx tdp rb ra rc hi tasklet hipc tlpc sep=''
 
-	while IFS='|' read -r arm gbps retries soft nettx netrx status reason wms napi split tdx tdp rb ra rc; do
+	while IFS='|' read -r arm gbps retries soft nettx netrx status reason wms napi split tdx tdp rb ra rc hi tasklet hipc tlpc; do
 		[ -n "$arm" ] || continue
-		printf '%s    {"arm": "%s", "status": "%s", "reason": "%s", "window_ms": %s, "gbps": "%s", "retries": "%s", "soft_pct_percpu": "%s", "net_tx": "%s", "net_rx": "%s", "tx_delta_bytes": "%s", "tx_delta_packets": "%s", "napi_threaded": "%s", "split_map": "%s", "rps_before": %s, "rps_after": %s, "rps_changed": %s}' \
+		printf '%s    {"arm": "%s", "status": "%s", "reason": "%s", "window_ms": %s, "gbps": "%s", "retries": "%s", "soft_pct_percpu": "%s", "net_tx": "%s", "net_rx": "%s", "hi": "%s", "tasklet": "%s", "hi_percpu": "%s", "tasklet_percpu": "%s", "tx_delta_bytes": "%s", "tx_delta_packets": "%s", "napi_threaded": "%s", "split_map": "%s", "rps_before": %s, "rps_after": %s, "rps_changed": %s}' \
 			"$sep" "$arm" "$status" "$reason" "${wms:-0}" "$gbps" "$retries" \
-			"$soft" "$nettx" "$netrx" "${tdx:-unavailable}" "${tdp:-unavailable}" \
+			"$soft" "$nettx" "$netrx" "${hi:-unavailable}" "${tasklet:-unavailable}" \
+			"${hipc:-none}" "${tlpc:-none}" "${tdx:-unavailable}" "${tdp:-unavailable}" \
 			"$napi" "$split" "${rb:-[]}" "${ra:-[]}" "${rc:-false}"
 		echo
 		sep=','
 	done <<EOF3
 $RESULT_RECORDS
 EOF3
+}
+
+evaluate_acceptance() {
+	local out
+	ACCEPTANCE_VERDICT=incomplete
+	ACCEPTANCE_COMPARISONS='[]'
+	[ -n "${RESULT_RECORDS:-}" ] || return 0
+	out=$(awk -F'|' -v clist="${ARM_CONTRAST_LIST:-}" -v tbase="${THREADED_BASELINE:-unavailable}" '
+		function is_num(v) { return (v ~ /^[0-9]+(\.[0-9]+)?$/) }
+		BEGIN {
+			n = split(clist, pairs, " ")
+			for (i = 1; i <= n; i++) {
+				if (pairs[i] == "") continue
+				k = index(pairs[i], ":")
+				if (k > 1) cmap[substr(pairs[i], 1, k - 1)] = substr(pairs[i], k + 1)
+			}
+		}
+		$1 == "" { next }
+		{
+			arm = $1; gbps = $2; status = $7; napi = $10; splitmap = $11; rpschg = $16
+			if (arm == "baseline" && status == "ok" && is_num(gbps)) {
+				has_base = 1
+				base_gbps = gbps + 0
+			} else if (arm != "baseline" && status == "ok" && is_num(gbps)) {
+				tcount++
+				t_arm[tcount] = arm
+				t_gbps[tcount] = gbps + 0
+				t_napi[tcount] = napi
+				t_split[tcount] = splitmap
+				t_rpschg[tcount] = rpschg
+			}
+		}
+		END {
+			if (!has_base || tcount == 0) {
+				print "VERDICT=incomplete"
+				print "COMPARISONS=[]"
+				exit 0
+			}
+			comps = ""
+			any_contrasted = 0
+			any_improved = 0
+			any_regressed = 0
+			for (i = 1; i <= tcount; i++) {
+				a = t_arm[i]
+				g = t_gbps[i]
+				dg = g - base_gbps
+				dp = (base_gbps > 0) ? (dg * 100.0 / base_gbps) : 0.0
+				if (a in cmap) {
+					contrasted = (cmap[a] == "true") ? 1 : 0
+				} else if (a == "threaded") {
+					contrasted = (t_napi[i] != "" && t_napi[i] != "none" && t_napi[i] != tbase) ? 1 : 0
+				} else if (a == "split") {
+					contrasted = ((t_split[i] != "" && t_split[i] != "none") || t_rpschg[i] == "true") ? 1 : 0
+				} else {
+					c_n = (t_napi[i] != "" && t_napi[i] != "none" && t_napi[i] != tbase) ? 1 : 0
+					c_s = ((t_split[i] != "" && t_split[i] != "none") || t_rpschg[i] == "true") ? 1 : 0
+					contrasted = (c_n || c_s) ? 1 : 0
+				}
+				if (!contrasted) {
+					outcome = "not-contrasted"
+				} else {
+					any_contrasted = 1
+					if (dp >= 2.0) {
+						outcome = "improved"
+						any_improved = 1
+					} else if (dp <= -2.0) {
+						outcome = "regressed"
+						any_regressed = 1
+					} else {
+						outcome = "no-effect"
+					}
+				}
+				entry = sprintf("{\"arm\": \"%s\", \"baseline_gbps\": %.3f, \"arm_gbps\": %.3f, \"delta_gbps\": %.3f, \"delta_pct\": %.2f, \"contrasted\": %s, \"outcome\": \"%s\"}", \
+					a, base_gbps, g, dg, dp, (contrasted ? "true" : "false"), outcome)
+				comps = comps ((comps == "") ? "" : ", ") entry
+			}
+			if (!any_contrasted) verdict = "not-contrasted"
+			else if (any_improved) verdict = "improved"
+			else if (any_regressed) verdict = "regressed"
+			else verdict = "no-effect"
+			printf "VERDICT=%s\n", verdict
+			printf "COMPARISONS=[%s]\n", comps
+		}
+	' <<EOF4
+$RESULT_RECORDS
+EOF4
+	)
+	ACCEPTANCE_VERDICT=$(printf '%s\n' "$out" | sed -n 's/^VERDICT=//p' | head -n 1)
+	ACCEPTANCE_COMPARISONS=$(printf '%s\n' "$out" | sed -n 's/^COMPARISONS=//p' | head -n 1)
+	[ -n "$ACCEPTANCE_VERDICT" ] || ACCEPTANCE_VERDICT=incomplete
+	[ -n "$ACCEPTANCE_COMPARISONS" ] || ACCEPTANCE_COMPARISONS='[]'
 }
 
 # Persist the basis the split rule used: the since-boot timer share table and
@@ -2715,6 +3003,7 @@ write_result_json() {
 	irqs_file=$OUT_DIR/result.irqs.json
 	arm_json_records >"$arms_file" 2>/dev/null || :
 	irq_json_records >"$irqs_file" 2>/dev/null || :
+	evaluate_acceptance
 	{
 		printf '{\n'
 		printf '  "mode": "%s",\n' "$mode"
@@ -2758,6 +3047,8 @@ write_result_json() {
 		printf '  "rps_probe": "%s",\n' "$RPS_PROBE"
 		printf '  "rps_blocks_split": %s,\n' "$SPLIT_RPS_BLOCKS"
 		printf '  "with_rps": %s,\n' "$WITH_RPS"
+		printf '  "rps_mask": "%s",\n' "${RPS_MASK_OPT:-none}"
+		printf '  "allow_unknown_rps": %s,\n' "${ALLOW_UNKNOWN_RPS:-0}"
 		printf '  "npu_irq_rates": "%s",\n' "$(json_str "$NPU_IRQ_RATES")"
 		printf '  "npu_irq_beacon_like": "%s",\n' "$NPU_BEACON_LIKE"
 		printf '  "irq_excluded": "%s",\n' "$(json_str "${IRQ_EXCLUDED# }")"
@@ -2769,6 +3060,8 @@ write_result_json() {
 		printf '  "napi_writable": %s,\n' "$NAPI_WRITABLE"
 		printf '  "arms_requested": "%s",\n' "$(printf '%s' "$ARMS" | tr ' ' ',')"
 		printf '  "restore": "%s",\n' "$([ "$RESTORE_FAILED" -eq 0 ] && echo ok || echo failed)"
+		printf '  "verdict": "%s",\n' "$ACCEPTANCE_VERDICT"
+		printf '  "comparisons": %s,\n' "$ACCEPTANCE_COMPARISONS"
 		if [ -s "$irqs_file" ]; then
 			printf '  "irqs": [\n'
 			cat "$irqs_file"
@@ -2804,14 +3097,14 @@ affinity_of() {
 
 print_results() {
 	local arm gbps retries soft nettx netrx status reason wms napi split
-	local tdx tdp
+	local tdx tdp rb ra rc hi tasklet hipc tlpc
 
 	if [ -n "$RESULT_RECORDS" ]; then
 		say "$PROG: results (station tx bytes over the measured window)"
 		printf '%-10s %8s %9s %-28s %12s %12s %-8s\n' \
 			arm gbps retries "soft% per cpu" net_tx net_rx status
 		while IFS='|' read -r arm gbps retries soft nettx netrx status \
-			reason wms napi split tdx tdp; do
+			reason wms napi split tdx tdp rb ra rc hi tasklet hipc tlpc; do
 			[ -n "$arm" ] || continue
 			printf '%-10s %8s %9s %-28s %12s %12s %-8s\n' \
 				"$arm" "$gbps" "$retries" "$soft" "$nettx" "$netrx" \
@@ -2823,12 +3116,13 @@ EOF
 		say "$PROG: results: no arm produced a measurement"
 	fi
 	write_result_json || note "could not write result.json"
+	say "$PROG: verdict=$ACCEPTANCE_VERDICT"
 }
 
 # -------------------------------------------------------------------- run
 
 run_all() {
-	local arm rc ran=0
+	local arm rc ran=0 skipped=0 blocked=0
 
 	mkdir -p "$OUT_DIR" 2>/dev/null || {
 		note "cannot create output directory $OUT_DIR"
@@ -2869,9 +3163,18 @@ run_all() {
 		}
 		rc=$?
 		if [ "$rc" -eq 2 ]; then
+			skipped=$((skipped + 1))
 			note "$arm: skipped (${ARM_REASON:-prerequisite missing})"
 			say "arm=$arm status=skipped reason=${ARM_REASON:-prerequisite-missing}"
+			record_arm_result
 			continue
+		fi
+		if [ "$rc" -eq 3 ]; then
+			blocked=$((blocked + 1))
+			note "$arm: blocked (${ARM_REASON:-station-missing}); restoring and stopping"
+			say "arm=$arm status=blocked reason=${ARM_REASON:-station-missing}"
+			print_results
+			exit 3
 		fi
 		note "$arm: failed (${ARM_REASON:-run-failure}); restoring and stopping"
 		print_results
@@ -2880,7 +3183,11 @@ run_all() {
 
 	if [ "$ran" -eq 0 ]; then
 		note "no arm could run; nothing was measured"
-		exit 1
+		print_results
+		if [ "$blocked" -gt 0 ]; then
+			exit 3
+		fi
+		exit 2
 	fi
 
 	# The per-arm restore already undid the last intervention; this is
@@ -2931,11 +3238,15 @@ main() {
 	resolve_threaded_value
 
 	# --irq-map named an IRQ this kernel keeps read-only (the mt7996e
-	# managed lines): report every requested IRQ and stop with rc=0
-	# instead of refusing the whole invocation.
+	# managed lines): write the read-only report + result.json.  Under --run
+	# this exits 2 (cannot apply the requested map); under --dry-run it
+	# stays rc=0.
 	if [ "$IRQ_MAP_READONLY" -eq 1 ]; then
 		report_irq_map_readonly
 		note "nothing was written; read-only map report done"
+		if [ "$RUN" -eq 1 ]; then
+			exit 2
+		fi
 		exit 0
 	fi
 
@@ -2957,13 +3268,16 @@ main() {
 				exit 2
 			fi
 			_nc_run='sh scripts/wireless/irq-napi-ab.sh --client <CLIENT_MAC> --client-ip <CLIENT_IP> --run --out-dir <DIR>'
-			_rec=$(no_client_record "${OUT_DIR:-}" 66 6ghz-eht-client \
+			_rec=$(NC_RECORD_CAUSE=missing-hardware \
+				no_client_record "${OUT_DIR:-}" 66 6ghz-eht-client \
 				"$_nc_run" \
 				"client ${CLIENT_MAC:-$CLIENT} is not associated to ${IFACE:-the AP}" \
 				"station tx-byte delta per arm" \
 				"napi_threaded / IRQ split A/B" 2>/dev/null)
 			note "missing 6ghz-eht-client; once it is available run: $_nc_run"
 			[ -n "$_rec" ] && note "no-client record: $_rec"
+			note "refusing to run; nothing was changed"
+			exit "$(nc_cause_exit missing-hardware)"
 		fi
 		note "refusing to run; nothing was changed"
 		# A missing prerequisite is a blocked run, not a crash: 6g-rx.sh,

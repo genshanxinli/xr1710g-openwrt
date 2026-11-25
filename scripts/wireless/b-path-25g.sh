@@ -34,8 +34,9 @@
 # Both arms report offered (sender) and arrived (receiver) from the iperf3
 # JSON, plus the AP/lan10g counter deltas over the same window.
 #
-# The 2.5G USB feeder is not assumed to be present.  A missing or 1G local
-# feeder NIC, or a missing/1G lan10g link, is a clean skip:
+# The 2.5G USB feeder is not assumed to be present.  A missing or < 2500 Mb/s
+# local feeder NIC, or a missing or < 2500 Mb/s lan10g link, is a clean skip
+# (v2 missing-hardware, exit 3; 5G/10G links are accepted):
 #
 #   SKIP: no 2.5G feeder
 
@@ -149,9 +150,11 @@ Output and safety:
   -h, --help              this text
 
 Skip and failure:
-  A missing or non-2500 feeder NIC, a missing or non-2500 lan10g link, or
-  an absent link exits 0 with exactly `SKIP: no 2.5G feeder`.  Missing ssh,
-  iperf3, ethtool, ip or awk is a hard error, not a skip.
+  A missing or < 2500 Mb/s feeder NIC, a missing or < 2500 Mb/s lan10g link,
+  or an absent link exits 3 (missing-hardware) with `SKIP: no 2.5G feeder`
+  (5G/10G links >= 2500 Mb/s are accepted).  Missing iperf3 records
+  missing-tool and exits 2; missing ssh, ethtool, ip or awk is a hard error
+  (exit 1).
 
 What is sampled while each arm runs:
   - AP per-station tx bytes/retries/failed and the AP netdev tx_bytes,
@@ -209,11 +212,23 @@ note() {
 }
 
 # Shared "no client" record (scripts/wireless/lib/no-client.sh).  Best effort:
-# a harness must still skip, and still exit 0, when the record cannot be
-# written.
+# a harness must still skip, and still exit with its v2 cause code (3 for
+# missing-hardware, 2 for missing-tool), when the record cannot be written.
 NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
 # shellcheck source=lib/no-client.sh
 [ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
+if ! command -v nc_cause_exit >/dev/null 2>&1; then
+	nc_cause_exit() {
+		case ${1:-} in
+		missing-hardware) printf '3\n' ;;
+		missing-tool | config-block | permission | environment | output-collision)
+			printf '2\n' ;;
+		precondition-mismatch) printf '4\n' ;;
+		interrupted) printf '130\n' ;;
+		*) printf '1\n' ;;
+		esac
+	}
+fi
 
 # Opt-in bridge detach/restore (scripts/wireless/lib/port-detach.sh).  Every
 # read and write goes through ssh_dev, so the library edits the AP, not the
@@ -243,7 +258,8 @@ skip_no_feeder() {
 	printf 'SKIP: no 2.5G feeder\n'
 	# Same missing hardware and the same "2.5g-peer" key as 2.5g-wired.sh, so
 	# hw-gap-report.sh merges both harnesses into one row for issue #70.
-	_rec=$(no_client_record "${OUT_DIR_OPT:-}" 70 2.5g-peer "$NC_2G5_RUN" \
+	_rec=$(NC_RECORD_CAUSE=missing-hardware \
+		no_client_record "${OUT_DIR_OPT:-}" 70 2.5g-peer "$NC_2G5_RUN" \
 		'no 2.5G feeder' \
 		"feeder NIC reports 2500 Mb/s and the AP data port reports 2500baseT/Full" \
 		"feeder arm arrived >= 2.2 Gbit/s over 20 s at --parallel 4" \
@@ -253,7 +269,7 @@ skip_no_feeder() {
 		note "missing 2.5g-peer #70; once it is available run: $NC_2G5_RUN"
 		note "no-client record: $_rec"
 	fi
-	exit 0
+	exit "$(nc_cause_exit missing-hardware)"
 }
 
 missing_tool() {
@@ -261,14 +277,15 @@ missing_tool() {
 	# host acts as server for one arm and client for the other) and there is no
 	# source slot here.  Record the gap and exit 2: a recorded prerequisite,
 	# not a failed run (1) and not a clean skip (0).
-	_rec=$(no_client_record "${OUT_DIR_OPT:-}" 70 "$1" "$NC_2G5_RUN" "$2" \
+	_rec=$(NC_RECORD_CAUSE=missing-tool \
+		no_client_record "${OUT_DIR_OPT:-}" 70 "$1" "$NC_2G5_RUN" "$2" \
 		"feeder NIC reports 2500 Mb/s and the AP data port reports 2500baseT/Full" \
 		"feeder arm arrived >= 2.2 Gbit/s over 20 s at --parallel 4" \
 		"token_info peak stays below the pool and hw-queues PLE pages do not pin" 2>/dev/null)
 	note "missing $1; on the device: opkg install iperf3 (or apk add iperf3)"
 	[ -n "$_rec" ] && note "no-client record: $_rec"
 	printf 'BLOCKED: missing %s\n' "$1"
-	exit 2
+	exit "$(nc_cause_exit missing-tool)"
 }
 
 is_uint() {
@@ -296,7 +313,7 @@ is_ifname() {
 }
 
 lower() {
-	printf '%s' "${1-}" | tr '[:upper:]' '[:lower:]'
+	printf '%s' "${1-}" | tr 'A-Z' 'a-z'
 }
 
 
@@ -315,6 +332,24 @@ link_speed() {
 			}
 		}
 	'
+}
+
+# The gate is "at least 2.5G", not "exactly 2.5G" (matching 2.5g-wired.sh):
+# 5G and 10G feeder NICs / device ports are accepted and noted.
+is_speed_ge_2500() {
+	case ${1-} in
+	''|*[!0-9]*) return 1 ;;
+	esac
+	[ "$1" -ge 2500 ]
+}
+
+require_2g5_speed() {
+	# require_2g5_speed SIDE IFACE SPEED
+	local side=$1 iface=$2 speed=${3-}
+
+	is_speed_ge_2500 "$speed" || return 1
+	[ "$speed" -eq 2500 ] ||
+		note "$side $iface link is $speed Mb/s (>= 2500, accepted)"
 }
 
 
@@ -616,8 +651,8 @@ resolve_feeder_iface() {
 			skip_no_feeder
 		fi
 		FEEDER_SPEED=$(link_speed "$FEEDER_IFACE")
-		if [ "$FEEDER_SPEED" != "2500" ]; then
-			note "feeder interface $FEEDER_IFACE link is '${FEEDER_SPEED:-unknown}' Mb/s, need 2500"
+		if ! require_2g5_speed feeder "$FEEDER_IFACE" "$FEEDER_SPEED"; then
+			note "feeder interface $FEEDER_IFACE link is '${FEEDER_SPEED:-unknown}' Mb/s, need >= 2500"
 			skip_no_feeder
 		fi
 		FEEDER_DRIVER=$(iface_driver "$FEEDER_IFACE")
@@ -633,23 +668,24 @@ resolve_feeder_iface() {
 		esac
 		[ "$c" = "$mgmt" ] && continue
 		[ "$c" = "$default" ] && continue
-		[ "$(link_speed "$c")" = "2500" ] || continue
+		is_speed_ge_2500 "$(link_speed "$c")" || continue
 		candidates="$candidates $c"
 	done
 	# shellcheck disable=SC2086
 	set -- $candidates
 	if [ "$#" -gt 1 ]; then
-		die "multiple 2.5G candidate NICs ($*); pass --feeder-iface"
+		die "multiple >= 2.5G candidate NICs ($*); pass --feeder-iface"
 	fi
 	if [ "$#" -eq 1 ]; then
 		FEEDER_IFACE=$1
-		FEEDER_SPEED=2500
+		FEEDER_SPEED=$(link_speed "$FEEDER_IFACE")
+		require_2g5_speed feeder "$FEEDER_IFACE" "$FEEDER_SPEED" || skip_no_feeder
 		FEEDER_DRIVER=$(iface_driver "$FEEDER_IFACE")
 		return 0
 	fi
 
-	# No candidate.  Distinguish "the only 2.5G NIC is management" from
-	# "there is no 2.5G NIC", because the first needs a human decision.
+	# No candidate.  Distinguish "the only >= 2.5G NIC is management" from
+	# "there is no >= 2.5G NIC", because the first needs a human decision.
 	for c in $(iface_list); do
 		case $c in
 		lo|Meta|tailscale*|wt*|wg*|tun*|tap*|br-*|docker*|veth*|virbr*)
@@ -657,12 +693,12 @@ resolve_feeder_iface() {
 			;;
 		esac
 		if { [ "$c" = "$mgmt" ] || [ "$c" = "$default" ]; } &&
-		   [ "$(link_speed "$c")" = "2500" ]; then
-			die "$c is the only 2.5G NIC but it carries management; pass --feeder-iface"
+		   is_speed_ge_2500 "$(link_speed "$c")"; then
+			die "$c is the only >= 2.5G NIC but it carries management; pass --feeder-iface"
 		fi
 	done
 
-	note "no local 2.5G NIC with carrier (management=$mgmt default=$default)"
+	note "no local >= 2.5G NIC with carrier (management=$mgmt default=$default)"
 	skip_no_feeder
 }
 
@@ -701,8 +737,8 @@ check_device() {
 	if ! DEV_SPEED=$(dev_speed); then
 		die "cannot run ethtool on $DEVICE:$DEV_IFACE"
 	fi
-	if [ "$DEV_SPEED" != "2500" ]; then
-		note "device $DEV_IFACE link is '${DEV_SPEED:-unknown}' Mb/s, need 2500"
+	if ! require_2g5_speed device "$DEV_IFACE" "$DEV_SPEED"; then
+		note "device $DEV_IFACE link is '${DEV_SPEED:-unknown}' Mb/s, need >= 2500"
 		skip_no_feeder
 	fi
 	DEV_DUPLEX=$(dev_duplex)
@@ -956,8 +992,8 @@ detach_data_port() {
 	if ! DEV_SPEED=$(dev_speed); then
 		die "cannot run ethtool on $DEVICE:$DEV_IFACE after detaching it from $master"
 	fi
-	if [ "$DEV_SPEED" != "2500" ]; then
-		note "device $DEV_IFACE link is '${DEV_SPEED:-unknown}' Mb/s after leaving $master, need 2500"
+	if ! require_2g5_speed device "$DEV_IFACE" "$DEV_SPEED"; then
+		note "device $DEV_IFACE link is '${DEV_SPEED:-unknown}' Mb/s after leaving $master, need >= 2500"
 		skip_no_feeder
 	fi
 	DEV_DUPLEX=$(dev_duplex)
@@ -1789,7 +1825,7 @@ dry_run() {
 	count=$(sampler_count)
 
 	printf 'DRY-RUN: B-path 2.5G feeder -> Wi-Fi plan\n'
-	printf 'device: %s iface=%s (SSH checked at run time; lan10g must be 2500Mb/s)\n' \
+	printf 'device: %s iface=%s (SSH checked at run time; lan10g must be >= 2500Mb/s)\n' \
 		"$DEVICE" "$DEV_IFACE"
 	printf 'feeder: %s link=%sMb/s driver=%s\n' \
 		"$FEEDER_IFACE" "$(or_unavailable "$FEEDER_SPEED")" \
@@ -1803,7 +1839,7 @@ dry_run() {
 
 	printf 'commands (run time):\n'
 	printf '  ssh %s %s true\n' "$SSH_OPTS" "$DEVICE"
-	printf '  ssh %s %s "ethtool %s  # require Speed: 2500Mb/s"\n' \
+	printf '  ssh %s %s "ethtool %s  # require Speed >= 2500Mb/s"\n' \
 		"$SSH_OPTS" "$DEVICE" "$DEV_IFACE"
 	if [ "$DETACH_PORT" -eq 1 ]; then
 		# Printed, not run: a dry run does no SSH, so the master is whatever

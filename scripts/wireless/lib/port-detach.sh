@@ -111,10 +111,13 @@ pd_ssh_ingress_port() {
 	local bridge=$1 ip mac
 	# shellcheck disable=SC2016  # SSH_CLIENT must expand on the device
 	ip=$(pd_exec 'printf "%s" "${SSH_CLIENT%% *}"' 2>/dev/null) || return 0
+	ip=${ip%%\%*}
 	case ${ip-} in
-	''|*[!0-9.]*) return 0 ;;
+	''|*[!0-9a-fA-F.:]*) return 0 ;;
+	*.*|*:*) ;;
+	*) return 0 ;;
 	esac
-	mac=$(pd_exec "ip neigh show $ip 2>/dev/null" | awk '{
+	mac=$(pd_exec "ip neigh show \"$ip\" dev \"$bridge\" 2>/dev/null" | awk '{
 			for (i = 1; i <= NF; i++)
 				if ($i == "lladdr") {
 					print $(i + 1)
@@ -134,7 +137,8 @@ pd_ssh_ingress_port() {
 		}'
 }
 
-pd_wait_master() {	# pd_wait_master PORT WANT: wait until PORT's master reads WANT ("" for
+pd_wait_master() {
+	# pd_wait_master PORT WANT: wait until PORT's master reads WANT ("" for
 	# none).  A port that never loses its master must not be measured on.
 	local port=$1 want=$2 i=0 got=
 	while [ "$i" -lt 20 ]; do
@@ -162,6 +166,20 @@ pd_wait_brif_gone() {
 		pd_sleep
 	done
 	pd_error "port $port is still listed in $bridge/brif after 20 polls"
+	return 1
+}
+
+pd_wait_brif_present() {
+	# pd_wait_brif_present PORT BRIDGE: mirror pd_wait_brif_gone on restore.
+	local port=$1 bridge=$2 i=0
+	while [ "$i" -lt 20 ]; do
+		if pd_exec "test -e $PD_SYSFS/class/net/$bridge/brif/$port"; then
+			return 0
+		fi
+		i=$((i + 1))
+		pd_sleep
+	done
+	pd_error "port $port is not listed in $bridge/brif after 20 polls"
 	return 1
 }
 
@@ -222,6 +240,17 @@ pd_restore() {
 	# Rebuilt here, not only in pd_detach: a restore has to be able to name
 	# its own command even when the detach ran in an earlier shell.
 	PD_RESTORE_HINT="ip link set $PD_PORT master $PD_MASTER"
+
+	# Probe first so restore is idempotent when the port never left its
+	# master (e.g. nomaster failed before changing netlink state).
+	got=$(pd_field master "$(pd_probe "$PD_PORT")")
+	if [ "$got" = "$PD_MASTER" ] &&
+		pd_exec "test -e $PD_SYSFS/class/net/$PD_MASTER/brif/$PD_PORT"; then
+		PD_DETACHED=0
+		pd_note "restored: $PD_PORT is already in $PD_MASTER"
+		return 0
+	fi
+
 	pd_note "restore: $PD_RESTORE_HINT"
 	if ! pd_exec "$PD_RESTORE_HINT"; then
 		# shellcheck disable=SC2034
@@ -229,11 +258,16 @@ pd_restore() {
 		pd_error "could not put $PD_PORT back into $PD_MASTER (bridge gone?); the port is still out of it - run on the device: $PD_RESTORE_HINT (a reboot or 'ifup ${PD_MASTER#br-}' also re-attaches it)"
 		return 1
 	fi
-	got=$(pd_field master "$(pd_probe "$PD_PORT")")
-	if [ "$got" != "$PD_MASTER" ]; then
+	if ! pd_wait_master "$PD_PORT" "$PD_MASTER"; then
 		# shellcheck disable=SC2034
 		PD_RESTORE_FAILED=1
-		pd_error "restored $PD_PORT but its master reads '${got:-none}', not '$PD_MASTER' - run on the device: $PD_RESTORE_HINT"
+		pd_error "restored $PD_PORT but its master did not settle to '$PD_MASTER' - run on the device: $PD_RESTORE_HINT"
+		return 1
+	fi
+	if ! pd_wait_brif_present "$PD_PORT" "$PD_MASTER"; then
+		# shellcheck disable=SC2034
+		PD_RESTORE_FAILED=1
+		pd_error "restored $PD_PORT but $PD_MASTER/brif/$PD_PORT is absent - run on the device: $PD_RESTORE_HINT"
 		return 1
 	fi
 	PD_DETACHED=0

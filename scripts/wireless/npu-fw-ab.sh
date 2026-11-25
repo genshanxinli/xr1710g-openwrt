@@ -36,6 +36,8 @@
 #       that refused to proceed
 
 set -u
+LC_ALL=C
+export LC_ALL
 
 PROG=${0##*/}
 SELF=$0
@@ -63,6 +65,7 @@ firmware_dir=$DEFAULT_FW_DIR
 backup_root=$DEFAULT_BACKUP_ROOT
 backup=
 tmpfile=
+REBOOT_ISSUED=0
 
 usage() {
 	cat <<EOF
@@ -130,14 +133,30 @@ NETWATCHDOG_GUARD=$(dirname "$0")/../lib/netwatchdog-guard.sh
 . "$NETWATCHDOG_GUARD"
 
 cleanup() {
+	_rc=$?
+	trap - 0 HUP INT TERM
 	if [ -n "$tmpfile" ]; then
 		rm -f "$tmpfile"
 		tmpfile=
 	fi
-	nw_guard_cleanup
+	if [ "${REBOOT_ISSUED:-0}" = 1 ]; then
+		# OpenWrt's reboot returns asynchronously while shutdown runs:
+		# write netwatchdog.json without releasing the hold so
+		# netwatchdog cannot interfere during shutdown.
+		if [ "${NW_GUARD_INITIALIZED:-0}" -eq 1 ] && [ "${NW_GUARD_CLEANED:-0}" -eq 0 ]; then
+			NW_GUARD_CLEANED=1
+			_nw_guard_write_json
+		fi
+	else
+		nw_guard_cleanup
+	fi
+	exit "$_rc"
 }
 
 trap 'cleanup' 0
+trap 'NW_GUARD_SIGNAL=HUP; exit 129' HUP
+trap 'NW_GUARD_SIGNAL=INT; exit 130' INT
+trap 'NW_GUARD_SIGNAL=TERM; exit 143' TERM
 
 set_mode() {
 	if [ -n "$mode" ] && [ "$mode" != "$1" ]; then
@@ -191,7 +210,7 @@ markers_of() {
 	if command -v strings >/dev/null 2>&1; then
 		strings -a "$1" | grep -E -o "$VERSION_RE" | sort -u
 	else
-		grep -a -o -E "$VERSION_RE" "$1" | sort -u
+		< "$1" tr -c '\040-\176' '\n' | grep -E -o "$VERSION_RE" | sort -u
 	fi
 }
 
@@ -645,7 +664,20 @@ run() {
 	say "  $_sample"
 	sync
 	sleep 5
-	reboot
+	# Arm REBOOT_ISSUED and flush netwatchdog.json *before* invoking reboot so
+	# an asynchronous SIGTERM/SIGHUP from procd during shutdown cannot drop
+	# the hold, and a synchronous reboot still leaves netwatchdog.json on disk.
+	REBOOT_ISSUED=1
+	if [ "${NW_GUARD_INITIALIZED:-0}" -eq 1 ] && [ "${NW_GUARD_CLEANED:-0}" -eq 0 ]; then
+		NW_GUARD_CLEANED=1
+		_nw_guard_write_json
+	fi
+	sync
+	if ! reboot; then
+		REBOOT_ISSUED=0
+		NW_GUARD_CLEANED=0
+		die "reboot command failed"
+	fi
 }
 
 sample_body() {

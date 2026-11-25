@@ -4,9 +4,10 @@
 
 The defect: nw_hold_active() failed hard whenever netwatchdog was not
 installed, but this repository has never packaged it and the board does not
-install it, so gates_require() exited 2 before any config write.  The no-client
-branch ("missing=6ghz-mlo-3link-client", exit 4) sits after that gate, so the
-"no 3-link MLD client" criterion could neither be met nor be disproved.
+install it, so gates_require() exited 2 before any config write.  The
+missing-hardware branch ("missing=6ghz-mlo-3link-client", v2 exit 3) sits
+after that gate, so the "no 3-link MLD client" criterion could neither be met
+nor be disproved.
 
 The fix keeps the gate for the risk it was written for: an installed
 netwatchdog that does not hold can reboot the board mid-experiment and must
@@ -22,7 +23,7 @@ Four gate cases run the real script against a stub PATH:
 
 A fifth case runs the whole script (under `unshare -Ur` for the root check)
 with stubbed uci/iw/wifi/ip, so the formerly unreachable no-station branch is
-exercised end to end: exit 4, a no-client record, and a restored config.
+exercised end to end: exit 3, a no-hardware record, and a restored config.
 
 Run from the repository root:
 
@@ -50,19 +51,39 @@ SH = shutil.which("sh") or "/bin/sh"
 UNSHARE = shutil.which("unshare")
 HOLD_FILE = Path("/tmp/netwatchdog.hold")
 
+
+def _unshare_works():
+    """Probe unshare -Ur so restricted sandboxes returning ENOSYS/EPERM skip cleanly."""
+    if UNSHARE is None:
+        return False
+    try:
+        res = subprocess.run(
+            [UNSHARE, "-Ur", SH, "-c", "true"],
+            capture_output=True, text=True, check=False,
+        )
+        return res.returncode == 0
+    except OSError:
+        return False
+
+
+UNSHARE_OK = _unshare_works()
+
 WIRELESS = """\
 config wifi-device 'radio0'
 \toption band '2g'
 \toption radio '0'
 \toption channel '6'
+\toption htmode 'EHT20'
 config wifi-device 'radio1'
 \toption band '5g'
 \toption radio '1'
 \toption channel '36'
+\toption htmode 'EHT80'
 config wifi-device 'radio2'
 \toption band '6g'
 \toption radio '2'
 \toption channel '37'
+\toption htmode 'EHT320'
 config wifi-iface 'default0'
 \toption device 'radio0'
 \toption ssid 'home'
@@ -118,6 +139,9 @@ get)
 	radio0.radio) printf '0\\n' ;;
 	radio1.radio) printf '1\\n' ;;
 	radio2.radio) printf '2\\n' ;;
+	radio0.htmode) printf 'EHT20\\n' ;;
+	radio1.htmode) printf 'EHT80\\n' ;;
+	radio2.htmode) printf 'EHT320\\n' ;;
 	default0.device) printf 'radio0\\n' ;;
 	default1.device) printf 'radio1\\n' ;;
 	default2.device) printf 'radio2\\n' ;;
@@ -285,7 +309,7 @@ class HoldGateTest(unittest.TestCase):
 
     # --- 5. the no-station branch is reachable --------------------------
 
-    @unittest.skipIf(UNSHARE is None, "unshare is not available")
+    @unittest.skipIf(not UNSHARE_OK, "unshare -Ur is not supported in this environment")
     def test_no_station_branch_is_reachable(self):
         before = self.config.read_text(encoding="utf-8")
         out = self.run_script(
@@ -295,14 +319,21 @@ class HoldGateTest(unittest.TestCase):
         text = out.stdout + out.stderr
         # The gate no longer refuses; the run reaches its own verdict.
         self.assertNotIn("refusing before any config write", text)
-        self.assertEqual(out.returncode, 4, text)
+        # v2: missing hardware is not-measured and exits 3, never the v1 4.
+        self.assertEqual(out.returncode, 3, text)
         self.assertIn("missing 6ghz-mlo-3link-client", out.stdout)
         self.assertIn("result: no station associated", out.stdout)
-        # The record survives cleanup, which rewrites $CAPTURE/result.json.
-        records = sorted(self.state.glob("runs/*/no-client/result.json"))
+        # The record survives cleanup, which rewrites $CAPTURE/result.json;
+        # v2 adds the no-hardware/ level under the no-client/ evidence dir.
+        records = sorted(
+            self.state.glob("runs/*/no-client/no-hardware/result.json"))
         self.assertEqual(len(records), 1, text)
         record = json.loads(records[0].read_text(encoding="utf-8"))
         self.assertEqual(record["schema"], "wireless-no-client/v1")
+        self.assertEqual(record["contract"], "v2")
+        self.assertEqual(record["cause"], "missing-hardware")
+        self.assertEqual(record["outcome"], "not-measured")
+        self.assertEqual(record["exit"], 3)
         self.assertEqual(record["status"], "no-client")
         self.assertEqual(record["missing"], "6ghz-mlo-3link-client")
         self.assertEqual(record["ticket"], "89")

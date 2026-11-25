@@ -248,8 +248,9 @@ class LibHelperTest(unittest.TestCase):
                       proc.stdout)
         self.assertIn("uci set wireless.default_radio2.ieee80211w=2",
                       proc.stdout)
-        record = json.loads((out / "result.json").read_text())
+        record = json.loads((out / "no-hardware/result.json").read_text())
         self.assertEqual(record["status"], "blocked")
+        self.assertEqual(record["cause"], "config-block")
         self.assertEqual(record["missing"], "6ghz-owe-mismatch")
         self.assertEqual(record["ticket"], "48")
         self.assertEqual(record["schema"], "wireless-no-client/v1")
@@ -321,24 +322,33 @@ class ScriptNoBssOweOrderTest(unittest.TestCase):
             "no 6G-only BSS must not hide the OWE block (#347)\n%s"
             % proc.stdout,
         )
-        record = json.loads((self.out / "result.json").read_text())
+        record = json.loads(
+            (self.out / "no-hardware/result.json").read_text())
         self.assertEqual(record["status"], "blocked")
+        self.assertEqual(record["cause"], "config-block")
         self.assertEqual(record["missing"], "6ghz-owe-mismatch")
         self.assertIn("uci set wireless.default_radio2.encryption=owe",
                       record["command"])
 
     def test_missing_hardware_still_skips_when_the_air_is_sae(self):
         proc = self.run_script(encryption="SAE (CCMP)")
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        # Nothing was measured: the v2 contract records missing-hardware and
+        # exits 3, not the old measured-success 0.
+        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
         self.assertIn("SKIP:", proc.stdout)
         # No output directory exists before BSS selection, so the skip falls
         # back to /tmp; read the record path it printed and clean it up.
         match = re.search(r"no-client record: (\S+)", proc.stdout)
         self.assertIsNotNone(match, proc.stdout)
         record_path = Path(match.group(1))
-        self.addCleanup(safe_rmtree, record_path.parent)
+        # result.json sits in <fallback>/no-hardware/; the disposable run
+        # directory is the one above it.  safe_rmtree re-checks the name, so
+        # a broken script that prints /tmp/result.json cannot delete /tmp.
+        self.addCleanup(safe_rmtree, record_path.parent.parent)
         record = json.loads(record_path.read_text())
+        self.assertIn("no-hardware", record_path.parts)
         self.assertEqual(record["status"], "no-client")
+        self.assertEqual(record["cause"], "missing-hardware")
         self.assertEqual(record["missing"], "6ghz-only-bss")
 
     def test_gate_call_precedes_select_bss(self):
@@ -374,7 +384,7 @@ class GapReportClassTest(unittest.TestCase):
         lines = text.splitlines()
         start = lines.index(
             "| Missing hardware | Tickets | Harnesses | "
-            "Command once acquired | Class |")
+            "Command once acquired | Class | Cause |")
         out = []
         for line in lines[start + 2:]:
             if not line.startswith("|"):

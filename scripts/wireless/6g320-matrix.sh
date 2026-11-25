@@ -54,10 +54,9 @@
 #
 # Output streams:
 #   stdout   one JSON object per line (JSONL), schema 6g320-matrix/v1.
-#            On a hardware skip stdout contains exactly one line:
-#                SKIP: no 320 client
-#            and exit status is 0.  With --dry-run, stdout contains the
-#            plan instead of a row.
+#            On a hardware skip stdout contains "SKIP: no 320 client" (plus
+#            the missing-hardware hint) and exit status is 3 (missing-hardware).
+#            With --dry-run, stdout contains the plan instead of a row and exits 0.
 #   stderr   progress, diagnostics, warnings, and the human summary table.
 #
 # Machine-readable schema:
@@ -122,21 +121,24 @@
 # wired-feed run; this harness does not implement that variant.
 #
 # Hardware gate: if iw finds no 6 GHz 320 MHz AP BSS, or no station with a
-# 320 MHz rate width in either direction, the script prints exactly
-# "SKIP: no 320 client" on stdout and exits 0.  A station whose rate width
-# is 160 MHz in both directions is not a 320 client.  With an explicit
-# --iface that is not a 6 GHz 320 MHz AP BSS, the script exits 1 instead,
-# because the caller asked for a specific interface.
+# 320 MHz rate width in either direction, the script prints
+# "SKIP: no 320 client" on stdout and exits 3 (missing-hardware).  A station
+# whose rate width is 160 MHz in both directions is not a 320 client.  With an
+# explicit --iface that is not a 6 GHz 320 MHz AP BSS, the script exits 1
+# instead, because the caller asked for a specific interface.
 #
 # No UCI write, no module load/unload, no firmware change: the script only
 # reads iw state, runs iperf3, and writes under --raw-dir.  The AP's iperf3
 # server binds the port for the duration of one arm and is always killed.
 #
 # Exit status:
-#   0  both arms ok, or a clean hardware skip
+#   0  both arms ok, or --dry-run
 #   1  a 320 MHz client was found, but an arm was invalid or failed, or
 #      the setup needed for the run was incomplete
-#   2  invalid arguments
+#   2  invalid arguments, missing required tool (missing-tool, e.g. iw), or
+#      OWE configuration block (config-block)
+#   3  clean hardware skip (missing-hardware: no 6 GHz 320 MHz AP BSS or no
+#      320 MHz station)
 #
 # Examples:
 #   # dry run: print the plan, execute nothing
@@ -169,6 +171,18 @@ PROG=${0##*/}
 NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
 # shellcheck source=lib/no-client.sh
 [ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
+if ! command -v nc_cause_exit >/dev/null 2>&1; then
+	nc_cause_exit() {
+		case ${1:-} in
+		missing-hardware) printf '3\n' ;;
+		missing-tool | config-block | permission | environment | output-collision)
+			printf '2\n' ;;
+		precondition-mismatch) printf '4\n' ;;
+		interrupted) printf '130\n' ;;
+		*) printf '1\n' ;;
+		esac
+	}
+fi
 SCHEMA_ID=6g320-matrix/v1
 
 IFACE=
@@ -195,6 +209,7 @@ PLAN_REASON=
 
 SERVER_PID=
 WATCH_PID=
+WATCH_SLEEP_PIDFILE=
 SERVER_ERR=
 SSH_BIN=
 
@@ -249,7 +264,8 @@ client.
 
 Hardware gate: when no 6 GHz 320 MHz AP BSS or no station with a
 320 MHz rate width in either direction is found, the script prints
-"SKIP: no 320 client" on stdout and exits 0.
+"SKIP: no 320 client" on stdout and exits 3 (missing-hardware); missing
+required tools (iw) or an OWE configuration mismatch exit 2.
 
 Required inputs for a real run, once a 320 MHz client is found:
   --client-ssh USER@HOST   SSH target for the client (key auth, no prompt)
@@ -473,7 +489,9 @@ cleanup() {
 		wait "$SERVER_PID" 2>/dev/null || :
 		SERVER_PID=
 	fi
-	if [ -n "$WATCH_PID" ]; then
+	if command -v stop_watch >/dev/null 2>&1; then
+		stop_watch
+	elif [ -n "$WATCH_PID" ]; then
 		kill "$WATCH_PID" 2>/dev/null || :
 		wait "$WATCH_PID" 2>/dev/null || :
 		WATCH_PID=
@@ -1186,9 +1204,29 @@ record_dir() {
 		dirname "$RESULT_JSON"
 		return 0
 	fi
-	_rd_dir=$(no_client_default_dir "$PROG")/${1:-record}
+	if command -v no_client_default_dir >/dev/null 2>&1; then
+		_rd_dir=$(no_client_default_dir "$PROG")/${1:-record}
+	else
+		_rd_dir=${TMPDIR:-/tmp}/${PROG%.sh}-no-client.$$/${1:-record}
+	fi
 	mkdir -p "$_rd_dir" 2>/dev/null || :
 	printf '%s\n' "$_rd_dir"
+}
+
+skip_no_tool() {
+	_nt_tool=${1:-iw}
+	_nt_reason=${2:-$_nt_tool is not installed}
+	_nc_run='sh scripts/wireless/6g320-matrix.sh --iface <6GHZ_320_AP_IFACE> --client-ssh <ROOT@HOST> --client-model <MODEL> --client-driver <DRIVER> --client-firmware <FIRMWARE> --result-json <DIR>/result.json'
+	_rec=$(NC_RECORD_CAUSE=missing-tool \
+		no_client_record "$(record_dir no-client)" 47 "$_nt_tool" \
+		"$_nc_run" "$_nt_reason" \
+		"per-arm TX/RX width (320 MHz) and NSS from iw station dump" \
+		"per-arm throughput, retries and failed frames" \
+		"width/NSS downgrade and re-association invalidation" 2>/dev/null)
+	printf 'SKIP: %s\n' "$_nt_reason"
+	printf '      missing %s; install it and run: %s\n' "$_nt_tool" "$_nc_run"
+	[ -n "$_rec" ] && printf '      no-client record: %s\n' "$_rec"
+	exit "$(nc_cause_exit missing-tool)"
 }
 
 # skip_no_client [MISSING] [REASON]: no usable 320 MHz client, so the matrix
@@ -1205,12 +1243,14 @@ skip_no_client() {
 	if [ -z "$_owe_iface" ] && [ -n "${CANDIDATES:-}" ]; then
 		_owe_iface=$(printf '%s\n' "$CANDIDATES" | awk -F'|' 'NF { print $1; exit }')
 	fi
-	if [ -n "$_owe_iface" ] && _mm=$(nc_owe_mismatch "$_owe_iface"); then
+	if [ -n "$_owe_iface" ] && command -v nc_owe_mismatch >/dev/null 2>&1 &&
+		_mm=$(nc_owe_mismatch "$_owe_iface"); then
 		nc_owe_mismatch_block "$(record_dir blocked)" 47 "$_mm"
-		exit 2
+		exit "$(nc_cause_exit config-block)"
 	fi
 	_nc_run='sh scripts/wireless/6g320-matrix.sh --iface <6GHZ_320_AP_IFACE> --client-ssh <ROOT@HOST> --client-model <MODEL> --client-driver <DRIVER> --client-firmware <FIRMWARE> --result-json <DIR>/result.json'
-	_rec=$(no_client_record "$(record_dir no-client)" 47 "$_nc_missing" \
+	_rec=$(NC_RECORD_CAUSE=missing-hardware \
+		no_client_record "$(record_dir no-client)" 47 "$_nc_missing" \
 		"$_nc_run" "$_nc_reason" \
 		"per-arm TX/RX width (320 MHz) and NSS from iw station dump" \
 		"per-arm throughput, retries and failed frames" \
@@ -1218,7 +1258,7 @@ skip_no_client() {
 	printf 'SKIP: no 320 client\n'
 	printf '      missing %s; once it is available run: %s\n' "$_nc_missing" "$_nc_run"
 	[ -n "$_rec" ] && printf '      no-client record: %s\n' "$_rec"
-	exit 0
+	exit "$(nc_cause_exit missing-hardware)"
 }
 
 # --------------------------------------------------------------------------
@@ -1235,8 +1275,15 @@ start_server() {
 	: >"$_log"
 	iperf3 -s -1 -p "$PORT" >"$_log" 2>&1 &
 	SERVER_PID=$!
+	WATCH_SLEEP_PIDFILE=$RAW_DIR/$_arm.watch.sleep.pid
+	rm -f "$WATCH_SLEEP_PIDFILE"
 	(
-		sleep $((DURATION + 30))
+		_sp=
+		trap '[ -n "$_sp" ] && kill "$_sp" 2>/dev/null || :; exit 0' TERM INT HUP
+		sleep $((DURATION + 30)) &
+		_sp=$!
+		printf '%s\n' "$_sp" >"$WATCH_SLEEP_PIDFILE"
+		wait "$_sp" 2>/dev/null || exit 0
 		if kill -0 "$SERVER_PID" 2>/dev/null; then
 			kill "$SERVER_PID" 2>/dev/null
 			: >"$_timeout_file"
@@ -1267,9 +1314,20 @@ start_server() {
 stop_watch() {
 	if [ -n "$WATCH_PID" ]; then
 		kill "$WATCH_PID" 2>/dev/null || :
+	fi
+	if [ -n "$WATCH_SLEEP_PIDFILE" ] && [ -r "$WATCH_SLEEP_PIDFILE" ]; then
+		_sp=$(head -n 1 "$WATCH_SLEEP_PIDFILE" 2>/dev/null)
+		case $_sp in
+		''|*[!0-9]*) ;;
+		*) kill "$_sp" 2>/dev/null || : ;;
+		esac
+		rm -f "$WATCH_SLEEP_PIDFILE"
+	fi
+	if [ -n "$WATCH_PID" ]; then
 		wait "$WATCH_PID" 2>/dev/null || :
 		WATCH_PID=
 	fi
+	WATCH_SLEEP_PIDFILE=
 }
 
 stop_server() {
@@ -2053,7 +2111,7 @@ Plan:
      require type AP*, frequency 5945-7125 MHz, width 320 MHz
   2. iw dev IFACE station dump
      require a station whose tx or rx rate width is 320 MHz
-     skip when there is no such station: "SKIP: no 320 client", exit 0
+     skip when there is no such station: "SKIP: no 320 client", exit 3 (missing-hardware)
   3. read country from iw reg get and AP address from the BSS or br-lan
   4. snapshot the station, then run arm 1 (local-source, AP->STA):
        iperf3 -s -1 -p $PORT
@@ -2077,10 +2135,11 @@ fi
 
 if ! command -v iw >/dev/null 2>&1; then
 	if [ -n "$IFACE" ]; then
-		die "iw is not installed; cannot validate --iface $IFACE"
+		say "iw is not installed; cannot validate --iface $IFACE"
+		skip_no_tool iw "iw is not installed; cannot validate --iface $IFACE"
 	fi
 	say "iw is not installed; no 6 GHz 320 MHz AP can be validated"
-	skip_no_client iw "iw is not installed"
+	skip_no_tool iw "iw is not installed"
 fi
 
 CANDIDATES=$(discover_candidates)

@@ -56,16 +56,16 @@
 #   mt76 token_info and tx_stats      (when the debugfs files exist)
 #   /sys/class/net/<iface>/statistics (AP tx bytes/packets)
 #
-# If no 6G STA is associated the harness prints exactly "SKIP: no 6G STA" and
-# exits 0 before creating a result directory or writing any configuration.
-# A missing iperf3 is treated the same way ("SKIP: iperf3 not found on the
-# AP"), because nothing has been measured and nothing was written; a missing
-# measurement tool is not a harness failure.  Both skips record the reason in
-# result.json when --result-dir named a directory, and both write a
-# wireless-no-client/v1 record (missing "6ghz-eht-client" / "iperf3") that
-# scripts/wireless/hw-gap-report.sh merges with the other harnesses.
-# --source CMD replaces the iperf3 client in every arm, so a host without
-# iperf3 still measures when another generator is named.
+# If no 6G STA is associated the harness prints "SKIP: no 6G STA", writes a v2
+# missing-hardware record (exit 3) without writing any device configuration.
+# A missing iperf3 prints "SKIP: iperf3 not found on the AP", writes a v2
+# missing-tool record (exit 2), because nothing has been measured and nothing
+# was written; a missing measurement tool is not a harness failure.  Both skips
+# write a wireless-no-client/v1 v2 record (missing "6ghz-eht-client" /
+# "iperf3") under <RESULT_DIR>/no-client/no-hardware/result.json (or a /tmp
+# fallback) that scripts/wireless/hw-gap-report.sh merges with the other
+# harnesses.  --source CMD replaces the iperf3 client in every arm, so a host
+# without iperf3 still measures when another generator is named.
 #
 # No module load/unload, no firmware change, no reboot.  The script only
 # changes the single 6 GHz radio's tx_burst UCI option or the edca_apply
@@ -73,7 +73,8 @@
 #
 # Exit status: 0 all arms measured and the original configuration restored;
 #              1 a runtime failure (arm invalid, reload failed, restore failed);
-#              2 invalid arguments (--help documents them).
+#              2 invalid arguments, missing tool (iperf3), or config block;
+#              3 missing hardware (no 6G STA).
 #
 # POSIX sh only, so it runs on the OpenWrt device with busybox ash.  Requires
 # root: wifi reload and debugfs access are not available otherwise.
@@ -97,6 +98,18 @@ PROG=${0##*/}
 NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
 # shellcheck source=lib/no-client.sh
 [ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
+if ! command -v nc_cause_exit >/dev/null 2>&1; then
+	nc_cause_exit() {
+		case ${1:-} in
+		missing-hardware) printf '3\n' ;;
+		missing-tool | config-block | permission | environment | output-collision)
+			printf '2\n' ;;
+		precondition-mismatch) printf '4\n' ;;
+		interrupted) printf '130\n' ;;
+		*) printf '1\n' ;;
+		esac
+	}
+fi
 
 # Fixed protocol constants.  These are the arms issue #43 asks for; do not
 # make them runtime-configurable, or two runs stop being comparable.
@@ -120,6 +133,8 @@ PARALLEL=${PARALLEL:-4}
 SETTLE=${SETTLE:-2}
 ROUNDS=${ROUNDS:-1}
 COOLDOWN=${COOLDOWN:-2}
+ORDER=${ORDER:-fixed}
+MIN_MBIT=${MIN_MBIT:-1.0}
 ASSOC_TIMEOUT=${ASSOC_TIMEOUT:-45}
 RESULT_DIR=${RESULT_DIR:-}
 MECHANISM=${MECHANISM:-auto}
@@ -133,11 +148,37 @@ DRY_RUN=0
 EDCA6G_IW=${EDCA6G_IW:-iw}
 EDCA6G_UCI=${EDCA6G_UCI:-uci}
 EDCA6G_WIFI=${EDCA6G_WIFI:-wifi}
+EDCA6G_HOSTAPD_CLI=${EDCA6G_HOSTAPD_CLI:-hostapd_cli}
 EDCA6G_IPERF3=${EDCA6G_IPERF3:-iperf3}
 EDCA6G_WIRELESS_CONF=${EDCA6G_WIRELESS_CONF:-/etc/config/wireless}
 EDCA6G_RUN_DIR=${EDCA6G_RUN_DIR:-/var/run}
 EDCA6G_DEBUGFS=${EDCA6G_DEBUGFS:-/sys/kernel/debug/ieee80211}
 EDCA6G_SYSFS_NET=${EDCA6G_SYSFS_NET:-/sys/class/net}
+
+# Restore and runtime globals: initialized here so die(), restore_all(),
+# on_exit() and write_result() are always safe under set -u, even before main
+# reaches setup.
+RAW_LOG=
+RESTORED=0
+RESTORE_OK=1
+HOSTAPD_CHANGED=0
+EDCA_WRITTEN=0
+EDCA_RESTORED=none
+WIRELESS_MD5_BEFORE=
+WIRELESS_MD5_AFTER=
+WIRELESS_BACKUP=
+EDCA_BACKUP=
+HOSTAPD_CONF=
+HOSTAPD_BURST_BEFORE=
+HOSTAPD_BURST_AFTER=
+HOSTAPD_EFF_BURST=
+HOSTAPD_EFF_SOURCE=
+PHY_NAME=
+RADIO_SECTION=
+TOKEN_INFO=
+TX_STATS=
+REF_WIDTH=
+REF_NSS=
 
 usage() {
 	cat <<'EOF'
@@ -147,7 +188,8 @@ A/B the 6 GHz BE EDCA TXOP with three arms: 0, 63 and 171 EDCA time units
 (32 us each, so 0 / 2.016 ms / 5.472 ms).  The AP runs the iperf3 client and
 the already-associated 6 GHz STA must run "iperf3 -s"; every arm uses the
 same iperf3 command.  If no 6G STA is associated the harness prints
-"SKIP: no 6G STA" and exits 0 without writing anything.
+"SKIP: no 6G STA" and exits 3 (missing-hardware) without writing device
+configuration.
 
 Required for a real run:
   --target IP             IPv4/IPv6 address of the STA running iperf3 -s
@@ -167,12 +209,15 @@ Optional inputs (environment variable or flag):
                          when iperf3 is not installed on the AP.
   --settle SEC           wait after the arm is applied (default 2)
   --rounds N             run the whole arm sequence N times (default 1).
-                         Every round uses the same arm order, so the
-                         round-to-round spread is drift, not an ordering
-                         effect.  Per-round values plus the median, min,
-                         max and range per arm are printed and recorded.
+                         Per-round arm sequence is controlled by --order
+                         (default fixed).  Per-round values plus the median,
+                         min, max and range per arm are printed and recorded.
   --cooldown SEC         sleep between rounds (default 2, the --settle
                          default); the first round has no cool-down
+  --order MODE           per-round arm order: fixed | rotate | mirror
+                         (default fixed)
+  --min-mbit M           minimum arm throughput in Mbit/s (default 1.0); an
+                         arm below this floor is marked invalid
   --assoc-timeout SEC    wait for the STA to re-associate after wifi reload
                          (default 45)
   --result-dir DIR       output directory (default ./edca-6g-ab-<epoch>;
@@ -223,13 +268,13 @@ Recorded per arm (before and after snapshots, plus result.json):
 
 Repeats (drift control):
   --rounds N runs the whole arm sequence N times.  The arms stay 0/63/171
-  and the order is the same in every round (A/B/C, A/B/C, ...), so round r
-  measures the same sequence as round 1 and the round-to-round spread is
-  drift plus noise, not an ordering effect.  --cooldown SEC sleeps between
-  rounds (default 2 s, the same value as --settle).  stdout prints the
-  throughput of every round and, per arm, the median, minimum, maximum and
-  range across rounds; result.json carries "rounds", "cooldown_s", a
-  timeline with per-round start/end stamps, and the same aggregate.
+  and --order selects fixed (default: A/B/C each round), rotate (cyclic
+  shift per round) or mirror (reverse even rounds).  --cooldown SEC sleeps
+  between rounds (default 2 s, the same value as --settle).  stdout prints
+  the throughput of every round and, per arm, the median, minimum, maximum
+  and range across rounds; result.json carries "order", "rounds",
+  "cooldown_s", a timeline with per-round start/end stamps, and the same
+  aggregate.
 
 Output directory:
   raw.log              chronological command log
@@ -251,9 +296,23 @@ Constraints: no module load/unload, no firmware change, no reboot.  The only
 writes are the single 6 GHz radio's tx_burst UCI option (with the original
 /etc/config/wireless restored) or the edca_apply debugfs value (restored).
 
-Exit status: 0 success or clean skip; 1 runtime/restore failure; 2 bad usage.
+Exit status: 0 measured and restored; 1 runtime/restore failure; 2 bad usage,
+missing tool (iperf3), or config block; 3 missing hardware (no 6G STA).
 EOF
 }
+
+note() { printf '%s\n' "$*" >&2; }
+
+say() { printf '%s\n' "$*"; }
+
+now_ts() { date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date +%Y-%m-%dT%H:%M:%S; }
+
+log_line() {
+	[ -n "${RAW_LOG:-}" ] || return 0
+	printf '%s %s\n' "$(now_ts)" "$*" >>"$RAW_LOG" 2>/dev/null || true
+}
+
+log_cmd() { log_line "CMD: $*"; }
 
 usage_error() {
 	printf '%s: %s\n' "$PROG" "$*" >&2
@@ -267,10 +326,11 @@ die() {
 	exit 1
 }
 
-# skip_run REASON [MISSING]: a clean hardware/tool skip.  Prints one SKIP
-# line, records the missing item as a wireless-no-client/v1 record (status
-# "no-client") and exits 0.  Nothing has been written to the device at this
-# point.
+# skip_run REASON [MISSING] [CAUSE]: a clean hardware/tool skip.  Prints one
+# SKIP line, records the missing item as a wireless-no-client/v1 record
+# (status "no-client") and exits with nc_cause_exit for its cause (3 for
+# missing-hardware, 2 for missing-tool).  Nothing has been written to the
+# device at this point.
 #
 # The record is the point: hw-gap-report.sh collects only "no-client" and
 # "blocked", so the old top-level "status": "skip" record was one no report
@@ -278,13 +338,20 @@ die() {
 # was never run.  MISSING names the item (default
 # "6ghz-eht-client", the one this harness fundamentally needs).
 skip_run() {
-	local _missing=${2:-6ghz-eht-client} _dir _run _rec
+	local _missing=${2:-6ghz-eht-client} _cause=${3:-} _dir _run _rec
+	if [ -z "$_cause" ]; then
+		case $_missing in
+		iperf3 | iw | uci | wifi | hostapd_cli) _cause=missing-tool ;;
+		*) _cause=missing-hardware ;;
+		esac
+	fi
 	_dir=${RESULT_DIR:-}
 	# Same subdirectory as skip_no_tool: the harness keeps its own
 	# result.json, and the gap record never overwrites it.
 	[ -n "$_dir" ] && _dir=$_dir/no-client
 	_run='sh scripts/wireless/edca-6g-ab.sh --target <STA_IP> --result-dir <DIR>'
-	_rec=$(no_client_record "$_dir" 43 "$_missing" "$_run" "$1" \
+	_rec=$(NC_RECORD_CAUSE=$_cause \
+		no_client_record "$_dir" 43 "$_missing" "$_run" "$1" \
 		"EDCA parameter A/B throughput delta per arm" \
 		"tx_burst / airtime restore verification" \
 		"per-arm station retries and failed frames" 2>/dev/null)
@@ -292,7 +359,7 @@ skip_run() {
 	say "      missing $_missing; once it is available run: $_run"
 	[ -n "$_rec" ] && say "      no-client record: $_rec"
 	log_line "SKIP: $1"
-	exit 0
+	exit "$(nc_cause_exit "$_cause")"
 }
 
 # skip_no_client REASON: no 6 GHz client, so there is no A/B to run.  Prints
@@ -322,7 +389,8 @@ skip_no_client() {
 		nc_owe_mismatch_block "$_nc_dir" 43 "$_mm"
 		exit 2
 	fi
-	_rec=$(no_client_record "$_nc_dir" 43 6ghz-eht-client "$_nc_run" \
+	_rec=$(NC_RECORD_CAUSE=missing-hardware \
+		no_client_record "$_nc_dir" 43 6ghz-eht-client "$_nc_run" \
 		"${1:-no 6G STA}" \
 		"EDCA parameter A/B throughput delta per arm" \
 		"tx_burst / airtime restore verification" \
@@ -331,19 +399,19 @@ skip_no_client() {
 	say "      missing 6ghz-eht-client; once it is available run: $_nc_run"
 	[ -n "$_rec" ] && say "      no-client record: $_rec"
 	log_line "SKIP: $1"
-	exit 0
+	exit "$(nc_cause_exit missing-hardware)"
 }
 
 # skip_no_tool DETAIL: iperf3 is missing on the AP and no --source names
-# another generator.  Same skip contract as skip_no_client (rc 0, one SKIP
-# line, skip record when --result-dir was given), plus the no-client record
-# that hw-gap-report.sh collects.  It lives in a subdirectory so the harness
-# keeps its own result.json.
+# another generator.  Same skip contract as skip_no_client (v2 missing-tool
+# exits 2, one SKIP line, no-client record under no-client/ so the harness
+# keeps its own result.json).
 skip_no_tool() {
 	_nc_run='sh scripts/wireless/edca-6g-ab.sh --target <STA_IP> --result-dir <DIR>'
 	_nc_dir=${RESULT_DIR:-}
 	[ -n "$_nc_dir" ] && _nc_dir=$_nc_dir/no-client
-	_rec=$(no_client_record "$_nc_dir" 43 iperf3 "$_nc_run" "$1" \
+	_rec=$(NC_RECORD_CAUSE=missing-tool \
+		no_client_record "$_nc_dir" 43 iperf3 "$_nc_run" "$1" \
 		"EDCA parameter A/B throughput delta per arm" \
 		"tx_burst / airtime restore verification" \
 		"per-arm station retries and failed frames" 2>/dev/null)
@@ -351,7 +419,7 @@ skip_no_tool() {
 	say "      missing iperf3; install it (opkg install iperf3) or pass --source CMD"
 	[ -n "$_rec" ] && say "      no-client record: $_rec"
 	log_line "SKIP: $1"
-	exit 0
+	exit "$(nc_cause_exit missing-tool)"
 }
 
 # The hostapd mechanism commits tx_burst and bounces every radio with "wifi
@@ -379,12 +447,6 @@ else
 	printf '%s: warning: shared library not found: %s; the pending UCI delta will not be restored\n' \
 		"${0##*/}" "$UCI_RESTORE_GUARD" >&2
 fi
-
-note() { printf '%s\n' "$*" >&2; }
-
-say() { printf '%s\n' "$*"; }
-
-now_ts() { date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date +%Y-%m-%dT%H:%M:%S; }
 
 # json_escape STRING: the value part of a JSON string.  The harness only
 # emits its own fixed keys and device/tool output, so escaping quotes,
@@ -422,6 +484,15 @@ require_uint() {
 
 normalize_mac() {
 	printf '%s' "$1" | tr 'A-F' 'a-f'
+}
+
+# is_laa_mac MAC: returns 0 when the locally-administered bit (0x02) of the
+# first octet is set (typical of randomized/private client MACs).
+is_laa_mac() {
+	case ${1:-} in
+	?[2367abefABEF]:??:??:??:??:??) return 0 ;;
+	*) return 1 ;;
+	esac
 }
 
 is_6g_freq() {
@@ -623,6 +694,41 @@ hostapd_conf_for_iface() {
 	return 1
 }
 
+# hostapd_read_effective_burst: verify live hostapd state via
+# EDCA6G_HOSTAPD_CLI when available (requiring state=ENABLED), prefer
+# get_config's tx_queue_data2_burst= if emitted, else fall back to verified
+# $HOSTAPD_CONF (applied_source=hostapd-conf+live-status).  Sets
+# HOSTAPD_EFF_BURST and HOSTAPD_EFF_SOURCE.
+hostapd_read_effective_burst() {
+	local _status _cli_burst _conf_burst
+	HOSTAPD_EFF_BURST=
+	HOSTAPD_EFF_SOURCE=
+	_conf_burst=
+	if [ -n "${HOSTAPD_CONF:-}" ] && [ -f "$HOSTAPD_CONF" ]; then
+		_conf_burst=$(sed -n 's/^tx_queue_data2_burst=//p' "$HOSTAPD_CONF" 2>/dev/null |
+			tail -n 1)
+	fi
+	if command -v "$EDCA6G_HOSTAPD_CLI" >/dev/null 2>&1; then
+		_status=$("$EDCA6G_HOSTAPD_CLI" -i "$IFACE" status 2>/dev/null) || _status=
+		if ! printf '%s\n' "$_status" | grep -q '^state=ENABLED$'; then
+			return 1
+		fi
+		_cli_burst=$("$EDCA6G_HOSTAPD_CLI" -i "$IFACE" get_config 2>/dev/null |
+			sed -n 's/^tx_queue_data2_burst=//p' | tail -n 1)
+		if [ -n "$_cli_burst" ]; then
+			HOSTAPD_EFF_BURST=$_cli_burst
+			HOSTAPD_EFF_SOURCE='hostapd-cli'
+			return 0
+		fi
+		HOSTAPD_EFF_BURST=$_conf_burst
+		HOSTAPD_EFF_SOURCE='hostapd-conf+live-status'
+		return 0
+	fi
+	HOSTAPD_EFF_BURST=$_conf_burst
+	HOSTAPD_EFF_SOURCE='hostapd-derived'
+	return 0
+}
+
 edca_apply_read() {
 	[ -n "$EDCA_APPLY" ] && [ -r "$EDCA_APPLY" ] || return 1
 	cat "$EDCA_APPLY" 2>/dev/null
@@ -714,14 +820,6 @@ md5_of() {
 
 # ---------------------------------------------------------------------------
 # logging and capture
-
-RAW_LOG=
-log_line() {
-	[ -n "$RAW_LOG" ] || return 0
-	printf '%s %s\n' "$(now_ts)" "$*" >>"$RAW_LOG" 2>/dev/null || true
-}
-
-log_cmd() { log_line "CMD: $*"; }
 
 # run_save FILE LABEL CMD...: run a command and save stdout+stderr+status.
 run_save() {
@@ -870,10 +968,11 @@ wait_ap() {
 }
 
 wait_sta() {
-	local _i
+	local _i _seen _other
 	_i=0
 	while [ "$_i" -lt "$ASSOC_TIMEOUT" ]; do
-		case " $(sta_macs "$IFACE" | tr '\n' ' ') " in
+		_seen=$(sta_macs "$IFACE" | tr 'A-F' 'a-f' | tr '\n' ' ')
+		case " $_seen " in
 		*" $STATION "*)
 			return 0
 			;;
@@ -881,19 +980,26 @@ wait_sta() {
 		sleep 1
 		_i=$((_i + 1))
 	done
+	_other=$(sta_macs "$IFACE" | tr 'A-F' 'a-f' | tr '\n' ' ' | sed 's/ *$//')
+	if [ -n "$_other" ]; then
+		note "diagnostic: expected STA $STATION on $IFACE after ${ASSOC_TIMEOUT}s, but saw different MAC(s): $_other (possible client MAC randomization; disable private/randomized Wi-Fi address on the STA)"
+	elif is_laa_mac "$STATION"; then
+		note "diagnostic: STA $STATION (locally-administered/randomized MAC) did not re-associate on $IFACE within ${ASSOC_TIMEOUT}s; check whether MAC randomization changed the client address"
+	fi
 	return 1
 }
 
 # restore_all: idempotent; called from the exit trap and at the normal end.
 restore_all() {
-	[ "$RESTORED" = 1 ] && return 0
+	[ "${RESTORED:-0}" = 1 ] && return 0
 	RESTORED=1
 	trap '' INT TERM HUP
 
 	say 'Restore: begin'
 	RESTORE_OK=1
 
-	if [ "$EDCA_WRITTEN" = 1 ] && [ -n "$EDCA_APPLY" ] && [ -f "$EDCA_BACKUP" ]; then
+	if [ "${EDCA_WRITTEN:-0}" = 1 ] && [ -n "${EDCA_APPLY:-}" ] &&
+		[ -n "${EDCA_BACKUP:-}" ] && [ -f "$EDCA_BACKUP" ]; then
 		log_cmd "cat $EDCA_BACKUP > $EDCA_APPLY"
 		if cat "$EDCA_BACKUP" >"$EDCA_APPLY" 2>/dev/null; then
 			if cmp -s "$EDCA_BACKUP" "$EDCA_APPLY"; then
@@ -911,25 +1017,29 @@ restore_all() {
 		fi
 	fi
 
-	if [ "$HOSTAPD_CHANGED" = 1 ]; then
-		log_cmd "cp $WIRELESS_BACKUP $EDCA6G_WIRELESS_CONF"
-		if cmp -s "$WIRELESS_BACKUP" "$EDCA6G_WIRELESS_CONF"; then
+	if [ "${HOSTAPD_CHANGED:-0}" = 1 ]; then
+		log_cmd "cp ${WIRELESS_BACKUP:-} $EDCA6G_WIRELESS_CONF"
+		if [ -n "${WIRELESS_BACKUP:-}" ] && cmp -s "$WIRELESS_BACKUP" "$EDCA6G_WIRELESS_CONF"; then
 			say 'Restore: wireless configuration already matches the backup'
-		else
+		elif [ -n "${WIRELESS_BACKUP:-}" ]; then
 			cp "$WIRELESS_BACKUP" "$EDCA6G_WIRELESS_CONF" ||
 				RESTORE_OK=0
+		else
+			RESTORE_OK=0
 		fi
 		log_cmd "$EDCA6G_WIFI reload"
 		"$EDCA6G_WIFI" reload 2>/dev/null || RESTORE_OK=0
 		if wait_ap; then
 			say 'Restore: wireless configuration and BSS reloaded'
 			HOSTAPD_BURST_AFTER=
-			if [ -n "$HOSTAPD_CONF" ] && [ -f "$HOSTAPD_CONF" ]; then
-				HOSTAPD_BURST_AFTER=$(sed -n 's/^tx_queue_data2_burst=//p' "$HOSTAPD_CONF" 2>/dev/null |
-					tail -n 1)
-			fi
-			if [ "$HOSTAPD_BURST_AFTER" != "$HOSTAPD_BURST_BEFORE" ]; then
-				note "restore error: effective tx_queue_data2_burst changed ('$HOSTAPD_BURST_BEFORE' -> '$HOSTAPD_BURST_AFTER')"
+			if hostapd_read_effective_burst; then
+				HOSTAPD_BURST_AFTER=$HOSTAPD_EFF_BURST
+				if [ "${HOSTAPD_BURST_AFTER:-}" != "${HOSTAPD_BURST_BEFORE:-}" ]; then
+					note "restore error: effective tx_queue_data2_burst changed ('${HOSTAPD_BURST_BEFORE:-}' -> '${HOSTAPD_BURST_AFTER:-}')"
+					RESTORE_OK=0
+				fi
+			else
+				note "restore error: hostapd is not live on $IFACE (expected state=ENABLED from $EDCA6G_HOSTAPD_CLI status)"
 				RESTORE_OK=0
 			fi
 			if wait_sta; then
@@ -944,18 +1054,19 @@ restore_all() {
 	fi
 
 	WIRELESS_MD5_AFTER=$(md5_of "$EDCA6G_WIRELESS_CONF")
-	if [ "$HOSTAPD_CHANGED" = 1 ] && [ "$WIRELESS_MD5_BEFORE" != "$WIRELESS_MD5_AFTER" ]; then
-		note "restore error: $EDCA6G_WIRELESS_CONF md5 changed ($WIRELESS_MD5_BEFORE -> $WIRELESS_MD5_AFTER)"
+	if [ "${HOSTAPD_CHANGED:-0}" = 1 ] &&
+		[ "${WIRELESS_MD5_BEFORE:-}" != "${WIRELESS_MD5_AFTER:-}" ]; then
+		note "restore error: $EDCA6G_WIRELESS_CONF md5 changed (${WIRELESS_MD5_BEFORE:-} -> ${WIRELESS_MD5_AFTER:-})"
 		RESTORE_OK=0
 	fi
-	if [ "$HOSTAPD_CHANGED" = 1 ] && command -v urg_restore_delta >/dev/null 2>&1; then
+	if [ "${HOSTAPD_CHANGED:-0}" = 1 ] && command -v urg_restore_delta >/dev/null 2>&1; then
 		urg_mark_dirty
 		if ! urg_restore_delta; then
-			note "restore error: could not restore the pending UCI delta $URG_DELTA"
+			note "restore error: could not restore the pending UCI delta ${URG_DELTA:-}"
 			RESTORE_OK=0
 		fi
 	fi
-	if [ "$RESTORE_OK" = 1 ]; then
+	if [ "${RESTORE_OK:-1}" = 1 ]; then
 		command -v urg_disarm >/dev/null 2>&1 && urg_disarm
 		say 'Restore: ok'
 	else
@@ -996,7 +1107,9 @@ apply_arm_hostapd() {
 	sleep "$SETTLE"
 
 	_refresh_hostapd_conf
-	_eff=$(sed -n 's/^tx_queue_data2_burst=//p' "$HOSTAPD_CONF" 2>/dev/null | tail -n 1)
+	hostapd_read_effective_burst ||
+		die "hostapd is not live on $IFACE (expected state=ENABLED from $EDCA6G_HOSTAPD_CLI status)"
+	_eff=$HOSTAPD_EFF_BURST
 	case $_eff in
 	'')
 		# An absent line means hostapd's default burst of 0.  On an image
@@ -1120,10 +1233,14 @@ run_arm() {
 	_bps_sent=$(iperf3_field "$_dir/iperf3.json" sum_sent bits_per_second)
 	_retr=$(iperf3_field "$_dir/iperf3.json" sum_sent retransmits)
 	_isecs=$(iperf3_field "$_dir/iperf3.json" sum_received seconds)
-	[ -n "$_bps" ] || {
+	if [ -z "$_bps" ]; then
 		_valid=false
 		_reason="${_reason:+$_reason, }no iperf3 throughput"
-	}
+	elif awk -v bps="$_bps" -v min_mbit="$MIN_MBIT" \
+		'BEGIN { exit !(bps + 0 < min_mbit * 1e6) }'; then
+		_valid=false
+		_reason="${_reason:+$_reason, }throughput below --min-mbit (${MIN_MBIT} Mbit/s)"
+	fi
 
 	_tx_delta=
 	_tx_rate=
@@ -1155,13 +1272,13 @@ run_arm() {
 		_edca_tu=$(parse_edca_txop "$_raw")
 	fi
 	_burst=
-	if [ -n "${HOSTAPD_CONF:-}" ] && [ -f "$HOSTAPD_CONF" ]; then
-		_burst=$(sed -n 's/^tx_queue_data2_burst=//p' "$HOSTAPD_CONF" 2>/dev/null |
-			tail -n 1)
-	fi
 	_applied=
 	_applied_source=
 	if [ "$MECHANISM" = debugfs ]; then
+		if [ -n "${HOSTAPD_CONF:-}" ] && [ -f "$HOSTAPD_CONF" ]; then
+			_burst=$(sed -n 's/^tx_queue_data2_burst=//p' "$HOSTAPD_CONF" 2>/dev/null |
+				tail -n 1)
+		fi
 		if [ -n "$_edca_tu" ]; then
 			_applied=$_edca_tu
 			_applied_source=edca_apply
@@ -1170,13 +1287,25 @@ run_arm() {
 			_applied_source=requested
 		fi
 	else
-		if [ -n "$_burst" ]; then
-			_applied=$(burst_to_tu "$_burst") || _applied=
-			[ -n "$_applied" ] && _applied_source='hostapd-derived'
-		elif [ "$_tu" = 0 ]; then
-			_applied=0
-			_applied_source='hostapd-default'
+		if hostapd_read_effective_burst; then
+			_burst=$HOSTAPD_EFF_BURST
+			if [ -n "$_burst" ]; then
+				_applied=$(burst_to_tu "$_burst") || _applied=
+				[ -n "$_applied" ] && _applied_source=$HOSTAPD_EFF_SOURCE
+			elif [ "$_tu" = 0 ]; then
+				_applied=0
+				if [ "$HOSTAPD_EFF_SOURCE" = 'hostapd-conf+live-status' ]; then
+					_applied_source='hostapd-conf+live-status'
+				else
+					_applied_source='hostapd-default'
+				fi
+			else
+				_applied=$_tu
+				_applied_source='requested'
+			fi
 		else
+			_valid=false
+			_reason="${_reason:+$_reason, }hostapd live status is not state=ENABLED"
 			_applied=$_tu
 			_applied_source='requested'
 		fi
@@ -1373,6 +1502,32 @@ aggregate_arms_json() {
 	done
 }
 
+# round_arms ROUND: print the arm sequence for ROUND (1-based) according to
+# ORDER (fixed, rotate, mirror).
+round_arms() {
+	awk -v arms="$ARMS" -v order="${ORDER:-fixed}" -v round="$1" '
+		BEGIN {
+			n = split(arms, a, " ")
+			if (n <= 0) exit 0
+			out = ""
+			if (order == "rotate") {
+				shift = (round - 1) % n
+				for (i = 0; i < n; i++) {
+					idx = ((i + shift) % n) + 1
+					out = (i == 0 ? a[idx] : out " " a[idx])
+				}
+			} else if (order == "mirror" && (round % 2) == 0) {
+				for (i = n; i >= 1; i--)
+					out = (i == n ? a[i] : out " " a[i])
+			} else {
+				for (i = 1; i <= n; i++)
+					out = (i == 1 ? a[i] : out " " a[i])
+			}
+			print out
+		}
+	'
+}
+
 # ---------------------------------------------------------------------------
 # result files
 
@@ -1382,7 +1537,7 @@ write_result() { # rc
 	_rc=$1
 	_ts=$(now_ts)
 	_ok=false
-	[ "$_rc" -eq 0 ] && [ "$RESTORE_OK" = 1 ] && _ok=true
+	[ "$_rc" -eq 0 ] && [ "${RESTORE_OK:-1}" = 1 ] && _ok=true
 
 	{
 		printf '{\n'
@@ -1392,15 +1547,17 @@ write_result() { # rc
 		printf ', "kernel": %s' "$(json_str "$(uname -r 2>/dev/null || echo unknown)")"
 		printf ', "iw": %s' "$(json_str "$("$EDCA6G_IW" --version 2>/dev/null | head -n 1)")"
 		printf ', "iperf3": %s}' "$(json_str "$("$EDCA6G_IPERF3" --version 2>/dev/null | head -n 1)")"
-		printf ',\n  "ap": {"iface": %s' "$(json_str "$IFACE")"
+		printf ',\n  "ap": {"iface": %s' "$(json_str "${IFACE:-}")"
 		printf ', "phy": %s' "$(json_str "${PHY_NAME:-}")"
 		printf ', "radio": %s' "$(json_str "${RADIO_SECTION:-}")"
 		printf ', "hostapd_conf": %s' "$(json_str "${HOSTAPD_CONF:-}")"
-		printf ', "freq_mhz": %s}' "$(json_num "$(iface_freq "$IFACE")")"
-		printf ',\n  "sta": {"mac": %s' "$(json_str "$STATION")"
-		printf ', "model": %s' "$(json_str "$STA_MODEL")"
-		printf ', "target": %s}' "$(json_str "$TARGET")"
-		printf ',\n  "mechanism": %s' "$(json_str "$MECHANISM")"
+		printf ', "freq_mhz": %s}' "$(json_num "$([ -n "${IFACE:-}" ] && iface_freq "$IFACE" || true)")"
+		printf ',\n  "sta": {"mac": %s' "$(json_str "${STATION:-}")"
+		printf ', "model": %s' "$(json_str "${STA_MODEL:-unknown}")"
+		printf ', "target": %s}' "$(json_str "${TARGET:-}")"
+		printf ',\n  "mechanism": %s' "$(json_str "${MECHANISM:-auto}")"
+		printf ',\n  "order": %s' "$(json_str "${ORDER:-fixed}")"
+		printf ',\n  "min_mbit": %s' "$(json_num "${MIN_MBIT:-1.0}")"
 		printf ',\n  "arms": [\n'
 		_first=1
 		if [ -f "$RESULT_DIR/arms.jsonl" ]; then
@@ -1415,8 +1572,8 @@ write_result() { # rc
 			done <"$RESULT_DIR/arms.jsonl"
 		fi
 		printf '\n  ],\n'
-		printf '  "rounds": %s,\n' "$(json_num "$ROUNDS")"
-		printf '  "cooldown_s": %s,\n' "$(json_num "$COOLDOWN")"
+		printf '  "rounds": %s,\n' "$(json_num "${ROUNDS:-1}")"
+		printf '  "cooldown_s": %s,\n' "$(json_num "${COOLDOWN:-2}")"
 		printf '  "rounds_timeline": [\n'
 		_first=1
 		if [ -f "$RESULT_DIR/rounds.jsonl" ]; then
@@ -1443,13 +1600,13 @@ write_result() { # rc
 			printf '%s' "$_agg"
 		done
 		printf '\n  ],\n'
-		printf '  "restore": {"ok": %s' "$([ "$RESTORE_OK" = 1 ] && echo true || echo false)"
-		printf ', "wireless_md5_before": %s' "$(json_str "$WIRELESS_MD5_BEFORE")"
-		printf ', "wireless_md5_after": %s' "$(json_str "$WIRELESS_MD5_AFTER")"
-		printf ', "wireless_changed": %s' "$([ "$HOSTAPD_CHANGED" = 1 ] && echo true || echo false)"
-		printf ', "hostapd_tx_burst_before": %s' "$(json_str "$HOSTAPD_BURST_BEFORE")"
+		printf '  "restore": {"ok": %s' "$([ "${RESTORE_OK:-1}" = 1 ] && echo true || echo false)"
+		printf ', "wireless_md5_before": %s' "$(json_str "${WIRELESS_MD5_BEFORE:-}")"
+		printf ', "wireless_md5_after": %s' "$(json_str "${WIRELESS_MD5_AFTER:-}")"
+		printf ', "wireless_changed": %s' "$([ "${HOSTAPD_CHANGED:-0}" = 1 ] && echo true || echo false)"
+		printf ', "hostapd_tx_burst_before": %s' "$(json_str "${HOSTAPD_BURST_BEFORE:-}")"
 		printf ', "hostapd_tx_burst_after": %s' "$(json_str "${HOSTAPD_BURST_AFTER:-}")"
-		printf ', "edca_apply": %s' "$(json_str "$EDCA_APPLY")"
+		printf ', "edca_apply": %s' "$(json_str "${EDCA_APPLY:-}")"
 		case ${EDCA_RESTORED:-none} in
 		true) _edca_restored_json=true ;;
 		false) _edca_restored_json=false ;;
@@ -1482,13 +1639,13 @@ bss_owner_note() {
 # shellcheck disable=SC2329  # installed with trap
 on_exit() {
 	local _rc
-	_rc=$1
+	_rc=${1:-0}
 	trap '' INT TERM HUP EXIT
-	if [ "$RESTORED" != 1 ]; then
+	if [ "${RESTORED:-0}" != 1 ]; then
 		restore_all
 	fi
 	bss_owner_note
-	[ "$RESTORE_OK" = 1 ] || [ "$_rc" -ne 0 ] || _rc=1
+	[ "${RESTORE_OK:-1}" = 1 ] || [ "$_rc" -ne 0 ] || _rc=1
 	if [ -n "${RESULT_DIR:-}" ] && [ -d "${RESULT_DIR:-}" ]; then
 		if [ -f "$RESULT_DIR/summary.tsv" ]; then
 			say ''
@@ -1499,7 +1656,7 @@ on_exit() {
 				NR > 1 { printf "  %-5s %-5s %-8s %-16s %-7s %-10s %-7s %-6s %-6s %-5s %-5s %s\n",
 					$1, $2, $3, $4, $5, $6, $7, $9, $10, $11, $13, $14 }' \
 				"$RESULT_DIR/summary.tsv"
-			if [ "$ROUNDS" -gt 1 ]; then
+			if [ "${ROUNDS:-1}" -gt 1 ]; then
 				say ''
 				say "Per-arm aggregate over $ROUNDS rounds:"
 				printf '  %-5s %-3s %-8s %-8s %-8s %s\n' \
@@ -1536,7 +1693,8 @@ Inputs:
   STA MAC        ${STATION:-<auto-detect one 6G STA>}
   UCI radio      ${RADIO:-<auto-detect from the AP phy>}
   STA model      $STA_MODEL
-  rounds         $ROUNDS (cooldown ${COOLDOWN}s between rounds)
+  rounds         $ROUNDS (cooldown ${COOLDOWN}s between rounds, order $ORDER)
+  min_mbit       $MIN_MBIT Mbit/s
   result dir     ${RESULT_DIR:-./edca-6g-ab-<epoch>}
   mechanism      $MECHANISM
   edca_apply     ${EDCA_APPLY:-<auto-detect /sys/kernel/debug/ieee80211/phy*/mt76/edca_apply>}
@@ -1556,7 +1714,7 @@ Per-arm evidence:
   tx_stats, iperf3 JSON.
 
 Repeats:
-  the arm sequence is replayed $ROUNDS time(s) in the same order, $COOLDOWN s
+  the arm sequence is replayed $ROUNDS time(s) (order: $ORDER), $COOLDOWN s
   apart; every round is recorded with its start and end stamp, and the
   median/min/max/range per arm is reported across rounds.
 
@@ -1564,11 +1722,12 @@ Restore:
   the original /etc/config/wireless (md5 checked, wifi reload) and the
   original edca_apply content, from an EXIT/INT/TERM/HUP trap.
 
-No-STA behaviour: "SKIP: no 6G STA", exit 0, no writes.  A missing iperf3
-is the same clean skip once a STA exists: "SKIP: iperf3 not found on the
-AP", exit 0.  Both write the reason to result.json when --result-dir was
-given.
-Exit status: 0 success/skip, 1 runtime failure, 2 bad usage.
+No-STA behaviour: "SKIP: no 6G STA", exit 3 (missing-hardware), no device
+writes.  A missing iperf3 once a STA exists: "SKIP: iperf3 not found on the
+AP", exit 2 (missing-tool).  Both write a v2 no-hardware record under
+<result-dir>/no-client/no-hardware/result.json (or a /tmp fallback).
+Exit status: 0 measured and restored, 1 runtime/restore failure, 2 bad usage /
+missing tool / config block, 3 missing hardware (no 6G STA).
 EOF
 }
 
@@ -1689,6 +1848,24 @@ while [ "$#" -gt 0 ]; do
 		COOLDOWN=${1#*=}
 		shift
 		;;
+	--order)
+		[ "$#" -ge 2 ] || usage_error '--order requires a value'
+		ORDER=$2
+		shift 2
+		;;
+	--order=*)
+		ORDER=${1#*=}
+		shift
+		;;
+	--min-mbit)
+		[ "$#" -ge 2 ] || usage_error '--min-mbit requires a value'
+		MIN_MBIT=$2
+		shift 2
+		;;
+	--min-mbit=*)
+		MIN_MBIT=${1#*=}
+		shift
+		;;
 	--assoc-timeout)
 		[ "$#" -ge 2 ] || usage_error '--assoc-timeout requires a value'
 		ASSOC_TIMEOUT=$2
@@ -1751,6 +1928,13 @@ case $MECHANISM in
 auto | hostapd | debugfs) ;;
 *) usage_error "--mechanism must be auto, hostapd or debugfs, got '$MECHANISM'" ;;
 esac
+case $ORDER in
+fixed | rotate | mirror) ;;
+*) usage_error "--order must be fixed, rotate or mirror, got '$ORDER'" ;;
+esac
+if ! printf '%s\n' "$MIN_MBIT" | grep -Eq '^(0|[1-9][0-9]*)([.][0-9]+)?$'; then
+	usage_error "--min-mbit must be a non-negative number, got '$MIN_MBIT'"
+fi
 [ -n "$STATION" ] && STATION=$(normalize_mac "$STATION")
 if [ -n "$STATION" ] &&
 	! printf '%s\n' "$STATION" | grep -Eq '^([0-9a-f][0-9a-f]:){5}[0-9a-f][0-9a-f]$'; then
@@ -1776,15 +1960,18 @@ discover_6g_sta || skip_no_client 'no 6G STA'
 IFACE=$DISCOVERED_IFACE
 STATION=$DISCOVERED_STA
 validate_6g_only_iface "$IFACE" "$STATION"
+if is_laa_mac "$STATION"; then
+	note "warning: STA $STATION is a locally-administered (randomized) MAC; after hostapd wifi reload the client may re-associate with a different MAC (disable private/randomized Wi-Fi address on the STA)"
+fi
 
 [ -n "$TARGET" ] || usage_error '--target is required for a real run (the STA must run iperf3 -s)'
 [ -n "$IFACE" ] || usage_error 'no 6G AP interface found'
 
 # The measurement tool is checked only now that a STA exists: without a STA
-# there is nothing to measure, so its absence is a skip (exit 0), not a
-# runtime failure (exit 1).  A --source replaces the iperf3 client, so a host
-# without iperf3 still measures when one is given; otherwise the gap is
-# recorded for hw-gap-report.sh.
+# there is nothing to measure, so its absence is a skip (exit 2,
+# missing-tool), not a runtime failure (exit 1).  A --source replaces the
+# iperf3 client, so a host without iperf3 still measures when one is given;
+# otherwise the gap is recorded for hw-gap-report.sh.
 if [ -z "$SOURCE" ] && command -v "$EDCA6G_IPERF3" >/dev/null 2>&1; then
 	# shellcheck disable=SC2016  # expands in the per-arm "sh -c"
 	SOURCE="$EDCA6G_IPERF3"' -c "$TARGET" -t "$DURATION" -P "$PARALLEL" -J'
@@ -1866,9 +2053,13 @@ esac
 HOSTAPD_CONF=$(hostapd_conf_for_iface) ||
 	HOSTAPD_CONF=$(find_hostapd_conf "$PHY_NAME") || HOSTAPD_CONF=
 HOSTAPD_BURST_BEFORE=
+if hostapd_read_effective_burst; then
+	HOSTAPD_BURST_BEFORE=$HOSTAPD_EFF_BURST
+fi
 if [ -n "$HOSTAPD_CONF" ] && [ -f "$HOSTAPD_CONF" ]; then
-	HOSTAPD_BURST_BEFORE=$(sed -n 's/^tx_queue_data2_burst=//p' "$HOSTAPD_CONF" 2>/dev/null |
-		tail -n 1)
+	[ -n "$HOSTAPD_BURST_BEFORE" ] ||
+		HOSTAPD_BURST_BEFORE=$(sed -n 's/^tx_queue_data2_burst=//p' "$HOSTAPD_CONF" 2>/dev/null |
+			tail -n 1)
 	if grep -q '^mld_ap=1$' "$HOSTAPD_CONF"; then
 		die "the AP BSS is an MLD (mld_ap=1); a 6G-only BSS is required"
 	fi
@@ -1946,12 +2137,13 @@ snapshot "$RESULT_DIR/baseline"
 _round=1
 while [ "$_round" -le "$ROUNDS" ]; do
 	_round_start=$(now_ts)
+	_cur_arms=$(round_arms "$_round")
 	if [ "$ROUNDS" -gt 1 ]; then
 		say ''
-		say "=== round $_round/$ROUNDS (arms $ARMS) ==="
+		say "=== round $_round/$ROUNDS (arms $_cur_arms, order $ORDER) ==="
 	fi
 	_round_arms=
-	for _arm in $ARMS; do
+	for _arm in $_cur_arms; do
 		run_arm "$_arm" "$_round"
 		_round_arms="${_round_arms:+$_round_arms, }$_arm"
 	done

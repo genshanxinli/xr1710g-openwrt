@@ -344,13 +344,14 @@ class ScriptRoundTrip(Netns):
     def test_default_run_still_blocks_without_the_flag(self) -> None:
         proc = self.run_wired("")
         out, err = proc.stdout, proc.stderr
-        self.assertEqual(proc.returncode, 0, out + err)
+        self.assertEqual(proc.returncode, 2, out + err)
         self.assertIn("BLOCKED: lan2 is in br0", out, out)
         self.assertIn("ip link set lan2 nomaster", out)
         self.assertIn("after_master=br0", out, out)
         # The record hw-gap-report.sh reads is unchanged: a bridged port
         # without the flag is still a configuration block, not a new status.
-        record = json.loads((self.tmp / "res" / "result.json").read_text())
+        record = json.loads(
+            (self.tmp / "res" / "no-hardware" / "result.json").read_text())
         self.assertEqual(record["status"], "blocked")
         self.assertEqual(record["missing"], "port-in-bridge")
 
@@ -457,9 +458,20 @@ class DetachFailureStillRestores(unittest.TestCase):
     fails the nomaster call, and the test records whether the restore ran.
     """
 
-    def run_library(self) -> subprocess.CompletedProcess:
+    def run_library(
+        self,
+        *,
+        detach_lands: bool = True,
+        master_delay: int = 0,
+        brif_present_after_restore: bool = True,
+        fail_master_cmd: bool = False,
+    ) -> subprocess.CompletedProcess:
         self.tmp = Path(tempfile.mkdtemp(prefix="port-detach-fail."))
         self.addCleanup(shutil.rmtree, self.tmp, True)
+        state = self.tmp / "master.state"
+        state.write_text("br0\n", encoding="utf-8")
+        probe_count = self.tmp / "probe.count"
+        probe_count.write_text("0\n", encoding="utf-8")
         fake = self.tmp / "fake-exec"
         _write_exec(
             fake,
@@ -468,17 +480,38 @@ class DetachFailureStillRestores(unittest.TestCase):
                 #!/bin/sh
                 case $1 in
                 *"ip link set lan2 nomaster"*)
+                    if [ "${DETACH_LANDS:-1}" = 1 ]; then
+                        : >"${STATE_FILE:?}"
+                    fi
                     printf 'fake: RTNETLINK answers: Link has been severed\\n' >&2
                     exit 1
                     ;;
                 *"ip link set lan2 master br0"*)
                     printf '%s\\n' "$1" >>"${RESTORE_LOG:?}"
+                    if [ "${FAIL_MASTER_CMD:-0}" = 1 ]; then
+                        exit 1
+                    fi
+                    printf 'br0\\n' >"${STATE_FILE:?}"
+                    printf '0\\n' >"${PROBE_COUNT:?}"
                     exit 0
                     ;;
                 *class/net/lan2*)
-                    printf 'master=br0\\noperstate=up\\nspeed=2500\\ncarrier=1\\n'
+                    m=$(cat "${STATE_FILE:?}" 2>/dev/null)
+                    if [ -n "$m" ] && [ "${MASTER_DELAY:-0}" -gt 0 ] && [ -f "${RESTORE_LOG:?}" ]; then
+                        n=$(cat "${PROBE_COUNT:?}" 2>/dev/null || echo 0)
+                        n=$((n + 1))
+                        printf '%s\\n' "$n" >"${PROBE_COUNT:?}"
+                        if [ "$n" -le "$MASTER_DELAY" ]; then
+                            m=
+                        fi
+                    fi
+                    printf 'master=%s\\noperstate=up\\nspeed=2500\\ncarrier=1\\n' "$m"
                     ;;
-                *"test -e"*)
+                *"test -e"*brif/lan2*)
+                    m=$(cat "${STATE_FILE:?}" 2>/dev/null)
+                    if [ "$m" = br0 ] && { [ ! -f "${RESTORE_LOG:?}" ] || [ "${BRIF_AFTER:-1}" = 1 ]; }; then
+                        exit 0
+                    fi
                     exit 1
                     ;;
                 esac
@@ -488,7 +521,13 @@ class DetachFailureStillRestores(unittest.TestCase):
         )
         env = dict(os.environ)
         env["PD_EXEC"] = str(fake)
+        env["STATE_FILE"] = str(state)
+        env["PROBE_COUNT"] = str(probe_count)
         env["RESTORE_LOG"] = str(self.tmp / "restore.log")
+        env["DETACH_LANDS"] = "1" if detach_lands else "0"
+        env["MASTER_DELAY"] = str(master_delay)
+        env["BRIF_AFTER"] = "1" if brif_present_after_restore else "0"
+        env["FAIL_MASTER_CMD"] = "1" if fail_master_cmd else "0"
         env["PROG"] = "t"
         body = textwrap.dedent(
             """\
@@ -497,6 +536,7 @@ class DetachFailureStillRestores(unittest.TestCase):
             echo "detached_after_detach=$PD_DETACHED"
             pd_restore; echo "restore_rc=$?"
             echo "detached_after_restore=$PD_DETACHED"
+            echo "restore_failed=$PD_RESTORE_FAILED"
             """
             % LIB
         )
@@ -510,7 +550,7 @@ class DetachFailureStillRestores(unittest.TestCase):
         )
 
     def test_a_failed_nomaster_still_arms_the_restore(self) -> None:
-        proc = self.run_library()
+        proc = self.run_library(detach_lands=True)
         out, err = proc.stdout, proc.stderr
         self.assertIn("detach_rc=1", out, out + err)
         self.assertIn("detached_after_detach=1", out, out + err)
@@ -522,6 +562,169 @@ class DetachFailureStillRestores(unittest.TestCase):
         self.assertEqual(
             log.read_text().splitlines(), ["ip link set lan2 master br0"]
         )
+
+    def test_restore_is_idempotent_when_port_never_left_master(self) -> None:
+        proc = self.run_library(detach_lands=False, fail_master_cmd=True)
+        out, err = proc.stdout, proc.stderr
+        self.assertIn("detach_rc=1", out, out + err)
+        self.assertIn("restore_rc=0", out, out + err)
+        self.assertIn("detached_after_restore=0", out, out + err)
+        log = self.tmp / "restore.log"
+        self.assertFalse(
+            log.exists(),
+            "pd_restore must probe master first and skip re-enslaving: %s" % err,
+        )
+
+    def test_restore_polls_master_and_requires_brif_presence(self) -> None:
+        # Delayed master settle: 2 empty probes before master reads br0.
+        proc = self.run_library(detach_lands=True, master_delay=2)
+        out, err = proc.stdout, proc.stderr
+        self.assertIn("restore_rc=0", out, out + err)
+        self.assertIn("detached_after_restore=0", out, out + err)
+
+        # Master settles, but brif/lan2 never appears: restore must fail.
+        proc2 = self.run_library(
+            detach_lands=True, brif_present_after_restore=False
+        )
+        out2, err2 = proc2.stdout, proc2.stderr
+        self.assertIn("restore_rc=1", out2, out2 + err2)
+        self.assertIn("restore_failed=1", out2, out2 + err2)
+
+    def test_ssh_ingress_port_accepts_ipv6_and_scopes_neigh_to_bridge(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="port-detach-v6."))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        bindir = self.tmp / "bin"
+        bindir.mkdir()
+        neigh_log = self.tmp / "neigh.log"
+        _write_exec(
+            bindir / "ip",
+            textwrap.dedent(
+                """\
+                #!/bin/sh
+                printf '%s\\n' "$*" >>"${NEIGH_LOG:?}"
+                case "$*" in
+                "neigh show fd00::1234 dev br-lan"|"neigh show fe80::1 dev br-lan")
+                    printf '%s lladdr aa:bb:cc:dd:ee:ff REACHABLE\\n' "$3"
+                    ;;
+                esac
+                exit 0
+                """
+            ),
+        )
+        _write_exec(
+            bindir / "bridge",
+            textwrap.dedent(
+                """\
+                #!/bin/sh
+                case "$*" in
+                "fdb show br br-lan")
+                    printf 'aa:bb:cc:dd:ee:ff dev lan3 master br-lan\\n'
+                    ;;
+                esac
+                exit 0
+                """
+            ),
+        )
+        for ssh_client, expected_ip in (
+            ("fd00::1234 54321 22", "fd00::1234"),
+            ("fe80::1%br-lan 54321 22", "fe80::1"),
+        ):
+            with self.subTest(ssh_client=ssh_client):
+                if neigh_log.exists():
+                    neigh_log.unlink()
+                env = dict(
+                    os.environ,
+                    PATH="%s:%s" % (bindir, os.environ.get("PATH", "/usr/bin:/bin")),
+                    SSH_CLIENT=ssh_client,
+                    NEIGH_LOG=str(neigh_log),
+                )
+                env.pop("PD_EXEC", None)
+                proc = subprocess.run(
+                    ["sh", "-c", '. "$1"; pd_ssh_ingress_port br-lan', "v6", str(LIB)],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    env=env,
+                    check=False,
+                )
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual(proc.stdout.strip(), "lan3", proc.stdout + proc.stderr)
+                self.assertTrue(neigh_log.is_file(), "ip neigh show was never called")
+                self.assertIn(
+                    "neigh show %s dev br-lan" % expected_ip,
+                    neigh_log.read_text(encoding="utf-8"),
+                )
+
+
+class BpathSpeedGateAndBusyboxTr(unittest.TestCase):
+    """b-path-25g.sh accepts >= 2500 Mb/s (5G/10G) and uses BusyBox-safe tr."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="bpath-speed."))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.bin = self.tmp / "bin"
+        self.bin.mkdir()
+
+    def test_bpath_accepts_10g_feeder_and_uses_literal_tr_ranges(self) -> None:
+        text = BPATH.read_text(encoding="utf-8")
+        self.assertNotIn("[:upper:]", text)
+        self.assertNotIn("[:lower:]", text)
+        _write_exec(
+            self.bin / "ethtool",
+            textwrap.dedent(
+                """\
+                #!/bin/sh
+                case "$1" in
+                -i) printf 'driver: stub10g\\n'; exit 0 ;;
+                esac
+                printf 'Settings for %s:\\n\\tSpeed: %sMb/s\\n\\tDuplex: Full\\n\\tLink detected: yes\\n' \
+                    "$1" "${STUB_SPEED:-10000}"
+                """
+            ),
+        )
+        _write_exec(
+            self.bin / "ip",
+            textwrap.dedent(
+                """\
+                #!/bin/sh
+                case "$*" in
+                *"link show dev eth10g"*) exit 0 ;;
+                *"route get"*) printf '192.0.2.1 dev mgmt0\\n'; exit 0 ;;
+                *"route show default"*) printf 'default dev mgmt0\\n'; exit 0 ;;
+                *"-o link show"*) printf '1: lo: <LOOPBACK>\\n2: mgmt0: <UP>\\n3: eth10g: <UP>\\n'; exit 0 ;;
+                esac
+                exit 0
+                """
+            ),
+        )
+        env = dict(
+            os.environ,
+            PATH="%s:%s" % (self.bin, os.environ.get("PATH", "/usr/bin:/bin")),
+            STUB_SPEED="10000",
+        )
+        proc = subprocess.run(
+            ["sh", str(BPATH), "--dry-run", "--device", "root@192.0.2.1",
+             "--feeder-iface", "eth10g"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=env,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("feeder: eth10g link=10000Mb/s", proc.stdout)
+        self.assertIn(">= 2500, accepted", proc.stderr)
+        # Auto-discovery must also pick a 10G NIC and keep speed=10000 (not 2500).
+        proc_auto = subprocess.run(
+            ["sh", str(BPATH), "--dry-run", "--device", "root@192.0.2.1"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=env,
+            check=False,
+        )
+        self.assertEqual(proc_auto.returncode, 0, proc_auto.stdout + proc_auto.stderr)
+        self.assertIn("feeder: eth10g link=10000Mb/s", proc_auto.stdout)
 
 
 if __name__ == "__main__":

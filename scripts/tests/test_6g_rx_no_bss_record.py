@@ -24,12 +24,13 @@ bought".  Merging them would make the purchase list lie.
 
 What is asserted here, with no device and no 6 GHz radio:
 
-  * rc = 0;
+  * rc = 3 (the v2 ``missing-hardware`` cause, which is not-measured);
   * exactly one ``SKIP:`` line on stdout (the reason, not a doubled skip);
-  * the printed no-client record exists inside ``/tmp`` (the fallback
-    directory hw-gap-report.sh scans) and parses as schema
-    ``wireless-no-client/v1`` with ``status: no-client``, ``ticket: 48`` and
-    ``missing: 6ghz-only-bss``.
+  * the printed record exists inside ``/tmp`` (the fallback directory
+    hw-gap-report.sh scans), under the run's ``no-hardware/`` directory, and
+    parses as schema ``wireless-no-client/v1`` with ``status: no-client``,
+    ``cause: missing-hardware``, ``ticket: 48`` and ``missing:
+    6ghz-only-bss``.
 
 Red half of the proof: keep a copy of the fixed script and put the bare
 ``skip()`` back on that one line, then run
@@ -109,7 +110,7 @@ def make_path(root: Path) -> Path:
 
 
 class NoBssRecordTest(unittest.TestCase):
-    """No 6G-only BSS: rc=0, one SKIP line, and a no-client record."""
+    """No 6G-only BSS: rc=3, one SKIP line, and a v2 no-hardware record."""
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="6g-rx-nobss."))
@@ -118,9 +119,10 @@ class NoBssRecordTest(unittest.TestCase):
         self.record = None
 
     def tearDown(self):
-        # The fallback directory lives under /tmp, outside self.tmp.
+        # The fallback directory lives under /tmp, outside self.tmp; the
+        # record itself now sits one level deeper in its no-hardware/.
         if self.record is not None:
-            safe_rmtree(self.record.parent)
+            safe_rmtree(self.record.parent.parent)
 
     def run_harness(self):
         env = os.environ.copy()
@@ -144,7 +146,8 @@ class NoBssRecordTest(unittest.TestCase):
 
     def test_no_bss_writes_a_no_client_record(self):
         res = self.run_harness()
-        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        # v2: missing hardware is not-measured and exits 3, never 0.
+        self.assertEqual(res.returncode, 3, res.stdout + res.stderr)
         self.assertNotIn("Traceback", res.stderr)
 
         skips = [ln for ln in res.stdout.splitlines() if ln.startswith("SKIP:")]
@@ -161,11 +164,18 @@ class NoBssRecordTest(unittest.TestCase):
         self.assertTrue(
             self.record.is_file(), "record %s does not exist" % self.record
         )
-        # hw-gap-report.sh scans /tmp by default; a skip must land there.
-        self.assertEqual(self.record.parent.parent, Path("/tmp"))
+        # hw-gap-report.sh scans /tmp by default; a skip must land there,
+        # in the run's no-hardware/ rather than beside the measurement result.
+        fallback = self.record.parent.parent
+        self.assertEqual(self.record.parent.name, "no-hardware")
+        self.assertEqual(fallback.parent, Path("/tmp"))
 
         data = json.loads(self.record.read_text())
         self.assertEqual(data["schema"], "wireless-no-client/v1")
+        self.assertEqual(data["contract"], "v2")
+        self.assertEqual(data["cause"], "missing-hardware")
+        self.assertEqual(data["outcome"], "not-measured")
+        self.assertEqual(data["exit"], 3)
         self.assertEqual(data["script"], SCRIPT.name)
         self.assertEqual(data["status"], "no-client")
         self.assertEqual(data["ticket"], "48")

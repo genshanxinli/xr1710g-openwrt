@@ -32,7 +32,10 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "scripts/wireless/mlo-3link.sh"
+SCRIPT = Path(
+    os.environ.get("MLO3_SCRIPT_UNDER_TEST")
+    or REPO_ROOT / "scripts/wireless/mlo-3link.sh"
+)
 
 # Minimal uci stub: the store is flat key=value lines; `show wireless` turns
 # wireless.<sec>.type=wifi-<kind> into the "wireless.<sec>=wifi-<kind>" line
@@ -273,6 +276,346 @@ class RadioOffReasonTest(unittest.TestCase):
         ])
         out = self.reason("radio0", "2.4")
         self.assertIn("wireless.radio0 (2.4) is disabled", out)
+
+
+class BridgeLocalIpTest(unittest.TestCase):
+    """MLO-1: --local-ip must target the bridge master when MLD is bridged."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="mlo-bridge-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.bin = self.tmp / "bin"
+        self.bin.mkdir()
+        self.ip_log = self.tmp / "ip.log"
+        ip_stub = self.bin / "ip"
+        ip_stub.write_text(
+            "#!/bin/sh\n"
+            f'printf "%s\\n" "$*" >>"{self.ip_log}"\n'
+            'if [ "$1" = addr ] && [ "$2" = show ]; then exit 0; fi\n'
+            "exit 0\n"
+        )
+        ip_stub.chmod(0o755)
+        self.sys_net = self.tmp / "sys_class_net"
+        (self.sys_net / "mld0").mkdir(parents=True)
+        (self.sys_net / "br-lan").mkdir(parents=True)
+        self.env = {
+            "PATH": "%s:%s" % (self.bin, os.environ["PATH"]),
+            "MLO3_SYS_CLASS_NET": str(self.sys_net),
+        }
+
+    def _run_ip_ops(self):
+        body = (
+            "PROG=mlo-3link.sh\nCMD_TIMEOUT=5\nMLD=mld0\n"
+            "LOCAL_IP=192.168.250.1/24\nIP_ADDED=0\nIP_DEV=\n"
+            f"SYS_CLASS_NET={self.sys_net}\n"
+            "say() { printf '%s\\n' \"$*\"; }\n"
+            "warn() { printf '%s\\n' \"$*\" >&2; }\n"
+            "die() { printf 'DIE: %s\\n' \"$*\" >&2; exit 1; }\n"
+            "need_cmd() { :; }\n"
+            "run_limited() { shift; \"$@\"; }\n"
+            + functions("resolve_ip_dev", "add_local_ip", "del_local_ip")
+            + "add_local_ip\ndel_local_ip\n"
+        )
+        return run_sh(body, env=self.env)
+
+    def test_bridged_mld_adds_and_removes_ip_on_bridge_master(self):
+        (self.sys_net / "mld0" / "master").symlink_to("../br-lan")
+        res = self._run_ip_ops()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        log = self.ip_log.read_text()
+        self.assertIn("addr add 192.168.250.1/24 dev br-lan", log, log)
+        self.assertIn("link set br-lan up", log, log)
+        self.assertIn("addr del 192.168.250.1/24 dev br-lan", log, log)
+        self.assertNotIn("dev mld0", log, log)
+
+    def test_unbridged_mld_uses_mld_directly(self):
+        res = self._run_ip_ops()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        log = self.ip_log.read_text()
+        self.assertIn("addr add 192.168.250.1/24 dev mld0", log, log)
+        self.assertIn("addr del 192.168.250.1/24 dev mld0", log, log)
+
+
+class ReachabilityProbeTest(unittest.TestCase):
+    """MLO-2: unreachable peer / refused control port is traffic-unreachable, not blackhole."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="mlo-probe-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.bin = self.tmp / "bin"
+        self.bin.mkdir()
+        self.capture = self.tmp / "cap"
+        self.capture.mkdir()
+
+    def _stub(self, name, body):
+        p = self.bin / name
+        p.write_text(body)
+        p.chmod(0o755)
+
+    def _probe_and_classify(self, tool):
+        body = (
+            f"CAPTURE={self.capture}\nPEER=192.168.250.2\n"
+            "LOCAL_IP=192.168.250.1/24\nCMD_TIMEOUT=5\n"
+            f"TRAFFIC_TOOL={tool}\nTRAFFIC_OK=0\nPER_LINK_NOBYTES=0\n"
+            "TRAFFIC_TIMEOUT=0\nTRAFFIC_LOSS=100\nSTATION=aa:bb:cc:dd:ee:ff\n"
+            "TRAFFIC_UNREACHABLE=0\nTRAFFIC_UNREACHABLE_REASON=\n"
+            "say() { :; }\nwarn() { :; }\n"
+            "have() { command -v \"$1\" >/dev/null 2>&1; }\n"
+            "run_limited() { shift; \"$@\"; }\n"
+            "find_mld() { printf 'mld0\\n'; }\n"
+            "link_count() { printf '3\\n'; }\n"
+            "station_present() { return 0; }\n"
+            + functions("probe_peer_reachability", "classify_result")
+            + "probe_peer_reachability; prc=$?\n"
+            + "classify_result\n"
+            + 'printf "prc=%s unreach=%s result=%s\\n" "$prc" "$TRAFFIC_UNREACHABLE" "$RESULT"\n'
+        )
+        env = {"PATH": "%s:%s" % (self.bin, os.environ["PATH"])}
+        return run_sh(body, env=env)
+
+    def test_no_route_marks_traffic_unreachable_not_blackhole(self):
+        self._stub("ip", "#!/bin/sh\nexit 1\n")
+        res = self._probe_and_classify("ping")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("prc=1 unreach=1 result=traffic-unreachable", res.stdout, res.stdout)
+
+    def test_iperf3_connection_refused_marks_traffic_unreachable(self):
+        self._stub("ip", "#!/bin/sh\nexit 0\n")
+        self._stub(
+            "iperf3",
+            "#!/bin/sh\n"
+            "echo 'iperf3: error - unable to connect to server: Connection refused' >&2\n"
+            "exit 1\n",
+        )
+        res = self._probe_and_classify("iperf3")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("prc=1 unreach=1 result=traffic-unreachable", res.stdout, res.stdout)
+
+    def test_silent_timeout_remains_blackhole_candidate(self):
+        self._stub("ip", "#!/bin/sh\nexit 0\n")
+        self._stub(
+            "iperf3",
+            "#!/bin/sh\n"
+            "echo 'iperf3: error - unable to connect to server: Connection timed out' >&2\n"
+            "exit 124\n",
+        )
+        res = self._probe_and_classify("iperf3")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("prc=0 unreach=0 result=blackhole", res.stdout, res.stdout)
+
+
+class EhtPreconditionTest(unittest.TestCase):
+    """MLO-3: check_eht_precondition checks live hostapd/iw first, then UCI htmode."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="mlo-eht-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.bin = self.tmp / "bin"
+        self.bin.mkdir()
+        self.store = self.tmp / "store"
+        uci = self.bin / "uci"
+        uci.write_text(UCI_STUB)
+        uci.chmod(0o755)
+        iw = self.bin / "iw"
+        iw.write_text("#!/bin/sh\nexit 0\n")
+        iw.chmod(0o755)
+        self.hostapd_dir = self.tmp / "run"
+        self.hostapd_dir.mkdir()
+
+    def _run_eht(self, uci_lines):
+        self.store.write_text("\n".join(uci_lines) + "\n")
+        body = (
+            "DEV24=radio0\nDEV5=radio1\nDEV6=radio2\n"
+            f"CFG_DIR={self.tmp}\nHOSTAPD_CONF_DIR={self.hostapd_dir}\n"
+            "RESULT=\nSTOP=\n"
+            "warn() { printf '%s\\n' \"$*\" >&2; }\n"
+            "have() { command -v \"$1\" >/dev/null 2>&1; }\n"
+            + functions("uci_get", "radio_index", "radio_has_eht", "check_eht_precondition")
+            + "check_eht_precondition; rc=$?\n"
+            + 'printf "rc=%s result=%s stop=%s\\n" "$rc" "$RESULT" "$STOP"\n'
+        )
+        env = {
+            "PATH": "%s:%s" % (self.bin, os.environ["PATH"]),
+            "UCI_STORE": str(self.store),
+        }
+        return run_sh(body, env=env)
+
+    def test_live_hostapd_ieee80211be_passes_without_uci_htmode(self):
+        for idx in (0, 1, 2):
+            (self.hostapd_dir / f"hostapd-phy0.{idx}.conf").write_text("ieee80211be=1\n")
+        res = self._run_eht([
+            "wireless.radio0.radio=0",
+            "wireless.radio1.radio=1",
+            "wireless.radio2.radio=2",
+        ])
+        self.assertIn("rc=0", res.stdout, res.stdout + res.stderr)
+
+    def test_live_hostapd_without_eht_refuses_with_links_config(self):
+        (self.hostapd_dir / "hostapd-phy0.0.conf").write_text("ieee80211be=1\n")
+        (self.hostapd_dir / "hostapd-phy0.1.conf").write_text("ieee80211be=1\n")
+        (self.hostapd_dir / "hostapd-phy0.2.conf").write_text("ieee80211be=0\n")
+        res = self._run_eht([
+            "wireless.radio0.radio=0", "wireless.radio0.htmode=EHT20",
+            "wireless.radio1.radio=1", "wireless.radio1.htmode=EHT80",
+            "wireless.radio2.radio=2", "wireless.radio2.htmode=EHT320",
+        ])
+        self.assertIn("rc=1 result=links-config", res.stdout, res.stdout + res.stderr)
+
+    def test_uci_htmode_fallback_accepts_eht_and_rejects_he(self):
+        res_ok = self._run_eht([
+            "wireless.radio0.radio=0", "wireless.radio0.htmode=EHT20",
+            "wireless.radio1.radio=1", "wireless.radio1.htmode=EHT80",
+            "wireless.radio2.radio=2", "wireless.radio2.htmode=EHT320",
+        ])
+        self.assertIn("rc=0", res_ok.stdout, res_ok.stdout + res_ok.stderr)
+
+        res_bad = self._run_eht([
+            "wireless.radio0.radio=0", "wireless.radio0.htmode=EHT20",
+            "wireless.radio1.radio=1", "wireless.radio1.htmode=HE80",
+            "wireless.radio2.radio=2", "wireless.radio2.htmode=EHT320",
+        ])
+        self.assertIn("rc=1 result=links-config", res_bad.stdout, res_bad.stdout + res_bad.stderr)
+
+    def test_multi_iface_iw_dev_keeps_earlier_6g_eht_match(self):
+        iw = self.bin / "iw"
+        iw.write_text(
+            "#!/bin/sh\n"
+            "cat <<'EOF'\n"
+            "phy#0\n"
+            "\tInterface phy0-ap2\n"
+            "\t\tssid lab-6g\n"
+            "\t\ttype AP\n"
+            "\t\tchannel 37 (6135 MHz), width: 320 MHz, center1: 6265 MHz\n"
+            "\tInterface phy0-ap0\n"
+            "\t\tssid lab-24\n"
+            "\t\ttype AP\n"
+            "\t\tchannel 6 (2437 MHz), width: 20 MHz\n"
+            "EOF\n"
+        )
+        iw.chmod(0o755)
+        self.store.write_text("wireless.radio2.radio=2\n")
+        body = (
+            f"CFG_DIR={self.tmp}\nHOSTAPD_CONF_DIR={self.hostapd_dir}\n"
+            "have() { command -v \"$1\" >/dev/null 2>&1; }\n"
+            + functions("uci_get", "radio_index", "radio_has_eht")
+            + "radio_has_eht radio2 6g; printf 'rc=%s\\n' \"$?\"\n"
+        )
+        env = {
+            "PATH": "%s:%s" % (self.bin, os.environ["PATH"]),
+            "UCI_STORE": str(self.store),
+            "MLO3_HOSTAPD_CONF_DIR": str(self.hostapd_dir),
+        }
+        res = run_sh(body, env=env)
+        self.assertIn("rc=0", res.stdout, res.stdout + res.stderr)
+
+    def test_ssid_containing_eht_or_mld_is_not_false_positive(self):
+        iw = self.bin / "iw"
+        iw.write_text(
+            "#!/bin/sh\n"
+            "cat <<'EOF'\n"
+            "phy#0\n"
+            "\tInterface phy0-ap1\n"
+            "\t\tssid My-EHT-Guest\n"
+            "\t\ttype AP\n"
+            "\t\tchannel 36 (5180 MHz), width: 80 MHz, center1: 5210 MHz\n"
+            "\tInterface phy0-ap0\n"
+            "\t\tssid MLD-Legacy-24\n"
+            "\t\ttype AP\n"
+            "\t\tchannel 6 (2437 MHz), width: 20 MHz\n"
+            "EOF\n"
+        )
+        iw.chmod(0o755)
+        self.store.write_text("wireless.radio0.radio=0\nwireless.radio1.radio=1\n")
+        body = (
+            f"CFG_DIR={self.tmp}\nHOSTAPD_CONF_DIR={self.hostapd_dir}\n"
+            "have() { command -v \"$1\" >/dev/null 2>&1; }\n"
+            + functions("uci_get", "radio_index", "radio_has_eht")
+            + "radio_has_eht radio1 5g; r1=$?\n"
+            + "radio_has_eht radio0 2.4; r0=$?\n"
+            + "printf 'r1=%s r0=%s\\n' \"$r1\" \"$r0\"\n"
+        )
+        env = {
+            "PATH": "%s:%s" % (self.bin, os.environ["PATH"]),
+            "UCI_STORE": str(self.store),
+            "MLO3_HOSTAPD_CONF_DIR": str(self.hostapd_dir),
+        }
+        res = run_sh(body, env=env)
+        self.assertIn("r1=1 r0=1", res.stdout, res.stdout + res.stderr)
+
+    def test_hostapd_conf_dir_override_guards_tmp_run_fallback(self):
+        self.store.write_text("wireless.radio0.radio=0\n")
+        body = (
+            f"CFG_DIR={self.tmp}\nHOSTAPD_CONF_DIR={self.hostapd_dir}\n"
+            "have() { return 1; }\n"
+            + functions("uci_get", "radio_index", "radio_has_eht")
+            + "set -x\n"
+            + "radio_has_eht radio0 2.4 || true\n"
+        )
+        env = {
+            "PATH": "%s:%s" % (self.bin, os.environ["PATH"]),
+            "UCI_STORE": str(self.store),
+            "MLO3_HOSTAPD_CONF_DIR": str(self.hostapd_dir),
+        }
+        res = run_sh(body, env=env)
+        self.assertNotIn("/tmp/run/hostapd-phy", res.stderr, res.stderr)
+
+
+class ElapsedAndHeaderTest(unittest.TestCase):
+    """MLO-4 + exit-code header alignment."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="mlo-mlo4-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_elapsed_seconds_clamps_to_at_least_1(self):
+        body = (
+            functions("elapsed_seconds")
+            + 'printf "small=%s\\n" "$(elapsed_seconds 100.00 100.25 10)"\n'
+            + 'printf "norm=%s\\n" "$(elapsed_seconds 100.00 114.50 10)"\n'
+            + 'printf "fb=%s\\n" "$(elapsed_seconds "" "" 10)"\n'
+        )
+        res = run_sh(body)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("small=1.00", res.stdout)
+        self.assertIn("norm=14.50", res.stdout)
+        self.assertIn("fb=10.00", res.stdout)
+
+    def test_empty_before_dump_fails_cleanly_in_per_link_deltas(self):
+        before = self.tmp / "before.txt"
+        after = self.tmp / "after.txt"
+        before.write_text("")
+        after.write_text(STATION_DUMP % (5000, 5000))
+        body = (
+            f"STATE_DIR={self.tmp}\nSTATION=aa:bb:cc:dd:ee:ff\n"
+            + functions("station_fields", "per_link_deltas")
+            + f'per_link_deltas "{before}" "{after}" 5\n'
+        )
+        res = run_sh(body)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+
+    def test_unavailable_per_link_counters_do_not_silently_pass(self):
+        body = (
+            "find_mld() { printf 'mld0\\n'; }\n"
+            "link_count() { printf '3\\n'; }\n"
+            "station_present() { return 0; }\n"
+            "TRAFFIC_OK=1\nPER_LINK_NOBYTES=0\nPER_LINK_UNAVAILABLE=1\n"
+            "TRAFFIC_TIMEOUT=0\nTRAFFIC_TOOL=ping\nTRAFFIC_LOSS=0\n"
+            "STATION=aa:bb:cc:dd:ee:ff\n"
+            + functions("classify_result")
+            + "classify_result\n"
+            + 'printf "result=%s\\n" "$RESULT"\n'
+        )
+        res = run_sh(body)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("result=per-link-unavailable", res.stdout)
+        self.assertNotIn("result=traffic-ok", res.stdout)
+
+    def test_header_and_result_json_align_exit_codes_and_elapsed_field(self):
+        text = SCRIPT.read_text()
+        header = "\n".join(text.splitlines()[:75])
+        self.assertIn("3    missing-hardware", header)
+        self.assertIn("black-hole", header.split("1    ", 1)[1].splitlines()[0])
+        self.assertIn('"traffic_elapsed_s":', text)
 
 
 if __name__ == "__main__":

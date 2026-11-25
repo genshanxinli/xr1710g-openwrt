@@ -26,6 +26,7 @@ TWO_G5_SCRIPT_UNDER_TEST=/path/to/copy (or 2G5_SCRIPT_UNDER_TEST through
 the reachability check deleted) is one env var.
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -45,7 +46,10 @@ WIRED = Path(
 # The preflight path needs these before it reaches the device probe:
 # check_link_tools (ip awk sed grep tr cut date) plus dirname for the
 # no-client library path.
-PREFLIGHT_TOOLS = ("ip", "awk", "sed", "grep", "tr", "cut", "date", "dirname")
+PREFLIGHT_TOOLS = (
+    "ip", "awk", "sed", "grep", "tr", "cut", "date", "dirname",
+    "basename", "mkdir", "mv",
+)
 UNREACHABLE = "root@192.0.2.1"
 
 # What the bench host printed in the issue: ssh refuses the host key and
@@ -76,16 +80,18 @@ class UnreachableTest(unittest.TestCase):
         self.assertIsNotNone(self.sh)
 
     def test_unreachable_is_not_a_hardware_verdict(self):
+        out_dir = self.tmp / "out"
         result = subprocess.run(
-            [self.sh, str(WIRED), "--device", UNREACHABLE],
+            [self.sh, str(WIRED), "--device", UNREACHABLE,
+             "--out-dir", str(out_dir)],
             capture_output=True,
             text=True,
             cwd=str(self.tmp),
             env={"PATH": str(self.bin), "HOME": str(self.tmp)},
             check=False,
         )
-        # Environment problem, not a hardware verdict: non-zero and named.
-        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        # Environment problem, not a hardware verdict: exit 2 and ticket #70.
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("BLOCKED: cannot reach %s" % UNREACHABLE,
                       result.stdout)
         self.assertIn("Host '192.0.2.1' is not in the trusted hosts file.",
@@ -94,6 +100,58 @@ class UnreachableTest(unittest.TestCase):
         self.assertNotIn("no device port advertises 2500baseT", result.stdout)
         self.assertNotIn("2.5g-peer", result.stdout + result.stderr)
         self.assertNotIn("SKIP", result.stdout)
+        rec_path = out_dir / "no-hardware" / "result.json"
+        self.assertTrue(rec_path.is_file(), result.stdout + result.stderr)
+        record = json.loads(rec_path.read_text(encoding="utf-8"))
+        self.assertEqual(record["ticket"], "70", record)
+        self.assertEqual(record["cause"], "environment", record)
+        self.assertEqual(record["exit"], 2, record)
+
+    def test_blocked_default_cause_matches_exit_and_record(self):
+        out_dir = self.tmp / "blocked-default"
+        body = (
+            '. "$1"\n'
+            '. "$(dirname "$1")/lib/no-client.sh"\n'
+            'OUT_DIR_OPT="$2"\n'
+            'blocked "custom block" "custom detail" custom-gap\n'
+        )
+        result = subprocess.run(
+            [self.sh, "-c", body, "blocked-default", str(WIRED), str(out_dir)],
+            capture_output=True,
+            text=True,
+            cwd=str(self.tmp),
+            env={
+                "PATH": str(self.bin),
+                "HOME": str(self.tmp),
+                "G25_WIRED_LIB_ONLY": "1",
+            },
+            check=False,
+        )
+        rec_path = out_dir / "no-hardware" / "result.json"
+        self.assertTrue(rec_path.is_file(), result.stdout + result.stderr)
+        record = json.loads(rec_path.read_text(encoding="utf-8"))
+        self.assertEqual(result.returncode, record["exit"], record)
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+        self.assertEqual(record["cause"], "precondition-mismatch", record)
+
+    def test_print_bridge_plan_uses_neigh_and_fdb_not_ip_route_get(self):
+        body = '. "$1"\nprint_bridge_plan lan2 br-lan\n'
+        result = subprocess.run(
+            [self.sh, "-c", body, "bridge-plan", str(WIRED)],
+            capture_output=True,
+            text=True,
+            cwd=str(self.tmp),
+            env={
+                "PATH": str(self.bin),
+                "HOME": str(self.tmp),
+                "G25_WIRED_LIB_ONLY": "1",
+            },
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("ip route get", result.stdout)
+        self.assertIn("ip neigh show <bench host>", result.stdout)
+        self.assertIn("bridge fdb show br br-lan | grep -i <MAC>", result.stdout)
 
 
 if __name__ == "__main__":

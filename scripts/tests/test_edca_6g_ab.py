@@ -5,8 +5,9 @@
 Two behaviours are guarded here, both without a radio:
 
   * The preflight order.  "No 6G STA" and "no iperf3 on the AP" are clean
-    skips: rc=0 plus a "SKIP:" line, with the reason written to
-    no-client/result.json (never a top-level result.json).  Before the fix
+    skips: rc=3 (missing-hardware) / rc=2 (missing-tool) plus a "SKIP:" line,
+    with the reason written under no-client/no-hardware/result.json (never a
+    top-level result.json).  Before the fix
     the iperf3 check ran before the STA was looked for, so a board without a 6G client exited 1 even though there
     was nothing to measure.
   * --rounds / --cooldown.  N rounds replay the same arm sequence, so the
@@ -151,11 +152,13 @@ class Harness(unittest.TestCase):
 class SkipPaths(Harness):
     """A run that cannot measure must skip, not fail."""
 
-    def test_no_6g_sta_skips_with_zero(self):
+    def test_no_6g_sta_skips_with_cause_exit(self):
         proc = self.run_harness(
             "--target", TARGET, "--result-dir", self.out, scenario="no-sta"
         )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # Nothing was measured: the v2 contract records missing-hardware and
+        # exits 3; 0 is reserved for a run that measured.
+        self.assertEqual(proc.returncode, 3, proc.stderr)
         self.assertIn("SKIP", proc.stdout)
         self.assertIn("no 6G STA", proc.stdout)
         # A skip caused by missing hardware leaves a machine-readable record,
@@ -166,17 +169,20 @@ class SkipPaths(Harness):
         # The record goes to a subdirectory: a top-level result.json would
         # trip the harness's own overwrite guard on the next real run.
         self.assertFalse((self.out / "result.json").exists())
-        data = json.loads((self.out / "no-client" / "result.json").read_text())
+        data = json.loads(
+            (self.out / "no-client" / "no-hardware" / "result.json").read_text())
         self.assertEqual(data["status"], "no-client")
+        self.assertEqual(data["cause"], "missing-hardware")
         self.assertEqual(data["missing"], "6ghz-eht-client")
         self.assertEqual(str(data["ticket"]), "43")
         self.assertIn("no 6G STA", data["reason"])
         self.assertTrue(data["command"])
         self.assertTrue(data["criteria"])
 
-    def test_missing_iperf3_skips_with_zero(self):
+    def test_missing_iperf3_skips_with_2(self):
         # The iperf3 check must come after the STA gate: with a STA present a
-        # missing iperf3 still ends in "SKIP", rc=0, never in a failure.
+        # missing iperf3 still ends in "SKIP", never in a failure.  The v2
+        # cause is missing-tool, so the exit code is 2, not the old 0.
         proc = self.run_harness(
             "--target",
             TARGET,
@@ -184,7 +190,7 @@ class SkipPaths(Harness):
             self.out,
             EDCA6G_IPERF3="iperf3-not-installed-h4347",
         )
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
         self.assertIn("SKIP", proc.stdout)
         self.assertIn("iperf3 not found", proc.stdout)
         # No top-level result.json: a skip must not poison the overwrite
@@ -192,9 +198,11 @@ class SkipPaths(Harness):
         self.assertFalse((self.out / "result.json").exists())
         # The gap lands as a wireless-no-client/v1 record, in a subdirectory
         # so it never overwrites the harness's own result.json.
-        record = json.loads((self.out / "no-client" / "result.json").read_text())
+        record = json.loads(
+            (self.out / "no-client" / "no-hardware" / "result.json").read_text())
         self.assertEqual(record["schema"], "wireless-no-client/v1")
         self.assertEqual(record["status"], "no-client")
+        self.assertEqual(record["cause"], "missing-tool")
         self.assertEqual(str(record["ticket"]), "43")
         self.assertEqual(record["missing"], "iperf3")
 
@@ -338,11 +346,12 @@ class SkipRunReachesTheGapReport(unittest.TestCase):
             timeout=120,
         )
         combined = proc.stdout + proc.stderr
-        self.assertEqual(proc.returncode, 0, combined)
+        # skip_run exits with its cause's code: missing-tool (iperf3) is 2.
+        self.assertEqual(proc.returncode, 2, combined)
         self.assertIn("SKIP: no 2.5G feeder on the bench host", proc.stdout)
 
         # The record first: a skip that leaves nothing collectable is the bug.
-        record = out / "no-client" / "result.json"
+        record = out / "no-client" / "no-hardware" / "result.json"
         self.assertTrue(
             record.is_file(),
             "no gap record under %s: %s"
@@ -351,12 +360,14 @@ class SkipRunReachesTheGapReport(unittest.TestCase):
         data = json.loads(record.read_text())
         self.assertEqual(data["schema"], "wireless-no-client/v1")
         self.assertEqual(data["status"], "no-client")
+        self.assertEqual(data["cause"], "missing-tool")
+        self.assertEqual(data["exit"], 2)
         self.assertEqual(data["missing"], "iperf3")
         self.assertEqual(str(data["ticket"]), "43")
         self.assertIn("missing iperf3", proc.stdout)
 
         report = subprocess.run(
-            ["sh", str(REPO_ROOT / "scripts/wireless/hw-gap-report.sh"), str(out)],
+            ["sh", str(REPO_ROOT / "scripts/wireless/hw-gap-report.sh"), "--strict", str(out)],
             capture_output=True,
             text=True,
             timeout=120,
@@ -406,10 +417,322 @@ class OweBlockRecord(unittest.TestCase):
             "a blocked run left a top-level result.json; the next real run "
             "will be refused: %s" % combined,
         )
-        record = json.loads((out / "no-client" / "result.json").read_text())
+        record = json.loads(
+            (out / "no-client" / "no-hardware" / "result.json").read_text())
         self.assertEqual(record["status"], "blocked")
+        self.assertEqual(record["cause"], "config-block")
         self.assertEqual(record["missing"], "6ghz-owe-mismatch")
         self.assertEqual(str(record["ticket"]), "43")
+
+
+class EarlyGlobalsAndTrapSafety(unittest.TestCase):
+    """#43 E2: die(), restore_all(), on_exit() must never crash under set -u."""
+
+    def test_die_works_when_netwatchdog_guard_is_missing(self):
+        tmp = Path(tempfile.mkdtemp(prefix="edca-e2-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        isolated_dir = tmp / "wireless"
+        isolated_dir.mkdir()
+        copy = isolated_dir / "edca-6g-ab.sh"
+        copy.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+        proc = subprocess.run(
+            ["sh", str(copy), "--help"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("shared library not found", proc.stderr)
+        self.assertNotIn("log_line: not found", proc.stderr)
+        self.assertNotIn("parameter not set", proc.stderr)
+
+    def test_restore_all_and_on_exit_safe_before_setup(self):
+        tmp = Path(tempfile.mkdtemp(prefix="edca-e2-trap."))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        env = os.environ.copy()
+        env.update({"EDCA6G_LIB_ONLY": "1"})
+        proc = subprocess.run(
+            [
+                "sh",
+                "-c",
+                '. "$0" || exit 9; restore_all; on_exit 0',
+                str(SCRIPT),
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertNotIn("parameter not set", proc.stderr)
+        self.assertNotIn("unbound variable", proc.stderr)
+
+        # Subcase: RESULT_DIR set and RESTORED=0 -> on_exit exercises
+        # restore_all() + write_result() cleanly before setup has run.
+        out = tmp / "early-out"
+        out.mkdir()
+        env2 = os.environ.copy()
+        env2.update({"EDCA6G_LIB_ONLY": "1", "RESULT_DIR": str(out)})
+        proc2 = subprocess.run(
+            [
+                "sh",
+                "-c",
+                '. "$0" || exit 9; RESTORED=0; on_exit 1',
+                str(SCRIPT),
+            ],
+            env=env2,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        self.assertEqual(proc2.returncode, 1, proc2.stdout + proc2.stderr)
+        self.assertNotIn("parameter not set", proc2.stderr)
+        self.assertNotIn("unbound variable", proc2.stderr)
+        self.assertTrue((out / "result.json").is_file(), proc2.stdout + proc2.stderr)
+        data = json.loads((out / "result.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["schema"], "edca-6g-ab/v1")
+        self.assertIs(data["ok"], False)
+
+
+class HostapdLiveVerification(Harness):
+    """#43 E3: EDCA6G_HOSTAPD_CLI checks live status and prefers get_config."""
+
+    def setup_hostapd_mocks(self, *, cli_state="ENABLED", emit_get_config=True,
+                            conf_stale=False):
+        self.run_dir = self.tmp / "run"
+        self.run_dir.mkdir()
+        self.burst_state = self.tmp / "uci_tx_burst"
+        self.burst_state.write_text("2.0\n")
+        self.hostapd_conf = self.run_dir / "hostapd-phy1.conf"
+        self.hostapd_conf.write_text(
+            "interface=phy1-ap0\ntx_queue_data2_burst=2.0\n"
+        )
+        self.write_mock(
+            "uci",
+            """#!/bin/sh
+case "$*" in
+"-q show wireless"*)
+	printf 'wireless.radio2=wifi-device\\n'
+	printf "wireless.radio2.band='6g'\\n"
+	printf "wireless.radio2.phy='phy1'\\n"
+	;;
+"-q get wireless.radio2.phy"*) printf 'phy1\\n' ;;
+"-q get wireless.radio2.band"*) printf '6g\\n' ;;
+"-q set wireless.radio2.tx_burst="*)
+	printf '%s\\n' "${3#*=}" >"$BURST_STATE"
+	;;
+"-q commit wireless"*) ;;
+esac
+exit 0
+""",
+        )
+        self.write_mock(
+            "wifi",
+            """#!/bin/sh
+b=$(cat "$BURST_STATE" 2>/dev/null || echo 2.0)
+if [ "${CONF_STALE:-0}" = 1 ]; then
+	b=9.9
+fi
+{
+	printf 'interface=phy1-ap0\\n'
+	printf 'tx_queue_data2_burst=%s\\n' "$b"
+} >"$HOSTAPD_CONF_PATH"
+exit 0
+""",
+        )
+        self.write_mock(
+            "hostapd_cli",
+            """#!/bin/sh
+case "$*" in
+*" status"*)
+	printf 'state=%s\\n' "${CLI_STATE:-ENABLED}"
+	;;
+*" get_config"*)
+	printf 'bssid=02:00:00:00:00:01\\n'
+	if [ "${EMIT_GET_CONFIG:-1}" = 1 ]; then
+		b=$(cat "$BURST_STATE" 2>/dev/null || echo 2.0)
+		printf 'tx_queue_data2_burst=%s\\n' "$b"
+	fi
+	;;
+esac
+exit 0
+""",
+        )
+        return {
+            "EDCA6G_UCI": str(self.bin / "uci"),
+            "EDCA6G_WIFI": str(self.bin / "wifi"),
+            "EDCA6G_HOSTAPD_CLI": str(self.bin / "hostapd_cli"),
+            "EDCA6G_RUN_DIR": str(self.run_dir),
+            "BURST_STATE": str(self.burst_state),
+            "HOSTAPD_CONF_PATH": str(self.hostapd_conf),
+            "CLI_STATE": cli_state,
+            "EMIT_GET_CONFIG": "1" if emit_get_config else "0",
+            "CONF_STALE": "1" if conf_stale else "0",
+        }
+
+    def test_prefers_get_config_when_emitted(self):
+        extra = self.setup_hostapd_mocks(
+            cli_state="ENABLED", emit_get_config=True, conf_stale=True
+        )
+        proc = self.run_harness(
+            "--target", TARGET, "--mechanism", "hostapd",
+            "--settle", 0, "--assoc-timeout", 2, "--result-dir", self.out,
+            **extra,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        arms = self.result_json()["arms"]
+        self.assertEqual([a["applied_tu"] for a in arms], [0, 63])
+        self.assertTrue(
+            all(a["applied_source"] == "hostapd-cli" for a in arms), arms
+        )
+
+    def test_falls_back_to_conf_with_live_status(self):
+        extra = self.setup_hostapd_mocks(
+            cli_state="ENABLED", emit_get_config=False, conf_stale=False
+        )
+        proc = self.run_harness(
+            "--target", TARGET, "--mechanism", "hostapd",
+            "--settle", 0, "--assoc-timeout", 2, "--result-dir", self.out,
+            **extra,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        arms = self.result_json()["arms"]
+        self.assertEqual([a["applied_tu"] for a in arms], [0, 63])
+        self.assertTrue(
+            all(a["applied_source"] == "hostapd-conf+live-status" for a in arms),
+            arms,
+        )
+
+    def test_fails_when_live_status_is_not_enabled(self):
+        extra = self.setup_hostapd_mocks(
+            cli_state="DISABLED", emit_get_config=True, conf_stale=False
+        )
+        proc = self.run_harness(
+            "--target", TARGET, "--mechanism", "hostapd",
+            "--settle", 0, "--assoc-timeout", 2, "--result-dir", self.out,
+            **extra,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("state=ENABLED", proc.stderr)
+
+
+class MinMbitGate(Harness):
+    """#43 E4: --min-mbit fails an arm whose throughput is below the floor."""
+
+    def test_below_default_min_mbit_invalidates_arm(self):
+        self.write_mock(
+            "iperf3",
+            """#!/bin/sh
+printf '{"end":{"sum_received":{"start":0,"seconds":1.0,"bits_per_second":500000},'
+printf '"sum_sent":{"bits_per_second":500000,"retransmits":0}}}\\n'
+""",
+        )
+        proc = self.run_harness(
+            "--target", TARGET, "--edca-apply", self.edca_apply,
+            "--settle", 0, "--result-dir", self.out,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        records = [
+            json.loads(line)
+            for line in (self.out / "arms.jsonl").read_text().splitlines()
+            if line.strip()
+        ]
+        self.assertEqual(len(records), 1)
+        self.assertFalse(records[0]["valid"])
+        self.assertIn("min-mbit", records[0]["invalid_reason"])
+
+    def test_custom_min_mbit_floor_is_honoured(self):
+        proc = self.run_harness(
+            "--target", TARGET, "--edca-apply", self.edca_apply,
+            "--settle", 0, "--min-mbit", "5000", "--result-dir", self.out,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        records = [
+            json.loads(line)
+            for line in (self.out / "arms.jsonl").read_text().splitlines()
+            if line.strip()
+        ]
+        self.assertFalse(records[0]["valid"])
+        bad_lead = self.run_harness(
+            "--target", TARGET, "--min-mbit", "01", "--dry-run"
+        )
+        self.assertEqual(bad_lead.returncode, 2, bad_lead.stdout + bad_lead.stderr)
+
+
+class LaaMacAndRandomization(Harness):
+    """#43 E5: LAA MAC warning in preflight + wait_sta randomization diagnostic."""
+
+    def test_laa_mac_warns_and_universal_mac_stays_quiet(self):
+        proc_laa = self.run_harness(
+            "--target", TARGET, "--edca-apply", self.edca_apply,
+            "--settle", 0, "--result-dir", self.out,
+            STA_MAC="aa:bb:cc:dd:ee:ff",
+        )
+        self.assertEqual(proc_laa.returncode, 0, proc_laa.stdout + proc_laa.stderr)
+        self.assertIn("locally-administered", proc_laa.stderr)
+
+        out2 = self.tmp / "out-univ"
+        proc_univ = self.run_harness(
+            "--target", TARGET, "--edca-apply", self.edca_apply,
+            "--settle", 0, "--result-dir", out2,
+            STA_MAC="00:11:22:33:44:55",
+        )
+        self.assertEqual(proc_univ.returncode, 0, proc_univ.stdout + proc_univ.stderr)
+        self.assertNotIn("locally-administered", proc_univ.stderr)
+
+    def test_wait_sta_diagnoses_different_mac_as_randomization(self):
+        env = self.env(STA_MAC="fe:ed:fa:ce:00:01")
+        env["EDCA6G_LIB_ONLY"] = "1"
+        proc = subprocess.run(
+            [
+                "sh",
+                "-c",
+                '. "$0" || exit 9; '
+                'IFACE=phy1-ap0; STATION=aa:bb:cc:dd:ee:ff; ASSOC_TIMEOUT=1; '
+                'wait_sta',
+                str(SCRIPT),
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("fe:ed:fa:ce:00:01", proc.stderr)
+        self.assertIn("randomization", proc.stderr)
+
+
+class ArmOrdering(Harness):
+    """#43 E6: --order fixed|rotate|mirror controls per-round arm sequence."""
+
+    def test_rotate_and_mirror_orders_and_json_recording(self):
+        for order, expected in (
+            ("fixed", [[0, 63, 171], [0, 63, 171], [0, 63, 171]]),
+            ("rotate", [[0, 63, 171], [63, 171, 0], [171, 0, 63]]),
+            ("mirror", [[0, 63, 171], [171, 63, 0], [0, 63, 171]]),
+        ):
+            with self.subTest(order=order):
+                out = self.tmp / ("order-" + order)
+                proc = self.run_harness(
+                    "--target", TARGET, "--edca-apply", self.edca_apply,
+                    "--settle", 0, "--rounds", 3, "--cooldown", 0,
+                    "--order", order, "--result-dir", out,
+                    EDCA6G_ARMS="0 63 171",
+                )
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                data = json.loads((out / "result.json").read_text())
+                self.assertEqual(data["order"], order)
+                self.assertEqual(
+                    [r["arms"] for r in data["rounds_timeline"]], expected
+                )
+        bad = self.run_harness(
+            "--target", TARGET, "--order", "bogus", "--result-dir", self.tmp / "bad"
+        )
+        self.assertEqual(bad.returncode, 2, bad.stdout + bad.stderr)
 
 
 if __name__ == "__main__":

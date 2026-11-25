@@ -84,12 +84,12 @@ disabled() {
 }
 case "$*" in
 "dev")
-\tprintf 'phy#2\\n\\tInterface phy2-ap0\\n\\t\\tssid 6g-clear-air\\n\\t\\ttype AP\\n\\t\\tchannel 37 (6135 MHz), width: 320 MHz, center1: 6265 MHz\\n'
+\tprintf 'phy#2\\n\\tInterface phy2-ap0\\n\\t\\taddr %s\\n\\t\\tssid 6g-clear-air\\n\\t\\ttype AP\\n\\t\\tchannel 37 (6135 MHz), width: 320 MHz, center1: 6265 MHz\\n' "${STUB_AP_MAC:-aa:bb:cc:00:00:01}"
 \tif ! disabled ap5g; then
-\t\tprintf 'phy#1\\n\\tInterface phy1-ap0\\n\\t\\tssid home-5g\\n\\t\\ttype AP\\n\\t\\tchannel 36 (5180 MHz), width: 160 MHz, center1: 5250 MHz\\n'
+\t\tprintf 'phy#1\\n\\tInterface phy1-ap0\\n\\t\\taddr aa:bb:cc:00:00:02\\n\\t\\tssid home-5g\\n\\t\\ttype AP\\n\\t\\tchannel 36 (5180 MHz), width: 160 MHz, center1: 5250 MHz\\n'
 \tfi
 \tif ! disabled ap24; then
-\t\tprintf 'phy#0\\n\\tInterface phy0-ap0\\n\\t\\tssid home-24\\n\\t\\ttype AP\\n\\t\\tchannel 6 (2437 MHz), width: 20 MHz\\n'
+\t\tprintf 'phy#0\\n\\tInterface phy0-ap0\\n\\t\\taddr aa:bb:cc:00:00:03\\n\\t\\tssid home-24\\n\\t\\ttype AP\\n\\t\\tchannel 6 (2437 MHz), width: 20 MHz\\n'
 \tfi
 \t;;
 "dev phy2-ap0 station dump")
@@ -101,7 +101,18 @@ case "$*" in
 \tfi
 \t;;
 "dev phy2-ap0 scan")
-\tif [ -n "${STUB_SCAN_FILE:-}" ]; then
+\tif [ -n "${STUB_SCAN_SEQ_DIR:-}" ]; then
+\t\tcnt_file="$STUB_SCAN_SEQ_DIR/count"
+\t\tn=0
+\t\t[ -r "$cnt_file" ] && n=$(cat "$cnt_file")
+\t\tn=$((n + 1))
+\t\tprintf '%s\\n' "$n" >"$cnt_file"
+\t\tif [ -r "$STUB_SCAN_SEQ_DIR/scan-$n.txt" ]; then
+\t\t\tcat "$STUB_SCAN_SEQ_DIR/scan-$n.txt"
+\t\telse
+\t\t\tcat "$STUB_SCAN_SEQ_DIR/scan-1.txt"
+\t\tfi
+\telif [ -n "${STUB_SCAN_FILE:-}" ]; then
 \t\tcat "$STUB_SCAN_FILE"
 \telse
 \t\tcat <<'SCAN'
@@ -112,6 +123,17 @@ BSS aa:bb:cc:00:00:09(on phy2-ap0)
 \tfreq: 6480
 \tSSID: neighbour-6g
 SCAN
+\tfi
+\t;;
+"dev phy2-ap0 survey dump")
+\tif [ -n "${STUB_SURVEY_STATE:-}" ]; then
+\t\tn=0
+\t\t[ -r "$STUB_SURVEY_STATE" ] && n=$(cat "$STUB_SURVEY_STATE")
+\t\tn=$((n + 1))
+\t\tprintf '%s\\n' "$n" >"$STUB_SURVEY_STATE"
+\t\tactive=$((10000 + n * 1000))
+\t\tbusy=$((2000 + n * 250))
+\t\tprintf 'Survey data from phy2-ap0\\n\\tfrequency:\\t\\t\\t6135 MHz [in use]\\n\\tchannel active time:\\t\\t%s ms\\n\\tchannel busy time:\\t\\t%s ms\\n' "$active" "$busy"
 \tfi
 \t;;
 *) ;;
@@ -175,7 +197,9 @@ if [ "$ip" = "192.168.1.51" ]; then
 \t\tbump "$STUB_ROOT/state/sta5_tx"
 \tdone
 fi
-bump "$STUB_ROOT/state/sta_tx"
+if [ -z "${NO_STA_BUMP:-}" ]; then
+\tbump "$STUB_ROOT/state/sta_tx"
+fi
 bump "$STUB_ROOT/net/phy2-ap0/statistics/tx_bytes"
 cat <<'JSON'
 {
@@ -282,13 +306,21 @@ class NoInterferer(unittest.TestCase):
     def test_no_station_on_the_interferer_band_is_invalid(self):
         out = self.fixture.run(["--interferer", "5g:36:tcp:100:192.168.1.51"], NOS5G="1")
         combined = out.stdout + out.stderr
-        self.assertNotEqual(out.returncode, 0, combined)
+        self.assertEqual(out.returncode, 3, combined)
         self.assertIn("NO_INTERFERER", combined)
         self.assertIn("verdict: INVALID", combined)
         self.assertNotIn("verdict: ok", combined)
         self.assertEqual(
             (self.fixture.out / "verdict").read_text().strip(), "INVALID"
         )
+        # Structured v2 no-hardware record is written alongside INVALID verdict.
+        rec_path = self.fixture.out / "no-hardware" / "result.json"
+        self.assertTrue(rec_path.is_file(), combined)
+        rec = json.loads(rec_path.read_text())
+        self.assertEqual(rec.get("contract"), "v2", rec)
+        self.assertEqual(rec.get("cause"), "missing-hardware", rec)
+        self.assertEqual(rec.get("missing"), "no-interferer", rec)
+        self.assertEqual(rec.get("exit"), 3, rec)
         # Nothing was measured, so no arm rows were invented.
         self.assertFalse((self.fixture.out / "arms.tsv").exists())
         # The config was still restored.
@@ -500,11 +532,12 @@ class MissingTool(unittest.TestCase):
         self.assertEqual(out.returncode, 2, combined)
         self.assertIn("SKIP", out.stdout)
         self.assertIn("missing iperf3", out.stdout)
-        record = self.fixture.out / "result.json"
+        record = self.fixture.out / "no-hardware" / "result.json"
         self.assertTrue(record.exists(), combined)
         data = json.loads(record.read_text())
         self.assertEqual(data["schema"], "wireless-no-client/v1")
         self.assertEqual(data["status"], "no-client")
+        self.assertEqual(data["cause"], "missing-tool")
         self.assertEqual(str(data["ticket"]), "68")
         self.assertEqual(data["missing"], "iperf3")
         # The config was restored by the run's own trap.
@@ -546,9 +579,222 @@ class SourceSlot(unittest.TestCase):
         self.assertIn("1234", arms)
         self.assertIn("SKIP", out.stdout)
         self.assertIn("interferer", out.stdout)
-        data = json.loads((self.fixture.out / "result.json").read_text())
+        data = json.loads(
+            (self.fixture.out / "no-hardware" / "result.json").read_text())
+        self.assertEqual(data["cause"], "missing-tool")
         self.assertEqual(data["missing"], "iperf3")
         self.assertEqual(self.fixture.cfg.read_text(), self.fixture.original)
+
+
+class FindingsC1ToC5(unittest.TestCase):
+    """Regression tests for #68 findings C1-C5 and aligned exit codes."""
+
+    def setUp(self):
+        self.fixture = Fixture()
+        self.addCleanup(self.fixture.cleanup)
+
+    def scan(self, body, name="scan.txt"):
+        path = self.fixture.root / name
+        path.write_text(body)
+        return path
+
+    def test_c1_overlapping_320mhz_neighbour_invalidates_clear_arm(self):
+        # Selected AP is ch 37 (6135 MHz), width 320 MHz, center1 6265 MHz ->
+        # [6105, 6425] MHz.  6295 MHz is not primary 6135, yet overlaps 320 MHz.
+        scan = self.scan(
+            "BSS aa:bb:cc:00:00:01(on phy2-ap0) -- associated\n"
+            "\tfreq: 6135\n"
+            "\tSSID: 6g-clear-air\n"
+            "BSS aa:bb:cc:00:00:09(on phy2-ap0)\n"
+            "\tfreq: 6295\n"
+            "\tSSID: overlap-320\n"
+        )
+        out = self.fixture.run(
+            ["--interferer", "5g:36:tcp:100:192.168.1.51"],
+            STUB_SCAN_FILE=str(scan),
+        )
+        combined = out.stdout + out.stderr
+        self.assertNotEqual(out.returncode, 0, combined)
+        self.assertIn("OVERLAPPING_BSS", combined)
+        self.assertIn("verdict: INVALID", combined)
+        self.assertEqual((self.fixture.out / "verdict").read_text().strip(), "INVALID")
+        scan_log = (self.fixture.out / "scan.txt").read_text()
+        self.assertIn("same_channel=0", scan_log)
+        self.assertIn("near_overlap=1", scan_log)
+
+    def test_c2_same_ssid_rogue_bssid_is_foreign_and_tab_ssid_parses(self):
+        # A foreign BSSID spoofing our SSID must NOT be excluded as own, and
+        # "\tSSID: 6g-clear-air" must parse cleanly without "\tSSID: " prefix.
+        scan = self.scan(
+            "BSS aa:bb:cc:00:00:01(on phy2-ap0)\n"
+            "\tfreq: 6135\n"
+            "\tSSID: 6g-clear-air\n"
+            "BSS de:ad:be:ef:00:99(on phy2-ap0)\n"
+            "\tfreq: 6135\n"
+            "\tSSID: 6g-clear-air\n"
+        )
+        out = self.fixture.run(
+            ["--interferer", "5g:36:tcp:100:192.168.1.51"],
+            STUB_SCAN_FILE=str(scan),
+        )
+        combined = out.stdout + out.stderr
+        self.assertNotEqual(out.returncode, 0, combined)
+        self.assertIn("CO_CHANNEL_BSS", combined)
+        scan_log = (self.fixture.out / "scan.txt").read_text()
+        self.assertIn("own=1", scan_log)
+        self.assertIn("foreign=1", scan_log)
+        self.assertIn("same_channel=1", scan_log)
+        self.assertIn('"6g-clear-air"', scan_log)
+        self.assertNotIn("SSID:", scan_log)
+
+    def test_c3_scan_timestamps_post_clear_scan_and_survey_delta(self):
+        seq = self.fixture.root / "seq"
+        seq.mkdir()
+        (seq / "scan-1.txt").write_text(
+            "BSS aa:bb:cc:00:00:01(on phy2-ap0) -- associated\n"
+            "\tfreq: 6135\n"
+            "\tSSID: 6g-clear-air\n"
+        )
+        # Second scan (post-clear) sees a rogue BSS that appeared mid-arm.
+        (seq / "scan-2.txt").write_text(
+            "BSS aa:bb:cc:00:00:01(on phy2-ap0) -- associated\n"
+            "\tfreq: 6135\n"
+            "\tSSID: 6g-clear-air\n"
+            "BSS 10:20:30:40:50:60(on phy2-ap0)\n"
+            "\tfreq: 6135\n"
+            "\tSSID: mid-arm-rogue\n"
+        )
+        survey_state = self.fixture.root / "survey.cnt"
+        out = self.fixture.run(
+            ["--interferer", "5g:36:tcp:100:192.168.1.51"],
+            STUB_SCAN_SEQ_DIR=str(seq),
+            STUB_SURVEY_STATE=str(survey_state),
+        )
+        combined = out.stdout + out.stderr
+        self.assertNotEqual(out.returncode, 0, combined)
+        self.assertIn("CO_CHANNEL_BSS", combined)
+        scan_lines = (self.fixture.out / "scan.txt").read_text().splitlines()
+        self.assertEqual(len(scan_lines), 2, scan_lines)
+        self.assertIn("phase=pre", scan_lines[0])
+        self.assertIn("scan_start=", scan_lines[0])
+        self.assertIn("scan_end=", scan_lines[0])
+        self.assertIn("phase=post", scan_lines[1])
+        self.assertIn("same_channel=1", scan_lines[1])
+        survey_txt = (self.fixture.out / "survey.txt").read_text()
+        self.assertIn("active_ms=1000", survey_txt)
+        self.assertIn("busy_ms=250", survey_txt)
+        self.assertIn("busy_pct=25.0", survey_txt)
+
+    def test_c4_zero_station_bytes_marks_invalid_without_dying(self):
+        out = self.fixture.run(
+            ["--interferer", "5g:36:tcp:100:192.168.1.51"],
+            NO_STA_BUMP="1",
+        )
+        combined = out.stdout + out.stderr
+        self.assertNotEqual(out.returncode, 0, combined)
+        self.assertIn("ZERO_STA_BYTES", combined)
+        self.assertIn("verdict: INVALID", combined)
+        self.assertEqual((self.fixture.out / "verdict").read_text().strip(), "INVALID")
+        self.assertTrue((self.fixture.out / "arms.tsv").exists(), combined)
+        self.assertEqual(self.fixture.cfg.read_text(), self.fixture.original)
+
+    def test_c5_usage_and_header_document_sta_tx_bytes_and_exit_codes(self):
+        res = subprocess.run(
+            ["sh", str(SCRIPT), "--help"], capture_output=True, text=True, check=False
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("sta_tx_bytes > 0", res.stdout)
+        self.assertIn("3", res.stdout)
+        self.assertIn("missing-hardware", res.stdout)
+        self.assertIn("missing-tool", res.stdout)
+        header = "\n".join(SCRIPT.read_text().splitlines()[:150])
+        self.assertIn("missing-hardware", header)
+        self.assertIn("missing-tool", header)
+
+    def test_survey_values_prefers_target_freq_over_other_in_use_bands(self):
+        # Single-wiphy MT7996 reports multiple [in use] frequencies (2.4/5/6 GHz).
+        # survey_values() must pick the target frequency (6135 MHz), not the
+        # earlier 2437 MHz or later 5180 MHz [in use] records.
+        text = SCRIPT.read_text()
+        start = text.index("survey_values() {")
+        lines = text[start:].splitlines()
+        fn_lines = []
+        for line in lines:
+            fn_lines.append(line)
+            if line == "}":
+                break
+        survey_file = self.fixture.root / "survey.txt"
+        survey_file.write_text(
+            "Survey data from phy0-ap0\n"
+            "\tfrequency:\t\t\t2437 MHz [in use]\n"
+            "\tchannel active time:\t\t1111 ms\n"
+            "\tchannel busy time:\t\t111 ms\n"
+            "Survey data from phy0-ap0\n"
+            "\tfrequency:\t\t\t6135 MHz [in use]\n"
+            "\tchannel active time:\t\t6666 ms\n"
+            "\tchannel busy time:\t\t666 ms\n"
+            "Survey data from phy0-ap0\n"
+            "\tfrequency:\t\t\t5180 MHz [in use]\n"
+            "\tchannel active time:\t\t5555 ms\n"
+            "\tchannel busy time:\t\t555 ms\n"
+        )
+        # Also test target frequency without [in use] when another band has [in use].
+        survey_no_inuse = self.fixture.root / "survey2.txt"
+        survey_no_inuse.write_text(
+            "Survey data from phy0-ap0\n"
+            "\tfrequency:\t\t\t2437 MHz [in use]\n"
+            "\tchannel active time:\t\t1111 ms\n"
+            "\tchannel busy time:\t\t111 ms\n"
+            "Survey data from phy0-ap0\n"
+            "\tfrequency:\t\t\t6135 MHz\n"
+            "\tchannel active time:\t\t7777 ms\n"
+            "\tchannel busy time:\t\t777 ms\n"
+        )
+        body = (
+            "\n".join(fn_lines) + "\n"
+            f'printf "case1=%s\\n" "$(survey_values "{survey_file}" 6135)"\n'
+            f'printf "case2=%s\\n" "$(survey_values "{survey_no_inuse}" 6135)"\n'
+            f'printf "case3=%s\\n" "$(survey_values "{survey_no_inuse}" "")"\n'
+        )
+        res = subprocess.run(["sh", "-c", body], capture_output=True, text=True, check=False)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("case1=6666|666", res.stdout, res.stdout)
+        self.assertIn("case2=7777|777", res.stdout, res.stdout)
+        self.assertIn("case3=1111|111", res.stdout, res.stdout)
+
+    def test_standalone_copy_without_no_client_lib_exits_3_on_no_interferer(self):
+        # Copying 6g-clear-air.sh without wireless/lib/no-client.sh (with only
+        # ../lib/netwatchdog-guard.sh available) must still resolve
+        # nc_cause_exit missing-hardware -> 3 rather than exiting 0.
+        st_root = self.fixture.root / "standalone"
+        (st_root / "wireless").mkdir(parents=True)
+        (st_root / "lib").mkdir(parents=True)
+        (st_root / "lib" / "netwatchdog-guard.sh").write_text(
+            (REPO_ROOT / "scripts" / "lib" / "netwatchdog-guard.sh").read_text()
+        )
+        standalone = st_root / "wireless" / "6g-clear-air.sh"
+        standalone.write_text(SCRIPT.read_text())
+        standalone.chmod(0o755)
+        full = os.environ.copy()
+        full.update(self.fixture.env(NOS5G="1"))
+        res = subprocess.run(
+            [
+                "sh", str(standalone),
+                "--config", str(self.fixture.cfg),
+                "--target", "192.168.1.50",
+                "--duration", "1",
+                "--settle", "0",
+                "--wait-sta", "3",
+                "--wait-bss", "3",
+                "--out", str(self.fixture.out),
+                "--interferer", "5g:36:tcp:100:192.168.1.51",
+            ],
+            capture_output=True,
+            text=True,
+            env=full,
+            check=False,
+        )
+        self.assertEqual(res.returncode, 3, res.stdout + res.stderr)
 
 
 if __name__ == "__main__":

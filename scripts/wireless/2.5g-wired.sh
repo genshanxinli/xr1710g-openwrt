@@ -31,18 +31,23 @@
 # --dev-wan10g-if to override.
 #
 # A host NIC that is absent or below 2500 Mb/s, or a detected device port
-# whose link is below 2500 Mb/s, is a clean skip (a faster link is accepted):
+# whose link is below 2500 Mb/s, is a clean skip (a faster link is accepted);
+# nothing was measured, so the v2 contract (scripts/wireless/lib/no-client.sh)
+# records missing-hardware and exits 3:
 #
 #   SKIP: no 2.5G link
 #
 # A missing precondition, rather than a slow link, is reported the same way
-# (exit 0, nothing measured) but with its own greppable first word:
+# (nothing measured, nothing failed) but with its own greppable first word
+# and the v2 exit code of its cause:
 #
-#   BLOCKED: no device port advertises 2500baseT
-#   BLOCKED: lan2 is in br-lan
+#   BLOCKED: no device port advertises 2500baseT   (config-block, exit 2)
+#   BLOCKED: lan2 is in br-lan                     (config-block, exit 2)
+#   BLOCKED: <other precondition>                  (precondition-mismatch, exit 4)
 #
 # An unreachable device is not one of those: port detection has no evidence
-# at all, so it stops with exit 2 instead of claiming the port is missing:
+# at all, so it stops with exit 2 (environment) instead of claiming the port
+# is missing:
 #
 #   BLOCKED: cannot reach <USER@DEVICE> (<first ssh error line>)
 #
@@ -227,15 +232,18 @@ Output and safety:
 A real run requires at least 2500 Mb/s on the device port and on the host
 NIC cabled to it: 2500 is the floor, not the exact rate.  A 10G host NIC
 negotiating 2500 against the device is fine, and so is a faster link; the
-host must never be the bottleneck.  Otherwise it exits 0 with exactly:
+host must never be the bottleneck.  Otherwise it prints exactly:
 
   SKIP: no 2.5G link
 
-A missing precondition is not a slow link and is reported separately, also
-with exit 0 because nothing was measured and nothing failed:
+and exits 3 (missing-hardware): 0 is reserved for a run that measured.
 
-  BLOCKED: no device port advertises 2500baseT
-  BLOCKED: <port> is in br-lan
+A missing precondition is not a slow link and is reported separately.  It is
+also not measured, so it never exits 0; its cause picks the code:
+
+  BLOCKED: no device port advertises 2500baseT   exits 2 (config-block)
+  BLOCKED: <port> is in br-lan                   exits 2 (config-block)
+  BLOCKED: <other precondition>                  exits 4 (precondition-mismatch)
 
 An unreachable device is an environment problem, not a hardware verdict:
 auto-detection cannot read ethtool, so the script stops with exit 2 instead
@@ -304,11 +312,23 @@ note() {
 }
 
 # Shared "no client" record (scripts/wireless/lib/no-client.sh).  Best effort:
-# a harness must still skip, and still exit 0, when the record cannot be
-# written.
+# a harness must still report its skip with the cause's exit code when the
+# record cannot be written.
 NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
 # shellcheck source=lib/no-client.sh
 [ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
+if ! command -v nc_cause_exit >/dev/null 2>&1; then
+	nc_cause_exit() {
+		case ${1:-} in
+		missing-hardware) printf '3\n' ;;
+		missing-tool | config-block | permission | environment | output-collision)
+			printf '2\n' ;;
+		precondition-mismatch) printf '4\n' ;;
+		interrupted) printf '130\n' ;;
+		*) printf '1\n' ;;
+		esac
+	}
+fi
 
 # Opt-in bridge detach/restore (scripts/wireless/lib/port-detach.sh).  Every
 # read and write goes through ssh_dev, so the library edits the device, not
@@ -338,7 +358,8 @@ skip_no_link() {
 	# No 2.5G peer (or only a 1G link) is missing hardware, not a failed
 	# measurement, so it is recorded instead of printed and forgotten: the
 	# record is what puts this gap in hw-gap-report.sh (issue #70).
-	_rec=$(no_client_record "${OUT_DIR_OPT:-}" 70 2.5g-peer "$NC_2G5_RUN" \
+	_rec=$(NC_RECORD_CAUSE=missing-hardware \
+		no_client_record "${OUT_DIR_OPT:-}" 70 2.5g-peer "$NC_2G5_RUN" \
 		"${1:-no 2.5G link}" \
 		"both ends report >= 2500 Mb/s (ethtool) and are link-up (/sys/class/net/*/carrier)" \
 		"iperf3 TCP both directions >= 2.2 Gbit/s at --parallel 4 --duration 10" \
@@ -349,7 +370,7 @@ skip_no_link() {
 		note "missing 2.5g-peer #70; once it is available run: $NC_2G5_RUN"
 		note "no-client record: $_rec"
 	fi
-	exit 0
+	exit "$(nc_cause_exit missing-hardware)"
 }
 
 missing_tool() {
@@ -358,21 +379,46 @@ missing_tool() {
 	# device client and client for the device server), so a host or device
 	# without it cannot measure at all.  Record the gap and exit 2: a
 	# recorded prerequisite, not a failed run (1) and not a clean skip (0).
-	_rec=$(no_client_record "${OUT_DIR_OPT:-}" 70 "$1" "$NC_2G5_RUN" "$2" \
+	_rec=$(NC_RECORD_CAUSE=missing-tool \
+		no_client_record "${OUT_DIR_OPT:-}" 70 "$1" "$NC_2G5_RUN" "$2" \
 		"both ends report >= 2500 Mb/s (ethtool) and are link-up (/sys/class/net/*/carrier)" \
 		"iperf3 TCP both directions >= 2.2 Gbit/s at --parallel 4 --duration 10" \
 		"UDP arm loses < 0.1% at the offered 2500 Mbit/s" 2>/dev/null)
 	note "missing $1; on the device: opkg install iperf3 (or apk add iperf3)"
 	[ -n "$_rec" ] && note "no-client record: $_rec"
 	printf 'BLOCKED: missing %s\n' "$1"
-	exit 2
+	exit "$(nc_cause_exit missing-tool)"
+}
+
+blocked_cause() {
+	case ${1:-} in
+	2.5g-peer | port-in-bridge) printf 'config-block\n' ;;
+	*) printf 'precondition-mismatch\n' ;;
+	esac
 }
 
 blocked_record() {
-	# blocked_record MISSING REASON: best effort status "blocked" record
-	# (issue #70).  MISSING is the gap hw-gap-report.sh groups by: 2.5g-peer
-	# is missing hardware, port-in-bridge is a setting on this board.
+	# blocked_record MISSING REASON: best effort "blocked" record (issue #70).
+	# MISSING is the gap hw-gap-report.sh groups by, and it also picks the v2
+	# cause through blocked_cause(), so the record and blocked()'s exit code
+	# can never disagree:
+	#
+	#   2.5g-peer        config-block, deliberately.  The gap itself is missing
+	#                    hardware, but this harness reaches the block only
+	#                    after the board answered ethtool and no port
+	#                    advertises 2500baseT: filing it as config-block keeps
+	#                    the v1 status "blocked", exit 2, and hw-gap-report.sh's
+	#                    HARDWARE_KEYS row (Class=hardware) that issue #70 and
+	#                    test_2g5_blocked_record.py pin.  The report therefore
+	#                    prints Class=hardware beside Cause=config-block; that
+	#                    contrast is the tradeoff, not an accident.  Switching
+	#                    to missing-hardware would mean exit 3 and a no-client
+	#                    status, so it is left for a contract change, not a
+	#                    comment fix.
+	#   port-in-bridge   config-block: the port is still in a bridge.
+	#   anything else    precondition-mismatch.
 	# note() writes to stderr, so the caller's stdout stays the BLOCKED line.
+	_cause=$(blocked_cause "$1")
 	case $1 in
 	2.5g-peer)
 		_cmd=$NC_2G5_RUN
@@ -387,21 +433,28 @@ blocked_record() {
 		_crit=
 		;;
 	esac
-	_rec=$(NC_RECORD_STATUS=blocked no_client_record "${OUT_DIR_OPT:-}" 70 \
-		"$1" "$_cmd" "${2:-blocked}" "$_crit" 2>/dev/null)
+	_rec=$(NC_RECORD_STATUS=blocked NC_RECORD_CAUSE=$_cause \
+			no_client_record "${OUT_DIR_OPT:-}" 70 \
+			"$1" "$_cmd" "${2:-blocked}" "$_crit" 2>/dev/null)
 	[ -z "$_rec" ] || note "blocked record: $_rec"
 }
 
 blocked() {
 	# blocked MESSAGE [DETAIL] [MISSING]
 	# A precondition that is missing, rather than a link that is slow.
-	# Nothing was measured, so nothing failed: still exit 0.
+	# Nothing was measured, so nothing failed, but the v2 contract still
+	# refuses 0 (only a measured run may use it): port-in-bridge and
+	# 2.5g-peer are config-block and exit 2; any other precondition is
+	# precondition-mismatch and exits 4.  The cause comes from the same
+	# blocked_cause() helper blocked_record() uses, so the record and the
+	# exit code match.
 	# MISSING names the gap for hw-gap-report.sh: without it a block left no
 	# record at all, so the 2.5G gap never appeared in that table.
 	[ -z "${3:-}" ] || blocked_record "$3" "${2:-$1}"
 	[ $# -lt 2 ] || note "$2"
 	printf 'BLOCKED: %s\n' "$1"
-	exit 0
+	_cause=$(blocked_cause "${3:-}")
+	exit "$(nc_cause_exit "$_cause")"
 }
 
 is_uint() {
@@ -866,7 +919,8 @@ print_bridge_plan() {
 	printf '  ip link set %s master %s\n' "$dev_if" "$bridge"
 	printf '  ip link set %s up\n' "$dev_if"
 	printf 'check first that the SSH session does not ride %s:\n' "$dev_if"
-	printf '  ssh ... "ip route get <bench host>"   # must not print "dev %s"\n' "$dev_if"
+	printf '  ssh ... "ip neigh show <bench host> dev %s"   # get <MAC>\n' "$bridge"
+	printf '  ssh ... "bridge fdb show br %s | grep -i <MAC>"   # must not print "dev %s"\n' "$bridge" "$dev_if"
 }
 
 resolve_device_ports() {
@@ -883,13 +937,18 @@ resolve_device_ports() {
 	# fails is an environment problem, not evidence about the hardware.  It
 	# used to be folded into the empty candidate list and reported as "no
 	# device port advertises 2500baseT" with exit 0 (issue #70).  Stop here
-	# instead, with a non-zero status and the ssh error that caused it.
+	# instead, with the environment cause, exit 2 and the ssh error that
+	# caused it.
 	err=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$DEVICE" true \
 		2>&1 >/dev/null) || {
 		first=$(printf '%s\n' "$err" | sed -n '1p')
 		printf 'BLOCKED: cannot reach %s (%s)\n' "$DEVICE" \
 			"${first:-ssh failed}"
-		exit 2
+		NC_RECORD_CAUSE=environment no_client_record "${OUT_DIR_OPT:-}" 70 \
+			ssh "ssh -o BatchMode=yes $DEVICE true" \
+			"${first:-ssh failed}" \
+			"the device answers an ssh BatchMode probe" >/dev/null 2>&1 || :
+		exit "$(nc_cause_exit environment)"
 	}
 
 	DEV_CANDIDATES=$(dev_phys_ports)
@@ -989,7 +1048,7 @@ check_device() {
 		fi
 		if [ -n "$master" ]; then
 			# --detach-port: the detach itself waits until main() has armed
-			# the EXIT trap (see detach_pending_ports), so an interrupt at
+			# the EXIT trap (see detach_pending_port), so an interrupt at
 			# any later point can still put the port back.
 			refuse_detach_if_ssh_ingress "$dev_if" "$master"
 			DETACH_PENDING="$DETACH_PENDING $label:$dev_if:$master"
@@ -1667,10 +1726,10 @@ dry_run() {
 		printf 'detach: --detach-port is planned, not run; its two "ip link set" lines are printed below\n'
 	fi
 	printf 'topology: host 2.5G NIC <-> LAN 2.5G port; host 2.5G NIC <-> WAN 2.5G port; SSH on lan3/management; no port<->port cable\n'
-	printf 'skip: a real run prints exactly "SKIP: no 2.5G link" and exits 0 unless both ends are >= 2500Mb/s\n'
+	printf 'skip: a real run prints exactly "SKIP: no 2.5G link" and exits 3 unless both ends are >= 2500Mb/s\n'
 	printf 'blocked: BLOCKED: no device port advertises 2500baseT, or BLOCKED: <port> is in br-lan\n'
-	printf 'blocked: both mean nothing was measured and nothing failed; each exits 0\n'
-	printf 'unreachable: BLOCKED: cannot reach <host> (<ssh error>) exits 2; port detection had no evidence\n'
+	printf 'blocked: both mean nothing was measured and nothing failed; config-block exits 2, any other precondition exits 4\n'
+	printf 'unreachable: BLOCKED: cannot reach <host> (<ssh error>) exits 2 (environment); port detection had no evidence\n'
 	printf 'protocols: %s; duration=%ss parallel=%s udp_rate=%sM iperf_port=%s\n' \
 		"$PROTO" "$DURATION" "$PARALLEL" "$UDP_RATE" "$IPERF_PORT"
 

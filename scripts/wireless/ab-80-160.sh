@@ -51,10 +51,11 @@
 # it as an air-throughput result.
 #
 # Exit status:
-#   0  both arms valid and comparable, or a clean SKIP (no client associated)
+#   0  both arms valid and comparable (or --dry-run / --help)
 #   1  setup/run/rollback failure (the trap has still tried to restore UCI)
 #   2  invalid arguments
-#   3  measured, but an arm or the pair was rejected
+#   3  clean SKIP: missing-hardware (no 5 GHz client associated; nothing changed)
+#   4  measured, but an arm or the pair was rejected
 #
 # POSIX sh only (busybox ash).  Tested with "sh -n", --help and --dry-run.
 #
@@ -95,9 +96,9 @@ SIGNAL_TOL=${SIGNAL_TOL:-5}
 DRY_RUN=${DRY_RUN:-0}
 RUN=${RUN:-0}
 
-# Constants that describe the board, not a preference.
-WIRELESS_CONFIG=/etc/config/wireless
-UCI_DELTA=/tmp/.uci/wireless
+# Constants that describe the board, not a preference (env overridable for offline tests).
+WIRELESS_CONFIG=${WIRELESS_CONFIG:-/etc/config/wireless}
+UCI_DELTA=${UCI_DELTA:-/tmp/.uci/wireless}
 
 usage() {
 	cat <<'EOF'
@@ -175,10 +176,11 @@ Rejection rules:
   * a rejected run still prints both rows and restores the radio.
 
 Exit status:
-  0 comparable, or clean SKIP (no client associated; nothing was changed)
+  0 comparable (or --dry-run / --help)
   1 setup/run/rollback failure
   2 invalid arguments
-  3 measured but rejected
+  3 clean SKIP: missing-hardware (no 5 GHz client associated; nothing changed)
+  4 measured but rejected
 EOF
 }
 
@@ -206,11 +208,23 @@ NETWATCHDOG_GUARD=$(dirname "$0")/../lib/netwatchdog-guard.sh
 . "$NETWATCHDOG_GUARD"
 
 # Shared "no client" record (scripts/wireless/lib/no-client.sh).  Best effort:
-# a harness must still skip, and still exit 0, when the record cannot be
-# written.
+# a harness must still skip, and still exit with its v2 cause code (3 for
+# missing-hardware), when the record cannot be written.
 NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
 # shellcheck source=lib/no-client.sh
 [ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
+if ! command -v nc_cause_exit >/dev/null 2>&1; then
+	nc_cause_exit() {
+		case ${1:-} in
+		missing-hardware) printf '3\n' ;;
+		missing-tool | config-block | permission | environment | output-collision)
+			printf '2\n' ;;
+		precondition-mismatch) printf '4\n' ;;
+		interrupted) printf '130\n' ;;
+		*) printf '1\n' ;;
+		esac
+	}
+fi
 
 # The one command that runs the A/B once a 5 GHz STA is associated.
 NC_5GHZ_RUN='sudo sh scripts/wireless/ab-80-160.sh --client <STA_MAC> --client-ip <STA_IP> --iface <5GHZ_AP_IFACE> --ch80 <CH> --ch160 36 --run'
@@ -633,6 +647,9 @@ run_arm() {
 	say "arm $_arm: channel=$_arm_ch htmode=$_arm_hm (expected ${_arm_w} MHz)"
 	log_cmd "uci set wireless.radio1.channel=$_arm_ch; uci set wireless.radio1.htmode=$_arm_hm; uci commit wireless; wifi reload"
 
+	# Armed only after nw_guard_take succeeded and right before the first UCI
+	# mutation, so a refused run never executes an unprotected wifi reload.
+	CONFIG_MODIFIED=1
 	if ! uci set wireless.radio1.channel="$_arm_ch" >>"$LOG" 2>&1; then
 		ARM_RAW_STATUS="uci set channel failed"
 		ARM_STATUS="reject: $ARM_RAW_STATUS"
@@ -741,6 +758,7 @@ run_arm() {
 }
 
 # Restore the saved UCI file and delta, reload, and read the result back.
+CONFIG_MODIFIED=0
 RESTORED=0
 ROLLBACK_OK=0
 restore_config() {
@@ -827,10 +845,10 @@ cleanup() {
 	trap - 0 1 2 15
 	trap '' 1 2 15
 	kill_sources
-	if [ "$RUN" = 1 ] && [ "$RESTORED" = 0 ] && [ -n "${OUT:-}" ]; then
+	if [ "$RUN" = 1 ] && [ "${CONFIG_MODIFIED:-0}" = 1 ] && [ "$RESTORED" = 0 ] && [ -n "${OUT:-}" ]; then
 		restore_config || true
 	fi
-	if [ "$RUN" = 1 ] && [ "$ROLLBACK_OK" != 1 ]; then
+	if [ "$RUN" = 1 ] && [ "${CONFIG_MODIFIED:-0}" = 1 ] && [ "$ROLLBACK_OK" != 1 ]; then
 		_st=1
 	fi
 	# Release after the rollback reload, so the hold covers the restore too.
@@ -1156,7 +1174,8 @@ if ! station_has "$IFACE" "$CLIENT"; then
 	# No associated 5 GHz STA: the widths cannot be compared at all, so this
 	# is missing hardware.  The record names it for hw-gap-report.sh (issue
 	# #43); the SKIP line on stdout stays the contract.
-	_rec=$(no_client_record "${OUT:-}" 43 5ghz-eht-client "$NC_5GHZ_RUN" \
+	_rec=$(NC_RECORD_CAUSE=missing-hardware \
+		no_client_record "${OUT:-}" 43 5ghz-eht-client "$NC_5GHZ_RUN" \
 		"no 5 GHz STA $CLIENT associated on $IFACE" \
 		"both arms come out VERDICT: COMPARABLE (same NSS, 80/160 MHz, signal within --signal-tol)" \
 		"the 160 MHz arm reports 160 MHz width and EHT160 in iw station dump" \
@@ -1166,7 +1185,7 @@ if ! station_has "$IFACE" "$CLIENT"; then
 		warn "missing 5ghz-eht-client #43; once it is available run: $NC_5GHZ_RUN"
 		warn "no-client record: $_rec"
 	fi
-	exit 0
+	exit "$(nc_cause_exit missing-hardware)"
 fi
 
 LOG=
@@ -1302,7 +1321,7 @@ print_row "$ROW160_CH" "$ROW160_WIDTH" "$ROW160_NSS" "$ROW160_SIG" "$ROW160_TXB"
 
 if [ -n "$VERDICT_OBS" ]; then
 	say "VERDICT: REJECT ($VERDICT_OBS)"
-	_st=3
+	_st=4
 else
 	say "VERDICT: COMPARABLE (both arms ${ROW80_WIDTH}/${ROW160_WIDTH} MHz, NSS $ROW80_NSS, signal $ROW80_SIG/$ROW160_SIG dBm)"
 	_st=0

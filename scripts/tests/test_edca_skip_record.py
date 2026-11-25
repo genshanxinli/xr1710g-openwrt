@@ -46,26 +46,30 @@ class LibOnlySkipTest(unittest.TestCase):
             check=False,
         )
 
-    def assert_only_subdir_record(self, out):
+    def assert_only_subdir_record(self, out, rc, cause):
         proc_out = out.stdout + out.stderr
-        self.assertEqual(out.returncode, 0, proc_out)
+        # v2: a skip exits with its cause, never the old measured-success 0.
+        self.assertEqual(out.returncode, rc, proc_out)
         self.assertIn("SKIP", out.stdout, proc_out)
         self.assertFalse(
             (self.out / "result.json").exists(),
             "a skip left a top-level result.json; the next real run will be "
             "refused: %s" % proc_out,
         )
-        record = self.out / "no-client" / "result.json"
+        record = self.out / "no-client" / "no-hardware" / "result.json"
         self.assertTrue(record.is_file(), proc_out)
         data = json.loads(record.read_text())
         self.assertEqual(data["schema"], "wireless-no-client/v1")
         self.assertEqual(data["status"], "no-client")
+        self.assertEqual(data["cause"], cause)
 
     def test_no_6g_sta_record_is_subdir_only(self):
-        self.assert_only_subdir_record(self.run_skip('skip_no_client "no 6G STA"'))
+        self.assert_only_subdir_record(
+            self.run_skip('skip_no_client "no 6G STA"'), 3, "missing-hardware")
 
     def test_no_tool_record_is_subdir_only(self):
-        self.assert_only_subdir_record(self.run_skip('skip_no_tool "iperf3 not found"'))
+        self.assert_only_subdir_record(
+            self.run_skip('skip_no_tool "iperf3 not found"'), 2, "missing-tool")
 
 
 class RealRunAfterSkipTest(Harness):
@@ -77,7 +81,8 @@ class RealRunAfterSkipTest(Harness):
             EDCA6G_IPERF3="iperf3-not-installed-h4347",
         )
         combined = skip.stdout + skip.stderr
-        self.assertEqual(skip.returncode, 0, combined)
+        # Missing iperf3 is missing-tool: the skip exits 2.
+        self.assertEqual(skip.returncode, 2, combined)
         self.assertIn("SKIP", skip.stdout, combined)
         self.assertFalse((self.out / "result.json").exists(), combined)
 

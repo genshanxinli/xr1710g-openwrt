@@ -27,6 +27,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -317,8 +318,14 @@ class MissingTool(unittest.TestCase):
         self.assertEqual(result.returncode, 2, combined)
         self.assertIn("SKIP: iperf3 is required", result.stderr)
         self.assertIn("missing iperf3", result.stderr)
-        record = json.loads((out / "result.json").read_text())
+        # v2 keeps the skip apart from the measurement result: a missing tool
+        # records under <out>/no-hardware/, never <out>/result.json.
+        record = json.loads((out / "no-hardware" / "result.json").read_text())
         self.assertEqual(record["schema"], "wireless-no-client/v1")
+        self.assertEqual(record["contract"], "v2")
+        self.assertEqual(record["cause"], "missing-tool")
+        self.assertEqual(record["outcome"], "not-measured")
+        self.assertEqual(record["exit"], 2)
         self.assertEqual(record["status"], "no-client")
         self.assertEqual(record["missing"], "iperf3")
         self.assertEqual(str(record["ticket"]), "53")
@@ -335,6 +342,281 @@ class MissingTool(unittest.TestCase):
         self.assertEqual(row["ok"], "1", rows[1])
         self.assertEqual(row["src"], "iperf", rows[1])
         self.assertEqual(row["throughput_mbps"], "1234.000", rows[1])
+
+
+NETWATCHDOG_STUB = """#!/bin/sh
+log=${NWD_STUB_LOG:-/dev/null}
+hold=${NW_GUARD_HOLD_FILE:-/tmp/netwatchdog.hold}
+printf '%s\\n' "$*" >>"$log"
+case "$*" in
+"hold on") : >"$hold"; exit 0 ;;
+"hold off") rm -f "$hold"; exit 0 ;;
+esac
+exit 1
+"""
+
+
+class NetwatchdogGuardIntegration(unittest.TestCase):
+    """F53-3: thermal-soak.sh must delegate hold management to netwatchdog-guard.sh."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="ts53-nwd-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.bin = self.tmp / "bin"
+        self.bin.mkdir()
+        for name in TOOLS:
+            real = shutil.which(name)
+            if real is not None:
+                (self.bin / name).symlink_to(real)
+        (self.bin / "iw").write_text(IW_STUB)
+        (self.bin / "iw").chmod(0o755)
+        self.hold_file = self.tmp / "netwatchdog.hold"
+        self.nwd_log = self.tmp / "nwd.log"
+
+    def _base_env(self, with_nwd=False):
+        if with_nwd:
+            p = self.bin / "netwatchdog"
+            p.write_text(NETWATCHDOG_STUB)
+            p.chmod(0o755)
+        env = dict(
+            os.environ,
+            PATH=str(self.bin),
+            HOME=str(self.tmp),
+            NW_GUARD_HOLD_FILE=str(self.hold_file),
+            NWD_STUB_LOG=str(self.nwd_log),
+        )
+        env.pop("NWD_ALLOW_NO_SERVICE", None)
+        return env
+
+    def test_uses_shared_guard_and_removes_local_hold_helpers(self):
+        text = SCRIPT.read_text()
+        self.assertIn("netwatchdog-guard.sh", text)
+        for dead_fn in ("netwatchdog_present() {", "nw_hold_on() {", "nw_hold_release() {"):
+            self.assertNotIn(dead_fn, text)
+        self.assertIn("nw_guard_state", extract_function("nw_hold_state"))
+
+    def test_missing_netwatchdog_fails_closed_by_default(self):
+        out = self.tmp / "fail-closed"
+        proc = subprocess.run(
+            [
+                "sh", str(SCRIPT), "--thermal", "--iface", "wlan0",
+                "--duration", "2", "--interval", "1", "--out", str(out),
+            ],
+            capture_output=True, text=True, env=self._base_env(with_nwd=False),
+            timeout=30, check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        nwd_json = out / "netwatchdog.json"
+        self.assertTrue(nwd_json.is_file(), "netwatchdog.json was not written")
+        data = json.loads(nwd_json.read_text())
+        self.assertEqual(data["label"], "thermal-soak-thermal", data)
+        self.assertEqual(data["action"], "refused", data)
+        self.assertEqual(data["result"], "missing-service", data)
+        # Refused runs must NOT fabricate measurement outputs or runs.log rows.
+        self.assertFalse((out / "result.json").exists(), "fake result.json written on guard refusal")
+        self.assertFalse((out / "summary.txt").exists(), "fake summary.txt written on guard refusal")
+        self.assertFalse((out / "runs.log").exists(), "fake runs.log written on guard refusal")
+
+    def test_takes_releases_hold_and_scales_stale_minutes_with_duration(self):
+        out = self.tmp / "with-nwd"
+        proc = subprocess.run(
+            [
+                "sh", str(SCRIPT), "--thermal", "--iface", "wlan0",
+                "--duration", "2", "--interval", "1", "--out", str(out),
+            ],
+            capture_output=True, text=True, env=self._base_env(with_nwd=True),
+            timeout=30, check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertFalse(self.hold_file.exists(), "hold file leaked after exit")
+        calls = self.nwd_log.read_text().splitlines()
+        self.assertEqual(calls, ["hold on", "hold off"], calls)
+        data = json.loads((out / "netwatchdog.json").read_text())
+        self.assertEqual(data["action"], "took-and-released", data)
+        self.assertEqual(data["result"], "ok", data)
+
+        # Verify --stale-minutes = (DURATION / 60) + 60:
+        # With --duration 600, stale threshold is 70 min.  A hold owned by a
+        # live PID aged 65 min is stale under default 60 min, but still fresh
+        # (busy!) under 70 min -> nw_guard_take refuses immediately.
+        self.hold_file.write_text("")
+        owner_file = Path(str(self.hold_file) + ".owner")
+        owner_file.write_text(f"{os.getpid()} {int(time.time()) - 65 * 60}\n")
+        out_busy = self.tmp / "busy-stale"
+        proc2 = subprocess.run(
+            [
+                "sh", str(SCRIPT), "--thermal", "--iface", "wlan0",
+                "--duration", "600", "--interval", "1", "--out", str(out_busy),
+            ],
+            capture_output=True, text=True, env=self._base_env(with_nwd=True),
+            timeout=30, check=False,
+        )
+        self.assertEqual(proc2.returncode, 1, proc2.stdout + proc2.stderr)
+        data2 = json.loads((out_busy / "netwatchdog.json").read_text())
+        self.assertEqual(data2["action"], "denied-busy", data2)
+        self.assertEqual(data2["result"], "busy", data2)
+
+
+class P1SafetyAndFormattingFixes(unittest.TestCase):
+    """P1-8: --interval > 30 soak rows, --fan-pwm floor, --cpu-load min 1, txp auto."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="ts53-p1-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_interval_60_prints_soak_rows(self):
+        body = (
+            "MODE=soak\nINTERVAL=60\nSAMPLES=0\n"
+            "PRINT_EVERY=$((60 / INTERVAL))\n"
+            '[ "$PRINT_EVERY" -ge 1 ] || PRINT_EVERY=1\n'
+            "refresh_macs() { :; }\n"
+            "scan_dmesg_new() { :; }\n"
+            "sample_sensors() { :; }\n"
+            "sample_station() { :; }\n"
+            "append_sensors() { :; }\n"
+            "print_soak_row() { echo ROW:$SAMPLES; }\n"
+            "IFACE_A=wlan0 MAC_A= IFACE_B=wlan1 MAC_B=\n"
+            + extract_function("sample_iteration")
+            + "sample_iteration\nsample_iteration\n"
+        )
+        res = run_sh(body, str(self.tmp))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("ROW:1", res.stdout, res.stdout)
+        self.assertIn("ROW:2", res.stdout, res.stdout)
+
+    def test_fan_pwm_below_30_refused_unless_allow_fan_stop(self):
+        for pwm in ("0", "29"):
+            proc = subprocess.run(
+                ["sh", str(SCRIPT), "--thermal", "--dry-run", "--fan-pwm", pwm],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+            self.assertIn("--allow-fan-stop", proc.stderr, proc.stderr)
+
+        proc_ok = subprocess.run(
+            [
+                "sh", str(SCRIPT), "--thermal", "--dry-run",
+                "--fan-pwm", "0", "--allow-fan-stop",
+            ],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(proc_ok.returncode, 0, proc_ok.stdout + proc_ok.stderr)
+
+        proc_floor = subprocess.run(
+            ["sh", str(SCRIPT), "--thermal", "--dry-run", "--fan-pwm", "30"],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(proc_floor.returncode, 0, proc_floor.stdout + proc_floor.stderr)
+
+    def test_nonzero_cpu_load_spawns_at_least_one_worker(self):
+        # Even at 1% on 4 cores (1*4/100 == 0), workers must clamp to >= 1.
+        body = (
+            "CPU_LOAD=1\n"
+            f'RUN="{self.tmp}"\n'
+            "iso_utc() { echo 2026-11-25T00:00:00Z; }\n"
+            "command_exists() { return 0; }\n"
+            "bg_start_redir() { echo WORKER:$1; }\n"
+            + extract_function("start_cpu_load")
+            + "start_cpu_load\n"
+        )
+        res = run_sh(body, str(self.tmp))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("WORKER:cpu", res.stdout, res.stdout)
+
+    def test_txp_restore_restores_auto_when_originally_auto(self):
+        iw_log = self.tmp / "iw.log"
+        bin_dir = self.tmp / "bin"
+        bin_dir.mkdir()
+        iw_stub = bin_dir / "iw"
+        iw_stub.write_text(
+            "#!/bin/sh\n"
+            f'echo "$*" >>"{iw_log}"\n'
+            'if [ "$3" = info ]; then\n'
+            '  printf "\\tInterface wlan0\\n\\twiphy 0\\n\\ttype AP\\n\\ttxpower 20.00 dBm\\n"\n'
+            'fi\n'
+            "exit 0\n"
+        )
+        iw_stub.chmod(0o755)
+        body = (
+            f'PATH="{bin_dir}:$PATH"\n'
+            f'RUN="{self.tmp}"\n'
+            "IFACE_A=wlan0 IFACE_B= TXP_APPLIED=1\n"
+            "iso_utc() { echo 2026-11-25T00:00:00Z; }\n"
+            "command_exists() { [ \"$1\" != uci ] && command -v \"$1\" >/dev/null 2>&1; }\n"
+            + extract_function("iface_txpower_dbm")
+            + extract_function("iface_txpower_mode")
+            + extract_function("txp_orig_field")
+            + extract_function("txp_snapshot")
+            + extract_function("txp_restore")
+            + 'txp_snapshot wlan0 "$RUN/txp.a.orig"\n'
+            + "txp_restore\n"
+        )
+        res = run_sh(body, str(self.tmp))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        log = iw_log.read_text()
+        self.assertIn("dev wlan0 set txpower auto", log, log)
+        self.assertNotIn("set txpower fixed", log, log)
+
+    def test_txp_mode_checks_uci_ifname_before_wiphy(self):
+        # Single-wiphy tri-band: phy0.2-ap0 is wiphy 0, radio0 has txpower=20,
+        # but phy0.2-ap0 maps via UCI ifname -> radio2 whose txpower is unset.
+        bin_dir = self.tmp / "bin-uci"
+        bin_dir.mkdir()
+        (bin_dir / "iw").write_text(
+            "#!/bin/sh\n"
+            "printf '\\tInterface phy0.2-ap0\\n\\twiphy 0\\n\\ttype AP\\n\\ttxpower 20.00 dBm\\n'\n"
+        )
+        (bin_dir / "iw").chmod(0o755)
+        (bin_dir / "uci").write_text(
+            "#!/bin/sh\n"
+            '[ "$1" = "-q" ] && shift\n'
+            'case "$*" in\n'
+            '"show wireless")\n'
+            "  printf \"wireless.ap6.ifname='phy0.2-ap0'\\nwireless.ap6.device='radio2'\\n\"\n"
+            "  ;;\n"
+            '"get wireless.radio0.txpower") printf "20\\n" ;;\n'
+            '"get wireless.radio2.txpower") exit 1 ;;\n'
+            "esac\n"
+        )
+        (bin_dir / "uci").chmod(0o755)
+        body = (
+            f'PATH="{bin_dir}:$PATH"\n'
+            "command_exists() { command -v \"$1\" >/dev/null 2>&1; }\n"
+            + extract_function("iface_txpower_mode")
+            + "iface_txpower_mode phy0.2-ap0\n"
+        )
+        res = run_sh(body, str(self.tmp))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.strip(), "auto", res.stdout)
+
+    def test_soak_missing_clients_exits_3_and_records_no_hardware(self):
+        out = self.tmp / "soak-no-client"
+        proc = subprocess.run(
+            ["sh", str(SCRIPT), "--soak", "--duration", "4", "--out", str(out)],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        rec = json.loads((out / "no-hardware" / "result.json").read_text())
+        self.assertEqual(rec["cause"], "missing-hardware", rec)
+        self.assertEqual(rec["exit"], 3, rec)
+        self.assertEqual(str(rec["ticket"]), "53", rec)
+
+        # Standalone copy without lib/no-client.sh must still exit 3.
+        st_dir = self.tmp / "standalone-ts"
+        st_dir.mkdir()
+        copy = st_dir / "thermal-soak.sh"
+        copy.write_text(SCRIPT.read_text())
+        copy.chmod(0o755)
+        lib_dir = self.tmp / "lib"
+        lib_dir.mkdir(exist_ok=True)
+        (lib_dir / "netwatchdog-guard.sh").write_text(
+            (REPO_ROOT / "scripts/lib/netwatchdog-guard.sh").read_text()
+        )
+        proc2 = subprocess.run(
+            ["sh", str(copy), "--soak", "--duration", "4", "--out", str(self.tmp / "soak-st")],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(proc2.returncode, 3, proc2.stdout + proc2.stderr)
 
 
 if __name__ == "__main__":

@@ -13,8 +13,8 @@
 #
 #   1. Look up one 6 GHz AP BSS that already has a station associated and
 #      select that station.  If no station is associated on any 6 GHz AP
-#      BSS, print exactly "SKIP: no 6G STA" and exit 0 before writing any
-#      configuration.
+#      BSS, print exactly "SKIP: no 6G STA" and exit 3 (missing-hardware)
+#      before writing any configuration.
 #   2. Save /etc/config/wireless (whole file, md5 and the radio0/radio1/
 #      radio2 sections) and the live iw state.
 #   3. Clear arm: disable every AP wifi-iface on radio0 and radio1 by
@@ -135,8 +135,12 @@
 #   ./scripts/wireless/6g-clear-air.sh --create-bss --target 192.168.1.50
 #   ./scripts/wireless/6g-clear-air.sh --dry-run
 #
-# Exit status: 0 both arms measured and the original config restored, or a
-# clean SKIP; 1 a runtime/measurement/restore failure; 2 invalid arguments.
+# Exit status (v2 no-hardware contract, scripts/wireless/lib/no-client.sh):
+#   0  both arms measured and the original config restored, or a clean --dry-run
+#   1  runtime, measurement, invalidation or restore failure
+#   2  missing-tool (no iperf3 without --source), config block (OWE mismatch),
+#      or invalid arguments
+#   3  missing-hardware clean SKIP (no 6G STA or no interferer station)
 #
 # POSIX sh only (busybox ash on the device), requires root on the device.
 # The IW/WIFI/IPERF3/WIRELESS_CONFIG/DEBUGFS/SYSFS_NET environment
@@ -155,6 +159,18 @@ PROG=${0##*/}
 NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
 # shellcheck source=lib/no-client.sh
 [ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
+if ! command -v nc_cause_exit >/dev/null 2>&1; then
+	nc_cause_exit() {
+		case ${1:-} in
+		missing-hardware) printf '3\n' ;;
+		missing-tool | config-block | permission | environment | output-collision)
+			printf '2\n' ;;
+		precondition-mismatch) printf '4\n' ;;
+		interrupted) printf '130\n' ;;
+		*) printf '1\n' ;;
+		esac
+	}
+fi
 
 # --- fixed protocol constants ----------------------------------------
 
@@ -223,6 +239,7 @@ SEL_IFACE=
 SEL_PHY=
 SEL_FREQ=
 SEL_WIDTH=
+SEL_CENTER1=
 SEL_SSID=
 SEL_MAC=
 SEL_6G_ONLY=
@@ -339,7 +356,8 @@ skip_no_sta() {
 	# the two lines after it name the missing hardware and the command to run
 	# once it exists, and result.json carries the same facts for
 	# hw-gap-report.sh.
-	_rec=$(no_client_record "${OUT_OPT:-}" 68 6ghz-eht-client \
+	_rec=$(NC_RECORD_CAUSE=missing-hardware \
+		no_client_record "${OUT_OPT:-}" 68 6ghz-eht-client \
 		"sh scripts/wireless/6g-clear-air.sh --interferer <2.4GHZ_AP_IP> --target <6GHZ_STA_IP> --create-bss" \
 		"${1:-no station on a 6 GHz AP BSS}" \
 		"6 GHz rx_ampdu_bytes_cnt delta, clear vs interferer" \
@@ -348,7 +366,7 @@ skip_no_sta() {
 	printf 'SKIP: no 6G STA\n'
 	printf '      missing 6ghz-eht-client; once it is available run: sh scripts/wireless/6g-clear-air.sh --interferer <2.4GHZ_AP_IP> --target <6GHZ_STA_IP> --create-bss\n'
 	[ -n "$_rec" ] && printf '      no-client record: %s\n' "$_rec"
-	exit 0
+	exit "$(nc_cause_exit missing-hardware)"
 }
 
 # require_source: the iperf3 source must exist, or --source must name another
@@ -360,13 +378,14 @@ require_source() {
 }
 
 # skip_no_tool NAME DETAIL: record the missing tool like a missing station
-# and exit 2.  The status stays "no-client" so hw-gap-report.sh files the key
-# under missing hardware; 2 says nothing was measured, which the clean SKIP
-# status 0 would hide.
+# and exit 2 (missing-tool).  The legacy status stays "no-client" so
+# hw-gap-report.sh indexes it alongside hardware gaps while exit 2 marks
+# the missing tool distinct from exit 3 (missing-hardware) and exit 0.
 skip_no_tool() {
 	_name=$1
 	_detail=$2
-	_rec=$(no_client_record "${OUT_OPT:-}" 68 "$_name" \
+	_rec=$(NC_RECORD_CAUSE=missing-tool \
+		no_client_record "${OUT_OPT:-}" 68 "$_name" \
 		"sh scripts/wireless/6g-clear-air.sh --interferer <2.4GHZ_AP_IP> --target <6GHZ_STA_IP> --create-bss" \
 		"$_detail" \
 		"6 GHz rx_ampdu_bytes_cnt delta, clear vs interferer" \
@@ -375,7 +394,7 @@ skip_no_tool() {
 	printf 'SKIP: %s\n' "$_detail"
 	printf '      missing %s; install it (opkg install iperf3) or pass --source CMD to run another traffic generator\n' "$_name"
 	[ -n "$_rec" ] && printf '      no-client record: %s\n' "$_rec"
-	exit 2
+	exit "$(nc_cause_exit missing-tool)"
 }
 
 usage() {
@@ -424,8 +443,10 @@ Traffic:
                                omitted it is resolved from the ARP table of
                                the interferer AP
                      The loaded arm keeps this traffic running on the
-                     interferer band; without an interferer that the script
-                     can find and measure, the run is INVALID
+                     interferer band and verifies real airtime traffic
+                     (ap_tx_bytes > 0 and sta_tx_bytes > 0 on the interferer
+                     AP/station); without an interferer that the script can
+                     find and measure, the run is INVALID
                      (NO_INTERFERER / NO_INTERFERER_EVIDENCE).
   --rounds N         repeat the A/B pair N times, alternating A/B/A/B, and
                      report every round plus the mean (default 1)
@@ -465,18 +486,17 @@ AP tx/rx netdev counters, tx retries / tx failed / rx drop misc, the mt76
 token_info values and the iperf3 JSON.  See scripts/wireless/6g-clear-air.sh
 header for the exact counter names.
 
-The output prints "SKIP: no 6G STA" and exits 0 when no station is
-associated on any 6 GHz AP BSS; without --create-bss that path writes no
-configuration.  A host without iperf3 (and without --source) and a run
-without a live interferer print "SKIP:"/"INVALID" and exit 2, each with a
-result.json that names the missing piece for
-scripts/wireless/hw-gap-report.sh.  A run needs root and bounces every
+The output prints "SKIP: no 6G STA" and exits 3 (missing-hardware) when no
+station is associated on any 6 GHz AP BSS; without --create-bss that path
+writes no configuration.  A run without a live interferer prints "INVALID"
+and exits 3 (missing-hardware), while a host without iperf3 (and without
+--source) prints "SKIP:" and exits 2 (missing-tool), each with a result.json
+for scripts/wireless/hw-gap-report.sh.  A run needs root and bounces every
 radio with wifi reload, so manage the board over a wired link.
 
-Exit status: 0 measured and restored, or clean SKIP (no 6G STA); 1
-runtime, measurement or restore failure; 2 blocked - a missing tool or
-the missing interferer, both recorded as a no-client record - or invalid
-arguments.
+Exit status: 0 measured and restored (or --dry-run); 1 runtime, measurement,
+invalidation or restore failure; 2 missing-tool, config block (OWE mismatch),
+or invalid arguments; 3 missing-hardware (no 6G STA or no interferer).
 EOF
 }
 
@@ -983,6 +1003,25 @@ live_iface_record() {
 	awk -F'|' -v want="$1" '$1 == want { print; exit }' "$TMP_LIVE"
 }
 
+live_iface_center1() {
+	[ -s "$TMP_IW" ] || return 1
+	awk -v want="$1" '
+		{
+			line = $0
+			sub(/^[ \t]+/, "", line)
+			if (line ~ /^Interface /) { cur = substr(line, 11); next }
+			if (cur == want && line ~ /^channel /) {
+				n = split(line, a, /[ (),]+/)
+				for (i = 1; i < n; i++)
+					if (a[i] == "center1" || a[i] == "center1:") {
+						print a[i + 1]
+						exit
+					}
+			}
+		}
+	' "$TMP_IW"
+}
+
 station_macs() {
 	"$IW" dev "$1" station dump 2>/dev/null |
 		awk '/^Station / { print $2 }'
@@ -1063,6 +1102,7 @@ set_sel_from_record() {
 	SEL_FREQ=$(printf '%s' "$1" | cut -d'|' -f3)
 	SEL_SSID=$(printf '%s' "$1" | cut -d'|' -f4)
 	SEL_WIDTH=$(live_iface_record "$SEL_IFACE" 2>/dev/null | cut -d'|' -f7)
+	SEL_CENTER1=$(live_iface_center1 "$SEL_IFACE" 2>/dev/null || true)
 	[ -n "${2:-}" ] && SEL_6G_ONLY=$2
 	TOKEN_PATH=$(find_token_path "$SEL_PHY" || true)
 }
@@ -1547,6 +1587,49 @@ snap_token() {
 	fi
 }
 
+snap_survey() {
+	"$IW" dev "$SEL_IFACE" survey dump >"$1" 2>/dev/null || : >"$1"
+}
+
+survey_values() {
+	# $1 survey file, $2 target freq MHz; prints "active_ms|busy_ms" or "n/a|n/a".
+	# On single-wiphy tri-band MT7996 multiple bands report "[in use]"; pick
+	# strictly by priority: (3) want != "" && freq == want && inuse,
+	# (2) want != "" && freq == want, (1) want == "" && inuse.
+	[ -s "$1" ] || { printf 'n/a|n/a'; return 0; }
+	awk -v want="$2" '
+		function flush(    prio) {
+			if (!seen) return
+			prio = 0
+			if (want != "") {
+				if (freq == want + 0) prio = inuse ? 3 : 2
+			} else if (inuse) {
+				prio = 1
+			}
+			if (prio > best_prio) {
+				best_prio = prio
+				best_act = act
+				best_busy = busy
+			}
+			seen = 0
+		}
+		/frequency:/ {
+			flush()
+			seen = 1
+			inuse = (index($0, "[in use]") > 0)
+			freq = $2 + 0
+			act = ""; busy = ""
+			next
+		}
+		seen && /channel active time:/ { act = $(NF - 1); next }
+		seen && /channel busy time:/ { busy = $(NF - 1); next }
+		END {
+			flush()
+			printf "%s|%s", (best_act != "" ? best_act : "n/a"), (best_busy != "" ? best_busy : "n/a")
+		}
+	' "$1"
+}
+
 station_value() {
 	# $1 dump file, $2 MAC, $3 field
 	[ -r "$1" ] || return 1
@@ -1967,28 +2050,48 @@ interferer_stop_and_verify() {
 
 scan_clear_air() {
 	# A real scan on the measured 6 GHz interface: "the air was clear" is
-	# evidence (how many BSS sit on our channel), not an inference from our
-	# own counters.
-	SCAN_FILE=$OUT/scan-round$ROUND-$SEL_IFACE.txt
+	# evidence (how many BSS sit on or overlap our channel), not an inference
+	# from our own counters.  $1 is the scan phase ("pre" or "post").
+	_phase=${1:-pre}
+	_scan_start=$(now_s)
+	SCAN_FILE=$OUT/scan-round$ROUND-$_phase-$SEL_IFACE.txt
 	SCAN_RECORDS=0
 	SCAN_FOREIGN=0
 	SCAN_SAME=0
 	SCAN_NEAR=0
 	if ! "$IW" dev "$SEL_IFACE" scan >"$SCAN_FILE" 2>"$SCAN_FILE.err"; then
-		check UNKNOWN "clear arm: iw dev $SEL_IFACE scan failed ($(tail -n 1 "$SCAN_FILE.err" 2>/dev/null || true))"
-		invalid "SCAN_UNKNOWN: no scan result on $SEL_IFACE; the clear arm cannot be called co-channel clean"
+		_scan_end=$(now_s)
+		printf 'round=%s phase=%s scan_start=%s scan_end=%s status=failed\n' \
+			"$ROUND" "$_phase" "$_scan_start" "$_scan_end" >>"$OUT/scan.txt"
+		check UNKNOWN "clear arm ($_phase): iw dev $SEL_IFACE scan failed ($(tail -n 1 "$SCAN_FILE.err" 2>/dev/null || true))"
+		invalid "SCAN_UNKNOWN: no scan result on $SEL_IFACE ($_phase); the clear arm cannot be called co-channel clean"
 		return 0
 	fi
+	_scan_end=$(now_s)
+	[ -n "${SEL_CENTER1:-}" ] || SEL_CENTER1=$(live_iface_center1 "$SEL_IFACE" 2>/dev/null || true)
+	# Collect local AP BSSIDs from $TMP_LIVE field 6 (addr); own BSS exclusion
+	# is strictly by association tag or local BSSID, never by SSID string.
+	_own_macs=$(awk -F'|' '$6 != "" { print tolower($6) }' "$TMP_LIVE" 2>/dev/null | tr '\n' ' ')
 	# total counts every BSS the scan returned; foreign counts the ones that
-	# are not our own BSS.  Only foreign matters for the co-channel claim, but
-	# a scan that returns our own BSS and nothing else is still a scan that
-	# saw something (records=1), not "no BSS records".
-	_counts=$(awk -v want="$SEL_FREQ" -v own="$SEL_SSID" '
+	# are not our own BSS.  Only foreign matters for the co-channel/overlap
+	# claim, but a scan that returns our own BSS and nothing else is still a
+	# scan that saw something (records=1), not "no BSS records".
+	_counts=$(awk -v want="$SEL_FREQ" -v c1="${SEL_CENTER1:-0}" \
+		-v width="${SEL_WIDTH:-0}" -v own_macs="$_own_macs" '
+		BEGIN {
+			nmac = split(own_macs, ma, " ")
+			for (i = 1; i <= nmac; i++)
+				if (ma[i] != "") own_mac[ma[i]] = 1
+			center = (c1 + 0 > 0) ? c1 + 0 : want + 0
+			half = (width + 0 > 0) ? (width + 0) / 2 : 160
+			lo = center - half
+			hi = center + half
+		}
 		function flush() {
 			if (!seen)
 				return
 			total++
-			if (assoc || (own != "" && ssid == own)) {
+			if (assoc || (b != "" && (b in own_mac))) {
 				own_bss++
 			} else {
 				n++
@@ -1996,24 +2099,36 @@ scan_clear_air() {
 					same++
 					if (same <= 4)
 						same_list = same_list sprintf(" \"%s\"", ssid == "" ? "(hidden)" : ssid)
-				} else if (f > 0 && f - want <= 160 && want - f <= 160)
+				} else if (f > 0 && f >= lo && f <= hi) {
 					near++
+					if (near <= 4)
+						near_list = near_list sprintf(" \"%s\"", ssid == "" ? "(hidden)" : ssid)
+				}
 			}
 			seen = 0
 		}
 		$1 == "BSS" {
 			flush()
 			seen = 1
+			b = $2
+			sub(/\(.*/, "", b)
+			b = tolower(b)
 			assoc = (index($0, "-- associated") > 0)
 			f = 0
 			ssid = ""
 			next
 		}
 		$1 == "freq:" { f = $2 + 0; next }
-		$1 == "SSID:" { sub(/^SSID: /, ""); ssid = $0; next }
+		$1 == "SSID:" {
+			line = $0
+			sub(/^[ \t]*SSID:[ \t]*/, "", line)
+			ssid = line
+			next
+		}
 		END {
 			flush()
-			printf "%d %d %d %d %d%s\n", total + 0, n + 0, same + 0, near + 0, own_bss + 0, same_list
+			names = (same_list != "") ? same_list : near_list
+			printf "%d %d %d %d %d%s\n", total + 0, n + 0, same + 0, near + 0, own_bss + 0, names
 		}
 	' "$SCAN_FILE")
 	SCAN_RECORDS=$(printf '%s' "$_counts" | awk '{ print $1 }')
@@ -2022,20 +2137,25 @@ scan_clear_air() {
 	SCAN_NEAR=$(printf '%s' "$_counts" | awk '{ print $4 }')
 	SCAN_OWN=$(printf '%s' "$_counts" | awk '{ print $5 }')
 	SCAN_NAMES=$(printf '%s' "$_counts" | awk '{$1 = $2 = $3 = $4 = $5 = ""; sub(/^ /, ""); print}')
-	printf 'round %s scan: %s BSS visible (%s foreign, %s own), %s on %s MHz, %s within 160 MHz\n' \
-		"$ROUND" "$SCAN_RECORDS" "$SCAN_FOREIGN" "$SCAN_OWN" "$SCAN_SAME" \
-		"$SEL_FREQ" "$SCAN_NEAR" |
+	_span_center=${SEL_CENTER1:-$SEL_FREQ}
+	_span_width=${SEL_WIDTH:-320}
+	printf 'round %s %s-scan: %s BSS visible (%s foreign, %s own), %s on %s MHz, %s overlapping %s MHz around %s MHz\n' \
+		"$ROUND" "$_phase" "$SCAN_RECORDS" "$SCAN_FOREIGN" "$SCAN_OWN" "$SCAN_SAME" \
+		"$SEL_FREQ" "$SCAN_NEAR" "$_span_width" "$_span_center" |
 		sed 's/^/  /' | while IFS= read -r _line; do say "$_line"; done
-	printf 'round=%s records=%s foreign=%s same_channel=%s near_160=%s own=%s names=%s\n' \
-		"$ROUND" "$SCAN_RECORDS" "$SCAN_FOREIGN" "$SCAN_SAME" "$SCAN_NEAR" \
-		"$SCAN_OWN" "${SCAN_NAMES:-none}" >>"$OUT/scan.txt"
+	printf 'round=%s phase=%s scan_start=%s scan_end=%s records=%s foreign=%s same_channel=%s near_overlap=%s own=%s names=%s\n' \
+		"$ROUND" "$_phase" "$_scan_start" "$_scan_end" "$SCAN_RECORDS" \
+		"$SCAN_FOREIGN" "$SCAN_SAME" "$SCAN_NEAR" "$SCAN_OWN" \
+		"${SCAN_NAMES:-none}" >>"$OUT/scan.txt"
 	if [ "$SCAN_RECORDS" -eq 0 ]; then
 		check UNKNOWN "clear arm: iw dev $SEL_IFACE scan returned no BSS records"
-		invalid "SCAN_UNKNOWN: iw dev $SEL_IFACE scan returned no BSS at all, so the same-channel claim is unverified"
+		invalid "SCAN_UNKNOWN: iw dev $SEL_IFACE scan ($_phase) returned no BSS at all, so the same-channel claim is unverified"
 	elif [ "$SCAN_SAME" -gt 0 ]; then
-		invalid "CO_CHANNEL_BSS: $SCAN_SAME BSS on $SEL_FREQ MHz (${SCAN_NAMES:-no SSID}; $SCAN_NEAR more within 160 MHz); the clear arm is not co-channel clean"
+		invalid "CO_CHANNEL_BSS: $SCAN_SAME BSS on $SEL_FREQ MHz ($_phase; ${SCAN_NAMES:-no SSID}; $SCAN_NEAR more overlapping ${_span_width} MHz); the clear arm is not co-channel clean"
+	elif [ "$SCAN_NEAR" -gt 0 ]; then
+		invalid "OVERLAPPING_BSS: $SCAN_NEAR foreign BSS overlap ${_span_width} MHz span around ${_span_center} MHz ($_phase; ${SCAN_NAMES:-no SSID}); the clear arm is not clear"
 	else
-		check PASS "clear arm: scan sees $SCAN_RECORDS BSS ($SCAN_FOREIGN foreign, $SCAN_OWN own), none on $SEL_FREQ MHz ($SCAN_NEAR within 160 MHz)"
+		check PASS "clear arm: scan sees $SCAN_RECORDS BSS ($SCAN_FOREIGN foreign, $SCAN_OWN own), none on $SEL_FREQ MHz ($SCAN_NEAR overlapping ${_span_width} MHz, phase=$_phase)"
 	fi
 }
 
@@ -2065,10 +2185,12 @@ measure_arm() {
 		snap_station "$OUT/$_tag-station-before.txt"
 		snap_sysfs "$OUT/$_tag-ap-before.txt"
 		snap_token "$OUT/$_tag-token-before.txt"
+		snap_survey "$OUT/$_tag-survey-before.txt"
 		run_iperf "$_dir" "$OUT/$_tag-iperf.json" "$OUT/$_tag-iperf.err"
 		snap_station "$OUT/$_tag-station-after.txt"
 		snap_sysfs "$OUT/$_tag-ap-after.txt"
 		snap_token "$OUT/$_tag-token-after.txt"
+		snap_survey "$OUT/$_tag-survey-after.txt"
 
 		_mbps=$(iperf_sum_field "$OUT/$_tag-iperf.json" sum_received bits_per_second || true)
 		[ -n "$_mbps" ] ||
@@ -2099,7 +2221,7 @@ measure_arm() {
 
 		# A measured direction must be visible on the selected 6G STA;
 		# otherwise the iperf3 flow took another path (or the station
-		# counter is missing) and the result is not a 6G result.
+		# counter is missing) and the arm is marked INVALID (C4).
 		if [ "$_dir" = "ap2sta" ]; then
 			_flow_d=$_st_tx_d
 			_flow_name="station tx bytes"
@@ -2113,7 +2235,7 @@ measure_arm() {
 			;;
 		*)
 			if [ "$_flow_d" -le 0 ]; then
-				die "$_dir: $_flow_name delta is $_flow_d; the iperf3 flow did not use the 6G STA $SEL_MAC"
+				invalid "ZERO_STA_BYTES: $_arm $_dir $_flow_name delta is $_flow_d; the iperf3 flow did not use the 6G STA $SEL_MAC"
 			fi
 			;;
 		esac
@@ -2124,6 +2246,20 @@ measure_arm() {
 		_ap_rx_a=$(sysfs_value "$OUT/$_tag-ap-after.txt" rx_bytes || true)
 		_ap_tx_d=$(num_delta "$_ap_tx_b" "$_ap_tx_a")
 		_ap_rx_d=$(num_delta "$_ap_rx_b" "$_ap_rx_a")
+
+		_sv_b=$(survey_values "$OUT/$_tag-survey-before.txt" "$SEL_FREQ")
+		_sv_a=$(survey_values "$OUT/$_tag-survey-after.txt" "$SEL_FREQ")
+		_sv_act_d=$(num_delta "$(printf '%s' "$_sv_b" | cut -d'|' -f1)" "$(printf '%s' "$_sv_a" | cut -d'|' -f1)")
+		_sv_busy_d=$(num_delta "$(printf '%s' "$_sv_b" | cut -d'|' -f2)" "$(printf '%s' "$_sv_a" | cut -d'|' -f2)")
+		if [ "$_sv_act_d" != "n/a" ] && [ "$_sv_busy_d" != "n/a" ]; then
+			_sv_pct=$(awk -v a="$_sv_act_d" -v b="$_sv_busy_d" 'BEGIN {
+				if (a + 0 > 0) printf "%.1f", b * 100.0 / a
+				else print "n/a"
+			}')
+			printf 'round=%s arm=%s dir=%s active_ms=%s busy_ms=%s busy_pct=%s\n' \
+				"$ROUND" "$_arm" "$_dir" "$_sv_act_d" "$_sv_busy_d" "$_sv_pct" >>"$OUT/survey.txt"
+			say "  survey: active ${_sv_act_d} ms, busy ${_sv_busy_d} ms (${_sv_pct}%)"
+		fi
 
 		_tok_a=$(token_values "$OUT/$_tag-token-after.txt")
 		_tok_sw=$(token_field "$_tok_a" 1)
@@ -2547,13 +2683,14 @@ main() {
 		say "traffic, which is not interference"
 		# A missing interferer is a second device that is not on the bench,
 		# not a run that failed.  invalid() would set INVALID, and cleanup
-		# turns that into status 1; record the gap and leave through 2
-		# (blocked) so a reader can tell the two apart.
+		# turns that into status 1; record the gap and leave through 3
+		# (missing-hardware) so a reader can tell the two apart.
 		touch "$OUT/verdict.invalid" 2>/dev/null || :
 		printf 'INVALID|NO_INTERFERER: %s\n' "$INTERFERER_NOTE" >>"$OUT/checks.txt" 2>/dev/null || :
 		printf 'INVALID\n' >"$OUT/verdict"
 		emit "verdict: INVALID (NO_INTERFERER: $INTERFERER_NOTE)"
-		_rec=$(no_client_record "$OUT" 68 no-interferer \
+		_rec=$(NC_RECORD_CAUSE=missing-hardware \
+			no_client_record "$OUT" 68 no-interferer \
 			"sh scripts/wireless/6g-clear-air.sh --interferer <2.4GHZ_AP_IP> --target <6GHZ_STA_IP> --create-bss" \
 			"NO_INTERFERER: $INTERFERER_NOTE" \
 			"6 GHz rx_ampdu_bytes_cnt delta, clear vs interferer" \
@@ -2561,7 +2698,7 @@ main() {
 			"mt76 token_info / WED token delta" 2>/dev/null)
 		printf '      missing no-interferer: a second device that can load 2.4/5 GHz out of band; once it is available run: sh scripts/wireless/6g-clear-air.sh --interferer <2.4GHZ_AP_IP> --target <6GHZ_STA_IP> --create-bss\n'
 		[ -n "$_rec" ] && printf '      no-client record: %s\n' "$_rec"
-		cleanup 2
+		cleanup "$(nc_cause_exit missing-hardware)"
 	fi
 
 	ROUND=1
@@ -2572,6 +2709,7 @@ main() {
 		reload_and_wait
 		verify_clear_arm
 		measure_arm clear
+		scan_clear_air post
 		restore_loaded_ssids
 		verify_loaded_arm
 		interferer_start || true
@@ -2620,7 +2758,7 @@ verify_clear_arm() {
 
 	# A real scan on the measured channel: "the air is clear" must be seen,
 	# not inferred from our own counters.
-	scan_clear_air
+	scan_clear_air pre
 
 	# The interferer band must really be quiet in this arm, otherwise the
 	# clear arm is contaminated (an SSID that survived the disable pass, or

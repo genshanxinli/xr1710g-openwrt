@@ -42,7 +42,7 @@ WANBENCH = REPO_ROOT / "tools/wan-bench/2.5g.sh"
 PREFLIGHT_TOOLS = (
     "ssh", "ethtool", "ip", "awk", "sed", "grep", "tr", "cut", "date",
     "id", "mkdir", "cat", "rm", "sleep", "readlink", "head", "tail", "wc",
-    "python3",
+    "dirname", "basename", "mv", "python3",
 )
 # A device that does not answer: no case below is allowed to reach SSH.
 UNREACHABLE = "root@192.0.2.1"
@@ -110,7 +110,7 @@ class WiredTest(Base):
             ["--device", UNREACHABLE, "--host-lan10g-if", "hw89nope0",
              "--ports", "lan10g"],
         )
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.returncode, 2, result.stderr)
         self.assertIn("BLOCKED: no device port advertises 2500baseT",
                       result.stdout)
         self.assertNotIn("iperf3", result.stderr)
@@ -126,7 +126,7 @@ class BPathTest(Base):
             BPATH,
             ["--device", UNREACHABLE, "--feeder-iface", "hw89nope0"],
         )
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.returncode, 3, result.stderr)
         self.assertEqual(result.stdout.strip(), "SKIP: no 2.5G feeder")
         self.assertNotIn("iperf3", result.stderr)
 

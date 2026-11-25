@@ -56,9 +56,10 @@
 #   * --apply writes are snapshotted first and restored from the
 #     EXIT/INT/TERM/HUP trap.  The summary compares before and after and
 #     names any mismatch.
-#   * netwatchdog: an already-active hold is left active; otherwise the
-#     harness takes the hold for the run and releases it on exit.  The hold
-#     file is the watchdog's own /tmp/netwatchdog.hold state.
+#   * netwatchdog: managed via scripts/lib/netwatchdog-guard.sh.  An already-
+#     active hold is left active; otherwise the harness takes the hold for the
+#     run and releases it on exit.  When netwatchdog is absent the run fails
+#     closed unless NWD_ALLOW_NO_SERVICE=1 is set.
 #   * Every load process and iperf3 client is tracked in a pid file and
 #     killed by the trap.
 #   * --dry-run resolves and prints the plan without sampling, sending
@@ -66,8 +67,9 @@
 #
 # Exit status:
 #   0  completed, or a dry run
-#   1  setup/run failure (the trap still restores what it changed)
-#   2  invalid arguments
+#   1  setup/run failure or netwatchdog hold refused (trap restores writes)
+#   2  invalid arguments, or missing traffic tool with no --source
+#   3  missing hardware (e.g. --soak without two clients; recorded v2 gap)
 #   130 / 143 / 129  interrupted by INT / TERM / HUP
 #
 # POSIX sh (busybox ash on OpenWrt).  Verified with sh -n, shellcheck -s sh,
@@ -109,6 +111,26 @@ PROG=${0##*/}
 NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
 # shellcheck source=lib/no-client.sh
 [ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
+if ! command -v nc_cause_exit >/dev/null 2>&1; then
+	nc_cause_exit() {
+		case ${1:-} in
+		missing-hardware) printf '3\n' ;;
+		missing-tool | config-block | permission | environment | output-collision)
+			printf '2\n' ;;
+		precondition-mismatch) printf '4\n' ;;
+		interrupted) printf '130\n' ;;
+		*) printf '1\n' ;;
+		esac
+	}
+fi
+
+NETWATCHDOG_GUARD=$(dirname "$0")/../lib/netwatchdog-guard.sh
+if [ ! -r "$NETWATCHDOG_GUARD" ]; then
+	printf '%s: shared library not found: %s\n' "$PROG" "$NETWATCHDOG_GUARD" >&2
+	exit 1
+fi
+# shellcheck source=../lib/netwatchdog-guard.sh
+. "$NETWATCHDOG_GUARD"
 
 # ---------------------------------------------------------------------------
 # Defaults.  Every value can also come from the environment.
@@ -133,6 +155,7 @@ IP_A=${IP_A:-}
 IP_B=${IP_B:-}
 
 FAN_PWM=${FAN_PWM:-}
+ALLOW_FAN_STOP=${ALLOW_FAN_STOP:-0}
 TXPOWER=${TXPOWER:-}
 APPLY=${APPLY:-0}
 DRY_RUN=${DRY_RUN:-0}
@@ -146,6 +169,7 @@ START_EPOCH=0
 RUN_END=0
 INTERRUPTED=
 CLEANED=0
+RUN_STARTED=0
 REBOOTS=0
 SAMPLES=0
 
@@ -163,9 +187,6 @@ IPERF3_CONNECT_TIMEOUT=0
 SOURCE=
 
 HOLD_PRIOR=
-HOLD_TAKEN=0
-HOLD_TOOK=0
-HOLD_FAILED=0
 FAN_APPLIED=0
 TXP_APPLIED=0
 
@@ -264,13 +285,14 @@ skip_no_tool() {
 	_name=$1
 	_detail=$2
 	_nc_run='sh scripts/wireless/thermal-soak.sh --soak --client-ip-a <IP_A> --client-ip-b <IP_B> --source <CMD>'
-	_rec=$(no_client_record "${OUT:-}" 53 "$_name" "$_nc_run" "$_detail" \
+	_rec=$(NC_RECORD_CAUSE=missing-tool \
+		no_client_record "${OUT:-}" 53 "$_name" "$_nc_run" "$_detail" \
 		"two-leg concurrent soak throughput" \
 		"thermal / throughput curve over the soak window" 2>/dev/null)
 	note "SKIP: $_detail"
 	note "missing $_name; install it (opkg install iperf3) or pass --source CMD"
 	[ -n "$_rec" ] && note "no-client record: $_rec"
-	exit 2
+	exit "$(nc_cause_exit missing-tool)"
 }
 
 is_uint() {
@@ -375,13 +397,16 @@ Common options:
   --apply               Allow fan/txpower writes.  Required for --fan-pwm and
                         --txpower.  Writes are snapshotted and restored by the
                         trap.  Requires root.
-  --fan-pwm N           With --apply: force nct7802 pwm1..3 to N (0..255) in
+  --fan-pwm N           With --apply: force nct7802 pwm1..3 to N (30..255) in
                         manual mode for the run, then restore the original
-                        PWM values and enable modes.
+                        PWM values and enable modes.  Values below 30 are
+                        refused unless --allow-fan-stop is also passed.
+  --allow-fan-stop      Allow --fan-pwm below the safety floor of 30 (down to
+                        0, which stops the fan).
   --txpower DBM         With --apply: fix the tested interface(s) at DBM,
-                        then restore the original value (or "auto" when the
-                        original was not a number).  This is a live iw
-                        setting, not a UCI change.
+                        then restore the original mode/value ("auto" when
+                        originally auto).  This is a live iw setting, not a
+                        UCI change.
   --help                This help.
 
 Thermal load (mode --thermal):
@@ -394,8 +419,8 @@ Thermal load (mode --thermal):
                         Without --client/--client-ip the thermal run samples
                         ambient state and reports throughput 0.
   --cpu-load PCT        Add PCT (0..100) of CPU load with "yes" workers,
-                        one per core step (on a 4-core AP, 10..24 => 0
-                        workers, 25 => 1, 50 => 2, 75 => 3, 100 => 4).
+                        at least 1 worker whenever PCT > 0 (on a 4-core AP,
+                        1..25 => 1 worker, 50 => 2, 75 => 3, 100 => 4).
 
 Soak legs (mode --soak, both legs are concurrent; one per band/client):
   --iface-a NAME        Leg A AP interface (alias: --iface).
@@ -450,8 +475,9 @@ Examples:
   sh thermal-soak.sh --thermal --apply --fan-pwm 255 --txpower 20 \
       --client-ip 192.168.1.236
 
-Exit status: 0 ok/dry run, 1 setup or run failure, 2 usage error or a
-missing traffic tool with no --source (recorded for hw-gap-report.sh),
+Exit status: 0 ok/dry run, 1 setup/run failure or netwatchdog hold refused,
+2 usage error or a missing traffic tool with no --source, 3 missing hardware
+(e.g. --soak without two clients; recorded for hw-gap-report.sh),
 130/143/129 interrupted by INT/TERM/HUP.
 
 Notes:
@@ -593,6 +619,9 @@ parse_args() {
 			FAN_PWM=$2
 			shift
 			;;
+		--allow-fan-stop)
+			ALLOW_FAN_STOP=1
+			;;
 		--txpower)
 			need_arg "$@"
 			TXPOWER=$2
@@ -695,6 +724,9 @@ validate() {
 		is_uint "$FAN_PWM" || usage_error "--fan-pwm must be 0..255"
 		FAN_PWM=$(norm_uint "$FAN_PWM")
 		[ "$FAN_PWM" -le 255 ] || usage_error "--fan-pwm must be 0..255"
+		if [ "$FAN_PWM" -lt 30 ] && [ "$ALLOW_FAN_STOP" -ne 1 ]; then
+			usage_error "--fan-pwm $FAN_PWM is below safety floor 30 (pass --allow-fan-stop to allow stopping the fan)"
+		fi
 		if [ "$APPLY" -ne 1 ] && [ "$DRY_RUN" -ne 1 ]; then
 			usage_error "--fan-pwm needs --apply; refusing to write"
 		fi
@@ -726,22 +758,21 @@ validate() {
 		if [ "$DRY_RUN" -eq 0 ]; then
 			# Two concurrent legs need two clients; without them the run
 			# stops here.  Record which one is missing so the gap shows up
-			# in hw-gap-report.sh; the argument error and its exit code are
-			# unchanged.
+			# in hw-gap-report.sh and exit 3 (missing-hardware).
 			if [ -z "$IP_A" ] || [ -z "$IP_B" ]; then
 				_nc_run='sh scripts/wireless/thermal-soak.sh --soak --client-ip-a <IP_A> --client-ip-b <IP_B> --duration 86400'
 				_missing_leg=''
 				[ -z "$IP_A" ] && _missing_leg='A'
 				[ -z "$IP_B" ] && _missing_leg="${_missing_leg}B"
-				_rec=$(no_client_record "${OUT:-}" 53 second-associated-wifi-client \
+				_rec=$(NC_RECORD_CAUSE=missing-hardware \
+					no_client_record "${OUT:-}" 53 second-associated-wifi-client \
 					"$_nc_run" "no client for soak leg $_missing_leg" \
 					"two-leg concurrent soak throughput" \
 					"thermal / throughput curve over the soak window" 2>/dev/null)
 				note "missing second-associated-wifi-client (leg $_missing_leg); once it is available run: $_nc_run"
 				[ -n "$_rec" ] && note "no-client record: $_rec"
+				exit "$(nc_cause_exit missing-hardware)"
 			fi
-			[ -n "$IP_A" ] || usage_error "--soak needs --client-ip-a (leg A)"
-			[ -n "$IP_B" ] || usage_error "--soak needs --client-ip-b (leg B)"
 		fi
 	fi
 
@@ -893,6 +924,47 @@ iface_txpower_dbm() {
 	esac
 }
 
+iface_txpower_mode() {
+	_info=$(iw dev "$1" info 2>/dev/null)
+	_line=$(printf '%s\n' "$_info" | awk '/txpower/ { print; exit }')
+	case "$_line" in
+	*fixed*) echo fixed; return 0 ;;
+	'' | *auto* | *off*) echo auto; return 0 ;;
+	esac
+	if command_exists uci; then
+		_dev=$(uci -q show wireless 2>/dev/null | awk -F= -v ifc="$1" '
+			$1 ~ /\.ifname$/ {
+				v = $2; gsub(/^'\''|'\''$/, "", v)
+				if (v == ifc) {
+					s = $1; sub(/\.ifname$/, "", s); sec = s
+				}
+			}
+			$1 ~ /\.device$/ {
+				s = $1; sub(/\.device$/, "", s)
+				v = $2; gsub(/^'\''|'\''$/, "", v)
+				devs[s] = v
+			}
+			END { if (sec != "" && sec in devs) print devs[sec] }
+		')
+		if [ -n "$_dev" ]; then
+			_u=$(uci -q get "wireless.${_dev}.txpower" 2>/dev/null || true)
+			case "$_u" in
+			'' | auto) echo auto; return 0 ;;
+			*) echo fixed; return 0 ;;
+			esac
+		fi
+		_wiphy=$(printf '%s\n' "$_info" | awk '/wiphy/ { print $2; exit }')
+		if [ -n "$_wiphy" ]; then
+			_u=$(uci -q get "wireless.radio${_wiphy}.txpower" 2>/dev/null || true)
+			case "$_u" in
+			'' | auto) ;;
+			*) echo fixed; return 0 ;;
+			esac
+		fi
+	fi
+	echo auto
+}
+
 resolve_iface_by_band() {
 	band=$1
 	for i in $(all_ap_ifaces); do
@@ -1031,55 +1103,10 @@ refresh_macs() {
 }
 
 # ---------------------------------------------------------------------------
-# netwatchdog hold.
+# netwatchdog hold (delegated to scripts/lib/netwatchdog-guard.sh).
 # ---------------------------------------------------------------------------
-netwatchdog_present() {
-	command_exists netwatchdog
-}
-
 nw_hold_state() {
-	if [ -e /tmp/netwatchdog.hold ]; then
-		echo on
-	elif netwatchdog_present; then
-		echo off
-	else
-		echo missing
-	fi
-}
-
-nw_hold_on() {
-	if ! netwatchdog_present; then
-		note "warning: netwatchdog not found; cannot hold the reboot watchdog"
-		HOLD_FAILED=1
-		return 1
-	fi
-	if [ "$(nw_hold_state)" = on ]; then
-		HOLD_TOOK=0
-		return 0
-	fi
-	# Set the taken flag before the command so an interrupt between the write
-	# and the next line still leads cleanup to release the hold.
-	HOLD_TAKEN=1
-	if ! netwatchdog hold on >/dev/null 2>&1; then
-		HOLD_TAKEN=0
-		note "warning: netwatchdog hold on failed"
-		HOLD_FAILED=1
-		return 1
-	fi
-	HOLD_TOOK=1
-	echo "[$(iso_utc)] hold: taken (was off)" >>"$RUN/events.log"
-	return 0
-}
-
-nw_hold_release() {
-	[ "$HOLD_TAKEN" -eq 1 ] || return 0
-	if netwatchdog_present && netwatchdog hold off >/dev/null 2>&1; then
-		echo "[$(iso_utc)] hold: released (restored to off)" >>"$RUN/events.log"
-	else
-		note "warning: netwatchdog hold off failed"
-		echo "[$(iso_utc)] hold: release FAILED" >>"$RUN/events.log"
-	fi
-	HOLD_TAKEN=0
+	nw_guard_state
 }
 
 # ---------------------------------------------------------------------------
@@ -1127,11 +1154,16 @@ fan_restore() {
 	echo "[$(iso_utc)] apply: fan restored" >>"$RUN/events.log"
 }
 
+txp_orig_field() {
+	sed -n "s/^$1=//p" "$2" 2>/dev/null | head -1
+}
+
 txp_snapshot() {
 	iface=$1
 	file=$2
+	txpower_mode=$(iface_txpower_mode "$iface")
 	txpower_dbm=$(iface_txpower_dbm "$iface")
-	printf '%s\n' "$txpower_dbm" >"$file"
+	printf 'mode=%s\ndbm=%s\n' "$txpower_mode" "$txpower_dbm" >"$file"
 }
 
 txp_apply() {
@@ -1157,8 +1189,10 @@ txp_restore() {
 		iface=${pair#*:}
 		file=$RUN/txp.$tag.orig
 		[ -n "$iface" ] && [ -f "$file" ] || continue
-		v=$(head -1 "$file")
-		if [ "$v" = na ]; then
+		mode=$(txp_orig_field mode "$file")
+		v=$(txp_orig_field dbm "$file")
+		[ -n "$v" ] || v=$(head -1 "$file")
+		if [ "$mode" = auto ] || [ "$v" = na ]; then
 			iw dev "$iface" set txpower auto >/dev/null 2>&1 || true
 		else
 			iw dev "$iface" set txpower fixed "$(awk -v d="$v" 'BEGIN { printf "%d", d * 100 }')" \
@@ -1198,9 +1232,11 @@ restore_check() {
 			iface=${pair#*:}
 			file=$RUN/txp.$tag.orig
 			[ -n "$iface" ] && [ -f "$file" ] || continue
-			want=$(head -1 "$file")
+			mode=$(txp_orig_field mode "$file")
+			want=$(txp_orig_field dbm "$file")
+			[ -n "$want" ] || want=$(head -1 "$file")
 			have=$(iface_txpower_dbm "$iface")
-			if [ "$want" != na ] && [ "$want" != "$have" ]; then
+			if [ "$mode" != auto ] && [ "$want" != na ] && [ "$want" != "$have" ]; then
 				TXP_RESTORE="mismatch:$iface=$want->$have"
 			fi
 		done
@@ -1892,6 +1928,7 @@ start_cpu_load() {
 	ncpu=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo 1)
 	[ -n "$ncpu" ] && [ "$ncpu" -gt 0 ] || ncpu=1
 	workers=$((CPU_LOAD * ncpu / 100))
+	[ "$workers" -ge 1 ] || workers=1
 	i=0
 	while [ "$i" -lt "$workers" ]; do
 		if command_exists yes; then
@@ -1955,23 +1992,25 @@ setup_run() {
 print_hold_report() {
 	before=${1-}
 	after=$(nw_hold_state)
-	case "$before" in
-	on) say "hold: before=on after=$after (already held; left unchanged)" ;;
-	off)
-		if [ "$HOLD_TOOK" -eq 1 ]; then
-			if [ "$after" = off ]; then
-				say "hold: before=off after=off (taken for the run and released)"
-			else
-				say "hold: before=off after=$after (WARNING: not back to off)"
-			fi
-		elif [ "$HOLD_FAILED" -eq 1 ]; then
-			say "hold: before=off after=$after (WARNING: hold could not be taken)"
-		else
-			say "hold: before=off after=$after"
-		fi
+	case "${NW_GUARD_ACTION:-}" in
+	took-and-released)
+		say "hold: before=$before after=$after (taken for the run and released)"
 		;;
-	missing) say "hold: netwatchdog not present (nothing to hold or restore)" ;;
-	*) say "hold: before=$before after=$after" ;;
+	took-release-failed | took-release-timeout)
+		say "hold: before=$before after=$after (WARNING: not back to off; action=$NW_GUARD_ACTION)"
+		;;
+	unchanged)
+		say "hold: before=$before after=$after (already held; left unchanged)"
+		;;
+	missing-allowed)
+		say "hold: netwatchdog not present (continued because NWD_ALLOW_NO_SERVICE=1)"
+		;;
+	refused | denied-busy | take-failed | timeout)
+		say "hold: before=$before after=$after (WARNING: hold refused; action=$NW_GUARD_ACTION result=${NW_GUARD_RESULT:-unknown})"
+		;;
+	*)
+		say "hold: before=$before after=$after"
+		;;
 	esac
 }
 
@@ -2258,19 +2297,7 @@ write_summary() {
 			soak_summary
 		fi
 		apply_restore_report
-		if [ "$HOLD_TOOK" -eq 1 ]; then
-			if [ "$(nw_hold_state)" = off ]; then
-				hold_action=took-and-released
-			else
-				hold_action=took-release-failed
-			fi
-		elif [ "$HOLD_PRIOR" = missing ]; then
-			hold_action=netwatchdog-missing
-		elif [ "$HOLD_FAILED" -eq 1 ]; then
-			hold_action=take-failed
-		else
-			hold_action=unchanged
-		fi
+		hold_action=${NW_GUARD_ACTION:-unknown}
 		printf 'hold: before=%s after=%s action=%s\n' "${HOLD_PRIOR:-unknown}" \
 			"$(nw_hold_state)" "$hold_action"
 		printf 'streams killed by trap: %s\n' "${STOPPED_CHILDREN:-0}"
@@ -2288,15 +2315,21 @@ cleanup() {
 	CLEANED=1
 	trap '' INT TERM HUP
 
-	[ -n "$RUN" ] && [ -d "$RUN" ] &&
+	[ "$RUN_STARTED" -eq 1 ] && [ -n "$RUN" ] && [ -d "$RUN" ] &&
 		echo "[$(iso_utc)] cleanup: reason=${INTERRUPTED:-duration}" >>"$RUN/events.log"
 	stop_children
 	fan_restore
 	txp_restore
-	nw_hold_release
+	if [ -n "$INTERRUPTED" ]; then
+		# shellcheck disable=SC2034  # consumed by sourced netwatchdog-guard.sh
+		NW_GUARD_SIGNAL=$INTERRUPTED
+	fi
+	nw_guard_cleanup
 
 	if [ -n "$RUN" ] && [ -d "$RUN" ]; then
-		write_summary
+		if [ "$RUN_STARTED" -eq 1 ]; then
+			write_summary
+		fi
 		print_hold_report "${HOLD_PRIOR:-unknown}"
 	fi
 }
@@ -2330,7 +2363,12 @@ plan_load() {
 			say "load traffic: none (no --client-ip; sensor-only run)"
 		fi
 		ncpu=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo 1)
-		say "load cpu: ${CPU_LOAD}% -> $((CPU_LOAD * ncpu / 100))/${ncpu} worker(s)"
+		[ -n "$ncpu" ] && [ "$ncpu" -gt 0 ] || ncpu=1
+		workers=$((CPU_LOAD * ncpu / 100))
+		if [ "$CPU_LOAD" -gt 0 ] && [ "$workers" -lt 1 ]; then
+			workers=1
+		fi
+		say "load cpu: ${CPU_LOAD}% -> ${workers}/${ncpu} worker(s)"
 	else
 		say "load traffic: iperf3 $STREAMS stream(s) $DIRECTION, both legs (${IPERF_TIME}s cycles, ${IPERF_GAP}s gap)"
 	fi
@@ -2369,7 +2407,7 @@ print_plan() {
 	case "$HOLD_PRIOR" in
 	on) say "hold: ACTIVE (/tmp/netwatchdog.hold); a real run would leave it active" ;;
 	off) say "hold: off; a real run would take netwatchdog hold and release it on exit" ;;
-	missing) say "hold: netwatchdog not present; nothing to take or restore" ;;
+	missing) say "hold: netwatchdog not present; a real run fails closed unless NWD_ALLOW_NO_SERVICE=1" ;;
 	esac
 	if [ -n "$FAN_PWM" ] || [ -n "$TXPOWER" ]; then
 		if [ "$APPLY" -eq 1 ]; then
@@ -2411,7 +2449,7 @@ sample_iteration() {
 	append_sensors
 	if [ "$MODE" = thermal ]; then
 		print_thermal_row
-	elif [ $((SAMPLES % PRINT_EVERY)) -eq 1 ]; then
+	elif [ $(( (SAMPLES - 1) % PRINT_EVERY )) -eq 0 ]; then
 		print_soak_row
 	fi
 }
@@ -2481,18 +2519,28 @@ run() {
 	trap 'INTERRUPTED=TERM; exit 143' TERM
 	trap 'INTERRUPTED=HUP; exit 129' HUP
 
-	setup_run
 	HOLD_PRIOR=$(nw_hold_state)
-	nw_hold_on || true
-	if [ "$HOLD_TAKEN" -eq 1 ]; then
+	nw_guard_init --apply --no-trap \
+		--label "thermal-soak-$MODE" \
+		--stale-minutes "$(( (DURATION / 60) + 60 ))" \
+		--result-json "$RUN/netwatchdog.json" ||
+		die "netwatchdog guard init failed"
+	nw_guard_take ||
+		die "netwatchdog hold refused (${NW_GUARD_RESULT:-unknown}); refusing run"
+	setup_run
+	RUN_STARTED=1
+	case "${NW_GUARD_ACTION:-}" in
+	took)
+		echo "[$(iso_utc)] hold: taken (was off)" >>"$RUN/events.log"
 		say "hold: taken for the run (was off); will release at exit"
-	elif [ "$HOLD_PRIOR" = on ]; then
+		;;
+	unchanged)
 		say "hold: ACTIVE before the run; left active"
-	elif [ "$HOLD_PRIOR" = missing ]; then
-		say "hold: netwatchdog not present"
-	elif [ "$HOLD_FAILED" -eq 1 ]; then
-		say "hold: WARNING: netwatchdog hold failed; the run is not protected from a watchdog reboot"
-	fi
+		;;
+	missing-allowed)
+		say "hold: netwatchdog not present (continuing because NWD_ALLOW_NO_SERVICE=1)"
+		;;
+	esac
 
 	fan_apply
 	txp_apply

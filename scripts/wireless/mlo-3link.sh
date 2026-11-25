@@ -59,12 +59,16 @@
 #   if userspace never comes up, boot the initramfs recovery image from the
 #   U-Boot recovery console; do not reflash unless the bootloader is wedged.
 #
-# Exit status:
+# Exit status (aligned with scripts/wireless/lib/no-client.sh v2):
 #   0    one-shot completed, no black-hole symptom, config restored
-#   1    safety failure: restore failed or a required command timed out
+#   1    black-hole symptom observed (nc_cause_exit internal), or safety
+#        failure (restore failed or a required command timed out)
 #   2    usage error, missing gate or unsupported environment (no config write)
-#   3    black-hole symptom observed (test completed and config restored)
-#   4    one-shot inconclusive: links != 3, no 3-link station, no traffic tool
+#   3    missing-hardware: no 3-link MLD station associated (nc_cause_exit
+#        missing-hardware; test completed and config restored)
+#   4    one-shot inconclusive / precondition mismatch: links-config (non-EHT),
+#        links != 3, station-no-perlink, station-not-3link, station-dump-empty,
+#        traffic-unreachable, link-lost, station-lost, or per-link-unavailable
 #   129/130/143  interrupted by HUP/INT/TERM; the trap restored the config
 #
 # The script is POSIX sh and runs with busybox ash, so it runs on the device.
@@ -81,6 +85,18 @@ PROG=${0##*/}
 NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
 # shellcheck source=lib/no-client.sh
 [ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
+if ! command -v nc_cause_exit >/dev/null 2>&1; then
+	nc_cause_exit() {
+		case ${1:-} in
+		missing-hardware) printf '3\n' ;;
+		missing-tool | config-block | permission | environment | output-collision)
+			printf '2\n' ;;
+		precondition-mismatch) printf '4\n' ;;
+		interrupted) printf '130\n' ;;
+		*) printf '1\n' ;;
+		esac
+	}
+fi
 MAIN_PID=$$
 MARKER=mlo-3link
 SECTION=mlo3link
@@ -102,6 +118,9 @@ STATION_TIMEOUT=${MLO3_STATION_TIMEOUT:-90}
 HARD_TIMEOUT=${MLO3_HARD_TIMEOUT:-600}
 CMD_TIMEOUT=${MLO3_CMD_TIMEOUT:-15}
 TRAFFIC=${MLO3_TRAFFIC:-auto}
+SYS_CLASS_NET=${MLO3_SYS_CLASS_NET:-/sys/class/net}
+HOSTAPD_CONF_DIR=${MLO3_HOSTAPD_CONF_DIR:-/var/run}
+PROC_UPTIME=${MLO3_PROC_UPTIME:-/proc/uptime}
 # Gate 1 policy: a missing netwatchdog is a warning (there is no watchdog to
 # restart the board) unless the caller asks for the strict gate.
 NWD_REQUIRE_SERVICE=${NWD_REQUIRE_SERVICE:-0}
@@ -123,6 +142,7 @@ LOG_FILE=
 CONFIG_MODIFIED=0
 RELOADED=0
 IP_ADDED=0
+IP_DEV=
 MLD=
 STATION=
 STATION_LINKS=
@@ -133,12 +153,16 @@ TRAFFIC_OK=0
 # dropped -- was reported as traffic-ok.
 TRAFFIC_MAX_LOSS=10
 TRAFFIC_TIMEOUT=0
+TRAFFIC_UNREACHABLE=0
+TRAFFIC_UNREACHABLE_REASON=
+TRAFFIC_ELAPSED_S=
 TRAFFIC_BITS=
 TRAFFIC_LOSS=
 TRAFFIC_TX=
 TRAFFIC_RX=
 # Set to 1 when the per-link byte counters did not move during the window.
 PER_LINK_NOBYTES=0
+PER_LINK_UNAVAILABLE=0
 RESULT=
 STOP=
 LINKS_AT_STOP=
@@ -313,6 +337,91 @@ select_radios() {
 		die "the 2.4/5/6 GHz radios share a radio index; a 3-link MLD needs three distinct link IDs"
 
 	LINK_MAP="$_r24:2.4 $_r5:5g $_r6:6g"
+	return 0
+}
+
+radio_has_eht() {
+	# radio_has_eht DEV BAND: check live hostapd-phy*.conf (ieee80211be=1) and
+	# live iw dev first; fall back to UCI wireless.<dev>.htmode EHT*.
+	_dev=$1
+	_band=$2
+	_idx=$(radio_index "$_dev")
+	if [ -z "$_idx" ]; then
+		_idx=$(printf '%s' "$_dev" | sed -n 's/^[^0-9]*\([0-9][0-9]*\)$/\1/p')
+	fi
+	_saw_conf=0
+	if [ -n "$_idx" ]; then
+		for _cf in \
+			"$HOSTAPD_CONF_DIR/hostapd-phy0.${_idx}.conf" \
+			"$HOSTAPD_CONF_DIR/hostapd-phy${_idx}.conf"; do
+			[ -r "$_cf" ] || continue
+			_saw_conf=1
+			if grep -q '^ieee80211be=1' "$_cf" 2>/dev/null; then
+				return 0
+			fi
+		done
+		if [ "$_saw_conf" = 0 ] && [ "$HOSTAPD_CONF_DIR" = "/var/run" ] &&
+			{ [ -z "${MLO3_HOSTAPD_CONF_DIR:-}" ] || [ "${MLO3_HOSTAPD_CONF_DIR:-}" = "/var/run" ]; }; then
+			for _cf in \
+				"/tmp/run/hostapd-phy0.${_idx}.conf" \
+				"/tmp/run/hostapd-phy${_idx}.conf"; do
+				[ -r "$_cf" ] || continue
+				_saw_conf=1
+				if grep -q '^ieee80211be=1' "$_cf" 2>/dev/null; then
+					return 0
+				fi
+			done
+		fi
+		# Live hostapd config exists for this radio without ieee80211be=1.
+		[ "$_saw_conf" = 1 ] && return 1
+	fi
+	if have iw; then
+		_iw_eht=$(iw dev 2>/dev/null | awk -v band="$_band" '
+			function flush() {
+				if (in_if && matched && has_eht) found = 1
+			}
+			/^[ \t]*Interface / { flush(); in_if = 1; matched = 0; has_eht = 0; next }
+			in_if && /^[ \t]*ssid[ \t]/ { next }
+			in_if && /^[ \t]*channel / {
+				line = $0
+				if (match(line, /\([0-9]+ MHz\)/)) {
+					f = substr(line, RSTART + 1, RLENGTH - 6) + 0
+					if ((band == "2.4" && f >= 2400 && f <= 2500) ||
+					    (band == "5g" && f >= 5000 && f <= 5900) ||
+					    (band == "6g" && f >= 5925 && f <= 7125))
+						matched = 1
+				}
+				if (line ~ /width:[ \t]*320 MHz/) has_eht = 1
+				next
+			}
+			in_if && (/^[ \t]*MLD / || /^[ \t]*- link ID [0-9]+/ || /^[ \t]*link [0-9]+:/ || /^[ \t]*ieee80211be=1/) { has_eht = 1 }
+			END { flush(); if (found) print "yes" }
+		')
+		[ "$_iw_eht" = yes ] && return 0
+	fi
+	_ht=$(uci_get "wireless.$_dev.htmode" 2>/dev/null || :)
+	case "$_ht" in
+	EHT*|eht*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+check_eht_precondition() {
+	_bad=
+	for _pair in "$DEV24:2.4" "$DEV5:5g" "$DEV6:6g"; do
+		_d=${_pair%%:*}
+		_b=${_pair#*:}
+		if ! radio_has_eht "$_d" "$_b"; then
+			_ht=$(uci_get "wireless.$_d.htmode" 2>/dev/null || :)
+			_bad="$_bad ${_d}(${_b}:htmode=${_ht:-unset})"
+		fi
+	done
+	if [ -n "$_bad" ]; then
+		RESULT=links-config
+		STOP="EHT (802.11be) precondition failed before any config write:${_bad} (need ieee80211be=1 in hostapd-phy*.conf or UCI htmode EHT*)"
+		warn "$STOP"
+		return 1
+	fi
 	return 0
 }
 
@@ -1042,6 +1151,22 @@ capture_after() {
 		>"$CAPTURE/dmesg-interesting.count"
 }
 
+resolve_ip_dev() {
+	# If $MLD is enslaved to a bridge, return the bridge master name (via
+	# readlink /sys/class/net/$MLD/master) so LOCAL_IP is added on the bridge
+	# rather than on an enslaved port (issue #89 MLO-1).
+	_dev=${1:-$MLD}
+	[ -n "$_dev" ] || return 1
+	if [ -L "$SYS_CLASS_NET/$_dev/master" ]; then
+		_master=$(readlink "$SYS_CLASS_NET/$_dev/master" 2>/dev/null || :)
+		if [ -n "$_master" ]; then
+			printf '%s\n' "${_master##*/}"
+			return 0
+		fi
+	fi
+	printf '%s\n' "$_dev"
+}
+
 add_local_ip() {
 	[ -n "$LOCAL_IP" ] || return 0
 	[ -n "$MLD" ] || die "no MLD to add $LOCAL_IP to"
@@ -1051,22 +1176,90 @@ add_local_ip() {
 		die "IPv6 is not supported by the one-shot traffic window; use an IPv4 --local-ip"
 		;;
 	esac
-	if run_limited "$CMD_TIMEOUT" ip addr show dev "$MLD" 2>/dev/null |
+	IP_DEV=$(resolve_ip_dev "$MLD")
+	if [ "$IP_DEV" != "$MLD" ]; then
+		say "local-ip: $MLD is bridged under $IP_DEV; adding $LOCAL_IP on $IP_DEV"
+	fi
+	if run_limited "$CMD_TIMEOUT" ip addr show dev "$IP_DEV" 2>/dev/null |
 		grep -q "inet ${LOCAL_IP%/*}/"; then
 		return 0
 	fi
-	run_limited "$CMD_TIMEOUT" ip addr add "$LOCAL_IP" dev "$MLD" >/dev/null 2>&1 ||
-		die "cannot add $LOCAL_IP to $MLD"
+	run_limited "$CMD_TIMEOUT" ip addr add "$LOCAL_IP" dev "$IP_DEV" >/dev/null 2>&1 ||
+		die "cannot add $LOCAL_IP to $IP_DEV"
 	IP_ADDED=1
-	run_limited "$CMD_TIMEOUT" ip link set "$MLD" up >/dev/null 2>&1 ||
-		warn "could not bring $MLD up"
+	run_limited "$CMD_TIMEOUT" ip link set "$IP_DEV" up >/dev/null 2>&1 ||
+		warn "could not bring $IP_DEV up"
 }
 
 del_local_ip() {
 	[ "$IP_ADDED" = 1 ] || return 0
-	[ -n "$LOCAL_IP" ] && [ -n "$MLD" ] || return 0
-	run_limited 5 ip addr del "$LOCAL_IP" dev "$MLD" >/dev/null 2>&1 || :
+	_target=${IP_DEV:-$MLD}
+	[ -n "$LOCAL_IP" ] && [ -n "$_target" ] || return 0
+	run_limited 5 ip addr del "$LOCAL_IP" dev "$_target" >/dev/null 2>&1 || :
 	IP_ADDED=0
+	IP_DEV=
+}
+
+probe_peer_reachability() {
+	# Pre-window control reachability probe (issue #89 MLO-2): distinguish a
+	# missing route or refused iperf3 control port (traffic-unreachable, rc=4)
+	# from a silent unicast black-hole timeout.
+	TRAFFIC_UNREACHABLE=0
+	TRAFFIC_UNREACHABLE_REASON=
+	if have ip; then
+		if ! run_limited 5 ip route get "$PEER" >/dev/null 2>&1; then
+			TRAFFIC_UNREACHABLE=1
+			TRAFFIC_UNREACHABLE_REASON="no route to peer $PEER from ${LOCAL_IP%/*}"
+			warn "control probe: $TRAFFIC_UNREACHABLE_REASON"
+			return 1
+		fi
+	fi
+	if [ "$TRAFFIC_TOOL" = iperf3 ]; then
+		run_limited 3 iperf3 -B "${LOCAL_IP%/*}" -c "$PEER" -n 1 \
+			>"$CAPTURE/probe.out" 2>"$CAPTURE/probe.err"
+		_prc=$?
+		if [ "$_prc" -ne 0 ] && grep -Eqi \
+			'Connection refused|No route to host|Network is unreachable|Cannot assign requested address|Name or service not known|Host is unreachable' \
+			"$CAPTURE/probe.err" "$CAPTURE/probe.out" 2>/dev/null; then
+			_detail=$(head -n 1 "$CAPTURE/probe.err" 2>/dev/null || :)
+			TRAFFIC_UNREACHABLE=1
+			TRAFFIC_UNREACHABLE_REASON="iperf3 control probe to $PEER failed: ${_detail:-unreachable}"
+			warn "control probe: $TRAFFIC_UNREACHABLE_REASON"
+			return 1
+		fi
+	else
+		run_limited 3 ping -I "${LOCAL_IP%/*}" -c 1 -W 2 "$PEER" \
+			>"$CAPTURE/probe.out" 2>&1
+		_prc=$?
+		if [ "$_prc" -ne 0 ] && grep -Eqi \
+			'Network is unreachable|No route to host|Cannot assign requested address|Invalid argument|Destination Host Unreachable|bad address' \
+			"$CAPTURE/probe.out" 2>/dev/null; then
+			_detail=$(head -n 1 "$CAPTURE/probe.out" 2>/dev/null || :)
+			TRAFFIC_UNREACHABLE=1
+			TRAFFIC_UNREACHABLE_REASON="ping control probe to $PEER failed: ${_detail:-unreachable}"
+			warn "control probe: $TRAFFIC_UNREACHABLE_REASON"
+			return 1
+		fi
+	fi
+	return 0
+}
+
+uptime_s() {
+	awk '{ print $1; exit }' "${PROC_UPTIME:-/proc/uptime}" 2>/dev/null || :
+}
+
+elapsed_seconds() {
+	# elapsed_seconds START END FALLBACK: compute actual elapsed seconds from
+	# /proc/uptime, clamped >= 1 so per-link rates never divide by zero/sub-1s.
+	awk -v a="$1" -v b="$2" -v fb="$3" 'BEGIN {
+		if (a == "" || b == "" || a !~ /^[0-9]+(\.[0-9]+)?$/ || b !~ /^[0-9]+(\.[0-9]+)?$/) {
+			v = (fb + 0 >= 1) ? fb + 0 : 1
+		} else {
+			v = b - a
+			if (v < 1) v = 1
+		}
+		printf "%.2f", v
+	}'
 }
 
 resolve_traffic_tool() {
@@ -1131,6 +1324,12 @@ traffic_window() {
 		case "$_rc" in
 		124|143) TRAFFIC_TIMEOUT=1 ;;
 		esac
+		if [ "$_rc" -ne 0 ] && grep -Eqi \
+			'Connection refused|No route to host|Network is unreachable|Cannot assign requested address' \
+			"$CAPTURE/iperf3.err" 2>/dev/null; then
+			TRAFFIC_UNREACHABLE=1
+			TRAFFIC_UNREACHABLE_REASON="iperf3 could not reach $PEER ($(head -n 1 "$CAPTURE/iperf3.err" 2>/dev/null || :))"
+		fi
 		_flat=$(tr '\n\r\t' '   ' <"$CAPTURE/iperf3.json" 2>/dev/null)
 		_block=$(printf '%s' "$_flat" |
 			sed -n 's/.*"sum_sent":[[:space:]]*{\([^}]*\)}.*/\1/p' | head -n 1)
@@ -1149,6 +1348,12 @@ traffic_window() {
 		case "$_rc" in
 		124|143) TRAFFIC_TIMEOUT=1 ;;
 		esac
+		if [ "$_rc" -ne 0 ] && grep -Eqi \
+			'Network is unreachable|No route to host|Cannot assign requested address|Invalid argument' \
+			"$CAPTURE/ping.txt" 2>/dev/null; then
+			TRAFFIC_UNREACHABLE=1
+			TRAFFIC_UNREACHABLE_REASON="ping could not reach $PEER ($(head -n 1 "$CAPTURE/ping.txt" 2>/dev/null || :))"
+		fi
 		TRAFFIC_TX=$(sed -n 's/.* \([0-9][0-9]*\) packets transmitted.*/\1/p' "$CAPTURE/ping.txt" 2>/dev/null | tail -n 1)
 		TRAFFIC_RX=$(sed -n 's/.* \([0-9][0-9]*\) packets received.*/\1/p' "$CAPTURE/ping.txt" 2>/dev/null | tail -n 1)
 		TRAFFIC_LOSS=$(sed -n 's/.* \([0-9][0-9]*\)% packet loss.*/\1/p' "$CAPTURE/ping.txt" 2>/dev/null | tail -n 1)
@@ -1164,14 +1369,16 @@ traffic_window() {
 
 per_link_deltas() {
 	# per_link_deltas BEFORE AFTER SECONDS ; print measured per-link rates and
-	# byte deltas.  Returns 1 when per-link counters are unavailable, 2 when
-	# the counters exist but moved no byte.
+	# byte deltas.  Returns 1 when per-link counters are unavailable or dumps
+	# are empty, 2 when the counters exist but moved no byte.
 	_before=$1
 	_after=$2
 	_secs=$3
+	[ -s "$_before" ] && [ -s "$_after" ] || return 1
 	station_fields "$_before" "$STATION" >"${STATE_DIR}/.fields-before.$$" 2>/dev/null || :
 	station_fields "$_after" "$STATION" >"${STATE_DIR}/.fields-after.$$" 2>/dev/null || :
 	awk -F '\t' -v secs="$_secs" '
+		BEGIN { if (secs + 0 < 1) secs = 1 }
 		NR == FNR { b[$1 SUBSEP $2 SUBSEP $3] = $4; next }
 		$1 == "link" && ($3 == "tx_bytes" || $3 == "rx_bytes") {
 			key = $1 SUBSEP $2 SUBSEP $3
@@ -1216,12 +1423,24 @@ classify_result() {
 	[ -n "$MLD" ] && _links_now=$(link_count "$MLD")
 	case "$_links_now" in ''|*[!0-9]*) _links_now=0 ;; esac
 
+	if [ "${TRAFFIC_UNREACHABLE:-0}" = 1 ]; then
+		RESULT=traffic-unreachable
+		STOP="${TRAFFIC_UNREACHABLE_REASON:-peer ${PEER:-unknown} was unreachable on the control plane}"
+		return 0
+	fi
+
 	# Per-link counters that exist but moved no byte mean the window carried
 	# no data, even when the tool reported success -- ping still counted a
 	# 90%-loss burst, iperf3 can report a rate for a link that sent nothing.
 	# Such a window is not traffic-ok.
 	if [ "$TRAFFIC_OK" = 1 ] && [ "$PER_LINK_NOBYTES" = 1 ]; then
 		TRAFFIC_OK=0
+	fi
+
+	if [ "$TRAFFIC_OK" = 1 ] && [ "${PER_LINK_UNAVAILABLE:-0}" = 1 ]; then
+		RESULT=per-link-unavailable
+		STOP="station dump had no usable per-link counters; cannot confirm 3-link traffic"
+		return 0
 	fi
 
 	if [ "$TRAFFIC_OK" = 1 ]; then
@@ -1637,6 +1856,7 @@ write_result() {
 		printf '  "traffic_tool": "%s",\n' "$(_json_str "${TRAFFIC_TOOL:-none}")"
 		printf '  "traffic_ok": %s,\n' "$([ "$TRAFFIC_OK" = 1 ] && printf true || printf false)"
 		printf '  "traffic_timeout": %s,\n' "$([ "$TRAFFIC_TIMEOUT" = 1 ] && printf true || printf false)"
+		printf '  "traffic_elapsed_s": %s,\n' "${TRAFFIC_ELAPSED_S:-0}"
 		printf '  "traffic_loss_pct": "%s",\n' "$(_json_str "${TRAFFIC_LOSS:-}")"
 		printf '  "traffic_goodput_mbps": "%s",\n' "$(_json_str "${TRAFFIC_BITS:-}")"
 		printf '  "blackhole_symptom": %s,\n' "$([ "$RESULT" = blackhole ] && printf true || printf false)"
@@ -1668,9 +1888,9 @@ write_summary() {
 		fi
 		printf '  links: %s\n' "${LINKS_AT_STOP:-0}"
 		printf '  station: %s (links: %s)\n' "${STATION:-none}" "${STATION_LINKS:-0}"
-		printf '  traffic: %s ok=%s timeout=%s loss=%s goodput_bps=%s\n' \
+		printf '  traffic: %s ok=%s timeout=%s elapsed=%ss loss=%s goodput_bps=%s\n' \
 			"${TRAFFIC_TOOL:-none}" "$TRAFFIC_OK" "$TRAFFIC_TIMEOUT" \
-			"${TRAFFIC_LOSS:-n/a}" "${TRAFFIC_BITS:-n/a}"
+			"${TRAFFIC_ELAPSED_S:-0}" "${TRAFFIC_LOSS:-n/a}" "${TRAFFIC_BITS:-n/a}"
 		printf '  serial: %s\n' "$([ "$NO_SERIAL" = 1 ] && printf 'none (--no-serial acknowledged)' || printf '%s' "${SERIAL:-none}")"
 		printf '  evidence: %s\n' "$CAPTURE"
 	} >"$CAPTURE/summary.txt" 2>/dev/null || :
@@ -1764,6 +1984,11 @@ do_run() {
 	preflight_run
 	select_radios
 	check_existing
+	if ! check_eht_precondition; then
+		say "RESULT: $RESULT"
+		say "  $STOP"
+		exit 4
+	fi
 
 	say "mlo-3link: one-shot 3-link MLO negative test"
 	say "  config: $CONFIG"
@@ -1827,7 +2052,8 @@ do_run() {
 		# A subdirectory of the evidence dir: cleanup() rewrites
 		# "$CAPTURE/result.json" with this run's own result, which would
 		# otherwise overwrite the no-client record.
-		_rec=$(no_client_record "${CAPTURE:+$CAPTURE/no-client}" 89 6ghz-mlo-3link-client \
+		_rec=$(NC_RECORD_CAUSE=missing-hardware \
+			no_client_record "${CAPTURE:+$CAPTURE/no-client}" 89 6ghz-mlo-3link-client \
 			"$_nc_run" "$STOP" \
 			"3-link MLO association (links=3 on the AP MLD)" \
 			"per-link station rates from iw station dump" \
@@ -1835,10 +2061,16 @@ do_run() {
 		say "result: $STOP; no traffic window and no retry"
 		say "      missing 6ghz-mlo-3link-client; once it is available run: $_nc_run"
 		[ -n "$_rec" ] && say "      no-client record: $_rec"
-		exit 4
+		exit "$(nc_cause_exit missing-hardware)"
 	fi
 
 	station_dump_to "$CAPTURE/station-before-traffic.txt"
+	if [ ! -s "$CAPTURE/station-before-traffic.txt" ]; then
+		RESULT=station-dump-empty
+		STOP="station-before-traffic.txt is empty; cannot verify per-link counters"
+		say "result: $STOP; no traffic window and no retry"
+		exit 4
+	fi
 	STATION_LINKS=$(station_link_count "$CAPTURE/station-before-traffic.txt" "$STATION")
 	case "$STATION_LINKS" in ''|*[!0-9]*) STATION_LINKS=0 ;; esac
 	say "station: $STATION; per-link data: ${STATION_LINKS} link(s)"
@@ -1850,13 +2082,33 @@ do_run() {
 		warn "per-link station rates are unavailable in iw station dump"
 	fi
 
+	add_local_ip
+	if ! probe_peer_reachability; then
+		classify_result
+		say "inconclusive: $STOP"
+		exit 4
+	fi
+
+	# Re-snapshot station counters right before the traffic window so
+	# probe_peer_reachability() packets do not pollute the measured deltas.
+	station_dump_to "$CAPTURE/station-before-traffic.txt"
+	if [ ! -s "$CAPTURE/station-before-traffic.txt" ]; then
+		RESULT=station-dump-empty
+		STOP="station-before-traffic.txt is empty after reachability probe; cannot verify per-link counters"
+		say "result: $STOP; no traffic window and no retry"
+		exit 4
+	fi
+
+	_up_before=$(uptime_s)
 	traffic_window
 	capture_after
 	station_dump_to "$CAPTURE/station-after-traffic.txt"
+	_up_after=$(uptime_s)
+	TRAFFIC_ELAPSED_S=$(elapsed_seconds "$_up_before" "$_up_after" "$DURATION")
 
 	per_link_rc=0
 	if per_link_deltas "$CAPTURE/station-before-traffic.txt" \
-		"$CAPTURE/station-after-traffic.txt" "$DURATION"; then
+		"$CAPTURE/station-after-traffic.txt" "$TRAFFIC_ELAPSED_S"; then
 		:
 	else
 		per_link_rc=$?
@@ -1868,6 +2120,7 @@ do_run() {
 		say "per-link counters exist but moved no byte during the traffic window"
 		;;
 	*)
+		PER_LINK_UNAVAILABLE=1
 		say "per-link traffic rates: unavailable (iw station dump has no per-link counters)"
 		;;
 	esac
@@ -1877,7 +2130,7 @@ do_run() {
 	blackhole)
 		say "BLACK-HOLE SYMPTOM: $STOP"
 		say "the run stops here; there is no retry"
-		exit 3
+		exit "$(nc_cause_exit internal)"
 		;;
 	traffic-ok)
 		say "traffic completed without a black-hole symptom"
@@ -2025,10 +2278,12 @@ Test shape:
 
 Exit status:
   0    one-shot completed, no black-hole symptom, config restored
-  1    safety failure: restore failed or a required command timed out
+  1    black-hole symptom observed, or safety failure (restore/timeout)
   2    usage error, missing gate or unsupported environment (no config write)
-  3    black-hole symptom observed (test completed and config restored)
-  4    one-shot inconclusive: links != 3, no 3-link station, traffic tool
+  3    missing-hardware: no 3-link MLD station associated (config restored)
+  4    one-shot inconclusive / precondition mismatch (links-config, links != 3,
+       station-not-3link, station-no-perlink, station-dump-empty, link-lost,
+       station-lost, per-link-unavailable, traffic-unreachable)
   129/130/143  interrupted by HUP/INT/TERM; the trap restored the config
 
 Serial fallback (keep this open before the run):

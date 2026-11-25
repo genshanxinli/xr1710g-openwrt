@@ -28,7 +28,10 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-SCRIPT = REPO / "scripts" / "wireless" / "multi-client.sh"
+SCRIPT = Path(
+    os.environ.get("MULTI_CLIENT_UNDER_TEST")
+    or (REPO / "scripts" / "wireless" / "multi-client.sh")
+)
 
 MAC1 = "aa:bb:cc:dd:ee:01"
 MAC2 = "aa:bb:cc:dd:ee:02"
@@ -116,7 +119,8 @@ class Fixture:
                 "KILL_WAIT": "5",
             }
         )
-        self.env.pop("MIN_MBIT", None)
+        for k in ("MIN_MBIT", "TARGET_A_GBIT", "TARGET_B_GBIT"):
+            self.env.pop(k, None)
         (self.fix / "debugfs").mkdir()
 
     def args(self, extra=(), arm="a", window=2, warmup=1):
@@ -181,7 +185,8 @@ class MinMbitFlagTest(unittest.TestCase):
         out = Path(tempfile.mkdtemp(prefix="mc50-out-")) / "out"
         fix = Fixture([(MAC1, 6.0), (MAC2, 2.0)], out)
         proc = fix.run(extra=["--min-mbit", "5"])
-        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        # Measured, but an idle client aborts the arm: v2 exit 4.
+        self.assertEqual(proc.returncode, 4, proc.stdout + proc.stderr)
         by_mac = {r[1]: r for r in client_rows(out)}
         self.assertEqual(status(by_mac[MAC1]), "ok", by_mac[MAC1])
         self.assertEqual(status(by_mac[MAC2]), "idle", by_mac[MAC2])
@@ -202,7 +207,8 @@ class IdleClientTest(unittest.TestCase):
         out = Path(tempfile.mkdtemp(prefix="mc50-out-")) / "out"
         fix = Fixture([(MAC1, 2.0), (MAC2, 0.05)], out)
         proc = fix.run()
-        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        # Measured, but the quiet client aborts the arm: v2 exit 4.
+        self.assertEqual(proc.returncode, 4, proc.stdout + proc.stderr)
         by_mac = {r[1]: r for r in client_rows(out)}
         self.assertEqual(status(by_mac[MAC1]), "ok", by_mac[MAC1])
         self.assertNotEqual(status(by_mac[MAC2]), "ok", by_mac[MAC2])
@@ -221,10 +227,15 @@ class GrandchildTest(unittest.TestCase):
         fix = Fixture([(MAC1, 2.0), (MAC2, 2.0)], out)
 
         pidfile = fix.out / "arm-a" / "grandchildren.txt"
+        samples = fix.out / "arm-a" / "samples.tsv"
         # The subshell exits at once, so the sleep is reparented and no longer
         # in the ppid tree of the recorded pid; only a group kill reaches it.
         source = '( sleep 300 & echo $! >> "$OUT/grandchildren.txt" ) ; sleep "$SOURCE_SECS"'
-        args = fix.args(extra=["--source", source])
+        # Use a 5s warmup so heavy parallel CPU load cannot finish the arm
+        # before SIGINT arrives, and wait until both sources have recorded
+        # their grandchildren and warmup sampling has started (guaranteeing
+        # start_sources has finished registering every PID in SRC_PIDS).
+        args = fix.args(extra=["--source", source], warmup=5)
         proc = subprocess.Popen(
             args,
             cwd=str(REPO),
@@ -237,8 +248,16 @@ class GrandchildTest(unittest.TestCase):
         )
         pids = []
         try:
-            deadline = time.time() + 20
-            while time.time() < deadline and not pidfile.exists():
+            deadline = time.time() + 25
+            while time.time() < deadline:
+                if pidfile.exists():
+                    pids = [int(x) for x in pidfile.read_text().split()]
+                warmup_ready = (
+                    samples.exists()
+                    and "\nwarmup\t" in samples.read_text()
+                )
+                if len(pids) >= 1 and warmup_ready:
+                    break
                 time.sleep(0.1)
             self.assertTrue(pidfile.exists(), "the source never started")
             pids = [int(x) for x in pidfile.read_text().split()]
@@ -246,7 +265,9 @@ class GrandchildTest(unittest.TestCase):
             # Interrupt during the warm-up, the same way an operator would.
             proc.send_signal(signal.SIGINT)
             out_text = proc.communicate(timeout=30)[0]
-            deadline = time.time() + 6
+            # Re-read in case another entry flushed just before signal delivery.
+            pids = sorted(set(pids) | {int(x) for x in pidfile.read_text().split()})
+            deadline = time.time() + 10
             alive = list(pids)
             while time.time() < deadline and alive:
                 alive = [p for p in alive if Path("/proc/%d/stat" % p).exists()]
@@ -294,7 +315,8 @@ class MinMbpsAliasTest(unittest.TestCase):
         out = Path(tempfile.mkdtemp(prefix="mc50-out-")) / "out"
         fix = Fixture([(MAC1, 6.0), (MAC2, 0.05)], out)
         proc = fix.run(extra=["--min-mbps", "5"])
-        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        # Measured, but one client is below the floor: v2 exit 4.
+        self.assertEqual(proc.returncode, 4, proc.stdout + proc.stderr)
         self.assertIn("ok=1 below_floor=1 invalid=0", proc.stdout, proc.stdout)
         data = json.loads((Path(out) / "result.json").read_text())
         self.assertEqual(data["min_mbit"], 5.0)

@@ -109,7 +109,7 @@ class Base:
         self.assertIn("BLOCKED: missing iperf3", result.stdout)
         self.assertIn("missing iperf3", result.stderr)
         self.assertIn("no-client record:", result.stderr)
-        record = json.loads((self.out / "result.json").read_text())
+        record = json.loads((self.out / "no-hardware/result.json").read_text())
         self.assertEqual(record["schema"], "wireless-no-client/v1")
         self.assertEqual(record["status"], "no-client")
         self.assertEqual(record["missing"], "iperf3")
@@ -122,7 +122,7 @@ class Base:
         combined = result.stdout + result.stderr
         self.assertEqual(result.returncode, 0, combined)
         self.assertIn("dry-run continues", result.stderr)
-        self.assertFalse((self.out / "result.json").exists(), combined)
+        self.assertFalse((self.out / "no-hardware/result.json").exists(), combined)
 
     def test_the_device_gate_records_instead_of_dying(self):
         # The device side is one line inside check_device; driving it needs a

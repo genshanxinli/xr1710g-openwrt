@@ -125,7 +125,7 @@ class BlockedRecordTest(unittest.TestCase):
         return result, out
 
     def read_record(self, out):
-        path = out / "result.json"
+        path = out / "no-hardware/result.json"
         self.assertTrue(path.is_file(), "no record under %s" % out)
         return json.loads(path.read_text(encoding="utf-8"))
 
@@ -141,7 +141,7 @@ class BlockedRecordTest(unittest.TestCase):
 
     def test_no_port_block_records_missing_hardware(self):
         result, out = self.no_port_block()
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.returncode, 2, result.stderr)
         # stdout is the single BLOCKED line, exactly as before the record.
         self.assertEqual(
             result.stdout, "BLOCKED: no device port advertises 2500baseT\n")
@@ -157,7 +157,7 @@ class BlockedRecordTest(unittest.TestCase):
 
     def test_bridged_port_block_records_configuration(self):
         result, out = self.bridged_block()
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.returncode, 2, result.stderr)
         blocked_lines = [l for l in result.stdout.splitlines()
                          if l.startswith("BLOCKED:")]
         self.assertEqual(blocked_lines, ["BLOCKED: lan2 is in br-lan"],

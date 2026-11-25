@@ -21,22 +21,26 @@
 # scripts/wireless/hw-gap-report.sh merges these records by "missing", so
 # one run answers "which single piece of hardware unblocks the most tickets".
 #
-# Two statuses share this schema:
+# Contract v2 (when NC_RECORD_CAUSE is set) writes the record under
+# DIR/no-hardware/ with an explicit "cause", "outcome", and "exit" code
+# alongside the legacy v1 "schema"/"status" fields (see the cause table
+# below at nc_cause_status / nc_cause_exit):
 #
-#   no-client  the board is reachable; a piece of hardware or a measurement
-#              tool is missing.  "missing" names it.  A missing client is a
-#              clean skip (exit 0, "SKIP:" line); a missing tool that the run
-#              cannot do without is recorded the same way but exits 2, so
-#              "nothing was measured" stays distinguishable from "measured".
-#   blocked    the board is reachable but the association cannot work until a
-#              configuration is fixed; the harness exits non-zero with a
-#              "BLOCKED:" line and the record says what to change.
+#   missing-hardware      exits 3 ("SKIP:" line; legacy status: no-client)
+#   missing-tool          exits 2 ("SKIP:" / error; legacy status: no-client)
+#   config-block          exits 2 ("BLOCKED:" line; legacy status: blocked)
+#   precondition-mismatch exits 4 ("BLOCKED:" line; legacy status: blocked)
+#
+# Callers that do not set NC_RECORD_CAUSE keep the legacy v1 schema
+# (DIR/result.json with status "no-client" or "blocked") so older readers
+# and callers continue to work unchanged.
 #
 # "6ghz-owe-mismatch" is the only blocked key today: a band=6g wifi-iface
 # with encryption none/open is upgraded by hostapd to OWE + PMF(2), so an
 # open-only client can never associate.  Filing that under
 # "6ghz-eht-client" would put a configuration fix on the purchase list.
-# Set NC_RECORD_STATUS=blocked when calling no_client_record for it.
+# Set NC_RECORD_CAUSE=config-block (and NC_RECORD_STATUS=blocked for legacy
+# v1 readers) when calling no_client_record for it.
 #
 # The record is best effort: a harness must still report its skip even when
 # the record cannot be written (read-only /tmp, no room, ...).
@@ -74,6 +78,73 @@ nc_json_str_list() {
 no_client_default_dir() {
 	_stamp=$(date -u '+%Y%m%dT%H%M%S' 2>/dev/null) || _stamp=$$
 	printf '/tmp/%s-no-client.%s.%s' "${1%.sh}" "$_stamp" "$$"
+}
+
+# no_hardware_dir BASE: where the v2 records of one run live.  They are kept
+# apart from BASE/result.json because that file is the measurement result of a
+# run that did measure something; a skip must never overwrite it.
+no_hardware_dir() {
+	printf '%s/no-hardware' "${1:-}"
+}
+
+# The cause vocabulary.  "cause" is the authority: "status" is only the legacy
+# v1 spelling kept for existing readers.  A harness sets NC_RECORD_CAUSE and
+# then exits with nc_cause_exit for that same cause, so the record and the
+# process status can never disagree.
+#
+#   cause                 status        outcome       exit
+#   missing-hardware      no-client     not-measured  3
+#   missing-tool          no-client     not-measured  2
+#   config-block          blocked       not-measured  2
+#   permission            blocked       not-measured  2
+#   environment           blocked       not-measured  2
+#   output-collision      blocked       not-measured  2
+#   precondition-mismatch blocked       not-measured  4
+#   internal              failed        measured      1
+#   interrupted           interrupted   not-measured  130 (129/143 by signal)
+
+# nc_cause_status CAUSE: the legacy v1 status for CAUSE.  Returns 1 when the
+# cause is unknown, so a typo cannot silently become "no-client".
+nc_cause_status() {
+	case ${1:-} in
+	missing-hardware | missing-tool) printf 'no-client\n' ;;
+	config-block | permission | environment | output-collision | \
+		precondition-mismatch) printf 'blocked\n' ;;
+	internal) printf 'failed\n' ;;
+	interrupted) printf 'interrupted\n' ;;
+	*) return 1 ;;
+	esac
+}
+
+# nc_cause_outcome CAUSE: "measured" or "not-measured".
+nc_cause_outcome() {
+	case ${1:-} in
+	internal) printf 'measured\n' ;;
+	missing-hardware | missing-tool | config-block | permission | \
+		environment | output-collision | precondition-mismatch | interrupted)
+		printf 'not-measured\n' ;;
+	*) return 1 ;;
+	esac
+}
+
+# nc_cause_exit CAUSE: the process status a harness exits with.  An empty or
+# unknown cause is a bug in the caller, not "blocked": it reports 1 and says
+# so on stderr instead of guessing.
+nc_cause_exit() {
+	case ${1:-} in
+	missing-hardware) printf '3\n' ;;
+	missing-tool) printf '2\n' ;;
+	config-block | permission | environment | output-collision)
+		printf '2\n' ;;
+	precondition-mismatch) printf '4\n' ;;
+	internal) printf '1\n' ;;
+	interrupted) printf '130\n' ;;
+	*)
+		printf 'no-client: unknown cause "%s"\n' "${1:-empty}" >&2
+		printf '1\n'
+		return 1
+		;;
+	esac
 }
 
 # nc_live_encryption IFACE: the live Encryption string of an AP interface
@@ -175,7 +246,8 @@ nc_owe_mismatch_block() {
 	else
 		_fix="set every band=6g wifi-iface to encryption=owe and ieee80211w=2, then wifi reload"
 	fi
-	_rec=$(NC_RECORD_STATUS=blocked no_client_record "$_dir" "$_ticket" \
+	_rec=$(NC_RECORD_CAUSE=config-block NC_RECORD_STATUS=blocked \
+		no_client_record "$_dir" "$_ticket" \
 		6ghz-owe-mismatch "$_fix" \
 		"${_detail:-6 GHz AP advertises OWE while the UCI profile is open}" \
 		"live 6 GHz AP Encryption from iwinfo/ubus" \
@@ -195,6 +267,14 @@ nc_owe_mismatch_block() {
 # COMMAND  the exact command to run once that hardware is available
 # REASON   one line saying why this run stopped
 #
+# NC_RECORD_CAUSE, when set, writes a v2 record under DIR/no-hardware/ with
+# the derived status, outcome and exit code.  NC_RECORD_STATUS only overrides
+# the legacy status explicitly; it is never inferred back from the cause.
+# NC_RECORD_KIND names the file inside that directory (precondition.json);
+# NC_RECORD_ARM puts it under no-hardware/arms/<arm>.json instead.  Without
+# NC_RECORD_CAUSE the record stays a plain v1 DIR/result.json, so an old tree
+# and an old caller keep working unchanged.
+#
 # Prints the record path on stdout; the caller prints the SKIP line.  Always
 # returns 0 so a record failure never turns a skip into an error.
 no_client_record() {
@@ -204,8 +284,31 @@ no_client_record() {
 	_nc_command=${4:-}
 	_nc_reason=${5:-}
 	shift 5 2>/dev/null || :
+	_nc_cause=${NC_RECORD_CAUSE:-}
 	if [ -z "$_nc_dir" ]; then
 		_nc_dir=$(no_client_default_dir "$(basename "$0")")
+	fi
+	if [ -n "$_nc_cause" ]; then
+		_nc_status=$(nc_cause_status "$_nc_cause") || _nc_status=blocked
+		_nc_outcome=$(nc_cause_outcome "$_nc_cause") || _nc_outcome=not-measured
+		_nc_exit=$(nc_cause_exit "$_nc_cause" 2>/dev/null) || _nc_exit=1
+		_nc_dir=$(no_hardware_dir "$_nc_dir")
+		_nc_name=${NC_RECORD_KIND:-result}
+		_nc_name=$_nc_name.json
+		if [ -n "${NC_RECORD_ARM:-}" ]; then
+			_nc_arm=$NC_RECORD_ARM
+			if printf '%s' "$_nc_arm" | grep -q '[^A-Za-z0-9_.-]'; then
+				_nc_arm=unknown
+			fi
+			_nc_dir=$_nc_dir/arms
+			_nc_name=$_nc_arm.json
+		fi
+	else
+		_nc_status=${NC_RECORD_STATUS:-no-client}
+		_nc_name=result.json
+	fi
+	if [ -n "${NC_RECORD_STATUS:-}" ]; then
+		_nc_status=$NC_RECORD_STATUS
 	fi
 	mkdir -p "$_nc_dir" 2>/dev/null || return 0
 	_nc_script=$(basename "$0")
@@ -214,7 +317,14 @@ no_client_record() {
 		printf '  "schema": "wireless-no-client/v1",\n'
 		printf '  "script": %s,\n' "$(nc_json_str "$_nc_script")"
 		printf '  "ticket": %s,\n' "$(nc_json_str "$_nc_ticket")"
-		printf '  "status": %s,\n' "$(nc_json_str "${NC_RECORD_STATUS:-no-client}")"
+		printf '  "status": %s,\n' "$(nc_json_str "$_nc_status")"
+		if [ -n "$_nc_cause" ]; then
+			printf '  "contract": "v2",\n'
+			printf '  "cause": %s,\n' "$(nc_json_str "$_nc_cause")"
+			printf '  "cause_source": "recorded",\n'
+			printf '  "outcome": %s,\n' "$(nc_json_str "$_nc_outcome")"
+			printf '  "exit": %s,\n' "$_nc_exit"
+		fi
 		printf '  "missing": %s,\n' "$(nc_json_str "$_nc_missing")"
 		printf '  "command": %s,\n' "$(nc_json_str "$_nc_command")"
 		printf '  "reason": %s,\n' "$(nc_json_str "$_nc_reason")"
@@ -222,8 +332,8 @@ no_client_record() {
 		printf '  "timestamp": %s\n' \
 			"$(nc_json_str "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)")"
 		printf '}\n'
-	} >"$_nc_dir/result.json.tmp" 2>/dev/null &&
-		mv "$_nc_dir/result.json.tmp" "$_nc_dir/result.json" 2>/dev/null
-	printf '%s\n' "$_nc_dir/result.json"
+	} >"$_nc_dir/$_nc_name.tmp" 2>/dev/null &&
+		mv "$_nc_dir/$_nc_name.tmp" "$_nc_dir/$_nc_name" 2>/dev/null
+	printf '%s\n' "$_nc_dir/$_nc_name"
 	return 0
 }

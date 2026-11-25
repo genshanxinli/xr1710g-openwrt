@@ -170,15 +170,43 @@ if [ "$APPLY" = 0 ]; then
 	exit "$drift"
 fi
 
+# read_live_width - read the channel width (MHz) of $G6_IFACE from iw, or empty.
+# iw prints "channel 37 (6135 MHz), width: 320 MHz, center1: 6105 MHz" and may
+# append center2: only the token after the "width:" label is the width.
+read_live_width() {
+	command -v iw >/dev/null 2>&1 || return 1
+	iw dev "$G6_IFACE" info 2>/dev/null |
+		awk '/width:/ { n = split($0, a, " ")
+		                for (i = 1; i < n; i++)
+		                        if (a[i] == "width" || a[i] == "width:") { print a[i + 1]; found = 1; break }
+		              }
+		     END { if (!found) exit 1 }'
+}
+
+# Numeric check before -ge so a non-numeric reading never prints a shell error.
+width_ge_320() {
+	case ${1:-} in
+	'' | *[!0-9]*) return 1 ;;
+	esac
+	[ "$1" -ge 320 ]
+}
+
 if [ "$drift" = 0 ] && [ "$be_count" != 0 ]; then
-	printf 'apply:    already at %s, nothing written\n' "$expected"
-	exit 0
+	# ieee80211be in hostapd.conf alone does not prove 320 MHz: an EHT160
+	# fallback still writes ieee80211be=1.  Check live iw width before
+	# short-circuiting as already good.
+	_live_width=$(read_live_width) || _live_width=
+	if width_ge_320 "$_live_width"; then
+		printf 'verify:   %s width: %s MHz\n' "$G6_IFACE" "$_live_width"
+		printf 'apply:    already at %s, nothing written\n' "$expected"
+		exit 0
+	fi
 fi
 
 if [ "$drift" = 0 ]; then
-	# The file matches but the running hostapd does not: a reload was
-	# pending from some earlier write.  Do not touch the config; just
-	# reload and verify.
+	# The file matches but the running hostapd/interface does not (either
+	# ieee80211be is absent or live width is below 320 MHz).  Do not touch
+	# the config; just reload and verify.
 	printf 'apply:    config already %s, reloading to verify\n' "$expected"
 else
 	[ -f "$URG_LIB" ] || die "no restore guard at $URG_LIB"
@@ -196,17 +224,37 @@ fi
 printf 'apply:    %s reload\n' "$WIFI_BIN"
 "$WIFI_BIN" reload || die 'wifi reload failed'
 
+_elapsed=0
 wait_be() {
-	_t=0
-	while [ "$_t" -lt "$G6_VERIFY_TIMEOUT" ]; do
+	while [ "$_elapsed" -lt "$G6_VERIFY_TIMEOUT" ]; do
 		if [ -f "$HOSTAPD_CONF" ] &&
 			grep -q ieee80211be "$HOSTAPD_CONF" 2>/dev/null; then
 			return 0
 		fi
-		_t=$((_t + 1))
+		_elapsed=$((_elapsed + 1))
 		sleep 1
 	done
+	if [ -f "$HOSTAPD_CONF" ] &&
+		grep -q ieee80211be "$HOSTAPD_CONF" 2>/dev/null; then
+		return 0
+	fi
 	return 1
+}
+
+wait_width() {
+	_width=
+	command -v iw >/dev/null 2>&1 || return 1
+	while :; do
+		_width=$(read_live_width) || _width=
+		if width_ge_320 "$_width"; then
+			return 0
+		fi
+		if [ "$_elapsed" -ge "$G6_VERIFY_TIMEOUT" ]; then
+			return 1
+		fi
+		_elapsed=$((_elapsed + 1))
+		sleep 1
+	done
 }
 
 if wait_be; then
@@ -215,27 +263,9 @@ if wait_be; then
 	# config text asks for EHT: it does not prove hostapd came up, nor that
 	# the radio negotiated the requested width.  An EHT160 fallback - a
 	# regulatory constraint, a coex downgrade - still has ieee80211be in that
-	# file, so read the running interface before calling the apply a success.
-	_width=
-	if command -v iw >/dev/null 2>&1; then
-		# iw prints "channel 37 (6135 MHz), width: 320 MHz, center1: 6105 MHz"
-		# and may append center2: only the token after the "width:" label is
-		# the width, never the rest of that line.
-		_width=$(iw dev "$G6_IFACE" info 2>/dev/null |
-			awk '/width:/ { n = split($0, a, " ")
-			                for (i = 1; i < n; i++)
-			                        if (a[i] == "width" || a[i] == "width:") { print a[i + 1]; found = 1; break }
-			              }
-			     END { if (!found) exit 1 }') || _width=
-	fi
-	# A non-numeric reading is handled by the diagnostic below; comparing it
-	# here would print a shell error ("Illegal number"/"bad number") right
-	# before that diagnostic.
-	_w=${_width:-0}
-	case $_w in
-	'' | *[!0-9]*) _w=0 ;;
-	esac
-	if [ "$_w" -ge 320 ]; then
+	# file, and hostapd may still be finishing interface setup right when
+	# hostapd.conf appears, so poll iw within G6_VERIFY_TIMEOUT.
+	if wait_width; then
 		if [ "$drift" != 0 ]; then
 			urg_disarm
 		fi

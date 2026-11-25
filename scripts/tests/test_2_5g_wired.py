@@ -207,15 +207,17 @@ class ScriptFixture:
 class NoDevicePortTest(unittest.TestCase):
     """(a) nothing on the device advertises 2.5G."""
 
-    def test_blocked_exit_zero(self):
+    def test_blocked_exit_2(self):
         with tempfile.TemporaryDirectory() as tmp:
             fx = ScriptFixture(tmp)
             # The only port is 1G: no candidate, and no invented default.
             fx.add_dev("lan2", 1000, "\t1000baseT/Full\n")
             fx.add_dev("lan4", 1000, "\t1000baseT/Full\n")
             run = fx.run("--ports", "lan10g", "--host-lan10g-if", "bench0")
-            self.assertEqual(run.returncode, 0,
-                             "BLOCKED must not look like a failure:\n"
+            # A block is not a failure, but the v2 contract no longer lets
+            # nothing-measured exit 0: no device port is config-block, so 2.
+            self.assertEqual(run.returncode, 2,
+                             "BLOCKED is a block, not a failure\n"
                              + run.stdout + run.stderr)
             self.assertIn("BLOCKED: no device port advertises 2500baseT",
                           run.stdout)
@@ -233,7 +235,8 @@ class BridgedPortTest(unittest.TestCase):
             fx.add_host_nic("bench0")
             run = fx.run("--ports", "lan10g", "--host-lan10g-if", "bench0")
             out = run.stdout
-            self.assertEqual(run.returncode, 0, out + run.stderr)
+            # The port is in a bridge: config-block, v2 exit 2.
+            self.assertEqual(run.returncode, 2, out + run.stderr)
             self.assertIn("precondition: lan2 is a member of br-lan", out)
             self.assertIn("ip link set lan2 nomaster", out)
             self.assertIn("BLOCKED: lan2 is in br-lan", out)
@@ -349,7 +352,8 @@ class MissingDevSysfsTest(unittest.TestCase):
                 cwd=REPO,
             )
             out = run.stdout + run.stderr
-            self.assertEqual(run.returncode, 0, out)
+            # No port on the device advertises 2500baseT: config-block, exit 2.
+            self.assertEqual(run.returncode, 2, out)
             for name in REPO_FILE_NAMES:
                 self.assertNotIn(
                     name, out,
@@ -369,7 +373,8 @@ class MissingDevSysfsTest(unittest.TestCase):
                 env_extra={"DEV_SYSFS": str(Path(tmp) / "does-not-exist")},
             )
             out = run.stdout + run.stderr
-            self.assertEqual(run.returncode, 0, out)
+            # A slow/absent link measured nothing: missing-hardware, exit 3.
+            self.assertEqual(run.returncode, 3, out)
             self.assertIn("SKIP: no 2.5G link", run.stdout)
             for name in REPO_FILE_NAMES:
                 self.assertNotIn(name, out, out)

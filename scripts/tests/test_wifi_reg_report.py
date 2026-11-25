@@ -24,14 +24,19 @@ Run from the repository root:
 """
 
 import json
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "scripts/wifi-reg-report.sh"
+SCRIPT = Path(
+    os.environ.get("WIFI_REG_REPORT_UNDER_TEST")
+    or REPO_ROOT / "scripts/wifi-reg-report.sh"
+).resolve()
 
 FUNCTION = re.compile(
     r"^json_escape\(\) \{\n.*?^\}\n", re.MULTILINE | re.DOTALL)
@@ -82,10 +87,11 @@ class JsonEscapeTest(unittest.TestCase):
                          "tab was flattened to 't'")
 
     def _harness(self):
-        path = REPO_ROOT / "scripts/tests/.wifi-reg-report-escape.sh"
+        tmpdir = tempfile.TemporaryDirectory(prefix="wifi-reg-report.")
+        self.addCleanup(tmpdir.cleanup)
+        path = Path(tmpdir.name) / "escape.sh"
         path.write_text("#!/bin/sh\n%s\nprintf '%%s' \"$1\" | json_escape\n"
                         % json_escape_body())
-        self.addCleanup(path.unlink)
         return path
 
 

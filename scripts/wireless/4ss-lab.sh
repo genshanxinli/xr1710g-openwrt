@@ -100,10 +100,11 @@
 #      "iw dev IFACE station dump".  No interface changes are made.
 #   2. A client is a 4SS client only when its station dump rate reports
 #      EHT-NSS/HE-NSS 4 (or a 4SS rate in one direction while the other is
-#      still settling).  With no such client the script prints
-#      "SKIP: no 4SS client" and exits 0 without sending traffic.
+#      still settling).  With no such client a real run prints
+#      "SKIP: no 4SS client" and exits 3 (missing-hardware) without sending
+#      traffic; a dry run prints the plan without writing files and exits 0.
 #   3. A run refuses a station dump that already reports a 2SS rate before
-#      sending traffic (exit 3); a dry run reports it and exits 0.  A
+#      sending traffic (exit 4); a dry run reports it and exits 0.  A
 #      station dump with no rate yet is probed by the warm-up; if the
 #      relevant direction never reaches NSS 4 at the expected width within
 #      --warmup seconds, the arm is refused and no measured window is taken.
@@ -126,8 +127,9 @@
 #      pool, CPU busy, MemAvailable and the thermal peak.
 #   6. Print one TSV row per arm, then a verdict that separates
 #      radio-reachable from SoC-reachable.  The script exits 0 for a
-#      completed measurement and for a clean skip, 3 for a refusal or an
-#      invalid arm, and 1 for a setup/run failure.
+#      completed measurement or --dry-run, 2 for usage errors or missing
+#      tools, 3 for a clean hardware skip (missing-hardware), 4 for a refusal
+#      or an invalid arm (precondition-mismatch), and 1 for a setup/run failure.
 #
 # Output schema
 #   result.tsv has one header line and one row per completed arm:
@@ -161,17 +163,18 @@
 #   Read retries and the source log before calling it air throughput.
 #
 # Exit status
-#   0  both arms measured, or clean SKIP (no 4SS client; nothing sent)
-#   1  setup/run failure (missing iw/iperf3, wrong AP width, source died)
-#   2  invalid arguments
-#   3  refused (2SS association/rate) or an invalid arm (NSS/width change,
-#      disassociation, short byte counters)
+#   0  both arms measured, or --dry-run (read-only plan; nothing written)
+#   1  setup/run failure (wrong AP width, missing client IP, source died)
+#   2  invalid arguments, or missing required tool (missing-tool: iw/iperf3)
+#   3  clean SKIP: no 4SS client associated (missing-hardware; nothing sent)
+#   4  refused (2SS association/rate) or an invalid arm (precondition-mismatch:
+#      NSS/width change, disassociation, short byte counters)
 #
 # POSIX sh only (busybox ash).  Tested with "sh -n", --help, --plan,
 # --dry-run, shellcheck -s sh and stubbed end-to-end runs.
 #
 # Examples:
-#   # read-only preflight on any host; exits 0 with a clean SKIP
+#   # read-only preflight on any host; writes nothing and exits 0
 #   ./scripts/wireless/4ss-lab.sh --dry-run
 #
 #   # print the full lab plan from this header
@@ -226,6 +229,8 @@ T_TARGET=
 
 HEADER_PRINTED=0
 SOURCES_PIDS=
+SOURCES_PGIDS=
+KILL_WAIT=${KILL_WAIT:-5}
 OUT_CREATED=0
 AP_ROW=
 STA_ROW=
@@ -531,20 +536,59 @@ EOF
 }
 
 # Shared "no client" record (scripts/wireless/lib/no-client.sh).  Best effort:
-# a harness must still skip, and still exit 0, when the record cannot be
-# written.
+# a harness must still skip, and still exit with nc_cause_exit, when the
+# record cannot be written.
 NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
 # shellcheck source=lib/no-client.sh
 [ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
+if ! command -v nc_cause_exit >/dev/null 2>&1; then
+	nc_cause_exit() {
+		case ${1:-} in
+		missing-hardware) printf '3\n' ;;
+		missing-tool | config-block | permission | environment | output-collision)
+			printf '2\n' ;;
+		precondition-mismatch) printf '4\n' ;;
+		interrupted) printf '130\n' ;;
+		*) printf '1\n' ;;
+		esac
+	}
+fi
 
 # The one command that runs the two arms once a 4SS client exists.
 NC_4SS_RUN='sudo sh scripts/wireless/4ss-lab.sh --run --band <5g|6g> --client <STA_MAC> --client-ip <STA_IP> --window 10 --warmup 15 --procs 4'
+
+dry_run_skip() {
+	say "$PROG: dry run; no wireless configuration is changed and no files are written"
+	say "SKIP: no 4SS client ($1)"
+	say "  nothing was sent and no traffic was generated"
+	say "  a real run (--run) would record this gap and exit $(nc_cause_exit "${2:-missing-hardware}")"
+	say "  full lab plan: $PROG --plan"
+	exit 0
+}
+
+skip_no_tool() {
+	_tool=$1
+	_detail=$2
+	_rec=$(NC_RECORD_CAUSE=missing-tool \
+		no_client_record "${OUT:-}" 4 "$_tool" "$NC_4SS_RUN" \
+		"$_detail" \
+		"iw station dump reports tx/rx NSS 4 for one station on the 5/6 GHz AP" \
+		"result.tsv holds both arm rows with gbit_s, retries and status ok" 2>/dev/null)
+	say "SKIP: missing tool $_tool ($_detail)"
+	say "  nothing was sent and no traffic was generated"
+	if [ -n "$_rec" ]; then
+		warn "missing $_tool #4; install $_tool and run: $NC_4SS_RUN"
+		warn "no-client record: $_rec"
+	fi
+	exit "$(nc_cause_exit missing-tool)"
+}
 
 skip_no_client() {
 	# A board with no 4SS client has nothing to measure, so the skip is
 	# recorded instead of dropped: hw-gap-report.sh merges it under #4.  The
 	# stdout lines stay the documented contract; the hints go to stderr.
-	_rec=$(no_client_record "${OUT:-}" 4 4ss-client "$NC_4SS_RUN" \
+	_rec=$(NC_RECORD_CAUSE=missing-hardware \
+		no_client_record "${OUT:-}" 4 4ss-client "$NC_4SS_RUN" \
 		"$1" \
 		"iw station dump reports tx/rx NSS 4 for one station on the 5/6 GHz AP" \
 		"result.tsv holds both arm rows with gbit_s, retries and status ok" \
@@ -556,13 +600,20 @@ skip_no_client() {
 		warn "missing 4ss-client #4; once it is available run: $NC_4SS_RUN"
 		warn "no-client record: $_rec"
 	fi
-	exit 0
+	exit "$(nc_cause_exit missing-hardware)"
+}
+
+no_4ss_client() {
+	if [ "$RUN" = 0 ]; then
+		dry_run_skip "$1" missing-hardware
+	fi
+	skip_no_client "$1"
 }
 
 refuse_association() {
 	say "REFUSE: $1"
 	say "  the 4SS lab does not run on a 2SS association; no traffic was sent"
-	exit 3
+	exit "$(nc_cause_exit precondition-mismatch)"
 }
 
 set_expected() {
@@ -660,7 +711,7 @@ memory, thermal and status), then one of:
   VERDICT: SoC-reachable     a target was missed with SoC-side saturation
   VERDICT: inconclusive      a target was missed with no SoC-side evidence
   VERDICT: rejected          an arm was invalid or refused
-Exit status: 0 measured/skip, 1 setup failure, 2 usage, 3 refused/invalid.
+Exit status: 0 measured/dry-run, 1 setup failure, 2 usage/missing-tool, 3 missing-hardware, 4 refused/invalid.
 
 Examples:
   $PROG --plan
@@ -826,12 +877,12 @@ is_positive_number "$NPU_THRESHOLD" || usage_error "--npu-threshold must be a po
 is_uint "$PCIE_IRQ_RATE" || usage_error "--pcie-irq-rate must be a non-negative integer"
 
 
-# A real run needs iw; a dry run can still explain the skip on a host.
+# A real run needs iw; a dry run explains the skip without writing files.
 if ! have iw; then
 	if [ "$RUN" = 1 ]; then
-		die "iw not found; run this on the AP"
+		skip_no_tool iw "iw not found; run this on the AP"
 	fi
-	skip_no_client "iw not found on this host"
+	dry_run_skip "iw not found on this host" missing-tool
 fi
 
 if [ -n "$IFACE" ]; then
@@ -839,7 +890,7 @@ if [ -n "$IFACE" ]; then
 	[ -n "$_info" ] || usage_error "--iface $IFACE does not exist"
 	[ "$(iface_type "$IFACE")" = AP ] || usage_error "--iface $IFACE is not an AP interface"
 	_f=$(iface_freq "$IFACE")
-	[ -n "$_f" ] || skip_no_client "AP $IFACE has no channel (down?)"
+	[ -n "$_f" ] || no_4ss_client "AP $IFACE has no channel (down?)"
 	_b=$(band_of_freq "$_f")
 	case $_b in
 	5g|6g) ;;
@@ -854,7 +905,7 @@ if [ -n "$IFACE" ]; then
 	T_AP_WIDTH=$(iface_width "$IFACE")
 	if [ "$CLIENT_SET" = 1 ]; then
 		station_has "$IFACE" "$CLIENT" ||
-			skip_no_client "client $CLIENT is not associated on $IFACE"
+			no_4ss_client "client $CLIENT is not associated on $IFACE"
 		T_CLIENT=$CLIENT
 		T_STATE=$(station_state "$IFACE" "$CLIENT")
 	else
@@ -873,22 +924,22 @@ if [ -n "$IFACE" ]; then
 $_macs
 EOF
 		[ -n "$_found" ] ||
-			skip_no_client "no station on $IFACE reports NSS 4"
+			no_4ss_client "no station on $IFACE reports NSS 4"
 	fi
 else
 	if [ "$BAND" = auto ]; then
 		find_target_in_band 6g || find_target_in_band 5g ||
-			skip_no_client "no station on a 5/6 GHz AP reports NSS 4"
+			no_4ss_client "no station on a 5/6 GHz AP reports NSS 4"
 	else
 		find_target_in_band "$BAND" ||
-			skip_no_client "no station reports NSS 4 on the $BAND band"
+			no_4ss_client "no station reports NSS 4 on the $BAND band"
 	fi
 	case $T_BAND in
 	6g)
-		[ -n "$T_CLIENT" ] || skip_no_client "no 6 GHz 4SS station found"
+		[ -n "$T_CLIENT" ] || no_4ss_client "no 6 GHz 4SS station found"
 		;;
 	5g)
-		[ -n "$T_CLIENT" ] || skip_no_client "no 5 GHz 4SS station found"
+		[ -n "$T_CLIENT" ] || no_4ss_client "no 5 GHz 4SS station found"
 		;;
 	esac
 	[ -n "$T_STATE" ] || T_STATE=$(station_state "$T_IFACE" "$T_CLIENT")
@@ -981,7 +1032,7 @@ fi
 # ---------------------------------------------------------------------------
 
 if [ -z "$TX_SOURCE" ] || [ -z "$RX_SOURCE" ]; then
-	have iperf3 || die "iperf3 not found; install it or pass --tx-source/--rx-source"
+	have iperf3 || skip_no_tool iperf3 "iperf3 not found; install it or pass --tx-source/--rx-source"
 fi
 if { [ -z "$TX_SOURCE" ] || [ -z "$RX_SOURCE" ]; } && [ -z "$CLIENT_IP" ]; then
 	die "no client IPv4 for the default iperf3 sources; pass --client-ip"
@@ -1146,6 +1197,55 @@ alive_sources() {
 	printf '%s' "$_n"
 }
 
+proc_pgid() {
+	awk '{ s = $0; sub(/.*\) /, "", s); split(s, a, " "); print a[3]; exit }' \
+		"/proc/$1/stat" 2>/dev/null
+}
+
+is_group_leader() {
+	[ -n "$1" ] && [ "$(proc_pgid "$1")" = "$1" ]
+}
+
+group_pids() {
+	awk -v g="$1" 'BEGIN {
+		for (i = 1; i < ARGC; i++) {
+			f = ARGV[i]
+			ARGV[i] = ""
+			rc = (getline line < f)
+			if (rc > 0) {
+				p = f
+				sub(/^.*\/proc\//, "", p)
+				sub(/\/stat$/, "", p)
+				sub(/.*\) /, "", line)
+				split(line, a, " ")
+				if (a[3] == g && a[1] != "Z") print p
+			}
+			if (rc >= 0) close(f)
+		}
+		exit
+	}' /proc/[0-9]*/stat 2>/dev/null
+}
+
+left_in_groups() {
+	_out=
+	for _p in ${SOURCES_PGIDS:-}; do
+		_pids=$(group_pids "$_p")
+		[ -n "$_pids" ] || continue
+		_out="$_out $_pids"
+	done
+	printf '%s' "${_out# }"
+}
+
+wait_groups_gone() {
+	_t=0
+	while [ "$_t" -lt "$1" ]; do
+		[ -z "$(left_in_groups)" ] && return 0
+		sleep 1
+		_t=$((_t + 1))
+	done
+	[ -z "$(left_in_groups)" ]
+}
+
 start_sources() {
 	_arm=$1
 	_sh=$2
@@ -1157,11 +1257,26 @@ start_sources() {
 	esac
 	_i=1
 	while [ "$_i" -le "$_copies" ]; do
-		IFACE="$T_IFACE" CLIENT="$T_CLIENT" CLIENT_IP="$CLIENT_IP" \
-		AP_IP="$AP_IP" WINDOW="$WINDOW" WARMUP="$WARMUP" \
-		SOURCE_SECS="$SOURCE_SECS" PROCS="$PROCS" ARM="$_arm" OUT="$OUT" \
-			sh -c "$_sh" >"$OUT/arm-$_arm-source-$_i.log" 2>&1 &
-		SOURCES_PIDS="$SOURCES_PIDS $!"
+		if have setsid; then
+			IFACE="$T_IFACE" CLIENT="$T_CLIENT" CLIENT_IP="$CLIENT_IP" \
+			AP_IP="$AP_IP" WINDOW="$WINDOW" WARMUP="$WARMUP" \
+			SOURCE_SECS="$SOURCE_SECS" PROCS="$PROCS" ARM="$_arm" OUT="$OUT" \
+				setsid sh -c "$_sh" >"$OUT/arm-$_arm-source-$_i.log" 2>&1 &
+			_p=$!
+			SOURCES_PIDS="$SOURCES_PIDS $_p"
+			if ! is_group_leader "$_p"; then
+				sleep 1
+			fi
+			if is_group_leader "$_p"; then
+				SOURCES_PGIDS="$SOURCES_PGIDS $_p"
+			fi
+		else
+			IFACE="$T_IFACE" CLIENT="$T_CLIENT" CLIENT_IP="$CLIENT_IP" \
+			AP_IP="$AP_IP" WINDOW="$WINDOW" WARMUP="$WARMUP" \
+			SOURCE_SECS="$SOURCE_SECS" PROCS="$PROCS" ARM="$_arm" OUT="$OUT" \
+				sh -c "$_sh" >"$OUT/arm-$_arm-source-$_i.log" 2>&1 &
+			SOURCES_PIDS="$SOURCES_PIDS $!"
+		fi
 		_i=$((_i + 1))
 	done
 	return 0
@@ -1169,13 +1284,27 @@ start_sources() {
 
 stop_sources() {
 	[ -n "${SOURCES_PIDS:-}" ] || return 0
-	for _p in $SOURCES_PIDS; do
-		kill -0 "$_p" 2>/dev/null && kill "$_p" 2>/dev/null
+	for _p in ${SOURCES_PGIDS:-}; do
+		kill -TERM -"$_p" 2>/dev/null || kill -TERM "$_p" 2>/dev/null
 	done
 	for _p in $SOURCES_PIDS; do
+		case " ${SOURCES_PGIDS:-} " in
+		*" $_p "*) ;;
+		*) kill -0 "$_p" 2>/dev/null && kill -TERM "$_p" 2>/dev/null ;;
+		esac
+	done
+	if [ -n "${SOURCES_PGIDS:-}" ] && ! wait_groups_gone "$KILL_WAIT"; then
+		for _p in $SOURCES_PGIDS; do
+			kill -KILL -"$_p" 2>/dev/null || kill -KILL "$_p" 2>/dev/null
+		done
+		wait_groups_gone "$KILL_WAIT" || true
+	fi
+	for _p in $SOURCES_PIDS; do
+		kill -0 "$_p" 2>/dev/null && kill -KILL "$_p" 2>/dev/null
 		wait "$_p" 2>/dev/null
 	done
 	SOURCES_PIDS=
+	SOURCES_PGIDS=
 }
 
 # shellcheck disable=SC2329  # invoked by the EXIT trap
@@ -1300,6 +1429,7 @@ measure_arm() {
 
 	say "[arm $_arm] source: $_cmd"
 	SOURCES_PIDS=
+	SOURCES_PGIDS=
 	start_sources "$_arm" "$_cmd" || {
 		A_STATUS="source not started"
 		return 1
@@ -1459,7 +1589,7 @@ if [ "$RC" -ne 0 ]; then
 	if [ "$RC" -eq 1 ]; then
 		reject_run 1 "AP->STA source/setup failure; evidence kept in $OUT"
 	fi
-	reject_run 3 "AP->STA arm was refused or invalid; see $OUT/result.tsv"
+	reject_run "$(nc_cause_exit precondition-mismatch)" "AP->STA arm was refused or invalid; see $OUT/result.tsv"
 fi
 
 say "  settle: 2s between arms"
@@ -1476,7 +1606,7 @@ if [ "$RC" -ne 0 ]; then
 	if [ "$RC" -eq 1 ]; then
 		reject_run 1 "STA->AP source/setup failure; evidence kept in $OUT"
 	fi
-	reject_run 3 "STA->AP arm was refused or invalid; see $OUT/result.tsv"
+	reject_run "$(nc_cause_exit precondition-mismatch)" "STA->AP arm was refused or invalid; see $OUT/result.tsv"
 fi
 
 # Read the two measured Gbit/s values back from the tab-separated rows.

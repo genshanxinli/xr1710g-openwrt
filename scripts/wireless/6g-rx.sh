@@ -60,18 +60,18 @@
 # band_bytes is optional in the kernel.  When the mt76 debugfs tree has no
 # band_bytes file, the per-band A-MPDU measurement is recorded as UNKNOWN
 # (result.json: "band_bytes_unavailable": true) and the run is PARTIAL (exit
-# 3): a counter nobody could read must never be reported as a measured zero,
+# 4): a counter nobody could read must never be reported as a measured zero,
 # but it must not overrule the verdict either - the station/ethtool counters
 # and the IRQ attribution are still a real measurement.
 #
 # Exit status: 0 the measurement ran, the verdict held and every counter it
-# needs was read, or the run was a clean SKIP (no iperf3, no 6G-only BSS, no
-# STA source); 1 the source or measurement failed, the required counters
-# (station RX delta, A-MPDU byte delta) were unreadable, the verdict could
-# not be attributed (undetermined), or the config restore failed; 2 invalid
-# arguments or an impossible setup; 3 the measurement ran and the verdict
-# held, but the optional per-band band_bytes counter is absent (status
-# "partial").
+# needs was read; 1 the source or measurement failed, the required counters
+# (station RX delta, A-MPDU byte delta/ratio/count) were unreadable or failed
+# their gates, the verdict could not be attributed (undetermined), or the
+# config restore failed; 2 invalid arguments, missing tool, or config block;
+# 3 missing hardware (no 6G-only BSS or no 6G STA, v2 contract); 4 the
+# measurement ran and the verdict held, but the optional per-band band_bytes
+# counter is absent (status "partial").
 
 set -u
 umask 077
@@ -99,15 +99,18 @@ STA_WAIT_SET=0
 ADD_BSS=0
 RADIO=
 OUT=
+OUT_EXPLICIT=0
 ETHTOOL_IFACE=
 IRQ_PATTERN=${IRQ_PATTERN:-pcie|hif|mt7996}
 PCIE_PATTERN=${PCIE_PATTERN:-pcie0|mt7996}
 HIF_PATTERN=${HIF_PATTERN:-hif}
-BASELINE=2
+BASELINE=10
+MIN_AMPDU_RATIO=0.5
 DRY_RUN=0
 
 WIRELESS_CONFIG=${WIRELESS_CONFIG:-/etc/config/wireless}
 PROC_INTERRUPTS=${PROC_INTERRUPTS:-/proc/interrupts}
+PROC_UPTIME=${PROC_UPTIME:-/proc/uptime}
 DEBUGFS=${DEBUGFS:-/sys/kernel/debug}
 
 # Runtime state.
@@ -183,6 +186,8 @@ IRQ_PCIE0_RATE=
 IRQ_HIF2_RATE=
 IRQ_PCIE0_ACTIVE=0
 IRQ_HIF2_ACTIVE=0
+IRQ_ACTIVE_MARGIN=5
+EXTRAPOLATION_RATIO=
 TOKEN_BEFORE=
 TOKEN_AFTER=
 WED_TOKEN_BEFORE=
@@ -250,11 +255,23 @@ else
 fi
 
 # Shared "no client" record (scripts/wireless/lib/no-client.sh).  Best effort:
-# a harness must still skip, and still exit 0, when the record cannot be
-# written.
+# a harness must still skip, and still exit with its v2 cause code, when the
+# record cannot be written.
 NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
 # shellcheck source=lib/no-client.sh
 [ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
+if ! command -v nc_cause_exit >/dev/null 2>&1; then
+	nc_cause_exit() {
+		case ${1:-} in
+		missing-hardware) printf '3\n' ;;
+		missing-tool | config-block | permission | environment | output-collision)
+			printf '2\n' ;;
+		precondition-mismatch) printf '4\n' ;;
+		interrupted) printf '130\n' ;;
+		*) printf '1\n' ;;
+		esac
+	}
+fi
 
 warn() {
 	printf '%s: warning: %s\n' "$PROG" "$1" >&2
@@ -262,10 +279,24 @@ warn() {
 
 skip() {
 	cleanup_tmp
-	RESULT_STATUS=skip
-	write_result_json 0
+	_cause=${NC_RECORD_CAUSE:-missing-hardware}
+	if { [ "${OUT_CREATED:-0}" != 1 ] && [ "${OUT_EXPLICIT:-0}" != 1 ]; } || [ -z "${OUT:-}" ]; then
+		OUT=$(no_client_default_dir "$PROG" 2>/dev/null) || OUT=
+	fi
+	if [ -n "${OUT:-}" ]; then
+		mkdir -p "$OUT" 2>/dev/null || OUT=
+	fi
+	_rec=$(NC_RECORD_CAUSE=$_cause \
+		no_client_record "${OUT:-}" 48 6ghz-eht-client \
+		"sh scripts/wireless/6g-rx.sh --iface <6GHZ_AP_IFACE> --sta <STA_MAC> --sta-ip <STA_IP>" \
+		"$*" \
+		"station rx bytes and rx bitrate on a 6 GHz BSS" \
+		"ethtool rx_ampdu_bytes_cnt / rx_mpdu_cnt delta" \
+		"PCIe0 vs hif2 IRQ attribution, idle-corrected" \
+		"mt76 band_bytes per-band A-MPDU delta" 2>/dev/null)
 	printf 'SKIP: %s\n' "$*"
-	exit 0
+	[ -n "$_rec" ] && printf '      no-client record: %s\n' "$_rec"
+	exit "$(nc_cause_exit "$_cause")"
 }
 
 # A board without a 6 GHz client is not a failed measurement, and a bare
@@ -278,14 +309,18 @@ skip_no_client() {
 	cleanup_tmp
 	# A skip can fire before make_out() ran - "no 6G-only BSS to select" is
 	# decided earlier than the output directory - and then there is no place
-	# for the record.  Fall back to the shared /tmp location so a skip never
-	# leaves the board indistinguishable from "the harness was never run".
-	# hw-gap-report.sh scans /tmp by default for exactly this case.
-	if [ "${OUT_CREATED:-0}" != 1 ] || [ -z "${OUT:-}" ]; then
-		OUT=$(no_client_default_dir "$PROG")
+	# for the record unless --out was explicitly given.  Fall back to the
+	# shared /tmp location only when --out was omitted and make_out() has not
+	# run, so --out never leaks into /tmp and the default fallback stays
+	# /tmp/6g-rx-no-client.<stamp>.<pid>.
+	if { [ "${OUT_CREATED:-0}" != 1 ] && [ "${OUT_EXPLICIT:-0}" != 1 ]; } || [ -z "${OUT:-}" ]; then
+		OUT=$(no_client_default_dir "$PROG" 2>/dev/null) || OUT=
+	fi
+	if [ -n "${OUT:-}" ]; then
 		mkdir -p "$OUT" 2>/dev/null || OUT=
 	fi
-	_rec=$(no_client_record "${OUT:-}" 48 "${2:-6ghz-eht-client}" "${3:-}" "${1:-}" \
+	_rec=$(NC_RECORD_CAUSE="${NC_RECORD_CAUSE:-missing-hardware}" \
+		no_client_record "${OUT:-}" 48 "${2:-6ghz-eht-client}" "${3:-}" "${1:-}" \
 		"station rx bytes and rx bitrate on a 6 GHz BSS" \
 		"ethtool rx_ampdu_bytes_cnt / rx_mpdu_cnt delta" \
 		"PCIe0 vs hif2 IRQ attribution, idle-corrected" \
@@ -294,7 +329,7 @@ skip_no_client() {
 	printf '      missing %s; once it is available run: %s\n' \
 		"${2:-6ghz-eht-client}" "${3:-<see --help>}"
 	[ -n "$_rec" ] && printf '      no-client record: %s\n' "$_rec"
-	exit 0
+	exit "$(nc_cause_exit "${NC_RECORD_CAUSE:-missing-hardware}")"
 }
 
 # A 6 GHz AP that advertises OWE while a band=6g wifi-iface is still open
@@ -540,9 +575,11 @@ write_result_json() {
 		printf '  "iperf_rx_bps": %s,\n' "$(json_num "$IPERF_RX_BPS")"
 		printf '  "rx_mbit_s": %s,\n' "$(json_num "$RX_MBIT_S")"
 		printf '  "counter_window_s": %s,\n' "$(json_num "$COUNTER_SECONDS")"
-		printf '  "irq": {"pcie0_excess": %s, "hif2_excess": %s, "pcie0_active": %s, "hif2_active": %s},\n' \
+		printf '  "irq": {"pcie0_excess": %s, "hif2_excess": %s, "pcie0_active": %s, "hif2_active": %s, "idle_window_s": %s, "irq_window_s": %s, "extrapolation_ratio": %s, "active_margin": %s},\n' \
 			"$(json_num "$IRQ_PCIE0_EXCESS")" "$(json_num "$IRQ_HIF2_EXCESS")" \
-			"$(json_num "$IRQ_PCIE0_ACTIVE")" "$(json_num "$IRQ_HIF2_ACTIVE")"
+			"$(json_num "$IRQ_PCIE0_ACTIVE")" "$(json_num "$IRQ_HIF2_ACTIVE")" \
+			"$(json_num "$IDLE_WINDOW_S")" "$(json_num "$IRQ_WINDOW_S")" \
+			"$(json_num "$EXTRAPOLATION_RATIO")" "$(json_num "$IRQ_ACTIVE_MARGIN")"
 		printf '  "verdict": %s,\n' "$(json_str "$VERDICT")"
 		printf '  "verdict_reason": %s\n' "$(json_str "$VERDICT_REASON")"
 		printf '}\n'
@@ -614,10 +651,13 @@ Options:
                       counted)
   --hif-pattern REGEX descriptions counted in the hif2 group (default "hif")
   --baseline N        idle IRQ baseline before the source, in seconds
-                      (default 2; 0 disables the beacon correction).  The
-                      baseline is sampled once before the traffic window and
-                      subtracted from both IRQ groups, so hif2 beacons alone
+                      (default 10, range 5..60).  The baseline is sampled
+                      once before the traffic window and subtracted from both
+                      IRQ groups with a quantization margin
+                      (5 + ceil(2 * elapsed / idle_s)), so hif2 beacons alone
                       cannot win the verdict.
+  --min-ampdu-ratio R minimum rx_ampdu_bytes_cnt / station_rx_bytes ratio
+                      required for a valid run (default 0.5, range (0, 1])
   --out DIR           result directory (default /tmp/6g-rx-<epoch>).  Must not
                       exist; raw snapshots and raw.log are kept there.
   --dry-run           print the planned commands, snapshot paths and
@@ -674,11 +714,11 @@ Examples:
   ./scripts/wireless/6g-rx.sh --sta-ip 192.168.1.23 --seconds 20
 
 Exit status: 0 the measurement ran, the verdict held and every counter it
-needs was read, or the run was a clean SKIP (no iperf3, no 6G-only BSS, no
-STA source); 1 the source or measurement failed, the required counters
-(station RX delta, A-MPDU byte delta) were unreadable, the verdict could
-not be attributed (undetermined), or the config restore failed; 2 invalid
-arguments or an impossible setup; 3 the measurement ran and the verdict
+needs was read; 1 the source or measurement failed, the required counters
+(station RX delta, A-MPDU byte delta/ratio/count) were unreadable, the
+verdict could not be attributed (undetermined), or the config restore failed;
+2 invalid arguments, missing tool or config block; 3 missing hardware (no
+6G-only BSS or no 6G STA, v2 contract); 4 the measurement ran and the verdict
 held, but the optional per-band band_bytes counter is absent (status
 "partial").
 EOF
@@ -873,13 +913,24 @@ while [ "$#" -gt 0 ]; do
 		BASELINE=${1#*=}
 		shift
 		;;
+	--min-ampdu-ratio)
+		need_value "$1" "$#"
+		MIN_AMPDU_RATIO=$2
+		shift 2
+		;;
+	--min-ampdu-ratio=*)
+		MIN_AMPDU_RATIO=${1#*=}
+		shift
+		;;
 	--out)
 		need_value "$1" "$#"
 		OUT=$2
+		OUT_EXPLICIT=1
 		shift 2
 		;;
 	--out=*)
 		OUT=${1#*=}
+		OUT_EXPLICIT=1
 		shift
 		;;
 	-*)
@@ -896,7 +947,15 @@ check_uint PARALLEL "$PARALLEL" 1 64
 check_uint PORT "$PORT" 1 65535
 check_uint SOURCE_WAIT "$SOURCE_WAIT" 0 7200
 check_uint BSS_WAIT "$BSS_WAIT" 1 600
-check_uint BASELINE "$BASELINE" 0 60
+if [ "${RX6G_ALLOW_ZERO_BASELINE:-0}" = 1 ]; then
+	check_uint BASELINE "$BASELINE" 0 60
+else
+	check_uint BASELINE "$BASELINE" 5 60
+fi
+if ! printf '%s\n' "$MIN_AMPDU_RATIO" | grep -Eq '^[0-9]+([.][0-9]+)?$' ||
+	! awk -v r="$MIN_AMPDU_RATIO" 'BEGIN { exit !(r > 0 && r <= 1) }'; then
+	usage_error "--min-ampdu-ratio must be in (0, 1], got '$MIN_AMPDU_RATIO'"
+fi
 
 if [ "$STA_WAIT_SET" = 0 ]; then
 	if [ "$ADD_BSS" = 1 ]; then
@@ -1393,6 +1452,11 @@ create_bss() {
 		make_out
 	fi
 
+	nw_guard_init --apply --no-trap --label 6g-rx-add-bss \
+		--result-json "$OUT/netwatchdog.json"
+	nw_guard_take ||
+		die "cannot take the netwatchdog hold; refusing to create the temporary BSS.  Install netwatchdog, or set NWD_ALLOW_NO_SERVICE=1 for a run that expects no protection."
+
 	WIRELESS_BACKUP="$OUT/wireless.backup"
 	cp -p "$WIRELESS_CONFIG" "$WIRELESS_BACKUP" 2>/dev/null ||
 		die "cannot back up $WIRELESS_CONFIG"
@@ -1403,9 +1467,6 @@ create_bss() {
 		# backup that cp just made.
 		DIGEST_ALGO='cmp'
 	fi
-	BSS_CHANGED=1
-	printf 'restore after a hard kill (SIGKILL): cp -p %s %s && wifi reload\n' \
-		"$WIRELESS_BACKUP" "$WIRELESS_CONFIG"
 
 	# $OUT lives on tmpfs: keep a second restore point outside /tmp and take
 	# the pending UCI delta with it, so a wiped /tmp or a killed run still
@@ -1415,14 +1476,14 @@ create_bss() {
 			warn "cannot create a durable restore point outside /tmp; the backup is $WIRELESS_BACKUP"
 	fi
 
-	nw_guard_init --apply --no-trap --label 6g-rx-add-bss \
-		--result-json "$OUT/netwatchdog.json"
-	nw_guard_take ||
-		die "cannot take the netwatchdog hold; refusing to create the temporary BSS.  Install netwatchdog, or set NWD_ALLOW_NO_SERVICE=1 for a run that expects no protection."
-
 	_sec="rx6g_$$"
 	uci -q get "wireless.$_sec" >/dev/null 2>&1 &&
 		die "temporary UCI section wireless.$_sec already exists; remove it or restore the config first"
+	# Arm restore only after nw_guard_take succeeded and right before the
+	# first UCI write, so a refused run never executes an unprotected reload.
+	BSS_CHANGED=1
+	printf 'restore after a hard kill (SIGKILL): cp -p %s %s && wifi reload\n' \
+		"$WIRELESS_BACKUP" "$WIRELESS_CONFIG"
 	log_cmd "uci set wireless.$_sec=wifi-iface (backup: $WIRELESS_BACKUP)"
 	uci set "wireless.$_sec=wifi-iface" || die "uci set failed"
 	uci set "wireless.$_sec.device=$RADIO" || die "uci set failed"
@@ -1699,22 +1760,22 @@ resolve_debugfs() {
 	[ -n "$TOKEN_INFO_PATH" ] ||
 		warn "mt76 token_info not found under $DEBUGFS; NPU queue evidence will be n/a"
 	band_bytes_available ||
-		warn "mt76 band_bytes not found under $DEBUGFS; the per-band 6G A-MPDU measurement is UNKNOWN (result.json: band_bytes_unavailable=true); the run will be partial (exit 3), the required counters still decide ok/invalid"
+		warn "mt76 band_bytes not found under $DEBUGFS; the per-band 6G A-MPDU measurement is UNKNOWN (result.json: band_bytes_unavailable=true); the run will be partial (exit 4), the required counters still decide ok/invalid"
 }
 
 # --- snapshots and parsing --------------------------------------------
 
 snapshot_idle() {
 	# Only the IRQ counters and uptime are needed for the beacon/background
-	# baseline; the full before snapshot is taken after the baseline sleep.
+	# baseline; keep them paired back-to-back so the uptime window matches
+	# the IRQ sample boundaries.
 	capture_required "$OUT/interrupts-idle.txt" cat "$PROC_INTERRUPTS"
-	capture "$OUT/uptime-idle.txt" cat /proc/uptime
+	capture "$OUT/uptime-idle.txt" cat "$PROC_UPTIME"
 }
 
 snapshot_before() {
 	capture_required "$OUT/station-before.txt" iw dev "$SEL_IFACE" station dump
 	capture_required "$OUT/ethtool-before.txt" ethtool -S "$ETHTOOL_IFACE"
-	capture_required "$OUT/interrupts-before.txt" cat "$PROC_INTERRUPTS"
 	if [ -n "$TOKEN_INFO_PATH" ]; then
 		capture "$OUT/token-info-before.txt" cat "$TOKEN_INFO_PATH"
 	else
@@ -1722,7 +1783,8 @@ snapshot_before() {
 	fi
 	capture_band_bytes "$OUT/band-bytes-before.txt" || true
 	capture "$OUT/ap-rx-before.txt" cat "/sys/class/net/$SEL_IFACE/statistics/rx_bytes"
-	capture "$OUT/uptime-before.txt" cat /proc/uptime
+	capture_required "$OUT/interrupts-before.txt" cat "$PROC_INTERRUPTS"
+	capture "$OUT/uptime-before.txt" cat "$PROC_UPTIME"
 }
 
 snapshot_mid() {
@@ -1734,10 +1796,10 @@ snapshot_mid() {
 }
 
 snapshot_after() {
-	capture "$OUT/uptime-after.txt" cat /proc/uptime
+	capture_required "$OUT/interrupts-after.txt" cat "$PROC_INTERRUPTS"
+	capture "$OUT/uptime-after.txt" cat "$PROC_UPTIME"
 	capture_required "$OUT/station-after.txt" iw dev "$SEL_IFACE" station dump
 	capture_required "$OUT/ethtool-after.txt" ethtool -S "$ETHTOOL_IFACE"
-	capture_required "$OUT/interrupts-after.txt" cat "$PROC_INTERRUPTS"
 	if [ -n "$TOKEN_INFO_PATH" ]; then
 		capture "$OUT/token-info-after.txt" cat "$TOKEN_INFO_PATH"
 	else
@@ -1773,7 +1835,8 @@ token_value() {
 			if (index(line, k ":") == 1) {
 				v = line
 				sub(/^[^:]*:[ \t]*/, "", v)
-				print v
+				if (match(v, /^[0-9]+/))
+					print substr(v, RSTART, RLENGTH)
 				exit
 			}
 		}
@@ -2192,7 +2255,8 @@ analyze() {
 	fi
 	_irq_rates=$(awk -v p="$IRQ_PCIE0_DELTA" -v h="$IRQ_HIF2_DELTA" \
 		-v ipr="$IDLE_PCIE0_RATE" -v ihr="$IDLE_HIF2_RATE" \
-		-v elapsed="$IRQ_WINDOW_S" -v src="$SOURCE_SECONDS" '
+		-v elapsed="$IRQ_WINDOW_S" -v src="$SOURCE_SECONDS" \
+		-v idle_s="${IDLE_WINDOW_S:-0}" '
 		BEGIN {
 			ep = p - ipr * elapsed
 			if (ep < 0) ep = 0
@@ -2202,9 +2266,21 @@ analyze() {
 			eh = int(eh + 0.5)
 			epr = (src > 0) ? ep / src : 0
 			ehr = (src > 0) ? eh / src : 0
-			pa = (ep >= 5 && epr >= 2) ? 1 : 0
-			ha = (eh >= 5 && ehr >= 2) ? 1 : 0
-			printf "%.0f %.0f %.3f %.3f %d %d\n", ep, eh, epr, ehr, pa, ha
+			if (idle_s + 0 > 0) {
+				extrap = elapsed / idle_s
+				q = (2 * elapsed) / idle_s
+				iq = int(q)
+				ceil_q = (q > iq + 1e-9) ? iq + 1 : iq
+				margin = 5 + ceil_q
+				extrap_str = sprintf("%.3f", extrap)
+			} else {
+				margin = 5
+				extrap_str = "na"
+			}
+			pa = (ep >= margin && epr >= 2) ? 1 : 0
+			ha = (eh >= margin && ehr >= 2) ? 1 : 0
+			printf "%.0f %.0f %.3f %.3f %d %d %d %s\n",
+				ep, eh, epr, ehr, pa, ha, margin, extrap_str
 		}')
 	IRQ_PCIE0_EXCESS=$(printf '%s\n' "$_irq_rates" | cut -d' ' -f1)
 	IRQ_HIF2_EXCESS=$(printf '%s\n' "$_irq_rates" | cut -d' ' -f2)
@@ -2212,10 +2288,14 @@ analyze() {
 	IRQ_HIF2_RATE=$(printf '%s\n' "$_irq_rates" | cut -d' ' -f4)
 	IRQ_PCIE0_ACTIVE=$(printf '%s\n' "$_irq_rates" | cut -d' ' -f5)
 	IRQ_HIF2_ACTIVE=$(printf '%s\n' "$_irq_rates" | cut -d' ' -f6)
+	IRQ_ACTIVE_MARGIN=$(printf '%s\n' "$_irq_rates" | cut -d' ' -f7)
+	EXTRAPOLATION_RATIO=$(printf '%s\n' "$_irq_rates" | cut -d' ' -f8)
+	[ "$EXTRAPOLATION_RATIO" = na ] && EXTRAPOLATION_RATIO=
 	is_uint "$IRQ_PCIE0_EXCESS" || IRQ_PCIE0_EXCESS=0
 	is_uint "$IRQ_HIF2_EXCESS" || IRQ_HIF2_EXCESS=0
 	is_uint "$IRQ_PCIE0_ACTIVE" || IRQ_PCIE0_ACTIVE=0
 	is_uint "$IRQ_HIF2_ACTIVE" || IRQ_HIF2_ACTIVE=0
+	is_uint "$IRQ_ACTIVE_MARGIN" || IRQ_ACTIVE_MARGIN=5
 
 	# Verdict: unused IRQ groups are excluded by the idle-corrected excess,
 	# so hif2 beacons alone cannot win.
@@ -2391,6 +2471,8 @@ print_report() {
 	printf '  IDLE_IRQ_HIF2_DELTA=%s\n' "$IDLE_HIF2_DELTA"
 	printf '  IDLE_WINDOW_S=%s\n' "$(val_or_na "$IDLE_WINDOW_S")"
 	printf '  IRQ_WINDOW_S=%s\n' "$(val_or_na "$IRQ_WINDOW_S")"
+	printf '  EXTRAPOLATION_RATIO=%s\n' "$(val_or_na "$EXTRAPOLATION_RATIO")"
+	printf '  IRQ_ACTIVE_MARGIN=%s\n' "$(val_or_na "$IRQ_ACTIVE_MARGIN")"
 	printf '  SOURCE_WINDOW_S=%s\n' "$(val_or_na "$SOURCE_SECONDS")"
 	printf '  IRQ_PCIE0_EXCESS=%s\n' "$IRQ_PCIE0_EXCESS"
 	printf '  IRQ_HIF2_EXCESS=%s\n' "$IRQ_HIF2_EXCESS"
@@ -2466,10 +2548,10 @@ command -v ethtool >/dev/null 2>&1 ||
 	die "required command not found: ethtool"
 
 # iperf3 is not a fatal prerequisite: a host without it has no source, so
-# there is nothing to measure.  That is a clean SKIP (rc=0), not an error,
-# and it says why instead of dying on someone else's missing tool.
+# there is nothing to measure.  That is a clean SKIP (rc=2, missing-tool),
+# not an internal error, and it says why instead of dying on a missing tool.
 if ! command -v iperf3 >/dev/null 2>&1; then
-	skip_no_client "no iperf3 on this host, so the 6G RX uplink cannot be measured; install iperf3 and rerun" iperf3 "install iperf3 on the AP, then: sh scripts/wireless/6g-rx.sh --iface <6GHZ_AP_IFACE> --sta <STA_MAC> --sta-ip <STA_IP>"
+	NC_RECORD_CAUSE=missing-tool skip_no_client "no iperf3 on this host, so the 6G RX uplink cannot be measured; install iperf3 and rerun" iperf3 "install iperf3 on the AP, then: sh scripts/wireless/6g-rx.sh --iface <6GHZ_AP_IFACE> --sta <STA_MAC> --sta-ip <STA_IP>"
 fi
 
 make_out
@@ -2543,6 +2625,24 @@ if ! is_positive "${RX_BYTES_DELTA:-}"; then
 	exit 1
 fi
 
+if ! awk -v ab="$AMPDU_BYTES_DELTA" -v rb="$RX_BYTES_DELTA" -v r="$MIN_AMPDU_RATIO" \
+	'BEGIN { exit !(ab + 0 >= rb * r) }'; then
+	printf '\nERROR: rx_ampdu_bytes_cnt delta (%s) is below %s * station rx bytes delta (%s); A-MPDU coverage is too low for a valid 6G RX measurement\n' \
+		"$AMPDU_BYTES_DELTA" "$MIN_AMPDU_RATIO" "$RX_BYTES_DELTA" >&2
+	RESULT_STATUS=invalid
+	write_result_json 1
+	exit 1
+fi
+
+if { [ -n "${AMPDU_CNT_BEFORE:-}" ] || [ -n "${AMPDU_CNT_AFTER:-}" ]; } &&
+	! is_positive "${AMPDU_CNT_DELTA:-}"; then
+	printf '\nERROR: rx_ampdu_cnt delta is %s; a positive A-MPDU frame count delta is required when rx_ampdu_cnt is exposed\n' \
+		"${AMPDU_CNT_DELTA:-unavailable}" >&2
+	RESULT_STATUS=invalid
+	write_result_json 1
+	exit 1
+fi
+
 if [ "$VERDICT" = undetermined ]; then
 	printf '\nERROR: the traffic could not be attributed (verdict undetermined: %s); a positive RX delta without a winning IRQ group is not a measurement\n' \
 		"${VERDICT_REASON:-no reason recorded}" >&2
@@ -2554,11 +2654,12 @@ fi
 # The per-band counter is optional in the kernel.  Its absence makes the
 # run partial, not invalid: the required counters were read and the verdict
 # holds, so nothing here may be called ok but the verdict must survive.
+# Exit 4 keeps exit 3 strictly for v2 missing-hardware skips.
 if [ "$BAND_BYTES_UNAVAILABLE" = 1 ]; then
-	printf '\nPARTIAL: mt76 band_bytes is not present in this kernel, so the per-band 6G A-MPDU byte delta could not be measured; result.json records band_bytes_unavailable=true, the verdict above stands, and the run exits 3\n' >&2
+	printf '\nPARTIAL: mt76 band_bytes is not present in this kernel, so the per-band 6G A-MPDU byte delta could not be measured; result.json records band_bytes_unavailable=true, the verdict above stands, and the run exits 4 (partial, measured)\n' >&2
 	RESULT_STATUS=partial
-	write_result_json 3
-	exit 3
+	write_result_json 4
+	exit 4
 fi
 
 RESULT_STATUS=ok

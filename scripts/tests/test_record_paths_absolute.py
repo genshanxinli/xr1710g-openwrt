@@ -157,25 +157,28 @@ def add_run_dir_cleanup(test, record: Path, started: float = None) -> None:
     """Remove the per-run directory a record sits in, and nothing else.
 
     The path is printed by the script under test, so it is untrusted input: a
-    pre-fix script prints /tmp/result.json, whose "record directory" by the
-    naive parents[1] rule is /tmp, and an unguarded rmtree there is an rmtree
-    of /tmp.  A directory qualifies only when it is a direct child of /tmp,
-    carries the no-client run-directory name, and is not older than the test
-    that found it; otherwise nothing is registered and the directory stays.
+    pre-fix script prints /tmp/result.json, whose ancestor /tmp is not a run
+    directory, and an unguarded rmtree there is an rmtree of /tmp.  The v2
+    layout puts the record deeper (``<run>/no-hardware/result.json`` or
+    ``<run>/<label>/no-hardware/result.json``), so the run directory is found
+    by walking every ancestor, never by index.  A directory qualifies only
+    when it is a direct child of /tmp, carries the no-client run-directory
+    name, and is not older than the test that found it; otherwise nothing is
+    registered and the directory stays.
     """
-    parents = list(record.parents)
-    run_dir = parents[1] if len(parents) > 1 else None
-    if run_dir is None or run_dir.parent != Path("/tmp"):
+    for run_dir in record.parents:
+        if run_dir.parent != Path("/tmp"):
+            continue
+        if not NO_CLIENT_RUN_DIR.fullmatch(run_dir.name):
+            continue
+        if started is not None:
+            try:
+                if run_dir.stat().st_ctime < started - 1:
+                    continue
+            except OSError:
+                continue
+        test.addCleanup(shutil.rmtree, run_dir, ignore_errors=True)
         return
-    if not NO_CLIENT_RUN_DIR.fullmatch(run_dir.name):
-        return
-    if started is not None:
-        try:
-            if run_dir.stat().st_ctime < started - 1:
-                return
-        except OSError:
-            return
-    test.addCleanup(shutil.rmtree, run_dir, ignore_errors=True)
 
 
 class _CleanupRecorder:
@@ -195,7 +198,8 @@ class CleanupGuardProof(unittest.TestCase):
     stands between a red-half run and an rmtree of /tmp.  This feeds the guard
     the exact string the old code produced -- /tmp/result.json -- and requires
     that nothing is registered.  The bad copy below writes that shared file on
-    purpose; it is removed again unless it was already there.
+    purpose; it lives under the test's own tmp directory, and is removed again
+    unless it was already there.
     """
 
     def test_shared_tmp_record_registers_no_deletion(self):
@@ -217,26 +221,40 @@ class CleanupGuardProof(unittest.TestCase):
         install(bin_dir, "iw", "#!/bin/sh\nexit 0\n")
         env = os.environ.copy()
         env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '/usr/bin:/bin')}"
-
-        shared = Path("/tmp/result.json")
+        # The bad copy keeps the fixed directory the old fallback produced,
+        # inside the test's own tmp so the proof leaves no file in /tmp.  The
+        # v2 library still adds no-hardware/ under it, which is the same
+        # collision in a new place: every run overwrites one record.
+        shared_dir = tmp / "shared"
+        shared = shared_dir / "no-hardware/result.json"
         if not shared.exists():
             self.addCleanup(lambda: shared.exists() and shared.unlink())
+        # The script resets RESULT_JSON at startup (a deliberate reset, not an
+        # inherited setting), so the fixed directory is passed as an argument.
+        result_json = shared_dir / "result.json"
+
+        # The exact shape the old code printed.  This is the path the guard
+        # exists for: a shallow /tmp path must never arm a deletion.
+        recorder = _CleanupRecorder()
+        add_run_dir_cleanup(recorder, Path("/tmp/result.json"), time.time())
+        self.assertEqual(recorder.registered, [],
+                         "cleanup armed a deletion for /tmp/result.json")
 
         started = time.time()
         proc = subprocess.run(
-            [SH, str(bad_copy)], capture_output=True, text=True, timeout=120,
-            env=env, cwd=str(tmp))
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            [SH, str(bad_copy), f"--result-json={result_json}"],
+            capture_output=True, text=True, timeout=120, env=env, cwd=str(tmp))
+        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
         printed = NO_CLIENT_RECORD.search(proc.stdout)
         self.assertIsNotNone(printed, proc.stdout + proc.stderr)
         record = Path(printed.group(1))
-        self.assertEqual(str(record), "/tmp/result.json",
-                         "the bad copy no longer reproduces the shared path")
+        self.assertEqual(str(record), str(shared),
+                         "the bad copy no longer reproduces a shared record")
 
         recorder = _CleanupRecorder()
         add_run_dir_cleanup(recorder, record, started)
         self.assertEqual(recorder.registered, [],
-                         "cleanup armed a deletion for a shared /tmp path")
+                         "cleanup armed a deletion for a shared record path")
         self.assertTrue(Path("/tmp").is_dir(), "/tmp is gone")
 
 
@@ -275,17 +293,23 @@ class MatrixRecordPaths(unittest.TestCase):
         install(self.bin, "iw", "#!/bin/sh\nexit 0\n")
         first = self.run_matrix()
         second = self.run_matrix()
-        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        # Nothing was measured: the v2 cause picks 3, never the old 0.
+        self.assertEqual(first.returncode, 3, first.stdout + first.stderr)
+        self.assertEqual(second.returncode, 3, second.stdout + second.stderr)
         self.assertIn("SKIP: no 320 client", first.stdout)
         one = self.record(first, NO_CLIENT_RECORD, "no-client")
         two = self.record(second, NO_CLIENT_RECORD, "no-client")
         assert_absolute_record(self, one)
         assert_absolute_record(self, two)
-        self.assertNotEqual(one.parent, two.parent, "two runs shared one record dir")
-        self.assertEqual(one.parent.name, "no-client")
-        self.assertEqual(one.parent.parent.parent, Path("/tmp"))
+        self.assertNotEqual(one.parent.parent, two.parent.parent,
+                            "two runs shared one record dir")
+        # v2: <run>/no-client/no-hardware/result.json
+        self.assertEqual(one.parent.name, "no-hardware")
+        self.assertEqual(one.parent.parent.name, "no-client")
+        self.assertEqual(one.parent.parent.parent.parent, Path("/tmp"))
         data = json.loads(one.read_text())
         self.assertEqual(data["status"], "no-client")
+        self.assertEqual(data["cause"], "missing-hardware")
         self.assertEqual(data["ticket"], "47")
 
     def test_blocked_record_is_absolute_and_per_run(self):
@@ -295,16 +319,21 @@ class MatrixRecordPaths(unittest.TestCase):
         first = self.run_matrix()
         second = self.run_matrix()
         self.assertEqual(first.returncode, 2, first.stdout + first.stderr)
+        self.assertEqual(second.returncode, 2, second.stdout + second.stderr)
         self.assertIn("BLOCKED:", first.stdout)
         one = self.record(first, BLOCKED_RECORD, "blocked")
         two = self.record(second, BLOCKED_RECORD, "blocked")
         assert_absolute_record(self, one)
         assert_absolute_record(self, two)
-        self.assertNotEqual(one.parent, two.parent, "two runs shared one record dir")
-        self.assertEqual(one.parent.name, "blocked")
-        self.assertEqual(one.parent.parent.parent, Path("/tmp"))
+        self.assertNotEqual(one.parent.parent, two.parent.parent,
+                            "two runs shared one record dir")
+        # v2: <run>/blocked/no-hardware/result.json
+        self.assertEqual(one.parent.name, "no-hardware")
+        self.assertEqual(one.parent.parent.name, "blocked")
+        self.assertEqual(one.parent.parent.parent.parent, Path("/tmp"))
         data = json.loads(one.read_text())
         self.assertEqual(data["status"], "blocked")
+        self.assertEqual(data["cause"], "config-block")
         self.assertEqual(data["ticket"], "47")
         self.assertEqual(data["missing"], "6ghz-owe-mismatch")
 
@@ -326,7 +355,8 @@ class MatrixRecordPaths(unittest.TestCase):
         assert_absolute_record(self, two)
         self.assertTrue(one.is_file(), "%s was overwritten" % one)
         self.assertTrue(two.is_file(), "%s was overwritten" % two)
-        self.assertNotEqual(one.parent, two.parent, "one directory holds both records")
+        self.assertNotEqual(one.parent.parent, two.parent.parent,
+                            "one directory holds both records")
         missing = {
             json.loads(one.read_text())["missing"],
             json.loads(two.read_text())["missing"],
@@ -408,7 +438,8 @@ class RxSkipRecord(unittest.TestCase):
     def test_skip_record_is_absolute_and_per_run(self):
         first = self.run_harness()
         second = self.run_harness()
-        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertEqual(first.returncode, 3, first.stdout + first.stderr)
+        self.assertEqual(second.returncode, 3, second.stdout + second.stderr)
         match = NO_CLIENT_RECORD.search(first.stdout)
         self.assertIsNotNone(match, first.stdout + first.stderr)
         one = Path(match.group(1))
@@ -417,8 +448,9 @@ class RxSkipRecord(unittest.TestCase):
         add_run_dir_cleanup(self, two, self.started)
         assert_absolute_record(self, one)
         assert_absolute_record(self, two)
-        self.assertEqual(one.parent.parent, Path("/tmp"))
-        self.assertNotEqual(one.parent, two.parent)
+        # v2: <run>/no-hardware/result.json, so the run directory is two up.
+        self.assertEqual(one.parent.parent.parent, Path("/tmp"))
+        self.assertNotEqual(one.parent.parent, two.parent.parent)
 
 
 if __name__ == "__main__":

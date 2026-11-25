@@ -165,8 +165,29 @@ EOF
 # "320 MHz, center1: 6105".  FAKE_IW_WIDTH=160 is the EHT160 fallback the
 # config text cannot show: ieee80211be is still in the hostapd config.
 FAKE_IW = r"""#!/bin/sh
+if [ -n "${FAKE_IW_LOG:-}" ]; then
+	printf '%s\n' "$*" >> "${FAKE_IW_LOG}"
+fi
+_w="${FAKE_IW_WIDTH:-320}"
+if [ -n "${FAKE_IW_SEQ:-}" ] && [ -n "${FAKE_IW_COUNT_FILE:-}" ]; then
+	_n=0
+	[ -f "$FAKE_IW_COUNT_FILE" ] && _n=$(cat "$FAKE_IW_COUNT_FILE")
+	_n=$((_n + 1))
+	printf '%s\n' "$_n" > "$FAKE_IW_COUNT_FILE"
+	_w=$(printf '%s\n' "$FAKE_IW_SEQ" | awk -F, -v idx="$_n" '{ if (idx <= NF) print $idx; else print $NF }')
+fi
+case "$_w" in
+missing)
+	printf 'command failed: No such device (-19)\n' >&2
+	exit 237
+	;;
+empty)
+	printf 'phy#0\n\tInterface %s\n\ttype AP\n' "${FAKE_IW_IFACE:-phy0.2-ap0}"
+	exit 0
+	;;
+esac
 printf 'phy#0\n\tInterface %s\n\t\tchannel 37 (6135 MHz), width: %s MHz, center1: 6105 MHz\n' \
-	"${FAKE_IW_IFACE:-phy0.2-ap0}" "${FAKE_IW_WIDTH:-320}"
+	"${FAKE_IW_IFACE:-phy0.2-ap0}" "$_w"
 """
 
 
@@ -189,9 +210,12 @@ class Bench:
         self.delta = self.tmp / "delta-wireless"
         self.uci_log = self.tmp / "uci.log"
         self.wifi_log = self.tmp / "wifi.log"
+        self.iw_log = self.tmp / "iw.log"
+        self.iw_count = self.tmp / "iw.count"
         self.urg_dir = self.tmp / "restore"
         self.uci_log.write_text("")
         self.wifi_log.write_text("")
+        self.iw_log.write_text("")
 
         write_exec(self.bin / "uci", FAKE_UCI)
         write_exec(self.bin / "wifi", FAKE_WIFI)
@@ -214,15 +238,22 @@ class Bench:
             "FAKE_UCI_DELTA": str(self.delta),
             "FAKE_UCI_LOG": str(self.uci_log),
             "FAKE_WIFI_LOG": str(self.wifi_log),
+            "FAKE_IW_LOG": str(self.iw_log),
+            "FAKE_IW_COUNT_FILE": str(self.iw_count),
             "FAKE_HOSTAPD_CFG": str(self.hostapd),
             "FAKE_UCI_MOVE": "1",
             "FAKE_IW_WIDTH": "320",
         })
 
-    def run(self, *args, emit_be="1", width="320"):
+    def run(self, *args, emit_be="1", width="320", iw_seq="", timeout="2"):
         env = dict(self.env)
         env["FAKE_WIFI_EMIT_BE"] = emit_be
         env["FAKE_IW_WIDTH"] = width
+        env["G6_VERIFY_TIMEOUT"] = str(timeout)
+        if iw_seq:
+            env["FAKE_IW_SEQ"] = iw_seq
+        else:
+            env.pop("FAKE_IW_SEQ", None)
         return subprocess.run(
             ["sh", str(SCRIPT), *args],
             env=env,
@@ -236,6 +267,9 @@ class Bench:
 
     def reloads(self) -> str:
         return self.wifi_log.read_text()
+
+    def iw_calls(self) -> list[str]:
+        return [line for line in self.iw_log.read_text().splitlines() if line]
 
     def close(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -338,7 +372,51 @@ class RestoreTest(unittest.TestCase):
         self.assertIn("status:   default", result.stdout)
         self.assertIn("apply:    already at EHT320, nothing written", result.stdout)
         self.assertEqual(b.uci_calls(), "", "a no-op run must not call uci at all")
+        self.assertEqual(b.reloads(), "", "a verified 320 MHz link must not reload wifi")
         self.assertEqual(b.cfg.read_text(), CONFIG_EHT320)
+
+    def test_already_at_default_with_eht160_fallback_does_not_short_circuit_ok(self):
+        # Config is EHT320 and hostapd.conf has ieee80211be=1, but live iw
+        # width fell back to 160 MHz.  --apply must NOT exit 0 as already-good.
+        b = self.bench(config=CONFIG_EHT320, hostapd=HOSTAPD_BE)
+        result = b.run("--apply", width="160")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertNotIn("already at EHT320, nothing written", result.stdout)
+        self.assertIn("apply:    config already EHT320, reloading to verify", result.stdout)
+        self.assertIn("reload", b.reloads())
+        self.assertIn("verify:   width is 160 MHz, expected 320 MHz", result.stderr)
+        self.assertIn(
+            "status:   failed, the config already asked for EHT320; the live radio did not reach it",
+            result.stderr,
+        )
+        self.assertEqual(b.uci_calls(), "")
+        self.assertEqual(b.cfg.read_text(), CONFIG_EHT320)
+
+    def test_already_at_default_with_eht160_recovers_after_reload(self):
+        # Config is EHT320 and hostapd.conf has ieee80211be=1, live iw is
+        # initially 160 MHz, then recovers to 320 MHz after wifi reload.
+        b = self.bench(config=CONFIG_EHT320, hostapd=HOSTAPD_BE)
+        result = b.run("--apply", iw_seq="160,320")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("already at EHT320, nothing written", result.stdout)
+        self.assertIn("apply:    config already EHT320, reloading to verify", result.stdout)
+        self.assertIn("reload", b.reloads())
+        self.assertIn("status:   restored to EHT320 (320 MHz)", result.stdout)
+        self.assertEqual(b.uci_calls(), "")
+        self.assertEqual(b.cfg.read_text(), CONFIG_EHT320)
+
+    def test_apply_polls_iw_until_interface_reaches_320(self):
+        # hostapd.conf appears before hostapd finishes interface setup: iw
+        # initially reports missing device, then empty width, then 320 MHz.
+        b = self.bench(config=CONFIG_HE20, hostapd=HOSTAPD_NO_BE)
+        result = b.run("--apply", iw_seq="missing,empty,320", timeout="3")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len(b.iw_calls()), 3, b.iw_calls())
+        self.assertIn("verify:   phy0.2-ap0 width: 320 MHz", result.stdout)
+        self.assertIn("status:   restored to EHT320 (320 MHz)", result.stdout)
+        self.assertEqual(b.cfg.read_text(), CONFIG_EHT320)
+        self.assertFalse(b.delta.exists())
+        self.assertFalse(b.urg_dir.exists())
 
 
 if __name__ == "__main__":

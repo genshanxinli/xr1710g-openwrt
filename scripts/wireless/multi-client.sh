@@ -26,7 +26,8 @@
 #   1. Resolve the requested MACs to AP interfaces (a client may be on 5 GHz
 #      or 6 GHz; each client is looked up on every AP interface).
 #   2. Refuse to run unless at least two requested clients are associated.
-#      Otherwise print "SKIP: ..." and exit 0 without sending traffic.
+#      Otherwise print "SKIP: ..." and exit 3 (missing-hardware, the v2
+#      no-hardware contract) without sending traffic.
 #   3. Per arm: snapshot station dump, token_info and hw-queues; start one
 #      per-client source (PROCS copies) for all clients concurrently.
 #   4. Warm up WARMUP seconds, then take the expected NSS from the last
@@ -145,11 +146,15 @@
 #   $OUT/arm-<a|b>/source-<index>-<copy>.log
 #   $OUT/run.log                  chronological harness log
 #
-# Exit status
-#   0  all requested arms valid, or a clean SKIP (fewer than two clients)
-#   1  setup/run failure (no iw, no AP interface, feeder ssh, output exists)
-#   2  invalid arguments
-#   3  measured, but an arm was aborted (NSS/disconnect/source death)
+# Exit status (v2 no-hardware contract, scripts/wireless/lib/no-client.sh)
+#   0  all requested arms valid and aggregate >= target_gbit (or target 0)
+#   1  setup/run failure (no AP interface, feeder ssh, output exists)
+#   2  invalid arguments, a configuration block (OWE mismatch) or a missing
+#      tool (iw, setsid, default iperf3); nothing was measured
+#   3  clean SKIP: fewer than two requested clients associated (missing
+#      hardware); nothing was measured
+#   4  measured, but an arm was aborted (NSS/disconnect/source death/idle)
+#   5  measured and all clients ok, but aggregate throughput < target_gbit
 #
 # POSIX sh only (busybox ash on the board).  Tested with sh -n, --help,
 # --dry-run, a board dry run, the board's clean-skip path, and a deterministic
@@ -192,6 +197,18 @@ PROG=${0##*/}
 NO_CLIENT_LIB=$(dirname "$0")/lib/no-client.sh
 # shellcheck source=lib/no-client.sh
 [ -r "$NO_CLIENT_LIB" ] && . "$NO_CLIENT_LIB"
+if ! command -v nc_cause_exit >/dev/null 2>&1; then
+	nc_cause_exit() {
+		case ${1:-} in
+		missing-hardware) printf '3\n' ;;
+		missing-tool | config-block | permission | environment | output-collision)
+			printf '2\n' ;;
+		precondition-mismatch) printf '4\n' ;;
+		interrupted) printf '130\n' ;;
+		*) printf '1\n' ;;
+		esac
+	}
+fi
 SCHEMA=multi-client-aggregation/v1
 
 CLIENT_COUNT=0
@@ -211,6 +228,8 @@ WARMUP=${WARMUP:-5}
 INTERVAL=${INTERVAL:-1}
 PROCS=${PROCS:-1}
 MIN_MBIT=${MIN_MBIT:-1.0}
+TARGET_A_GBIT=${TARGET_A_GBIT:-2.0}
+TARGET_B_GBIT=${TARGET_B_GBIT:-1.5}
 # Seconds a source group gets to honour TERM before it is KILLed, and the same
 # again for the KILL to take effect.  Only a stuck group pays this.
 KILL_WAIT=${KILL_WAIT:-5}
@@ -252,7 +271,8 @@ time for one fixed window; throughput comes from AP-side iw station dump
 tx/rx byte deltas, and token_info/hw-queues are sampled around the window.
 
 A real run needs 2 or 3 associated clients.  With fewer than two it prints a
-clean "SKIP:" and exits 0 without sending traffic or creating output.
+clean "SKIP:" and exits 3 (missing-hardware) without sending traffic or
+creating output.
 
 Options:
   --client MAC          add a client (2-3 required for a real run; a MAC may
@@ -275,6 +295,10 @@ Options:
                         is below this is reported idle (BELOW_FLOOR in the
                         arm summary), not ok (default 1.0); --min-mbps is the
                         same flag
+  --target-a-gbit GBIT  aggregate target for arm A in Gbit/s (default 2.0;
+                        0 disables the target check)
+  --target-b-gbit GBIT  aggregate target for arm B in Gbit/s (default 1.5;
+                        0 disables the target check)
   --out DIR             output directory (default /tmp/multi-client-<UTC>);
                         an existing directory is never reused
   --dry-run             print the plan and every command; do not send traffic,
@@ -293,15 +317,18 @@ rates.  A client row below --min-mbit is "idle", and an arm with an idle
 client is not valid.
 
 An arm is aborted if a client disconnects, its NSS disappears or changes, or
-a source process exits before the window ends.  A clean skip (fewer than two
-associated clients) is not an error.
+a source process exits before the window ends; that run exits 4.  A clean
+skip (fewer than two associated clients) is not an error: it exits 3.  When
+all clients are ok but an arm's aggregate rate is below its target, the run
+records target_met=false in result.json and exits 5.
 
 Safety: this script never writes UCI, never reloads Wi-Fi, never loads a
 module, never writes firmware/flash, never reboots and never writes
 sysfs/debugfs.  It writes only the output directory and the source logs.
 
-Exit status: 0 valid run or clean SKIP, 1 setup/run failure, 2 bad arguments,
-3 measured but aborted.
+Exit status: 0 valid run meeting targets, 1 setup/run failure, 2 bad arguments,
+OWE block or missing tool (iw/setsid/default iperf3), 3 clean SKIP (missing
+hardware), 4 measured but aborted, 5 all clients ok but aggregate below target.
 
 Examples:
   ./scripts/wireless/multi-client.sh --dry-run
@@ -325,6 +352,22 @@ usage_error() {
 die() {
 	printf '%s: error: %s\n' "$PROG" "$1" >&2
 	exit 1
+}
+
+skip_no_tool() {
+	_tool=$1
+	_detail=$2
+	_rec=$(NC_RECORD_CAUSE=missing-tool \
+		no_client_record "${OUT:-}" 50 "$_tool" \
+		"sh scripts/wireless/multi-client.sh --client <MAC_A> --client <MAC_B> --out <DIR>" \
+		"$_detail" \
+		"aggregate tx/rx throughput across 2-3 concurrent clients" \
+		"per-client rate against the --min-mbit floor" \
+		"NPU token_info / hw-queues under concurrent traffic" 2>/dev/null)
+	say "SKIP: $_detail"
+	say "      missing $_tool; install it or pass --source with another traffic generator"
+	[ -n "$_rec" ] && say "      no-client record: $_rec"
+	exit "$(nc_cause_exit missing-tool)"
 }
 
 warn() {
@@ -688,6 +731,24 @@ while [ "$#" -gt 0 ]; do
 			;;
 		esac
 		;;
+	--target-a-gbit)
+		[ "$#" -ge 2 ] || usage_error "--target-a-gbit needs a rate in Gbit/s"
+		TARGET_A_GBIT=$2
+		shift 2
+		;;
+	--target-a-gbit=*)
+		TARGET_A_GBIT=${1#*=}
+		shift
+		;;
+	--target-b-gbit)
+		[ "$#" -ge 2 ] || usage_error "--target-b-gbit needs a rate in Gbit/s"
+		TARGET_B_GBIT=$2
+		shift 2
+		;;
+	--target-b-gbit=*)
+		TARGET_B_GBIT=${1#*=}
+		shift
+		;;
 	--out)
 		[ "$#" -ge 2 ] || usage_error "--out needs a directory"
 		OUT=$2
@@ -733,6 +794,15 @@ case $MIN_MBIT in
 esac
 awk -v m="$MIN_MBIT" 'BEGIN { exit (m ~ /^[0-9]+(\.[0-9]+)?$/ && m + 0 > 0) ? 0 : 1 }' ||
 	usage_error "--min-mbit must be a positive number in Mbit/s"
+for _tpair in "target-a-gbit:$TARGET_A_GBIT" "target-b-gbit:$TARGET_B_GBIT"; do
+	_tname=${_tpair%%:*}
+	_tval=${_tpair#*:}
+	case $_tval in
+	''|*[!0-9.]*|*.*.*) usage_error "--$_tname must be a non-negative number in Gbit/s (0 disables)" ;;
+	esac
+	awk -v t="$_tval" 'BEGIN { exit (t ~ /^(0|[1-9][0-9]*)(\.[0-9]+)?$/ && t + 0 >= 0) ? 0 : 1 }' ||
+		usage_error "--$_tname must be a non-negative number in Gbit/s (0 disables)"
+done
 
 case $ARM in
 a|b|both) ;;
@@ -1230,17 +1300,26 @@ is_group_leader() {
 }
 
 # Non-zombie pids in process group $1, from one /proc scan.
+# Iterate ARGV via getline in BEGIN so a short-lived process disappearing
+# between glob expansion and open() never aborts awk mid-scan.
 group_pids() {
-	awk -v g="$1" '
-		FNR == 1 {
-			p = FILENAME
-			sub(/^.*\/proc\//, "", p)
-			sub(/\/stat$/, "", p)
-			s = $0
-			sub(/.*\) /, "", s)
-			split(s, a, " ")
-			if (a[3] == g && a[1] != "Z") print p
-		}' /proc/[0-9]*/stat 2>/dev/null
+	awk -v g="$1" 'BEGIN {
+		for (i = 1; i < ARGC; i++) {
+			f = ARGV[i]
+			ARGV[i] = ""
+			rc = (getline line < f)
+			if (rc > 0) {
+				p = f
+				sub(/^.*\/proc\//, "", p)
+				sub(/\/stat$/, "", p)
+				sub(/.*\) /, "", line)
+				split(line, a, " ")
+				if (a[3] == g && a[1] != "Z") print p
+			}
+			if (rc >= 0) close(f)
+		}
+		exit
+	}' /proc/[0-9]*/stat 2>/dev/null
 }
 
 start_sources() {
@@ -1323,7 +1402,7 @@ wait_groups_gone() {
 kill_sources() {
 	[ -n "${SRC_PIDS:-}" ] || return 0
 	for _p in $SRC_PIDS; do
-		kill -TERM -"$_p" 2>/dev/null
+		kill -TERM -"$_p" 2>/dev/null || kill -TERM "$_p" 2>/dev/null
 	done
 	# Poll before reaping: a leader that traps or ignores TERM (a
 	# user-supplied --source wrapper) would block a blocking wait here and
@@ -1331,7 +1410,7 @@ kill_sources() {
 	# group, so the reap after the escalation cannot block.
 	if ! wait_groups_gone "$KILL_WAIT"; then
 		for _p in $SRC_PIDS; do
-			kill -KILL -"$_p" 2>/dev/null
+			kill -KILL -"$_p" 2>/dev/null || kill -KILL "$_p" 2>/dev/null
 		done
 		if ! wait_groups_gone "$KILL_WAIT"; then
 			ARM_STATUS=invalid
@@ -1758,17 +1837,44 @@ run_arm() {
 	print_arm_table
 	print_npu_summary
 	cat "$ARM_DIR/result.tsv" >>"$OUT/result.tsv"
+	if ! arm_target_met "$ARM_LABEL" "$ARM_DIR/result.tsv"; then
+		return 5
+	fi
 	return 0
+}
+
+arm_target_gbit() {
+	case $1 in
+	b) printf '%s' "${TARGET_B_GBIT:-1.5}" ;;
+	*) printf '%s' "${TARGET_A_GBIT:-2.0}" ;;
+	esac
+}
+
+arm_target_met() {
+	_arm_t=$(arm_target_gbit "$1")
+	awk -F'\t' -v tgt="$_arm_t" '
+		$2 ~ /^AGGREGATE/ {
+			found = 1
+			if ($15 != "ok") exit 1
+			if (tgt + 0 <= 0) exit 0
+			txv = ($11 ~ /^[0-9]+(\.[0-9]+)?$/) ? $11 + 0 : -1
+			rxv = ($12 ~ /^[0-9]+(\.[0-9]+)?$/) ? $12 + 0 : -1
+			best = (txv > rxv) ? txv : rxv
+			exit (best >= tgt + 0) ? 0 : 1
+		}
+		END { if (!found) exit 1 }
+	' "$2"
 }
 
 # ---------------------------------------------------------------------------
 # result.json
 
-# The same rows as result.tsv, plus the per-client floor, so a consumer does
-# not have to parse a tab table or re-derive the threshold.  Values that the
-# table writes as "?" or "-" become null.
+# The same rows as result.tsv, plus the per-client floor and arm target
+# verdicts, so a consumer does not have to parse a tab table or re-derive the
+# thresholds.  Values that the table writes as "?" or "-" become null.
 write_result_json() {
-	awk -F'\t' -v minm="$MIN_MBIT" '
+	awk -F'\t' -v minm="$MIN_MBIT" \
+		-v tgta="${TARGET_A_GBIT:-2.0}" -v tgtb="${TARGET_B_GBIT:-1.5}" '
 		function s(v) { gsub(/["\\]/, "_", v); return "\"" v "\"" }
 		function n(v) { return (v == "" || v == "?" || v == "-") ? "null" : v }
 		NR == 1 { next }
@@ -1782,9 +1888,23 @@ write_result_json() {
 				", \"min_mbit\": " n($16) "}"
 			if (($2 ~ /^AGGREGATE/ || $15 ~ /^(INVALID|ABORTED)/) && !($1 in seen)) {
 				seen[$1] = 1
+				tgt_str = ($1 == "b") ? tgtb : tgta
+				tgt = tgt_str + 0
+				tmet = "false"
+				if ($15 == "ok") {
+					if (tgt <= 0) {
+						tmet = "true"
+					} else {
+						txv = ($11 ~ /^[0-9]+(\.[0-9]+)?$/) ? $11 + 0 : -1
+						rxv = ($12 ~ /^[0-9]+(\.[0-9]+)?$/) ? $12 + 0 : -1
+						best = (txv > rxv) ? txv : rxv
+						if (best >= tgt) tmet = "true"
+					}
+				}
 				arms = arms ((arms == "") ? "" : ",") "\n    {" "\"arm\": " s($1) \
 					", \"status\": " s($15) ", \"tx_gbit\": " n($11) ", \"rx_gbit\": " n($12) \
-					", \"retries\": " n($13) ", \"seconds\": " n($10) "}"
+					", \"retries\": " n($13) ", \"seconds\": " n($10) \
+					", \"target_gbit\": " n(tgt_str) ", \"target_met\": " tmet "}"
 			}
 		}
 		END {
@@ -1820,8 +1940,9 @@ dry_run_plan() {
 			_i=$((_i + 1))
 		done
 	fi
-	printf '  arm=%s window=%ss warmup=%ss interval=%ss procs=%s min-mbit=%s\n' \
-		"$_armtext" "$WINDOW" "$WARMUP" "$INTERVAL" "$PROCS" "$MIN_MBIT"
+	printf '  arm=%s window=%ss warmup=%ss interval=%ss procs=%s min-mbit=%s target-a-gbit=%s target-b-gbit=%s\n' \
+		"$_armtext" "$WINDOW" "$WARMUP" "$INTERVAL" "$PROCS" "$MIN_MBIT" \
+		"$TARGET_A_GBIT" "$TARGET_B_GBIT"
 	printf '  output: %s\n' "$OUT"
 	printf '  source window: SOURCE_SECS = %s (warm-up + window + 5)\n' \
 		"$((WARMUP + WINDOW + 5))"
@@ -1829,7 +1950,7 @@ dry_run_plan() {
 	printf '  1. iw dev <ap-ifaces> station dump; map each MAC to its AP interface\n'
 	printf '     and band (5G/6G); resolve each address from ARP/neigh or --client-ip\n'
 	printf '  2. if fewer than 2 requested clients are associated: print SKIP and\n'
-	printf '     exit 0; no traffic, no output directory, no config change\n'
+	printf '     exit 3 (missing-hardware); no traffic, no output directory, no config change\n'
 	printf '  3. per arm: snapshot station dump, token_info and hw-queues\n'
 	printf '  4. start the per-client source(s), each in its own process group:\n'
 	if [ "$_armtext" = a ] || [ "$_armtext" = both ]; then
@@ -1876,10 +1997,10 @@ fi
 # ---------------------------------------------------------------------------
 # real run
 
-have iw || die "iw is required (install iw or iw-full)"
+have iw || skip_no_tool iw "iw is required (install iw or iw-full)"
 have awk || die "awk is required"
 have sed || die "sed is required"
-have setsid || die "setsid is required (install busybox or util-linux setsid)"
+have setsid || skip_no_tool setsid "setsid is required (install busybox or util-linux setsid)"
 [ -r /proc/uptime ] || die "/proc/uptime is required"
 
 log_cmd "multi-client.sh $SCHEMA starting"
@@ -1917,7 +2038,8 @@ if [ "$ACTIVE_COUNT" -lt 2 ]; then
 			exit 2
 		fi
 	done
-	_rec=$(no_client_record "${OUT:-}" 50 second-associated-wifi-client \
+	_rec=$(NC_RECORD_CAUSE=missing-hardware \
+		no_client_record "${OUT:-}" 50 second-associated-wifi-client \
 		"sh scripts/wireless/multi-client.sh --client <MAC_A> --client <MAC_B> --out <DIR>" \
 		"only $ACTIVE_COUNT of $CLIENT_COUNT requested client(s) associated; need at least 2" \
 		"aggregate tx/rx throughput across 2-3 concurrent clients" \
@@ -1927,7 +2049,7 @@ if [ "$ACTIVE_COUNT" -lt 2 ]; then
 	say "      missing second-associated-wifi-client; once it is available run: sh scripts/wireless/multi-client.sh --client <MAC_A> --client <MAC_B> --out <DIR>"
 	say "      no traffic was sent and no config was changed"
 	[ -n "$_rec" ] && say "      no-client record: $_rec"
-	exit 0
+	exit "$(nc_cause_exit missing-hardware)"
 fi
 
 if [ "$SOURCE_COUNT" -eq 0 ]; then
@@ -1947,7 +2069,7 @@ if [ "$SOURCE_COUNT" -eq 0 ]; then
 	case $ARM in
 	a|both)
 		have iperf3 ||
-			die "the default source needs iperf3 on the AP; pass --source with the lab source (e.g. /tmp/ringblast)"
+			skip_no_tool iperf3 "the default source needs iperf3 on the AP; pass --source with the lab source (e.g. /tmp/ringblast)"
 		;;
 	esac
 fi
@@ -1978,6 +2100,8 @@ LOG=$OUT/run.log
 	done
 	printf 'source=%s\n' "$(get_source 1)"
 	printf 'min_mbit=%s\n' "$MIN_MBIT"
+	printf 'target_a_gbit=%s\n' "$TARGET_A_GBIT"
+	printf 'target_b_gbit=%s\n' "$TARGET_B_GBIT"
 	printf 'kill_wait=%s\n' "$KILL_WAIT"
 } >"$OUT/meta.txt"
 printf 'arm\tclient\tiface\tchannel\twidth\tnss\tsignal\ttx_bytes\trx_bytes\tseconds\ttx_gbit\trx_gbit\tretries\tfailed\tstatus\tmin_mbit\n' >"$OUT/result.tsv"
@@ -1989,32 +2113,59 @@ fi
 EXIT_CODE=0
 case $ARM in
 a)
-	run_arm a || EXIT_CODE=3
+	_rc=0
+	run_arm a || _rc=$?
+	if [ "$_rc" -eq 5 ]; then
+		EXIT_CODE=5
+	elif [ "$_rc" -ne 0 ]; then
+		EXIT_CODE=4
+	fi
 	;;
 b)
-	run_arm b || EXIT_CODE=3
+	_rc=0
+	run_arm b || _rc=$?
+	if [ "$_rc" -eq 5 ]; then
+		EXIT_CODE=5
+	elif [ "$_rc" -ne 0 ]; then
+		EXIT_CODE=4
+	fi
 	;;
 both)
-	if run_arm a; then
-		run_arm b || EXIT_CODE=3
+	_rc=0
+	run_arm a || _rc=$?
+	if [ "$_rc" -eq 0 ] || [ "$_rc" -eq 5 ]; then
+		[ "$_rc" -eq 5 ] && EXIT_CODE=5
+		_rc2=0
+		run_arm b || _rc2=$?
+		if [ "$_rc2" -eq 5 ]; then
+			EXIT_CODE=5
+		elif [ "$_rc2" -ne 0 ]; then
+			EXIT_CODE=4
+		fi
 	else
-		EXIT_CODE=3
+		EXIT_CODE=4
 	fi
 	;;
 esac
 
 write_result_json
 
-if [ "$EXIT_CODE" -eq 0 ]; then
+if [ "$EXIT_CODE" -eq 0 ] || [ "$EXIT_CODE" -eq 5 ]; then
 	say ""
-	say "SUMMARY: all requested arms valid"
+	if [ "$EXIT_CODE" -eq 0 ]; then
+		say "SUMMARY: all requested arms valid (PASS)"
+	else
+		say "SUMMARY: all requested arms valid, aggregate below target (FAIL)"
+	fi
 	if [ -f "$OUT/arm-a/result.tsv" ]; then
 		_agg=$(awk -F'\t' '$2 ~ /^AGGREGATE/ { printf "tx %s Gbit/s, rx %s Gbit/s, %s retries over %s s", $11, $12, $13, $10 }' "$OUT/arm-a/result.tsv")
-		say "  A: ${_agg:-no aggregate row}"
+		if arm_target_met a "$OUT/arm-a/result.tsv"; then _tv=PASS; else _tv=FAIL; fi
+		say "  A: ${_agg:-no aggregate row} (target ${TARGET_A_GBIT} Gbit/s: $_tv)"
 	fi
 	if [ -f "$OUT/arm-b/result.tsv" ]; then
 		_agg=$(awk -F'\t' '$2 ~ /^AGGREGATE/ { printf "tx %s Gbit/s, rx %s Gbit/s, %s retries over %s s", $11, $12, $13, $10 }' "$OUT/arm-b/result.tsv")
-		say "  B: ${_agg:-no aggregate row}"
+		if arm_target_met b "$OUT/arm-b/result.tsv"; then _tv=PASS; else _tv=FAIL; fi
+		say "  B: ${_agg:-no aggregate row} (target ${TARGET_B_GBIT} Gbit/s: $_tv)"
 	fi
 fi
 

@@ -186,8 +186,8 @@ class GuardTest(unittest.TestCase):
         # swallow the status with `|| true`.
         adopters = [p for p in sorted(WIRELESS.glob("*.sh"))
                     if "netwatchdog-guard.sh" in read(p)]
-        self.assertEqual(len(adopters), 7,
-                         "expected the 7 destructive scripts from #102, got %d"
+        self.assertEqual(len(adopters), 8,
+                         "expected the 8 destructive scripts (7 from #102 + thermal-soak.sh), got %d"
                          % len(adopters))
         for path in adopters:
             body = read(path)
@@ -273,7 +273,10 @@ class KernelTest(unittest.TestCase):
     def test_10g_series_is_where_the_row_says(self):
         # 744 is a generic net-phy fix, 745/747/748/749 are airoha net-pcs ones.
         # Wrong placement means a kernel bump silently drops a fix.
-        for kernel in ("6.18", "7.3", "7.4"):
+        # The 7.3 airoha queue was retired in #374 (the 6.18 baseline uses
+        # pending-6.18, not pending-7.3), so the airoha queue loop drops 7.3
+        # while the generic pending-7.3 directory still carries 744.
+        for kernel in ("6.18", "7.4"):
             airoha = {p.name for p in (AIROHA / ("patches-" + kernel)).glob("74*")}
             for prefix in ("745", "746", "748", "749"):
                 self.assertTrue(any(n.startswith(prefix) for n in airoha),
