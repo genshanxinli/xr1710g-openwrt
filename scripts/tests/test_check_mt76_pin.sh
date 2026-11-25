@@ -365,6 +365,23 @@ run_case mirror-diverged 0 keep \
 printf '%s\n' "$OUT" | grep -q '^mirror.moved *unknown$' ||
 	fail "mirror-diverged: a reader that shares no lineage with the pin must be unknown; output: $OUT"
 
+# a separate reader repo that does not contain the pin commit at all:
+# ancestry cannot be proved either way, so mirror.moved stays unknown and
+# keep stands (rc 0).
+MISSING_PIN="$WORK/mirror-missing-pin"
+rm -rf "$MISSING_PIN"
+git init -q -b main "$MISSING_PIN"
+git -C "$MISSING_PIN" config user.name t
+git -C "$MISSING_PIN" config user.email t@t
+GIT_COMMITTER_DATE='2026-10-12T00:00:00+0000' git -C "$MISSING_PIN" commit -q --allow-empty \
+	-m 'unrelated-mirror' --date '2026-10-12T00:00:00+0000' --author 't <t@t>'
+run_case mirror-missing-pin 0 keep \
+	MT76_PIN_FILE="$PIN_SAME" MT76_PATCH_DIR="$PATCHES" \
+	MT76_UPSTREAM_REPO="$SAME" MT76_UPSTREAM_REF=main \
+	MT76_MIRROR_REF="$MISSING_PIN"
+printf '%s\n' "$OUT" | grep -q '^mirror.moved *unknown$' ||
+	fail "mirror-missing-pin: a separate reader repo without the pin commit must be unknown; output: $OUT"
+
 # --- 10: blocked.by -- a real count of commits this tree cannot absorb -------
 
 write_pin_blocked() {

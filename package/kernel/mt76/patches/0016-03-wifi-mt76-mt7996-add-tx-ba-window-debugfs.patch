@@ -1,4 +1,3 @@
-From 667ba55deb806271e5d64d4914fc4885a4437a44 Mon Sep 17 00:00:00 2001
 From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 Date: Sun, 15 Nov 2026 04:08:42 +0800
 Subject: [PATCH] wifi: mt76: mt7996: expose per-STA TX BA window in debugfs
@@ -14,14 +13,9 @@ inactive TIDs are omitted after a single header line.
 
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
- mt7996/debugfs.c | 25 +++++++++++++++++++++++++
- 1 file changed, 25 insertions(+)
-
-diff --git a/mt7996/debugfs.c b/mt7996/debugfs.c
-index 6526bbf..a425167 100644
 --- a/mt7996/debugfs.c
 +++ b/mt7996/debugfs.c
-@@ -1268,10 +1268,35 @@ mt7996_queues_show(struct seq_file *s, void *data)
+@@ -1549,10 +1549,35 @@ mt7996_queues_show(struct seq_file *s, v
  
  DEFINE_SHOW_ATTRIBUTE(mt7996_queues);
  
@@ -57,6 +51,3 @@ index 6526bbf..a425167 100644
  }
  
  static ssize_t mt7996_link_sta_fixed_rate_set(struct file *file,
--- 
-2.56.0
-

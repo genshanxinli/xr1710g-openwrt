@@ -1,0 +1,31 @@
+From: OpenWrt <openwrt@example.org>
+Date: Wed, 25 Nov 2026 12:52:00 +0800
+Subject: [PATCH] AP: lower unsolicited Link Measurement Report to debug
+
+A client may send an RRM Link Measurement Report without the AP having an
+outstanding request for it. hostapd logs that case at MSG_INFO, and with
+logger_syslog_level=2 every such frame reaches syslog.
+
+On the XR1710G (MT7996) one 5 GHz client sent them at roughly one per
+second: all 980 hostapd lines in logread were this message, and the
+128 KiB ring only held the first nine minutes after boot. The report is
+not actionable - there is no request state to repair - so MSG_INFO is the
+wrong level. Keep it visible only with -ddd as MSG_EXCESSIVE instead.
+
+Logged in the r20 live review as N2 (syslog noise) / N9 (retention).
+
+Local patch, not for upstream.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+--- a/src/ap/rrm.c
++++ b/src/ap/rrm.c
+@@ -367,7 +367,7 @@ static void hostapd_handle_link_mesr_report(struct hostapd_data *hapd,
+ 
+ 	if (!hapd->link_mesr_req_active ||
+ 	    (hapd->link_measurement_req_token != report->dialog_token)) {
+-		wpa_printf(MSG_INFO,
++		wpa_printf(MSG_EXCESSIVE,
+ 			   "Unexpected Link measurement report, token %u",
+ 			   report->dialog_token);
+ 		return;

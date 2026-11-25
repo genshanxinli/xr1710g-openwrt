@@ -255,31 +255,56 @@ run_fetch() {
     fi
 }
 
+# Record one failed downloader attempt. The text is that downloader's own
+# stderr: uclient-fetch prints "Failed to send request: Operation not permitted"
+# via strerror() on an internal negative return, not a kernel errno, so keep it
+# verbatim and append the real exit status instead of guessing a cause.
+note_fetch_failure() {
+    fetch_tool="$1"; fetch_rc="$2"
+    fetch_reason=$(tr '\n' ' ' < "$err" 2>/dev/null | sed 's/[[:space:]][[:space:]]*/ /g; s/^[[:space:]]*//; s/[[:space:]]*$//' | cut -c1-160)
+    [ -n "$fetch_reason" ] || fetch_reason='no error output'
+    printf '%s (rc=%s): %s\n' "$fetch_tool" "$fetch_rc" "$fetch_reason" >> "$TMPDIR/fetch.failures"
+}
+
 fetch() {
     url="$1"; dst="$2"
     err="$TMPDIR/fetch.err"
     : > "$err"
+    : > "$TMPDIR/fetch.failures"
     : > "$TMPDIR/fetch.detail"
     # Try every available downloader. On older OpenWrt builds uclient-fetch
     # can exist but fail on redirects/TLS while wget or curl works.
     if command -v uclient-fetch >/dev/null 2>&1; then
-        if run_fetch uclient-fetch -T 120 -O "$dst" "$url" 2>"$err"; then return 0; fi
+        # Capture the real status next to the command that produced it. Reading
+        # $? as the first command of an else branch works today, but any added
+        # statement in front of it would silently record the wrong rc.
+        dl_rc=0
+        run_fetch uclient-fetch -T 120 -O "$dst" "$url" 2>"$err" || dl_rc=$?
+        if [ "$dl_rc" -eq 0 ]; then return 0; fi
+        note_fetch_failure uclient-fetch "$dl_rc"
     fi
     if command -v wget >/dev/null 2>&1; then
         # Never pass -t/--tries here: uclient-fetch (installed as /usr/bin/wget
         # on images without the BusyBox wget applet) and BusyBox wget both reject
         # it. Retry in the shell so every wget variant sees only -T/-O.
         wget_try=0
+        wget_rc=0
         while [ "$wget_try" -lt 2 ]; do
-            if run_fetch wget -T 120 -O "$dst" "$url" 2>"$err"; then return 0; fi
+            if run_fetch wget -T 120 -O "$dst" "$url" 2>"$err"; then return 0; else wget_rc=$?; fi
             wget_try=$((wget_try + 1))
         done
+        note_fetch_failure wget "$wget_rc"
     fi
     if command -v curl >/dev/null 2>&1; then
-        if run_fetch curl -fsSL --connect-timeout 15 --max-time 120 -o "$dst" "$url" 2>"$err"; then return 0; fi
+        dl_rc=0
+        run_fetch curl -fsSL --connect-timeout 15 --max-time 120 -o "$dst" "$url" 2>"$err" || dl_rc=$?
+        if [ "$dl_rc" -eq 0 ]; then return 0; fi
+        note_fetch_failure curl "$dl_rc"
     fi
-    detail=$(tr '\n' ' ' < "$err" 2>/dev/null | sed 's/[[:space:]][[:space:]]*/ /g' | cut -c1-220)
-    [ -n "$detail" ] || detail='no HTTP downloader available or download failed'
+    if [ ! -s "$TMPDIR/fetch.failures" ]; then
+        printf '%s\n' 'no HTTP downloader available' >> "$TMPDIR/fetch.failures"
+    fi
+    detail=$(tr '\n' ';' < "$TMPDIR/fetch.failures" | sed 's/;$//; s/;/; /g')
     echo "$detail" > "$TMPDIR/fetch.detail"
     echo "$detail" >&2
     return 1

@@ -27,9 +27,9 @@ the primary phy only, one tick in ten of MT7996_WATCHDOG_TIME: once
 per second instead of 3 phys x 10 Hz.
 
 ---
---- a/mt76.h	2026-11-24 14:33:02.189564114 +0800
-+++ b/mt76.h	2026-11-24 14:33:02.510946322 +0800
-@@ -2147,6 +2147,8 @@
+--- a/mt76.h
++++ b/mt76.h
+@@ -2151,6 +2151,8 @@ static inline bool mt76_queue_is_npu_txf
  struct mt76_txwi_cache *
  mt76_token_release(struct mt76_dev *dev, int token, bool *wake);
  int mt76_token_consume(struct mt76_dev *dev, struct mt76_txwi_cache **ptxwi);
@@ -40,7 +40,7 @@ per second instead of 3 phys x 10 Hz.
  			    unsigned int reserved);
 --- a/mt7996/mac.c
 +++ b/mt7996/mac.c
-@@ -2910,14 +2910,64 @@
+@@ -2910,14 +2910,64 @@ void mt7996_mac_sta_rc_work(struct work_
  	mutex_unlock(&dev->mt76.mutex);
  }
  
@@ -105,7 +105,7 @@ per second instead of 3 phys x 10 Hz.
  
  	mutex_lock(&mphy->dev->mutex);
  
-@@ -2940,6 +2990,14 @@
+@@ -2940,6 +2990,14 @@ void mt7996_mac_work(struct work_struct
  
  	mt76_beacon_mon_check(mphy);
  	mt76_tx_status_check(mphy->dev, false);
@@ -130,7 +130,7 @@ per second instead of 3 phys x 10 Hz.
  #define MT7996_RESET_TIMEOUT		(30 * HZ)
  
  #define MT7996_TX_RING_SIZE		2048
-@@ -508,6 +509,7 @@
+@@ -508,6 +509,7 @@ struct mt7996_dev {
  	u16 chainmask;
  	u8 chainshift[__MT_MAX_BAND];
  	u32 hif_idx;
@@ -138,9 +138,9 @@ per second instead of 3 phys x 10 Hz.
  
  	struct work_struct init_work;
  	struct work_struct rc_work;
---- a/tx.c	2026-11-24 14:33:02.148955345 +0800
-+++ b/tx.c	2026-11-24 14:33:02.511527275 +0800
-@@ -129,6 +129,8 @@
+--- a/tx.c
++++ b/tx.c
+@@ -129,6 +129,8 @@ mt76_tx_status_skb_add(struct mt76_dev *
  
  	memset(cb, 0, sizeof(*cb));
  
@@ -149,7 +149,7 @@ per second instead of 3 phys x 10 Hz.
  	if (!wcid)
  		return MT_PACKET_ID_NO_ACK;
  
-@@ -1326,6 +1328,74 @@
+@@ -1395,6 +1397,74 @@ mt76_token_release(struct mt76_dev *dev,
  }
  EXPORT_SYMBOL_GPL(mt76_token_release);
  

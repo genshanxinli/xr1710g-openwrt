@@ -27,7 +27,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 ---
 --- a/mt7996/mac.c
 +++ b/mt7996/mac.c
-@@ -406,9 +406,16 @@
+@@ -294,9 +294,16 @@ mt7996_wed_check_ppe(struct mt7996_dev *
  	wdev = ieee80211_vif_to_wdev(vif);
  	skb->dev = wdev->netdev;
  

@@ -1,4 +1,3 @@
-From d07c2f82155d9c929703346006070fca42103563 Mon Sep 17 00:00:00 2001
 From: Yanghan Ye <yyh94306@gmail.com>
 Date: Wed, 24 Jun 2026 20:19:12 +0800
 Subject: [PATCH] wifi: mt76: mt7996: refresh power limits on txpower changes
@@ -16,12 +15,9 @@ and report MCU failures instead of silently ignoring them.
 
 Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
 ---
- mt7996/main.c | 62 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++--
- 1 file changed, 60 insertions(+), 2 deletions(-)
-
 --- a/mt7996/main.c
 +++ b/mt7996/main.c
-@@ -764,7 +764,50 @@
+@@ -863,7 +863,50 @@ static int mt7996_set_key(struct ieee802
  
  static int mt7996_config(struct ieee80211_hw *hw, int radio_idx, u32 changed)
  {
@@ -73,7 +69,7 @@ Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
  }
  
  static int
-@@ -1064,9 +1107,24 @@
+@@ -1185,9 +1228,24 @@ mt7996_link_info_changed(struct ieee8021
  		mt7996_update_mu_group(hw, link, info);
  
  	if (changed & BSS_CHANGED_TXPOWER &&

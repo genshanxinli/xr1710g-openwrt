@@ -142,13 +142,13 @@ static int regio_wr_n;
 static int regio_parse_ranges(const char *s, struct regio_range *out, int max)
 {
 	int n = 0;
-	char *buf, *tok;
+	char *orig, *buf, *tok;
 
 	if (!s || !*s)
 		return 0;
 
-	buf = kstrdup(s, GFP_KERNEL);
-	if (!buf)
+	orig = buf = kstrdup(s, GFP_KERNEL);
+	if (!orig)
 		return -ENOMEM;
 
 	for (tok = strsep(&buf, ","); tok && n < max; tok = strsep(&buf, ",")) {
@@ -175,7 +175,7 @@ static int regio_parse_ranges(const char *s, struct regio_range *out, int max)
 		n++;
 	}
 
-	kfree(buf);
+	kfree(orig);
 	return n;
 }
 
@@ -275,14 +275,20 @@ static void rb_printf(struct regio_buf *b, const char *fmt, ...)
 static ssize_t regio_read(struct file *f, char __user *ubuf, size_t len,
 			  loff_t *ppos)
 {
-	return simple_read_from_buffer(ubuf, len, ppos, regio_out,
-				       strlen(regio_out));
+	ssize_t ret;
+
+	mutex_lock(&regio_lock);
+	ret = simple_read_from_buffer(ubuf, len, ppos, regio_out,
+				      strlen(regio_out));
+	mutex_unlock(&regio_lock);
+
+	return ret;
 }
 
 static ssize_t regio_write(struct file *f, const char __user *ubuf, size_t len,
 			   loff_t *ppos)
 {
-	char *cmd, *tok, *op;
+	char *orig, *cmd, *tok, *op;
 	unsigned long long addr_ull, val_ull;
 	u32 args[REGIO_MAX_ARGS];
 	int nargs = 0;
@@ -292,15 +298,15 @@ static ssize_t regio_write(struct file *f, const char __user *ubuf, size_t len,
 	if (len >= REGIO_MAX_CMD)
 		return -EINVAL;
 
-	cmd = kzalloc(REGIO_MAX_CMD, GFP_KERNEL);
-	if (!cmd)
+	orig = cmd = kzalloc(REGIO_MAX_CMD, GFP_KERNEL);
+	if (!orig)
 		return -ENOMEM;
 
-	if (copy_from_user(cmd, ubuf, len)) {
-		kfree(cmd);
+	if (copy_from_user(orig, ubuf, len)) {
+		kfree(orig);
 		return -EFAULT;
 	}
-	cmd[len] = '\0';
+	orig[len] = '\0';
 
 	mutex_lock(&regio_lock);
 	b.p = regio_out;
@@ -471,7 +477,7 @@ static ssize_t regio_write(struct file *f, const char __user *ubuf, size_t len,
 out:
 	regio_out[b.len] = '\0';
 	mutex_unlock(&regio_lock);
-	kfree(cmd);
+	kfree(orig);
 	return ret;
 }
 

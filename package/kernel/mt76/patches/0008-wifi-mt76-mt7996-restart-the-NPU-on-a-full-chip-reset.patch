@@ -40,7 +40,7 @@ Signed-off-by: airola <airola@example.org>
 ---
 --- a/mt7996/mac.c
 +++ b/mt7996/mac.c
-@@ -2325,6 +2325,13 @@
+@@ -2189,6 +2189,13 @@ mt7996_mac_restart(struct mt7996_dev *de
  		    mt76_queue_is_wed_rro(&mdev->q_rx[i]))
  			continue;
  
@@ -54,7 +54,7 @@ Signed-off-by: airola <airola@example.org>
  		if (mdev->q_rx[i].ndesc)
  			napi_disable(&dev->mt76.napi[i]);
  	}
-@@ -2341,6 +2348,13 @@
+@@ -2205,6 +2212,13 @@ mt7996_mac_restart(struct mt7996_dev *de
  		    mt76_queue_is_wed_rro(&mdev->q_rx[i]))
  			continue;
  
@@ -68,7 +68,7 @@ Signed-off-by: airola <airola@example.org>
  		if (mdev->q_rx[i].ndesc) {
  			napi_enable(&dev->mt76.napi[i]);
  			local_bh_disable();
-@@ -2394,6 +2408,17 @@
+@@ -2258,6 +2272,17 @@ mt7996_mac_restart(struct mt7996_dev *de
  				     MT_INT_TX_RX_DONE_EXT);
  	}
  
@@ -86,7 +86,7 @@ Signed-off-by: airola <airola@example.org>
  	/* set the necessary init items */
  	ret = mt7996_mcu_set_eeprom(dev);
  	if (ret)
-@@ -2472,6 +2497,11 @@
+@@ -2336,6 +2361,11 @@ mt7996_mac_full_reset(struct mt7996_dev
  
  	dev->recovery.hw_full_reset = true;
  

@@ -1,31 +1,56 @@
 From: OpenWrt <openwrt@example.org>
-Subject: [PATCH] wifi: mt76: npu: advance the RX ring past an unfinished descriptor
+Subject: [PATCH] wifi: mt76: npu: pre-check DONE across multi-descriptor RX frames
 
 mt76_npu_dequeue() walks up to NPU_RX_DMA_PKT_COUNT_MASK descriptors of one
-NPU RX frame.  When a descriptor's NPU_RX_DMA_DESC_DONE bit is still clear it
-frees the skb built so far and returns NULL, but q->tail and q->queued are
-only assigned after the loop.  Nothing in the driver ever clears that DONE
-bit either, so the next mt76_npu_rx_poll() re-reads the very same descriptor,
-rebuilds a skb on top of the page_pool buffer that the freed skb already
-returned, and frees it a second time.
+NPU RX frame.  When a descriptor's NPU_RX_DMA_DESC_DONE bit is still clear,
+bailing out mid-loop after building the head skb either double-frees
+descriptor 0's page_pool buffer on rollback (when q->tail is not advanced)
+or hands a truncated skb up the stack while leaving the trailing fragments
+orphaned at q->tail (when breaking out and advancing q->tail).
 
-Stopping the walk is enough.  The descriptors that are not done yet have not
-been consumed, the ones that are already done stay where they are, and
-q->tail/q->queued move forward by exactly the number of frames taken.  The
-NPU raises the RX interrupt again for the remainder.
-
-Break out of the loop so the unified exit publishes the progress made.  The
-dev_kfree_skb() goes away with the early return: skb is still handed to the
-caller when at least one descriptor was ready, and NULL when none was.
+Pre-check NPU_RX_DMA_DESC_DONE_MASK across all descriptors 0..nframes-1
+before consuming any descriptor or page_pool buffer.  If any descriptor in
+the multi-descriptor frame is not ready yet, return NULL with q->tail,
+q->queued and every buffer untouched so the next poll completes the whole
+frame cleanly.
 
 Signed-off-by: OpenWrt <openwrt@example.org>
 ---
- npu.c | 6 ++----
- 1 file changed, 2 insertions(+), 4 deletions(-)
-
 --- a/npu.c
 +++ b/npu.c
-@@ -75,10 +75,8 @@
+@@ -67,19 +67,38 @@ static struct sk_buff *mt76_npu_dequeue(
+ 	int i, nframes, index = q->tail;
+ 	struct sk_buff *skb = NULL;
+ 
++	if (!q->queued ||
++	    !FIELD_GET(NPU_RX_DMA_DESC_DONE_MASK, desc[index].ctrl))
++		return NULL;
++
++	dma_rmb();
++
+ 	nframes = FIELD_GET(NPU_RX_DMA_PKT_COUNT_MASK, desc[index].info);
+ 	nframes = max_t(int, nframes, 1);
+ 
++	if (nframes > q->queued)
++		return NULL;
++
++	/*
++	 * Verify every descriptor of a multi-descriptor frame is DONE before
++	 * consuming any page_pool buffer or advancing q->tail.  Bailing out
++	 * mid-loop either double-frees descriptor 0 on rollback or delivers
++	 * a truncated frame and leaves the trailing fragments orphaned.
++	 */
++	for (i = 1; i < nframes; i++) {
++		int idx = (index + i) % q->ndesc;
++
++		if (!FIELD_GET(NPU_RX_DMA_DESC_DONE_MASK, desc[idx].ctrl))
++			return NULL;
++	}
++	if (nframes > 1)
++		dma_rmb();
++
+ 	for (i = 0; i < nframes; i++) {
+ 		struct mt76_queue_entry *e = &q->entry[index];
  		int len = FIELD_GET(NPU_RX_DMA_DESC_CUR_LEN_MASK,
  				    desc[index].ctrl);
  
@@ -33,8 +58,7 @@ Signed-off-by: OpenWrt <openwrt@example.org>
 -			dev_kfree_skb(skb);
 -			return NULL;
 -		}
-+		if (!FIELD_GET(NPU_RX_DMA_DESC_DONE_MASK, desc[index].ctrl))
-+			break;
- 
+-
  		dma_sync_single_for_cpu(dev->dma_dev, e->dma_addr[0],
  					e->dma_len[0],
+ 					page_pool_get_dma_dir(q->page_pool));

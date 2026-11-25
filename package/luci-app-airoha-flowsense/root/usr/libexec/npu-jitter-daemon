@@ -35,6 +35,15 @@ SHAPE_MAX_MBPS="${SHAPE_MAX_MBPS:-9500}"
 SHAPE_JITTER_MS="${SHAPE_JITTER_MS:-25}"
 shaped_mbps=0
 
+cleanup() {
+	if [ "$shaped_mbps" -gt 0 ] 2>/dev/null; then
+		tc qdisc del dev "$SHAPE_IFACE" root 2>/dev/null
+	fi
+	rm -f "$RESULT_FILE" "$RESULT_FILE.tmp"
+	exit 0
+}
+trap cleanup TERM INT
+
 ping_values=""
 count=0
 
@@ -122,7 +131,7 @@ while true; do
 		fi
 
 		# Calculate mean absolute deviation (jitter) and last ping
-		result=$(echo "$ping_values" | awk -v c="$count" -v cpu="$cpu_pct" '{
+		result=$(echo "$ping_values" | awk -v c="$count" -v cpu="$cpu_pct" -v target="$TARGET" '{
 			n = NF
 			sum = 0
 			for (i = 1; i <= n; i++) sum += $i
@@ -132,7 +141,7 @@ while true; do
 			jitter = dev / n
 			last = $n
 			printf "{\"jitter\":%.2f,\"last_ping\":%.2f,\"samples\":%d,\"target\":\"%s\",\"reachable\":true,\"available\":true,\"cpu_pct\":%d}", \
-				jitter, last, c, "'"$TARGET"'", cpu
+				jitter, last, c, target, cpu
 		}')
 
 		# Write atomically so a reader never sees a half-written file

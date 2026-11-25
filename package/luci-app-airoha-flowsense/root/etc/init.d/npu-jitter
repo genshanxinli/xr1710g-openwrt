@@ -42,7 +42,14 @@ start_service() {
 	procd_close_instance
 }
 
-stop_service() {
+service_stopped() {
+	local iface
+	iface=$(ubus call network.interface.wan status 2>/dev/null |
+		jsonfilter -e '@.device' 2>/dev/null)
+	iface="${iface:-wan}"
+	if tc qdisc show dev "$iface" 2>/dev/null | grep -q '^qdisc tbf .* root'; then
+		tc qdisc del dev "$iface" root 2>/dev/null
+	fi
 	rm -f /tmp/npu-jitter.json /tmp/npu-jitter.json.tmp
 }
 

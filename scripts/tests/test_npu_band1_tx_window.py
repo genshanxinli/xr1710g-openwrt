@@ -44,7 +44,7 @@ REPO = Path(__file__).resolve().parents[2]
 PATCH = Path(os.environ.get(
     "MT76_BAND1_PATCH",
     REPO / "package/kernel/mt76/patches"
-    / "0016-wifi-mt76-mt7996-give-band1-its-own-NPU-TX-buffer-space.patch"))
+    / "0016-04-wifi-mt76-mt7996-give-band1-its-own-NPU-TX-buffer-space.patch"))
 
 BAND0, BAND1, BAND2 = 0, 1, 2
 

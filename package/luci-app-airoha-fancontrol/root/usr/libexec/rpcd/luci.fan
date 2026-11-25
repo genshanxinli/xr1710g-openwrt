@@ -49,6 +49,13 @@ find_phy_hwmon() {
 	echo ""
 }
 
+is_uint() {
+	case "$1" in
+		''|0[0-9]*|*[!0-9]*) return 1 ;;
+		*) return 0 ;;
+	esac
+}
+
 HWMON=$(find_nct7802)
 
 read_temp() {
@@ -78,8 +85,8 @@ get_status() {
 	# Read CPU temperature from thermal zone (AN7581 SoC die temp)
 	temp_cpu=$(read_temp "/sys/class/thermal/thermal_zone0/temp")
 
-	# Read temperatures from NCT7802 fan controller (hwmon5)
-	# temp1 = board local (used by hardware fan curve), temp2 = external (disconnected), temp4 = external
+	# Read temperatures from NCT7802 fan controller
+	# temp1 = external diode RTD1 (used by hardware fan curve), temp2 = external RTD2 (disconnected), temp4 = local on-die sensor (LTD)
 	temp_board=$(read_temp "${HWMON}/temp1_input")
 
 	# Read PHY temperatures from mt7530 DSA switch sensors (dynamic lookup)
@@ -131,6 +138,14 @@ get_status() {
 get_curve() {
 	local preset="$1"
 	[ -z "$preset" ] && preset="balanced"
+
+	case "$preset" in
+		quiet|balanced|performance|custom) ;;
+		*)
+			echo '{"error":"Invalid preset"}'
+			return
+			;;
+	esac
 
 	local points="["
 	local first=1
@@ -195,7 +210,7 @@ set_manual_pwm() {
 	local pwm="$1"
 
 	# Validate PWM range
-	if [ "$pwm" -ge 0 ] && [ "$pwm" -le 255 ] 2>/dev/null; then
+	if is_uint "$pwm" && [ "$pwm" -ge 0 ] 2>/dev/null && [ "$pwm" -le 255 ] 2>/dev/null; then
 		uci set fan.settings.manual_pwm="$pwm"
 		uci commit fan
 		/etc/init.d/fan reload
@@ -224,14 +239,35 @@ set_preset() {
 set_custom_curve() {
 	# Read JSON from stdin
 	local json
-	read json
+	read -r json
 
 	# Parse points using jsonfilter if available
 	if command -v jsonfilter >/dev/null 2>&1; then
+		local i idx temp pwm valid=0
 		for i in 1 2 3 4 5; do
-			local idx=$((i - 1))
-			local temp=$(echo "$json" | jsonfilter -e "@.points[${idx}].temp" 2>/dev/null)
-			local pwm=$(echo "$json" | jsonfilter -e "@.points[${idx}].pwm" 2>/dev/null)
+			idx=$((i - 1))
+			temp=$(echo "$json" | jsonfilter -e "@.points[${idx}].temp" 2>/dev/null)
+			pwm=$(echo "$json" | jsonfilter -e "@.points[${idx}].pwm" 2>/dev/null)
+
+			[ -z "$temp" ] && [ -z "$pwm" ] && continue
+
+			if ! is_uint "$temp" || ! [ "$temp" -ge 0 ] 2>/dev/null || ! [ "$temp" -le 100 ] 2>/dev/null ||
+			   ! is_uint "$pwm" || ! [ "$pwm" -ge 0 ] 2>/dev/null || ! [ "$pwm" -le 255 ] 2>/dev/null; then
+				echo '{"success":false,"error":"Invalid curve point values"}'
+				return
+			fi
+			valid=$((valid + 1))
+		done
+
+		if [ "$valid" -eq 0 ]; then
+			echo '{"success":false,"error":"No valid curve points"}'
+			return
+		fi
+
+		for i in 1 2 3 4 5; do
+			idx=$((i - 1))
+			temp=$(echo "$json" | jsonfilter -e "@.points[${idx}].temp" 2>/dev/null)
+			pwm=$(echo "$json" | jsonfilter -e "@.points[${idx}].pwm" 2>/dev/null)
 
 			if [ -n "$temp" ] && [ -n "$pwm" ]; then
 				uci set fan.custom.point${i}_temp="$temp"

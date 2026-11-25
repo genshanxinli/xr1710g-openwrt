@@ -24,8 +24,6 @@ data path is otherwise unchanged when the file is not read.
 
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
-diff --git a/mt76.h b/mt76.h
-index 63ba188..9f27f40 100644
 --- a/mt76.h
 +++ b/mt76.h
 @@ -273,6 +273,14 @@ struct mt76_queue {
@@ -43,8 +41,6 @@ index 63ba188..9f27f40 100644
  };
  
  struct mt76_mcu_ops {
-diff --git a/mt7996/debugfs.c b/mt7996/debugfs.c
-index 6526bbf..c4842ef 100644
 --- a/mt7996/debugfs.c
 +++ b/mt7996/debugfs.c
 @@ -3,8 +3,10 @@
@@ -58,7 +54,7 @@ index 6526bbf..c4842ef 100644
  #include "eeprom.h"
  #include "mcu.h"
  #include "mac.h"
-@@ -1151,6 +1153,219 @@ static int mt7996_token_info_read(struct seq_file *s, void *data)
+@@ -1150,6 +1152,219 @@ static int mt7996_token_info_read(struct
  	return 0;
  }
  
@@ -278,7 +274,7 @@ index 6526bbf..c4842ef 100644
  int mt7996_init_debugfs(struct mt7996_dev *dev)
  {
  	struct dentry *dir;
-@@ -1186,6 +1401,8 @@ int mt7996_init_debugfs(struct mt7996_dev *dev)
+@@ -1185,6 +1400,8 @@ int mt7996_init_debugfs(struct mt7996_de
  				    mt7996_rdd_monitor);
  	debugfs_create_devm_seqfile(dev->mt76.dev, "token_info", dir,
  				    mt7996_token_info_read);
@@ -287,11 +283,9 @@ index 6526bbf..c4842ef 100644
  
  	dev->debugfs_dir = dir;
  
-diff --git a/mt7996/mac.c b/mt7996/mac.c
-index e016d0d..e70eafb 100644
 --- a/mt7996/mac.c
 +++ b/mt7996/mac.c
-@@ -1922,6 +1922,11 @@ void mt7996_rro_rx_process(struct mt76_dev *mdev, void *data)
+@@ -1926,6 +1926,11 @@ void mt7996_rro_rx_process(struct mt76_d
  			if (seq_id != MT7996_RRO_MAX_SESSION)
  				status->aggr = true;
  
@@ -303,11 +297,9 @@ index e016d0d..e70eafb 100644
  			mt7996_queue_rx_skb(mdev, qid, skb, &info);
  next_page:
  			if ((j + 1) % MT7996_MAX_HIF_RXD_IN_PG == 0) {
-diff --git a/npu.c b/npu.c
-index c416072..975e248 100644
 --- a/npu.c
 +++ b/npu.c
-@@ -101,6 +101,9 @@ static struct sk_buff *mt76_npu_dequeue(struct mt76_dev *dev,
+@@ -122,6 +122,9 @@ static struct sk_buff *mt76_npu_dequeue(
  						len, q->buf_size);
  		}
  

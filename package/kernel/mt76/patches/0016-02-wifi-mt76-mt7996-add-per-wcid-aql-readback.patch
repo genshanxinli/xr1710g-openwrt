@@ -22,14 +22,11 @@ paths. With no station associated it prints the header only.
 
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
- mt7996/debugfs.c | 64 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 64 insertions(+)
-
 --- a/mt7996/debugfs.c
 +++ b/mt7996/debugfs.c
-@@ -997,6 +997,70 @@
+@@ -998,6 +998,70 @@ mt7996_txpower_show(struct seq_file *s,
+ 	return 0;
  }
- DEFINE_SHOW_ATTRIBUTE(mt7996_txpower);
  
 +/*
 + * Per-WCID AQL pending airtime. The pending counter lives in struct sta_info,
@@ -98,7 +95,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  static int
  mt7996_twt_stats(struct seq_file *s, void *data)
  {
-@@ -1162,6 +1226,7 @@
+@@ -1376,6 +1440,7 @@ int mt7996_init_debugfs(struct mt7996_de
  	debugfs_create_file("xmit-queues", 0400, dir, dev,
  			    &mt7996_xmit_queues_fops);
  	debugfs_create_file("tx_stats", 0400, dir, dev, &mt7996_tx_stats_fops);

@@ -1,4 +1,3 @@
-From b7ba96ac12322a5c413311486902617d9433cf93 Mon Sep 17 00:00:00 2001
 From: Yanghan Ye <yyh94306@gmail.com>
 Date: Wed, 24 Jun 2026 20:19:12 +0800
 Subject: [PATCH] wifi: mt76: mt7996: enable firmware txpower limit controls
@@ -26,17 +25,9 @@ path.  phy->sku_limit_en stays in place for the debugfs reader in 0015.
 
 Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
 ---
- eeprom.c |   9 ++
- mt7996/init.c |  16 +-
- mt7996/main.c |   5 +
- mt7996/mcu.c | 329 +++++++++++++++++++++++++++++++++++++++---
- mt7996/mcu.h |   1 +
- mt7996/mt7996.h |   4 +
- 6 files changed, 344 insertions(+), 20 deletions(-)
-
 --- a/eeprom.c
 +++ b/eeprom.c
-@@ -516,6 +516,15 @@
+@@ -516,6 +516,15 @@ s8 mt76_get_rate_power_limits(struct mt7
  				     ARRAY_SIZE(dest->ru), val, len, target_power,
  				     txs_delta, &max_power, n_chains, MT76_SKU_RATE);
  
@@ -54,7 +45,7 @@ Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
  			       target_power, txs_delta, &max_power, n_chains, MT76_SKU_BACKOFF);
 --- a/mt7996/init.c
 +++ b/mt7996/init.c
-@@ -362,15 +362,23 @@
+@@ -362,15 +362,23 @@ static void __mt7996_init_txpower(struct
  	int i, n_chains = hweight16(phy->mt76->chainmask);
  	int path_delta = mt76_tx_power_path_delta(n_chains);
  	int pwr_delta = mt7996_eeprom_get_power_delta(dev, sband->band);
@@ -80,7 +71,7 @@ Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
  							  target_power);
  		target_power += path_delta;
  		target_power = DIV_ROUND_UP(target_power, 2);
-@@ -379,6 +387,8 @@
+@@ -379,6 +387,8 @@ static void __mt7996_init_txpower(struct
  		phy->txpower = max(phy->txpower, chan->max_power);
  		chan->orig_mpwr = target_power;
  	}
@@ -89,7 +80,7 @@ Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
  }
  
  void mt7996_init_txpower(struct mt7996_phy *phy)
-@@ -386,6 +396,8 @@
+@@ -386,6 +396,8 @@ void mt7996_init_txpower(struct mt7996_p
  	if (!phy)
  		return;
  
@@ -100,7 +91,7 @@ Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
  	if (phy->mt76->cap.has_5ghz)
 --- a/mt7996/main.c
 +++ b/mt7996/main.c
-@@ -39,6 +39,11 @@
+@@ -39,6 +39,11 @@ int mt7996_run(struct mt7996_phy *phy)
  	if (ret)
  		goto disable_radio;
  
@@ -122,7 +113,7 @@ Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
  #include "mt7996.h"
  #include "mcu.h"
  #include "mac.h"
-@@ -108,6 +109,242 @@
+@@ -108,6 +109,242 @@ static bool sr_scene_detect = true;
  module_param(sr_scene_detect, bool, 0644);
  MODULE_PARM_DESC(sr_scene_detect, "Enable firmware scene detection algorithm");
  
@@ -365,7 +356,7 @@ Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
  static u8
  mt7996_mcu_get_sta_nss(u16 mcs_map)
  {
-@@ -6181,6 +6418,7 @@
+@@ -6136,6 +6373,7 @@ int mt7996_mcu_set_tx_power_ctrl(struct
  int mt7996_mcu_set_txpower_sku(struct mt7996_phy *phy)
  {
  #define TX_POWER_LIMIT_TABLE_RATE	0
@@ -373,7 +364,7 @@ Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
  	struct mt7996_dev *dev = phy->dev;
  	struct mt76_phy *mphy = phy->mt76;
  	struct tx_power_limit_table_ctrl {
-@@ -6198,45 +6436,100 @@
+@@ -6153,45 +6391,100 @@ int mt7996_mcu_set_txpower_sku(struct mt
  		.power_limit_type = TX_POWER_LIMIT_TABLE_RATE,
  		.band_idx = phy->mt76->band_idx,
  	};
@@ -494,7 +485,7 @@ Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
  int mt7996_mcu_cp_support(struct mt7996_dev *dev, u8 mode)
 --- a/mt7996/mcu.h
 +++ b/mt7996/mcu.h
-@@ -1155,6 +1155,7 @@
+@@ -1151,6 +1151,7 @@ enum {
  	UNI_TXPOWER_BACKOFF_POWER_LIMIT_CTRL = 3,
  	UNI_TXPOWER_POWER_LIMIT_TABLE_CTRL = 4,
  	UNI_TXPOWER_ATE_MODE_CTRL = 6,
@@ -504,7 +495,7 @@ Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
  enum {
 --- a/mt7996/mt7996.h
 +++ b/mt7996/mt7996.h
-@@ -467,6 +467,8 @@
+@@ -473,6 +473,8 @@ struct mt7996_phy {
  	bool has_aux_rx;
  	bool counter_reset;
  	bool rdd_tx_paused;
@@ -513,7 +504,7 @@ Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
  	bool offchan_bcn_stopped;
  };
  
-@@ -894,6 +896,8 @@
+@@ -889,6 +891,8 @@ int mt7996_mcu_get_chan_mib_info(struct
  int mt7996_mcu_get_temperature(struct mt7996_phy *phy);
  int mt7996_mcu_set_thermal_throttling(struct mt7996_phy *phy, u8 state);
  int mt7996_mcu_set_thermal_protect(struct mt7996_phy *phy, bool enable);

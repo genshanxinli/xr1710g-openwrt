@@ -30,11 +30,9 @@ value in use from the same place as the station queues.
 
 Signed-off-by: genshanxinli <genshanxinli@users.noreply.github.com>
 ---
-diff --git a/mt7996/debugfs.c b/mt7996/debugfs.c
-index ae9a1a7..ad10c91 100644
 --- a/mt7996/debugfs.c
 +++ b/mt7996/debugfs.c
-@@ -830,11 +830,28 @@ mt7996_sta_hw_queue_read(void *data, struct ieee80211_sta *sta)
+@@ -829,11 +829,28 @@ mt7996_sta_hw_queue_read(void *data, str
  	rcu_read_unlock();
  }
  
@@ -63,11 +61,9 @@ index ae9a1a7..ad10c91 100644
  	seq_puts(s, "PLE page info:\n");
  	mt7996_freepg_show(s, mt76_rr(dev, MT_PLE_FREEPG_CNT),
  			   mt76_rr(dev, MT_PLE_FREEPG_HEAD_TAIL));
-diff --git a/mt7996/main.c b/mt7996/main.c
-index 3cac0f5..db120af 100644
 --- a/mt7996/main.c
 +++ b/mt7996/main.c
-@@ -1369,6 +1369,17 @@ void mt7996_mac_sta_remove_link(struct mt7996_dev *dev,
+@@ -1452,6 +1452,17 @@ void mt7996_mac_sta_remove_link(struct m
  	if (!msta_link)
  		return;
  
@@ -85,11 +81,9 @@ index 3cac0f5..db120af 100644
  	spin_lock_bh(&dev->mt76.sta_poll_lock);
  	if (!list_empty(&msta_link->wcid.poll_list))
  		list_del_init(&msta_link->wcid.poll_list);
-diff --git a/mt7996/mt7996.h b/mt7996/mt7996.h
-index 7a5b8ce..3e6ddfb 100644
 --- a/mt7996/mt7996.h
 +++ b/mt7996/mt7996.h
-@@ -571,6 +571,7 @@ struct mt7996_dev {
+@@ -574,6 +574,7 @@ struct mt7996_dev {
  	} wed_rro;
  
  	dma_addr_t npu_txd_addr[2 * MT7996_NPU_TXD_SIZE];
@@ -97,7 +91,7 @@ index 7a5b8ce..3e6ddfb 100644
  
  	struct {
  		bool requested;
-@@ -1076,6 +1077,7 @@ int __mt7996_npu_hw_init(struct mt7996_dev *dev);
+@@ -1083,6 +1084,7 @@ int __mt7996_npu_hw_init(struct mt7996_d
  int mt7996_npu_hw_init(struct mt7996_dev *dev);
  int mt7996_npu_hw_stop(struct mt7996_dev *dev);
  int mt7996_npu_rx_queues_init(struct mt7996_dev *dev);
@@ -105,7 +99,7 @@ index 7a5b8ce..3e6ddfb 100644
  #else
  static inline int __mt7996_npu_hw_init(struct mt7996_dev *dev)
  {
-@@ -1096,6 +1098,11 @@ static inline int mt7996_npu_rx_queues_init(struct mt7996_dev *dev)
+@@ -1103,6 +1105,11 @@ static inline int mt7996_npu_rx_queues_i
  {
  	return 0;
  }
@@ -117,11 +111,9 @@ index 7a5b8ce..3e6ddfb 100644
  #endif /* CONFIG_MT7996_NPU */
  
  #endif
-diff --git a/mt7996/npu.c b/mt7996/npu.c
-index 242c82e..7a27256 100644
 --- a/mt7996/npu.c
 +++ b/mt7996/npu.c
-@@ -244,6 +244,46 @@ static int mt7996_npu_offload_init(struct mt7996_dev *dev,
+@@ -244,6 +244,46 @@ static int mt7996_npu_offload_init(struc
  	return 0;
  }
  

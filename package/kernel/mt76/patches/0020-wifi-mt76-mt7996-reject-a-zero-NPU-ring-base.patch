@@ -26,7 +26,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/mt7996/npu.c
 +++ b/mt7996/npu.c
-@@ -286,7 +286,12 @@
+@@ -331,7 +331,12 @@ static int mt7996_npu_rxd_init(struct mt
  			 "failed retrieving NPU wlan rx ring0 addr\n");
  		return err;
  	}
@@ -40,7 +40,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
  	err = mt76_npu_get_msg(npu, 2, WLAN_FUNC_GET_WAIT_RXDESC_BASE,
  			       &val, GFP_KERNEL);
-@@ -295,7 +300,12 @@
+@@ -340,7 +345,12 @@ static int mt7996_npu_rxd_init(struct mt
  			 "failed retrieving NPU wlan rx ring2 addr\n");
  		return err;
  	}
@@ -54,7 +54,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
  	/* msdu pg ring */
  	err = mt76_npu_get_msg(npu, 10, WLAN_FUNC_GET_WAIT_RXDESC_BASE,
-@@ -305,7 +315,12 @@
+@@ -350,7 +360,12 @@ static int mt7996_npu_rxd_init(struct mt
  			 "failed retrieving NPU wlan msdu pg ring addr\n");
  		return err;
  	}
@@ -68,7 +68,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
  	err = mt76_npu_get_msg(npu, 11, WLAN_FUNC_GET_WAIT_RXDESC_BASE,
  			       &val, GFP_KERNEL);
-@@ -314,7 +329,12 @@
+@@ -359,7 +374,12 @@ static int mt7996_npu_rxd_init(struct mt
  			 "failed retrieving NPU wlan msdu pg ring addr\n");
  		return err;
  	}
@@ -82,7 +82,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
  	err = mt76_npu_get_msg(npu, 12, WLAN_FUNC_GET_WAIT_RXDESC_BASE,
  			       &val, GFP_KERNEL);
-@@ -323,7 +343,12 @@
+@@ -368,7 +388,12 @@ static int mt7996_npu_rxd_init(struct mt
  			 "failed retrieving NPU wlan msdu pg ring addr\n");
  		return err;
  	}
@@ -96,7 +96,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
  	/* ind_cmd ring */
  	err = mt76_npu_get_msg(npu, 8, WLAN_FUNC_GET_WAIT_RXDESC_BASE,
-@@ -333,7 +358,12 @@
+@@ -378,7 +403,12 @@ static int mt7996_npu_rxd_init(struct mt
  			 "failed retrieving NPU wlan ind_cmd ring addr\n");
  		return err;
  	}
@@ -110,7 +110,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
  	return 0;
  }
-@@ -362,6 +392,13 @@
+@@ -434,6 +464,13 @@ static int mt7996_npu_txd_init(struct mt
  			return err;
  		}
  

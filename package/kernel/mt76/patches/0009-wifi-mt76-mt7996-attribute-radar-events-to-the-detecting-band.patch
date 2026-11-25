@@ -19,15 +19,16 @@ Link: https://github.com/Gilly1970/Gemtek-W1700K-6.18
 Signed-off-by: Gilly1970 <gilroyscott1970@gmail.com>
 Signed-off-by: airola <airola@example.org>
 ---
---- a/mt7996/mcu.c	2026-11-24 14:33:01.664367689 +0800
-+++ b/mt7996/mcu.c	2026-11-24 14:33:01.820335377 +0800
-@@ -573,10 +573,28 @@
+--- a/mt7996/mcu.c
++++ b/mt7996/mcu.c
+@@ -573,10 +573,30 @@ mt7996_mcu_rx_radar_detected(struct mt79
  						&dev->rdd2_chandef,
  						GFP_ATOMIC);
  	} else {
 +		struct ieee80211_chanctx_conf *conf = NULL;
  		struct mt7996_phy *phy = mphy->priv;
- 
++		struct mt76_chanctx *ctx;
++
 +		/* All bands share one wiphy: a radar reported with a NULL
 +		 * chanctx marks every channel context, so each BSS logs a
 +		 * radar event on its own frequency, including 2.4 GHz where
@@ -40,11 +41,12 @@ Signed-off-by: airola <airola@example.org>
 +		 * exactly once so a concurrently cleared pointer cannot be
 +		 * reloaded between the test and the conversion.
 +		 */
-+		if (READ_ONCE(mphy->chanctx))
-+			conf = container_of((void *)READ_ONCE(mphy->chanctx),
++		ctx = READ_ONCE(mphy->chanctx);
++		if (ctx)
++			conf = container_of((void *)ctx,
 +					    struct ieee80211_chanctx_conf,
 +					    drv_priv);
-+
+ 
  		phy->rdd_tx_paused = true;
 -		ieee80211_radar_detected(mphy->hw, NULL);
 +		ieee80211_radar_detected(mphy->hw, conf);

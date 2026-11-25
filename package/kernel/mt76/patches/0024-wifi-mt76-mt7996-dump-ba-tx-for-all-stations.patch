@@ -14,10 +14,9 @@ per-STA file it only reads driver state and is mode 0400.
 
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
-
 --- a/mt7996/debugfs.c
 +++ b/mt7996/debugfs.c
-@@ -1080,6 +1080,52 @@
+@@ -1079,6 +1079,52 @@ mt7996_aql_show(struct seq_file *s, void
  
  DEFINE_SHOW_ATTRIBUTE(mt7996_aql);
  
@@ -70,7 +69,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  static int
  mt7996_twt_stats(struct seq_file *s, void *data)
  {
-@@ -1577,6 +1623,8 @@
+@@ -1576,6 +1622,8 @@ int mt7996_init_debugfs(struct mt7996_de
  
  	debugfs_create_file("hw-queues", 0400, dir, dev,
  			    &mt7996_hw_queues_fops);

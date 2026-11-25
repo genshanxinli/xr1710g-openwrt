@@ -68,7 +68,9 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  static struct mt76_txwi_cache *
  mt76_alloc_txwi(struct mt76_dev *dev)
  {
-@@ -687,8 +717,12 @@
+@@ -685,9 +715,13 @@ mt76_dma_tx_queue_skb(struct mt76_phy *p
+ 	if (test_bit(MT76_RESET, &phy->state))
+ 		goto free_skb;
  
 -	/* TODO: Take into account unlinear skbs */
 -	if (mt76_npu_device_active(dev) && skb_linearize(skb))
@@ -83,10 +85,9 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
  	t = mt76_get_txwi(dev);
  	if (!t)
- 		goto free_skb;
 --- a/debugfs.c
 +++ b/debugfs.c
-@@ -160,6 +160,22 @@
+@@ -163,6 +163,22 @@ mt76_non_aql_limit_set(void *data, u64 v
  DEFINE_DEBUGFS_ATTRIBUTE(fops_non_aql_limit, mt76_non_aql_limit_get,
  			 mt76_non_aql_limit_set, "%llu\n");
  
@@ -109,7 +110,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  struct dentry *
  mt76_register_debugfs_fops(struct mt76_phy *phy,
  			   const struct file_operations *ops)
-@@ -182,6 +198,8 @@
+@@ -185,6 +201,8 @@ mt76_register_debugfs_fops(struct mt76_p
  				    mt76_rx_queues_read);
  	debugfs_create_devm_seqfile(dev->dev, "tx_burst", dir,
  				    mt76_tx_burst_read);
@@ -120,7 +121,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
 --- a/mt76.h
 +++ b/mt76.h
-@@ -755,6 +755,17 @@
+@@ -756,6 +756,17 @@ struct mt76_mmio {
  	int npu_type;
  };
  
@@ -138,7 +139,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  struct mt76_rx_status {
  	union {
  		struct mt76_wcid *wcid;
-@@ -1097,6 +1108,8 @@
+@@ -1098,6 +1109,8 @@ struct mt76_dev {
  	};
  
  	atomic_t bus_hung;
@@ -146,8 +147,8 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	struct mt76_npu_tx_stats npu_tx;
  };
  
- static inline unsigned int
-@@ -1730,6 +1743,7 @@
+ static inline int
+@@ -1741,6 +1754,7 @@ int mt76_testmode_dump(struct ieee80211_
  int mt76_testmode_set_state(struct mt76_phy *phy, enum mt76_testmode_state state);
  int mt76_testmode_alloc_skb(struct mt76_phy *phy, u32 len);
  

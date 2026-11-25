@@ -11,10 +11,9 @@ short to even hold the tx_free header. Pull the whole skb into the
 linear buffer before parsing it, the payload may still be paged.
 
 ---
-
---- a/mt7996/mac.c	2026-11-24 14:33:02.317074619 +0800
-+++ b/mt7996/mac.c	2026-11-24 14:33:02.357602374 +0800
-@@ -1255,11 +1255,17 @@
+--- a/mt7996/mac.c
++++ b/mt7996/mac.c
+@@ -1255,11 +1255,17 @@ mt7996_mac_tx_free(struct mt7996_dev *de
  	struct mt76_wcid *wcid = NULL;
  	LIST_HEAD(free_list);
  	struct sk_buff *skb, *tmp;
@@ -33,7 +32,7 @@ linear buffer before parsing it, the payload may still be paged.
  	/* clean DMA queues and unmap buffers first */
  	mt76_queue_tx_cleanup(dev, dev->mphy.q_tx[MT_TXQ_PSD], false);
  	mt76_queue_tx_cleanup(dev, dev->mphy.q_tx[MT_TXQ_BE], false);
-@@ -1281,8 +1287,9 @@
+@@ -1281,8 +1287,9 @@ mt7996_mac_tx_free(struct mt7996_dev *de
  		u32 msdu, info;
  		u8 i;
  
@@ -45,7 +44,7 @@ linear buffer before parsing it, the payload may still be paged.
  		/* 1'b1: new wcid pair.
  		 * 1'b0: msdu_id with the same 'wcid pair' as above.
  		 */
-@@ -1304,7 +1311,8 @@
+@@ -1304,7 +1311,8 @@ mt7996_mac_tx_free(struct mt7996_dev *de
  				goto next;
  next:
  			/* ver 7 has a new DW with pair = 1, skip it */
@@ -55,7 +54,7 @@ linear buffer before parsing it, the payload may still be paged.
  			    (le32_to_cpu(*(cur_info + 1)) & MT_TXFREE_INFO_PAIR))
  				cur_info++;
  			continue;
-@@ -1584,7 +1592,11 @@
+@@ -1584,7 +1592,11 @@ void mt7996_queue_rx_skb(struct mt76_dev
  			break;
  		}
  
