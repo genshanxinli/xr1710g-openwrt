@@ -31,12 +31,52 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-SCRIPT = REPO / "scripts/bench-10g-unidirectional.sh"
+SCRIPT = Path(
+    os.environ.get("BENCH_UNDER_TEST")
+    or REPO / "scripts/bench-10g-unidirectional.sh"
+)
+PERF_BASELINES = Path(
+    os.environ.get("PERF_BASELINES_UNDER_TEST")
+    or REPO / "scripts/perf-baselines"
+)
 CLAIMS = REPO / "scripts/claims.yaml"
 CHECK_CLAIMS = REPO / "scripts/check-claims.py"
 
 # The record file the script must not tell anyone to write.
 MD_HINT = re.compile(r"(\w|`)\s*(\.md|\\u002emd)")
+
+
+def check_baseline_artifacts(result_json: Path) -> list:
+    """Return missing/broken artifact pointer messages for one result.json."""
+    base = result_json.parent
+    data = json.loads(result_json.read_text(encoding="utf-8"))
+    errors = []
+    if data.get("schema") != "bench-10g-unidirectional/v1":
+        return errors
+
+    raw_log = data.get("raw_log")
+    if not raw_log or not (base / raw_log).is_file():
+        errors.append(f"missing raw_log: {raw_log}")
+
+    env = data.get("environment")
+    if isinstance(env, dict):
+        captures = env.get("captures")
+        cap_dir = base / captures if captures else None
+        if not cap_dir or not cap_dir.is_dir() or not any(cap_dir.iterdir()):
+            errors.append(f"missing environment.captures dir: {captures}")
+
+    directions = data.get("directions") or {}
+    for direction in ("tx", "rx"):
+        arm = directions.get(direction) or {}
+        snaps = arm.get("snapshots") or {}
+        for key in ("before", "after"):
+            rel = snaps.get(key)
+            if not rel or not (base / rel).is_dir():
+                errors.append(f"missing directions.{direction}.snapshots.{key}: {rel}")
+        iperf_rel = snaps.get("iperf3")
+        if not iperf_rel or not (base / iperf_rel).is_file():
+            errors.append(f"missing directions.{direction}.snapshots.iperf3: {iperf_rel}")
+    return errors
 
 
 def free_port():
@@ -147,6 +187,65 @@ class BaselineRecordTest(unittest.TestCase):
                       % self.result_dir.name, out)
         self.assertNotIn(".md", out)
         self.assertIn("no summary document is written", out)
+
+    def test_fresh_baseline_artifacts_are_complete(self):
+        self.assertEqual(
+            check_baseline_artifacts(self.result_dir / "result.json"), [],
+            "fresh --baseline run produced broken artifact pointers",
+        )
+
+
+class BaselineArtifactIntegrityTest(unittest.TestCase):
+    """F7: every non-legacy baseline under scripts/perf-baselines/ resolves cleanly."""
+
+    def test_committed_baselines_have_complete_pointers_or_legacy_flag(self):
+        results = sorted(PERF_BASELINES.glob("*/result.json"))
+        self.assertTrue(results, f"no baseline result.json under {PERF_BASELINES}")
+        for result_json in results:
+            data = json.loads(result_json.read_text(encoding="utf-8"))
+            if data.get("schema") != "bench-10g-unidirectional/v1":
+                continue
+            missing = check_baseline_artifacts(result_json)
+            if data.get("legacy_incomplete"):
+                # Historical incomplete record must still carry its core evidence
+                # files and must actually have omitted snapshot pointers.
+                self.assertTrue(
+                    missing,
+                    f"{result_json} is marked legacy_incomplete but has no missing pointers",
+                )
+                for core in ("raw.log", "iperf3-tx.json", "iperf3-rx.json"):
+                    self.assertTrue(
+                        (result_json.parent / core).is_file(),
+                        f"legacy baseline {result_json} is missing {core}",
+                    )
+            else:
+                self.assertEqual(
+                    missing, [],
+                    f"{result_json} has broken artifact pointers: {missing}",
+                )
+
+    def test_missing_snapshots_are_caught_on_non_legacy_baseline(self):
+        tmp = Path(tempfile.mkdtemp(prefix="bench-f7."))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        run_dir = tmp / "sample"
+        run_dir.mkdir()
+        (run_dir / "raw.log").write_text("ok\n", encoding="utf-8")
+        (run_dir / "iperf3-tx.json").write_text("{}\n", encoding="utf-8")
+        (run_dir / "iperf3-rx.json").write_text("{}\n", encoding="utf-8")
+        record = {
+            "schema": "bench-10g-unidirectional/v1",
+            "raw_log": "raw.log",
+            "environment": {"captures": "snapshots/env"},
+            "directions": {
+                "tx": {"snapshots": {"before": "snapshots/tx-before", "after": "snapshots/tx-after", "iperf3": "iperf3-tx.json"}},
+                "rx": {"snapshots": {"before": "snapshots/rx-before", "after": "snapshots/rx-after", "iperf3": "iperf3-rx.json"}},
+            },
+        }
+        result_json = run_dir / "result.json"
+        result_json.write_text(json.dumps(record), encoding="utf-8")
+        missing = check_baseline_artifacts(result_json)
+        self.assertTrue(any("snapshots/env" in e for e in missing), missing)
+        self.assertTrue(any("snapshots/tx-before" in e for e in missing), missing)
 
 
 class ScriptSourceTest(unittest.TestCase):

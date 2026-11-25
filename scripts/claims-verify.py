@@ -57,13 +57,15 @@ Usage:
     python3 scripts/claims-verify.py                    # everything
     python3 scripts/claims-verify.py --dry-run          # plan only, no I/O
     python3 scripts/claims-verify.py --strict           # exit 1 on any FAIL
-    python3 scripts/claims-verify.py --skip device --skip symbol
+    python3 scripts/claims-verify.py --skip source,device
     python3 scripts/claims-verify.py --device-host 192.168.1.1
 
 --skip takes a comma-separated class list (source, text, kconfig, symbol,
-device).  CI runs the static layer only (``--skip device --skip symbol``): the
-device class needs the box, the symbol class needs a finished build, and this
-repository's CI never gets a self-hosted runner, so both would only SKIP.
+device); repeat --skip to name more than one.  CI runs the static layer only
+(``--skip device``): the device class needs the box, and this repository's CI
+never gets a self-hosted runner.  symbol is not skipped there -- without a
+build_dir each ``symbol:`` line SKIPs on its own (reported, never a failure),
+and when a built artifact is present it is byte-compared and still FAILs.
 
 Exit status: 0 when nothing failed (SKIPs are not failures) and also when
 checks failed but --strict was not given, 1 on --strict with any FAIL, 2 on a
@@ -375,15 +377,19 @@ def main(argv: list[str] | None = None) -> int:
             "  needs-reverify (verified_at..HEAD touched a cited path) is a WARNING:\n"
             "    the ledger has not been re-baselined yet, so a hard failure would flag\n"
             "    rows nobody has re-read.  It turns into a failure after that pass.\n"
-            "CI runs the static layer only: --skip device --skip symbol."
+            "CI runs the static layer only: --skip device.  symbol is not skipped:\n"
+            "    without a build_dir each symbol: line SKIPs (reported, never a\n"
+            "    failure); with an artifact it is byte-compared and FAILs on a\n"
+            "    mismatch."
         ),
     )
     parser.add_argument("--ledger", type=Path, default=None, metavar="PATH",
                         help="ledger to verify (default: scripts/claims.yaml here)")
     parser.add_argument("--root", type=Path, default=None, metavar="PATH",
                         help="repository root for cited paths (default: this checkout)")
-    parser.add_argument("--skip", default="", metavar="CLASS[,CLASS]",
-                        help=f"classes to skip, comma separated: {', '.join(CLASSES)}")
+    parser.add_argument("--skip", action="append", default=[], metavar="CLASS[,CLASS]",
+                        help=f"classes to skip, comma separated: {', '.join(CLASSES)}; "
+                             "repeatable")
     parser.add_argument("--strict", action="store_true",
                         help="exit 1 when any claim FAILs (skips are not failures)")
     parser.add_argument("--dry-run", action="store_true",
@@ -394,7 +400,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="ssh connect timeout for device: assertions (default: 8)")
     args = parser.parse_args(argv)
 
-    skip = {part.strip() for part in args.skip.split(",") if part.strip()}
+    skip = {part.strip() for chunk in args.skip for part in chunk.split(",") if part.strip()}
     unknown = skip - set(CLASSES)
     if unknown:
         parser.error(f"unknown class(es) in --skip: {', '.join(sorted(unknown))}")

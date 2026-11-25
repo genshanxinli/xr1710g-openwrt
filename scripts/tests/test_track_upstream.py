@@ -195,6 +195,29 @@ class TrackUpstreamVerdict(unittest.TestCase):
         self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
         self.assertIn("verdict: unknown", verdict_line(p))
 
+    def test_verdict_fetch_failure_is_unknown_not_must_act(self):
+        # r28 CI-11: the weekly job runs `--fetch --verdict`.  A runner that
+        # cannot reach upstream must not hand the scheduler a 2 (must-act);
+        # that code is spent on "upstream moved far enough to act".
+        repo = self.repo(behind=3)
+        p = repo.run("--quiet", "--verdict", "--fetch")
+        self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
+        self.assertIn("git fetch upstream failed", p.stderr)
+        self.assertEqual(verdict_line(p), "")  # no verdict was computed
+
+    def test_verdict_without_refs_is_unknown_not_must_act(self):
+        repo = self.repo(behind=3)
+        for ref in ("kernel73", "kernel74"):
+            repo.git("update-ref", "-d", "refs/remotes/upstream/" + ref)
+        verdict = repo.run("--quiet", "--verdict")
+        self.assertEqual(verdict.returncode, 3, verdict.stdout + verdict.stderr)
+        self.assertIn("verdict: unknown", verdict.stdout)
+
+        # The report mode keeps its own numbering: 2 is still "unknown" there.
+        report = repo.run()
+        self.assertEqual(report.returncode, 2, report.stdout + report.stderr)
+        self.assertIn("verdict: unknown", report.stdout)
+
     def test_list_hot_prints_only_hot_commits(self):
         repo = self.repo(behind=2, files=2, hot=2)
         p = repo.run("--list-hot")

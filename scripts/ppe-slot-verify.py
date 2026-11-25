@@ -23,7 +23,7 @@ The recomputation is:
   * airoha_ppe_foe_get_entry_hash() from the tuple, using the ORIGINAL
     (pre-NAT) tuple, exactly as the driver does;
   * airoha_ppe_fold_hash() as introduced by
-    target/linux/airoha/patches-7.3/212-net-airoha-address-PPE-entries-from-their-own-table.patch:
+    target/linux/airoha/patches-7.4/212-net-airoha-address-PPE-entries-from-their-own-table.patch:
     a power-of-two table masks with & (entries - 1), 24576 == 3 * 8192
     uses the (%3, low 13 bits) split, and anything else falls back to %.
 
@@ -177,7 +177,7 @@ class Result:
 
 
 def fold_hash(hash_value, num_entries):
-    """airoha_ppe_fold_hash() from patches-7.3/212, branch for branch."""
+    """airoha_ppe_fold_hash() from patches-7.4/212, branch for branch."""
     if not (num_entries & (num_entries - 1)):
         return hash_value & (num_entries - 1)
     if num_entries == 3 * PPE_SRAM_NUM_ENTRIES:
@@ -233,15 +233,33 @@ def _ipv6_words(address):
     return [(value >> shift) & MASK32 for shift in (96, 64, 32, 0)]
 
 
-def _parse_ipv6_endpoint(text):
+def _parse_ipv6_endpoint(text, expect_port=False):
+    # Bracketed [addr]:port (or [addr]) is unambiguous regardless of row type.
+    if text.startswith("["):
+        close = text.find("]")
+        if close < 0:
+            raise ValueError("not an IPv6 endpoint")
+        address_text = text[1:close]
+        rest = text[close + 1:]
+        try:
+            address = ipaddress.IPv6Address(address_text)
+        except ValueError:
+            raise ValueError("not an IPv6 endpoint")
+        if not rest:
+            return _ipv6_words(address), None
+        if not rest.startswith(":"):
+            raise ValueError("not an IPv6 endpoint")
+        port_text = rest[1:]
+        if not port_text.isdigit() or int(port_text) > 65535:
+            raise ValueError("port out of range")
+        return _ipv6_words(address), int(port_text)
+
     # %pI6 prints IPv6 addresses compressed, so "fe80::2e0:4cff:fee2:12b:42401"
-    # is a legal address *and* a legal "address:port" pair.  Trying the whole
-    # string first picks the address reading, leaves port=None, and the caller
-    # rejects the row as "not a five-tuple": every 5T row ends up in skipped
-    # while an IPv4-only dump still reports status=OK.  The port reading has
-    # to win, so split first and accept the whole-string address only when
-    # there is no legal "address:port" split.
-    if ":" in text:
+    # (5T addr:port) and "2001:db8::1:2" (3T bare address ending in a decimal
+    # hextet) are syntactically indistinguishable without knowing whether the
+    # row carries ports.  Only split the trailing ":port" when the caller
+    # explicitly expects a port (5T rows).
+    if expect_port and ":" in text:
         address_text, port_text = text.rsplit(":", 1)
         if port_text.isdigit() and int(port_text) <= 65535:
             try:
@@ -257,16 +275,19 @@ def _parse_ipv6_endpoint(text):
     return _ipv6_words(address), None
 
 
-def parse_five_tuple(text, family):
+def parse_five_tuple(text, family, expect_port=True):
     """Parse 'src->dst' with both ports present; raise ValueError otherwise."""
     if text is None:
         raise ValueError("missing tuple")
     if text.count("->") != 1:
         raise ValueError("not a src->dst tuple")
     src_text, dst_text = text.split("->")
-    parse_endpoint = _parse_ipv4_endpoint if family == "ipv4" else _parse_ipv6_endpoint
-    src_words, src_port = parse_endpoint(src_text)
-    dst_words, dst_port = parse_endpoint(dst_text)
+    if family == "ipv4":
+        src_words, src_port = _parse_ipv4_endpoint(src_text)
+        dst_words, dst_port = _parse_ipv4_endpoint(dst_text)
+    else:
+        src_words, src_port = _parse_ipv6_endpoint(src_text, expect_port=expect_port)
+        dst_words, dst_port = _parse_ipv6_endpoint(dst_text, expect_port=expect_port)
     if src_port is None or dst_port is None:
         raise ValueError("not a five-tuple (missing port)")
     return FiveTuple(family, src_words, dst_words, src_port, dst_port)
@@ -350,13 +371,14 @@ def analyze(text, image, geometry):
             continue
 
         family = "ipv4" if entry.type == PKT_IPV4_HNAPT else "ipv6"
+        expect_port = entry.type in (PKT_IPV4_HNAPT, PKT_IPV6_ROUTE_5T)
         try:
-            original = parse_five_tuple(entry.orig, family)
+            original = parse_five_tuple(entry.orig, family, expect_port=expect_port)
             # The translated half is parsed when the dump carries it, but
             # the driver hashes only the original tuple, so its absence
             # does not make the slot unverifiable.
             if entry.type == PKT_IPV4_HNAPT and entry.new is not None:
-                parse_five_tuple(entry.new, family)
+                parse_five_tuple(entry.new, family, expect_port=expect_port)
         except ValueError:
             reason = "%s (malformed five-tuple)" % PKT_NAMES.get(
                 entry.type, "type %d" % entry.type
@@ -778,10 +800,33 @@ def _self_test():
             == ipv6_tuple.src_words,
             "compressed and uncompressed IPv6 spellings disagree",
         )
-        # A bare compressed address still has no port (3T rows).
+        # Bare compressed addresses (3T rows, expect_port=False) must keep
+        # trailing decimal hextets as part of the address, never as a port.
         check(
             _parse_ipv6_endpoint("2001:db8::10") == ([0x20010DB8, 0, 0, 0x10], None),
             "a bare compressed address was read as address:port",
+        )
+        check(
+            _parse_ipv6_endpoint("2001:db8::1:2", expect_port=False)
+            == ([0x20010DB8, 0, 0, 0x00010002], None),
+            "bare compressed 2001:db8::1:2 was corrupted into address:port",
+        )
+        check(
+            _parse_ipv6_endpoint("fe80::2e0:4cff:fee2:1234", expect_port=False)
+            == ([0xFE800000, 0, 0x02E04CFF, 0xFEE21234], None),
+            "bare compressed fe80::2e0:4cff:fee2:1234 was corrupted into address:port",
+        )
+        # Bracketed [addr]:port stays unambiguous even when expect_port=False.
+        check(
+            _parse_ipv6_endpoint("[2001:db8::1:2]:443", expect_port=False)
+            == ([0x20010DB8, 0, 0, 0x00010002], 443),
+            "bracketed [addr]:port failed to parse",
+        )
+        # On 5T rows (expect_port=True), trailing :port is split explicitly.
+        check(
+            _parse_ipv6_endpoint("2001:db8::1:2", expect_port=True)
+            == ([0x20010DB8, 0, 0, 0x1], 2),
+            "5T compressed endpoint 2001:db8::1:2 failed to split port",
         )
 
     # Parsing must reject a truncated tuple and not count header text.

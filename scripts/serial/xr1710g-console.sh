@@ -81,7 +81,7 @@ tool=$(find_tool) || {
 
 case $tool in
 picocom)
-	set -- picocom -b "$baud" -8 -n -l
+	set -- picocom -b "$baud" -d 8 -y n -p 1 -l
 	[ -n "$logfile" ] && set -- "$@" -g "$logfile"
 	set -- "$@" "$device"
 	;;

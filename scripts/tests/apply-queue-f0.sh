@@ -14,13 +14,14 @@
 # order patch-kernel.sh sees.  Nothing here touches the network.
 #
 # usage:
-#   apply-queue-f0.sh <repo-root> [--ver 7.3] [--tarball FILE] [--tree DIR]
+#   apply-queue-f0.sh <repo-root> [--ver 7.4] [--tarball FILE] [--tree DIR]
 #                                 [--workroot DIR] [--keep] [--verbose]
 #
 #   <repo-root>   checkout that holds target/linux
 #   --ver V       kernel patch version: dirs backport-V, pending-V, hack-V,
-#                 target/linux/airoha/patches-V (default 7.3)
-#   --tarball F   kernel tarball to extract (default <repo-root>/dl/linux-V.tar.xz)
+#                 target/linux/airoha/patches-V (default 7.4)
+#   --tarball F   kernel tarball to extract (default: first
+#                 <repo-root>/dl/linux-V*.tar.*, so a -rc tarball works)
 #   --tree DIR    audit an already extracted pristine tree instead of extracting
 #   --workroot D  parent for the fresh extraction (default
 #                 $HOME/projects/.scratch); never /tmp, a kernel tree does not
@@ -44,7 +45,7 @@ PROG=${0##*/}
 die() { echo "$PROG: $*" >&2; exit 2; }
 
 REPO=""
-VER=7.3
+VER=7.4
 TARBALL=""
 TREE=""
 WORKROOT="${HOME}/projects/.scratch"
@@ -82,8 +83,12 @@ echo "# queue $VER: $n patches in $(echo $DIRS | wc -w) directories"
 
 RM_TREE=0
 if [ -z "$TREE" ]; then
-	[ -n "$TARBALL" ] || TARBALL="$TARBALL_DIR/linux-$VER.tar.xz"
-	[ -f "$TARBALL" ] || die "no tarball at $TARBALL (pass --tarball)"
+	# 7.4 was rebuilt against linux-7.4-rc3.tar.gz, so match any linux-$VER*.tar.*
+	if [ -z "$TARBALL" ]; then
+		TARBALL=$(ls -1 "$TARBALL_DIR/linux-$VER"*.tar.* 2>/dev/null | head -1)
+		[ -n "$TARBALL" ] || die "no tarball matching $TARBALL_DIR/linux-$VER*.tar.* (pass --tarball)"
+	fi
+	[ -f "$TARBALL" ] || die "no tarball at $TARBALL"
 	case "${WORKROOT%/}" in
 	/tmp|/tmp/*|/dev/shm|/dev/shm/*) die "WORKROOT $WORKROOT is a tmpfs; a kernel tree does not fit there" ;;
 	esac

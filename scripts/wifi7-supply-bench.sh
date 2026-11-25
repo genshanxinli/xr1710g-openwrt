@@ -583,7 +583,7 @@ else
 			break
 		fi
 	done
-	[ -n "$SEL_MAC" ] || SEL_MAC=${STA_MACS%% *}
+	[ -n "$SEL_MAC" ] || SEL_MAC=$(printf '%s\n' "$STA_MACS" | head -n 1)
 	[ "$(printf '%s\n' "$STA_MACS" | wc -l | tr -d ' ')" -gt 1 ] &&
 		warn "several stations associated on $STA; using $SEL_MAC (set STA_MAC=<mac> to choose)"
 fi

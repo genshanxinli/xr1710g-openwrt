@@ -365,9 +365,8 @@ capture_iface_counters() {
 	log_cmd "read /sys/class/net/$IFACE/statistics/{rx_packets,tx_packets,rx_bytes,tx_bytes,rx_errors,tx_errors,rx_dropped,tx_dropped} > $_out"
 }
 
-# Everything except /proc/stat and /proc/interrupts, which are taken last
-# before the run and first after it so their deltas cover only the iperf3
-# window.
+# Everything except iface counters and /proc/{uptime,stat,interrupts}, which
+# are taken adjacent to the iperf3 window so their deltas cover only the run.
 snapshot_extra() {
 	_dir=$1
 	if command -v ethtool >/dev/null 2>&1; then
@@ -399,13 +398,13 @@ snapshot_extra() {
 			note_file "$_dir/$S_PPE_ENTRIES" "not readable: /sys/kernel/debug/ppe/entries"
 		fi
 	fi
-	capture_iface_counters "$_dir/$S_IFACE_COUNTERS"
 }
 
 snapshot_before() {
 	_dir=$(snapshot_dir "$1-before")
 	log_note "snapshot before $1: $_dir"
 	snapshot_extra "$_dir"
+	capture_iface_counters "$_dir/$S_IFACE_COUNTERS"
 	capture "$_dir/$S_UPTIME" cat /proc/uptime
 	capture "$_dir/$S_PROC_STAT" cat /proc/stat
 	capture "$_dir/$S_INTERRUPTS" cat /proc/interrupts
@@ -414,6 +413,7 @@ snapshot_before() {
 snapshot_after() {
 	_dir=$(snapshot_dir "$1-after")
 	log_note "snapshot after $1: $_dir"
+	capture_iface_counters "$_dir/$S_IFACE_COUNTERS"
 	capture "$_dir/$S_PROC_STAT" cat /proc/stat
 	capture "$_dir/$S_INTERRUPTS" cat /proc/interrupts
 	capture "$_dir/$S_UPTIME" cat /proc/uptime
@@ -581,10 +581,22 @@ peer_cmd_string() {
 	fi
 }
 
+# True (return 0) when PID has exited, including un-reaped zombie/dead states.
+pid_exited() {
+	if ! kill -0 "$1" 2>/dev/null; then
+		return 0
+	fi
+	case $(awk '/^State:/ { print $2; exit }' "/proc/$1/status" 2>/dev/null) in
+	Z|X) return 0 ;;
+	esac
+	return 1
+}
+
 # Passive role: this box listens and the peer drives the traffic.  iperf3
-# -1 serves exactly one test and then exits, so a complete JSON summary in
-# the output file is the "test finished" signal.  The wait is bounded by
-# PEER_WAIT so an absent peer fails the direction instead of hanging.
+# -1 serves exactly one test and then exits, so polling the listener PID
+# detects completion (or early failure) immediately and preserves the real
+# wait exit status.  The wait is bounded by PEER_WAIT so an absent peer
+# fails the direction instead of hanging.
 serve_iperf() {
 	_dir=$1
 	_out=$2
@@ -598,25 +610,32 @@ serve_iperf() {
 	_lpid=$!
 	printf 'peer now, for %s: %s\n' "$_dir" "$(peer_cmd_string "$_dir")"
 	_w=0
-	_st=1
+	_timed_out=1
 	while [ "$_w" -lt "$PEER_WAIT" ]; do
-		if grep -q '"sum_received"' "$_out" 2>/dev/null; then
-			# the summary is written after the test ends; one more
-			# second lets the trailing fields land.
-			sleep 1
-			_st=0
+		if pid_exited "$_lpid"; then
+			_timed_out=0
 			break
 		fi
 		sleep 1
 		_w=$((_w + 1))
 	done
-	if [ "$_st" -ne 0 ]; then
+	if [ "$_timed_out" -ne 0 ] && pid_exited "$_lpid"; then
+		_timed_out=0
+	fi
+	if [ "$_timed_out" -ne 0 ]; then
 		log_note "no peer test arrived within ${PEER_WAIT}s for $_dir"
 		# -1 keeps the listener alive until one test arrives; stop it,
 		# and only it.
-		kill "$_lpid" 2>/dev/null
+		kill "$_lpid" 2>/dev/null || :
+		wait "$_lpid" 2>/dev/null || :
+		_st=124
+	else
+		wait "$_lpid" 2>/dev/null
+		_st=$?
 	fi
-	wait "$_lpid" 2>/dev/null
+	if [ "$_st" -eq 0 ] && ! iperf_json_check "$_dir" "$_out"; then
+		_st=1
+	fi
 	if [ -s "$_err" ]; then
 		log_note "iperf3 $_dir stderr:"
 		cat "$_err" >>"$RAW_LOG"
@@ -683,6 +702,9 @@ run_iperf() {
 			>"$_out" 2>"$_err"
 	fi
 	_st=$?
+	if [ "$_st" -eq 0 ] && ! iperf_json_check "$_dir" "$_out"; then
+		_st=1
+	fi
 	if [ -s "$_err" ]; then
 		log_note "iperf3 $_dir stderr:"
 		cat "$_err" >>"$RAW_LOG"
@@ -739,18 +761,46 @@ iperf_summary() {
 # iperf3 writes its own error message into the JSON on a failed run.
 iperf_error() {
 	awk '
-	{
-		line = $0
-		sub(/^[[:space:]]+/, "", line)
-		if (index(line, "\"error\":") == 1) {
-			v = line
-			sub(/^"error":[[:space:]]*"/, "", v)
-			sub(/"$/, "", v)
-			print v
-			exit
-		}
+	match($0, /"error":[[:space:]]*"[^"]*"/) {
+		v = substr($0, RSTART, RLENGTH)
+		sub(/^"error":[[:space:]]*"/, "", v)
+		sub(/"$/, "", v)
+		print v
+		exit
 	}
 	' "$1"
+}
+
+# Verify an iperf3 JSON capture succeeded: no "error" field and a positive
+# numeric (non-null) bits_per_second for the measured direction.
+iperf_json_check() {
+	_jc_dir=$1
+	_jc_out=$2
+	if [ ! -r "$_jc_out" ] || [ ! -s "$_jc_out" ]; then
+		log_note "iperf3 $_jc_dir produced no JSON output"
+		return 1
+	fi
+	_jc_err=$(iperf_error "$_jc_out")
+	if [ -n "$_jc_err" ]; then
+		log_note "iperf3 $_jc_dir reported JSON error: $_jc_err"
+		return 1
+	fi
+	_jc_line=$(iperf_summary "$_jc_out")
+	_jc_bps=null
+	if [ -n "$_jc_line" ]; then
+		# shellcheck disable=SC2086
+		set -- $_jc_line
+		if [ "$#" -ge 8 ]; then
+			if [ "$_jc_dir" = rx ]; then _jc_bps=$5; else _jc_bps=$1; fi
+		fi
+	fi
+	if ! awk -v b="$_jc_bps" 'BEGIN {
+		exit !(b ~ /^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$/ && (b + 0) > 0)
+	}'; then
+		log_note "iperf3 $_jc_dir produced null or non-positive bits_per_second ($_jc_bps)"
+		return 1
+	fi
+	return 0
 }
 
 # Delta of two counter snapshots, each "key value" per line.
@@ -777,6 +827,53 @@ uptime_delta() {
 	FNR == NR { b = $1; next }
 	{ printf "%.3f", $1 - b }
 	' "$1" "$2"
+}
+
+# Compute wire pps (null when TSO/GSO/GRO coalescing is detected), skb_per_sec,
+# avg_bytes_per_pkt, coalesced (true|false), and window_skew_pct.  Divides rate
+# by iperf3.seconds when positive numeric, falling back to /proc/uptime delta.
+pkt_rate_metrics() {
+	awk -v pkts="$1" -v bytes="$2" -v isec="$3" -v el="$4" -v mtu="$5" '
+	function is_pos_num(v) {
+		return (v ~ /^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$/ && (v + 0) > 0)
+	}
+	function is_nonneg_num(v) {
+		return (v ~ /^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$/ && (v + 0) >= 0)
+	}
+	BEGIN {
+		pps = "null"
+		skb = "null"
+		avg = "null"
+		coal = "false"
+		skew = "null"
+
+		has_isec = is_pos_num(isec)
+		has_el = is_pos_num(el)
+		if (has_isec && has_el) {
+			skew = sprintf("%.2f", ((el + 0) - (isec + 0)) * 100.0 / (isec + 0))
+		}
+
+		denom = 0
+		if (has_isec) denom = isec + 0
+		else if (has_el) denom = el + 0
+
+		if (is_nonneg_num(pkts) && denom > 0) {
+			rate = (pkts + 0) / denom
+			skb = sprintf("%.1f", rate)
+			pps = skb
+		}
+
+		if (is_pos_num(pkts) && is_nonneg_num(bytes)) {
+			av = (bytes + 0) / (pkts + 0)
+			avg = sprintf("%.1f", av)
+			if (is_pos_num(mtu) && av > (mtu + 18)) {
+				coal = "true"
+				pps = "null"
+			}
+		}
+
+		printf "%s %s %s %s %s\n", pps, skb, avg, coal, skew
+	}'
 }
 
 # CPU idle deltas from /proc/stat.  Idle excludes iowait; idle_pct uses
@@ -829,16 +926,28 @@ cpu_json() {
 	' "$1" "$2"
 }
 
-# CPU time spent inside one direction, in seconds.  Same /proc/stat
-# fields as cpu_json, but reported as wall-clock seconds so a baseline can
-# state cost per direction instead of only a percentage.  USER_HZ is 100
-# on every kernel this repo targets; idle_pct counts iowait as idle.
+# /proc/stat ticks are exported in USER_HZ (sysconf(_SC_CLK_TCK), 100 on Linux),
+# never kernel CONFIG_HZ (e.g. 250).  BENCH_CLK_TCK overrides for tests.
+clk_tck() {
+	_hz=${BENCH_CLK_TCK:-$(getconf CLK_TCK 2>/dev/null || echo 100)}
+	case $_hz in
+	''|*[!0-9]*) _hz=100 ;;
+	esac
+	if [ "$_hz" -le 0 ]; then
+		_hz=100
+	fi
+	printf '%s\n' "$_hz"
+}
+
+# CPU time spent inside one direction, in CPU-seconds.  Same /proc/stat
+# fields as cpu_json, scaled by clk_tck() (USER_HZ=100, never CONFIG_HZ=250);
+# idle_pct counts iowait as idle.
 cpu_seconds() {
 	if [ ! -r "$1" ] || [ ! -r "$2" ]; then
 		printf 'null null null\n'
 		return
 	fi
-	awk '
+	awk -v hz="$(clk_tck)" '
 	FNR == NR {
 		if ($1 == "cpu") {
 			bt = $2 + $3 + $4 + $5 + $6 + $7 + $8 + $9
@@ -855,7 +964,7 @@ cpu_seconds() {
 		dt = at - bt
 		di = ai - bi
 		if (dt <= 0) { print "null null null"; exit }
-		printf "%.2f %.2f %.2f\n", (dt - di) / 100, dt / 100, di * 100 / dt
+		printf "%.2f %.2f %.2f\n", (dt - di) / hz, dt / hz, di * 100 / dt
 	}
 	' "$1" "$2"
 }
@@ -916,7 +1025,7 @@ irq_json() {
 	' "$1" "$2"
 }
 
-# airoha PPE usage (see target/linux/airoha/patches-7.3/205): eight values,
+# airoha PPE usage (see target/linux/airoha/patches-7.4/205): eight values,
 # "null" per value when the file does not parse.
 ppe_fields() {
 	if [ ! -r "$1" ]; then
@@ -976,8 +1085,12 @@ emit_direction() {
 	fi
 	_retr=$_sretr
 
+	_imsg=
+	if [ -r "$_ijson" ]; then
+		_imsg=$(iperf_error "$_ijson")
+	fi
 	_ok=false
-	if [ "$_ist" -eq 0 ] && [ "$_bps" != null ]; then
+	if [ "$_ist" -eq 0 ] && [ "$_bps" != null ] && [ -z "$_imsg" ]; then
 		_ok=true
 	fi
 
@@ -994,10 +1107,14 @@ emit_direction() {
 	fi
 
 	_err=null
-	if [ "$_ist" -ne 0 ]; then
-		_imsg=$(iperf_error "$_ijson")
-		[ -n "$_imsg" ] || _imsg="iperf3 exited $_ist"
-		_err="\"$(json_escape "$_imsg")\""
+	if [ "$_ok" != true ]; then
+		if [ -n "$_imsg" ]; then
+			_err="\"$(json_escape "$_imsg")\""
+		elif [ "$_ist" -ne 0 ]; then
+			_err="\"$(json_escape "iperf3 exited $_ist")\""
+		else
+			_err="\"null bits_per_second\""
+		fi
 	fi
 
 	_el=$(uptime_delta "$_bdir/$S_UPTIME" "$_adir/$S_UPTIME")
@@ -1010,15 +1127,14 @@ emit_direction() {
 
 	if [ "$_dn" = rx ]; then
 		_pktdelta=$_rxp
+		_bytedelta=$_rxb
 	else
 		_pktdelta=$_txp
+		_bytedelta=$_txb
 	fi
-	_pps=null
-	if [ "$_pktdelta" != null ] && [ "$_el" != null ]; then
-		_pps=$(awk -v d="$_pktdelta" -v t="$_el" 'BEGIN {
-			if (t > 0) printf "%.1f", d / t; else print "null"
-		}')
-	fi
+	# shellcheck disable=SC2046
+	set -- $(pkt_rate_metrics "$_pktdelta" "$_bytedelta" "$_secs" "$_el" "${_mtu:-0}")
+	_pps=$1; _skb_s=$2; _avg_b=$3; _coal=$4; _skew=$5
 
 	_cpu=$(cpu_json "$_bdir/$S_PROC_STAT" "$_adir/$S_PROC_STAT")
 	_irq=$(irq_json "$_bdir/$S_INTERRUPTS" "$_adir/$S_INTERRUPTS")
@@ -1059,6 +1175,8 @@ emit_direction() {
 		"$(json_num "$_peer")" "$_pgbps" "$_tsrc"
 	printf '"pps":%s,"pps_source":"iface:%s",' \
 		"$_pps" "$_pktkey"
+	printf '"skb_per_sec":%s,"avg_bytes_per_pkt":%s,"coalesced":%s,"window_skew_pct":%s,' \
+		"$_skb_s" "$_avg_b" "$_coal" "$_skew"
 	printf '"iface_counters":{"elapsed_s":%s,"tx_packets_delta":%s,' "$_el" "$_txp"
 	printf '"rx_packets_delta":%s,"tx_bytes_delta":%s,' "$_rxp" "$_txb"
 	printf '"rx_bytes_delta":%s,"tx_errors_delta":%s,"rx_errors_delta":%s},' \
@@ -1206,11 +1324,13 @@ emit_baseline_summary() {
 		printf 'record: this box holds only its own iperf3 JSON, so the peer\n'
 		printf 'column is "-" rather than a number the harness did not see.\n\n'
 	fi
-	printf '| direction | Gbit/s | peer Gbit/s (passive: -) | pps | retransmits | CPU busy s | CPU busy %% of wall | idle %% |\n'
+	printf '| direction | Gbit/s | peer Gbit/s (passive: -) | pps | retransmits | CPU busy s | CPU busy %% of capacity | idle %% |\n'
 	printf '| --- | --- | --- | --- | --- | --- | --- | --- |\n'
 
 	_gbps_tx=-
 	_gbps_rx=-
+	_tx_real_ok=0
+	_rx_real_ok=0
 
 	for _dn in tx rx; do
 		case $_dn in
@@ -1221,7 +1341,7 @@ emit_baseline_summary() {
 		_bdir=$(snapshot_dir "$_dn-before")
 		_adir=$(snapshot_dir "$_dn-after")
 
-		_sbps=null; _rbps=null; _retr=null
+		_sbps=null; _rbps=null; _ssecs=null; _rsecs=null; _retr=null
 		if [ -r "$_ijson" ]; then
 			_iline=$(iperf_summary "$_ijson")
 			if [ -n "$_iline" ]; then
@@ -1229,22 +1349,34 @@ emit_baseline_summary() {
 				set -- $_iline
 				if [ "$#" -ge 8 ]; then
 					_sbps=$1
-					_rbps=$5
+					_ssecs=$3
 					_retr=$4
+					_rbps=$5
+					_rsecs=$7
 				fi
 			fi
 		fi
 		if [ "$_dn" = rx ]; then
 			_bps=$_rbps
+			_secs=$_rsecs
 			_peer=$_sbps
 		else
 			_bps=$_sbps
+			_secs=$_ssecs
 			_peer=$_rbps
 		fi
 
 		_gbps=-
 		_pgbps=-
-		if [ "$_bps" != null ]; then
+		_dir_real=0
+		if [ "$_st" -eq 0 ] && awk -v b="$_bps" 'BEGIN {
+			exit !(b ~ /^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$/ && (b + 0) > 0)
+		}'; then
+			_gbps=$(gbit "$_bps")
+			_dir_real=1
+		elif [ "$_bps" != null ] && awk -v b="$_bps" 'BEGIN {
+			exit !(b ~ /^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$/)
+		}'; then
 			_gbps=$(gbit "$_bps")
 		fi
 		if [ "$_peer" != null ]; then
@@ -1257,27 +1389,36 @@ emit_baseline_summary() {
 			esac
 		fi
 		case $_dn in
-		tx) _gbps_tx=$_gbps ;;
-		rx) _gbps_rx=$_gbps ;;
+		tx)
+			_gbps_tx=$_gbps
+			_tx_real_ok=$_dir_real
+			;;
+		rx)
+			_gbps_rx=$_gbps
+			_rx_real_ok=$_dir_real
+			;;
 		esac
 
 		_el=$(uptime_delta "$_bdir/$S_UPTIME" "$_adir/$S_UPTIME")
-		_elv=1
-		case $_el in
-		*[!0-9.]*) _elv=1 ;;
-		*) _elv=$_el ;;
-		esac
 		if [ "$_dn" = rx ]; then
 			_pk=$(counter_delta "$_bdir/$S_IFACE_COUNTERS" \
 				"$_adir/$S_IFACE_COUNTERS" rx_packets)
+			_by=$(counter_delta "$_bdir/$S_IFACE_COUNTERS" \
+				"$_adir/$S_IFACE_COUNTERS" rx_bytes)
 		else
 			_pk=$(counter_delta "$_bdir/$S_IFACE_COUNTERS" \
 				"$_adir/$S_IFACE_COUNTERS" tx_packets)
+			_by=$(counter_delta "$_bdir/$S_IFACE_COUNTERS" \
+				"$_adir/$S_IFACE_COUNTERS" tx_bytes)
 		fi
+		# shellcheck disable=SC2046
+		set -- $(pkt_rate_metrics "$_pk" "$_by" "$_secs" "$_el" "${_mtu:-0}")
+		_mpps=$1; _mskb=$2; _mcoal=$4
 		_pps=-
-		if [ "$_pk" != null ] && [ -n "$_pk" ]; then
-			_pps=$(awk -v d="$_pk" -v t="$_elv" \
-				'BEGIN { if (t > 0) printf "%.0f", d / t; else print "-" }')
+		if [ "$_mcoal" = true ]; then
+			_pps="- (coalesced)"
+		elif [ "$_mpps" != null ] && [ -n "$_mpps" ]; then
+			_pps=$(awk -v r="$_mpps" 'BEGIN { printf "%.0f", r }')
 		fi
 		_retrs=-
 		if [ "$_retr" != null ] && [ -n "$_retr" ]; then
@@ -1332,26 +1473,34 @@ emit_baseline_summary() {
 	printf -- '- `raw.log` (every command, in order)\n'
 
 	printf '\n## paste-ready claims.yaml entry\n\n'
-	printf 'Copy the directory under scripts/perf-baselines/%s/ as is, so the\n' \
-		"$_label_esc"
-	printf 'source line below resolves in a checkout.  result.json is the record:\n'
-	printf 'no summary document is written, and none should be added.\n\n'
-	printf '```yaml\n'
-	printf '  - id: baseline-%s\n' "$_id"
-	printf '    claim: "在本仓库 iperf3 基线上（%s Mb/s 链路，%s 驱动，flowtable\n' \
-		"$_speed" "$_driver"
-	printf '      硬件 offload %s），本移植单向吞吐为 TX %s Gbit/s、RX %s Gbit/s，\n' \
-		"$_ft_hw" "$_gbps_tx" "$_gbps_rx"
-	printf '      对应 CPU busy 见记录。"\n'
-	printf '    source:\n'
-	printf '      - "scripts/perf-baselines/%s/result.json:1"\n' "$_label_esc"
-	printf '    evidence: 实测\n'
-	printf '    date: "%s"\n' "$(date -u +%Y-%m-%d)"
-	printf '    status: supported\n'
-	printf '    notes: "单机、单次、%s 链路，不代表 10G 能力，也不能与 stock 固件\n' \
-		"$_speed"
-	printf '      的数字并列当作对比；stock 侧仍无测量。"\n'
-	printf '```\n'
+	if [ "$_tx_st" -eq 0 ] && [ "$_rx_st" -eq 0 ] && [ "$_tx_real_ok" -eq 1 ] && [ "$_rx_real_ok" -eq 1 ]; then
+		printf 'Copy the directory under scripts/perf-baselines/%s/ as is, so the\n' \
+			"$_label_esc"
+		printf 'source line below resolves in a checkout.  result.json is the record:\n'
+		printf 'no summary document is written, and none should be added.\n\n'
+		printf '```yaml\n'
+		printf '  - id: baseline-%s\n' "$_id"
+		printf '    claim: "在本仓库 iperf3 基线上（%s Mb/s 链路，%s 驱动，flowtable\n' \
+			"$_speed" "$_driver"
+		printf '      硬件 offload %s），本移植单向吞吐为 TX %s Gbit/s、RX %s Gbit/s，\n' \
+			"$_ft_hw" "$_gbps_tx" "$_gbps_rx"
+		printf '      对应 CPU busy 见记录。"\n'
+		printf '    source:\n'
+		printf '      - "scripts/perf-baselines/%s/result.json:1"\n' "$_label_esc"
+		printf '    evidence: 实测\n'
+		printf '    date: "%s"\n' "$(date -u +%Y-%m-%d)"
+		printf '    status: supported\n'
+		printf '    notes: "单机、单次、%s 链路，不代表 10G 能力，也不能与 stock 固件\n' \
+			"$_speed"
+		printf '      的数字并列当作对比；stock 侧仍无测量。"\n'
+		printf '```\n'
+	else
+		printf 'Not emitted: both TX and RX must succeed with real numeric Gbit/s\n'
+		printf 'before a baseline may be cited in claims.yaml (tx_exit=%s tx_gbps=%s,\n' \
+			"$_tx_st" "$_gbps_tx"
+		printf 'rx_exit=%s rx_gbps=%s).  No summary document is written.\n' \
+			"$_rx_st" "$_gbps_rx"
+	fi
 }
 
 # Print the planned protocol without touching the system.  Every path and
@@ -1405,33 +1554,49 @@ dry_run_plan() {
 		printf '\n[%s], exact snapshot commands and paths:\n' "$_dir"
 		case $_phase in
 		*-after)
-			# after phase: /proc first, matching snapshot_after()
+			# after phase: iface counters + /proc first, matching snapshot_after()
+			printf '  read /sys/class/net/%s/statistics/{rx_packets,tx_packets,rx_bytes,tx_bytes,rx_errors,tx_errors,rx_dropped,tx_dropped} > %s/%s\n' \
+				"$_iface" "$_dir" "$S_IFACE_COUNTERS"
 			printf '  cat /proc/stat > %s/%s\n' "$_dir" "$S_PROC_STAT"
 			printf '  cat /proc/interrupts > %s/%s\n' "$_dir" "$S_INTERRUPTS"
 			printf '  cat /proc/uptime > %s/%s\n' "$_dir" "$S_UPTIME"
+			printf '  ethtool -S %s > %s/%s        # if ethtool is installed\n' \
+				"$_iface" "$_dir" "$S_ETHTOOL"
+			printf '  nft list ruleset > %s/%s    # if nft is installed\n' \
+				"$_dir" "$S_NFT"
+			printf '  tc -s qdisc show dev %s > %s/%s\n' \
+				"$_iface" "$_dir" "$S_TC_QDISC"
+			printf '  tc -s filter show dev %s > %s/%s\n' \
+				"$_iface" "$_dir" "$S_TC_FILTER"
+			printf '  cat /sys/kernel/debug/ppe/usage > %s/%s   # if readable\n' \
+				"$_dir" "$S_PPE_USAGE"
+			if [ "$DUMP_FOE" = 1 ]; then
+				printf '  cat /sys/kernel/debug/ppe/entries > %s/%s   # DUMP_FOE=1\n' \
+					"$_dir" "$S_PPE_ENTRIES"
+			fi
 			;;
 		*)
+			printf '  ethtool -S %s > %s/%s        # if ethtool is installed\n' \
+				"$_iface" "$_dir" "$S_ETHTOOL"
+			printf '  nft list ruleset > %s/%s    # if nft is installed\n' \
+				"$_dir" "$S_NFT"
+			printf '  tc -s qdisc show dev %s > %s/%s\n' \
+				"$_iface" "$_dir" "$S_TC_QDISC"
+			printf '  tc -s filter show dev %s > %s/%s\n' \
+				"$_iface" "$_dir" "$S_TC_FILTER"
+			printf '  cat /sys/kernel/debug/ppe/usage > %s/%s   # if readable\n' \
+				"$_dir" "$S_PPE_USAGE"
+			if [ "$DUMP_FOE" = 1 ]; then
+				printf '  cat /sys/kernel/debug/ppe/entries > %s/%s   # DUMP_FOE=1\n' \
+					"$_dir" "$S_PPE_ENTRIES"
+			fi
+			printf '  read /sys/class/net/%s/statistics/{rx_packets,tx_packets,rx_bytes,tx_bytes,rx_errors,tx_errors,rx_dropped,tx_dropped} > %s/%s\n' \
+				"$_iface" "$_dir" "$S_IFACE_COUNTERS"
 			printf '  cat /proc/uptime > %s/%s\n' "$_dir" "$S_UPTIME"
 			printf '  cat /proc/stat > %s/%s\n' "$_dir" "$S_PROC_STAT"
 			printf '  cat /proc/interrupts > %s/%s\n' "$_dir" "$S_INTERRUPTS"
 			;;
 		esac
-		printf '  ethtool -S %s > %s/%s        # if ethtool is installed\n' \
-			"$_iface" "$_dir" "$S_ETHTOOL"
-		printf '  nft list ruleset > %s/%s    # if nft is installed\n' \
-			"$_dir" "$S_NFT"
-		printf '  tc -s qdisc show dev %s > %s/%s\n' \
-			"$_iface" "$_dir" "$S_TC_QDISC"
-		printf '  tc -s filter show dev %s > %s/%s\n' \
-			"$_iface" "$_dir" "$S_TC_FILTER"
-		printf '  cat /sys/kernel/debug/ppe/usage > %s/%s   # if readable\n' \
-			"$_dir" "$S_PPE_USAGE"
-		if [ "$DUMP_FOE" = 1 ]; then
-			printf '  cat /sys/kernel/debug/ppe/entries > %s/%s   # DUMP_FOE=1\n' \
-				"$_dir" "$S_PPE_ENTRIES"
-		fi
-		printf '  read /sys/class/net/%s/statistics/{rx_packets,tx_packets,rx_bytes,tx_bytes,rx_errors,tx_errors,rx_dropped,tx_dropped} > %s/%s\n' \
-			"$_iface" "$_dir" "$S_IFACE_COUNTERS"
 	done
 	if [ "$BASELINE" = 1 ]; then
 		_dir=$RESULT_DIR/snapshots/env

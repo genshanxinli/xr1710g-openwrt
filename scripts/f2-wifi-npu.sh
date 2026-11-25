@@ -550,7 +550,7 @@ route_field() {
 }
 
 is_hijack_dev() {
-	case $(printf '%s' "$1" | tr '[:upper:]' '[:lower:]') in
+	case $(printf '%s' "$1" | tr 'A-Z' 'a-z') in
 	meta|meta[0-9]*|tun|tun[0-9]*|tap|tap[0-9]*|wg|wg[0-9]*|tailscale[0-9]*|utun[0-9]*)
 		return 0
 		;;
@@ -1040,14 +1040,14 @@ else
 fi
 
 # A band change during the window makes the active-band delta meaningless.
-AFTER_FREQ=$(printf '%s\n' "$RAW/iw-after.txt" | awk '
+AFTER_FREQ=$(awk '
 	/^[[:space:]]*freq:/ {
 		v = $0
 		sub(/^[^:]*:[[:space:]]*/, "", v)
 		sub(/[^0-9].*$/, "", v)
 		print v
 		exit
-	}')
+	}' "$RAW/iw-after.txt")
 if [ -n "$AFTER_FREQ" ] && [ "$AFTER_FREQ" != "$FREQ" ]; then
 	VERDICT=BAND_CHANGED
 	VERDICT_DETAIL="the STA frequency changed from $FREQ to $AFTER_FREQ MHz during the window"

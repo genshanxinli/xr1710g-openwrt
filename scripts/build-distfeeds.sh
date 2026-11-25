@@ -104,14 +104,14 @@ fi
 rm -rf "$out"
 mkdir -p "$out"
 
-# Copy every directory that holds a repository index. Same shape as the
-# build output, so relative paths stay stable between build and release.
+# Copy every directory holding a repository index (guard empty *.apk / index.json).
 for d in "$bin"/targets/*/*/packages "$bin"/packages/*/*; do
-	[ -d "$d" ] || continue
-	[ -f "$d/packages.adb" ] || continue
+	[ -d "$d" ] && [ -f "$d/packages.adb" ] || continue
 	rel=${d#"$bin"/}
 	mkdir -p "$out/$rel"
-	cp -a "$d"/*.apk "$d/packages.adb" "$d/index.json" "$out/$rel/"
+	cp -a "$d/packages.adb" "$out/$rel/"
+	if [ -f "$d/index.json" ]; then cp -a "$d/index.json" "$out/$rel/"; fi
+	set -- "$d"/*.apk; if [ -f "$1" ]; then cp -a "$@" "$out/$rel/"; fi
 done
 
 if [ ! -f "$out/distfeeds.list" ]; then
@@ -190,7 +190,7 @@ if not rows:
     sys.exit("no repository index found under %s" % out)
 
 core = [r for r in rows if r[0].startswith("targets/")]
-if not core or not core[0][2]:
+if not core or not all(r[2] > 0 for r in sorted(core)):
     sys.exit("core feed carries no kernel/kmod entries: %r" % (rows,))
 
 if stale:

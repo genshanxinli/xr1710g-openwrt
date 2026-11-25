@@ -30,7 +30,10 @@ Checks, in order:
            sha256 of the extracted payload must match), so a new rootfs
            cannot be shipped with an old kernel again.  Staleness is judged
            by the embedded kernel's build string and payload hash, never by
-           the mtime order of ``Image`` and ``vmlinux``.
+           the mtime order of ``Image`` and ``vmlinux``.  The release manifest
+           must also carry the CLI providers ``ip-bridge`` and
+           ``coreutils-base64``; when ``unsquashfs`` is available, the rootfs
+           is checked for ``/usr/sbin/bridge`` and ``/bin/base64`` as well.
   capture  an offline capture of ``byte_queue_limits`` proves the running
            image lets BQL fill the queue: max ``inflight`` >= 64 KiB under
            sustained TX load.
@@ -86,6 +89,14 @@ TARGET_MAKEFILE_REL = PATCHES_PARENT_REL / "Makefile"
 BUILD_DIR_REL = Path("build_dir")
 IMAGE_DIR_REL = Path("bin/targets/airoha/an7581")
 MIN_INFLIGHT_DEFAULT = 64 * 1024
+# package -> path in the release rootfs.  The manifest proves the package; the
+# rootfs check (when unsquashfs is available) proves the command is really
+# there.  scripts/tests/test_release_cli_tools.py keeps its own copy of this
+# table, so dropping an entry here fails that test instead of narrowing quietly.
+REQUIRED_CLI_TOOLS = {
+    "ip-bridge": "/usr/sbin/bridge",
+    "coreutils-base64": "/bin/base64",
+}
 MTIME_TOLERANCE = 2.0
 
 KVER_RE = re.compile(r"(\d+\.\d+)")
@@ -94,7 +105,7 @@ MAKE_PATCHVER_RE = re.compile(r"(?m)^\s*KERNEL(?:_TESTING)?_PATCHVER\s*:?=\s*(\d
 VERSION_RE = re.compile(rb"Linux version [^\x00\n\r]{1,200}")
 INFLIGHT_RE = re.compile(r"(?i)\b(?:max_)?inflight\b\s*[:=]?\s*(\d+)")
 INFLIGHT_I_RE = re.compile(r"(?i)\bi\s*=\s*(\d+)")
-LIMIT_RE = re.compile(r"(?i)(?<![a-z0-9_])(?:max_|min_)?limit(?:_max)?\s*[:=]\s*(\d+)")
+LIMIT_RE = re.compile(r"(?i)(?<![a-z0-9_])(?:max_|min_)?limit(?![a-z0-9_])\s*[:=]\s*(\d+)")
 BQL_STAT_RE = re.compile(r"(?i)\b(?:bql|byte_queue|inflight|dql)\b")
 
 
@@ -313,12 +324,16 @@ def normalize_kver(value: str) -> str:
     return match.group(1)
 
 
-def read_make_patchver(path: Path) -> str | None:
+def read_make_patchver(path: Path, var: str | None = None) -> str | None:
     try:
         text = path.read_text(errors="replace")
     except OSError:
         return None
-    match = MAKE_PATCHVER_RE.search(text)
+    if var is None:
+        pattern = MAKE_PATCHVER_RE
+    else:
+        pattern = re.compile(rf"(?m)^\s*{re.escape(var)}\s*:?=\s*(\d+\.\d+)")
+    match = pattern.search(text)
     return match.group(1) if match else None
 
 
@@ -367,11 +382,11 @@ def detect_kernel_tree(
         kver = normalize_kver(explicit)
         report.note(f"kernel version {kver} (from --kver)")
     else:
-        kver = read_make_patchver(repo / SUBTARGET_MK_REL)
+        kver = read_make_patchver(repo / SUBTARGET_MK_REL, "KERNEL_PATCHVER")
         if kver is not None:
             report.note(f"kernel version {kver} (from {SUBTARGET_MK_REL}: KERNEL_PATCHVER)")
         else:
-            kver = read_make_patchver(repo / TARGET_MAKEFILE_REL)
+            kver = read_make_patchver(repo / TARGET_MAKEFILE_REL, "KERNEL_TESTING_PATCHVER")
             if kver is not None:
                 report.note(
                     f"kernel version {kver} (from {TARGET_MAKEFILE_REL}: KERNEL_TESTING_PATCHVER)"
@@ -549,6 +564,9 @@ def find_kernel_image(kdir: Path, kernel_dir: Path) -> Path | None:
 
 def require_symbols(path: Path, label: str, symbols: set[str], report: Report) -> bool:
     data = read_bytes(path, label)
+    if data[:4] != b"\x7fELF":
+        report.fail(f"{label} {path.name} is not an ELF binary; cannot verify the compiled 974 code")
+        return False
 
     # The 974 helpers are `static void ...` in airoha_eth.c with a single caller
     # each, so at -O2 they are inlined and never reach .symtab.  The kernel is
@@ -733,9 +751,79 @@ def extract_fit_kernel(image: Path, report: Report) -> bytes:
     raise GateError(f"unsupported FIT kernel compression: {compression}")
 
 
+def check_required_tools(image_dir: Path, image: Path, report: Report) -> bool:
+    """The release manifest is the direct proof that a package was installed."""
+    manifests = sorted(image_dir.glob("openwrt-*gemtek_xr1710g-ubi.manifest"))
+    if len(manifests) != 1:
+        raise GateError(
+            f"expected exactly one openwrt-*gemtek_xr1710g-ubi.manifest next to "
+            f"{image.name}, found {len(manifests)}; cannot verify the required CLI tools",
+            3,
+        )
+    manifest = manifests[0]
+    report.note(f"release manifest: {manifest.name}")
+    have = set()
+    for line in manifest.read_text(errors="replace").splitlines():
+        if " - " in line and not line.startswith("#"):
+            have.add(line.split(" - ", 1)[0])
+    missing = [pkg for pkg in REQUIRED_CLI_TOOLS if pkg not in have]
+    if missing:
+        report.fail(
+            "release image is missing required CLI package(s): "
+            + ", ".join(missing)
+            + "; add them to DEVICE_PACKAGES in target/linux/airoha/image/an7581.mk "
+            "and run make defconfig before building"
+        )
+        return False
+    report.ok("required CLI packages present: " + ", ".join(sorted(REQUIRED_CLI_TOOLS)))
+    return True
+
+
+def check_rootfs_tools(image: Path, report: Report) -> bool:
+    """Path-level proof, best effort: unsquashfs may not exist on the host."""
+    data = read_bytes(image, "release image")
+    root = parse_fdt(data)
+    images = fdt_child(root, "images")
+    node = fdt_child(images, "rootfs-1") if images is not None else None
+    if node is None:
+        report.warn("no rootfs-1 node in the FIT image; the manifest is the only tool proof")
+        return True
+    offset = fdt_u32(node, "data-position")
+    if offset is None:
+        report.warn("rootfs-1 node has no data-position in the FIT image; the manifest is the only tool proof")
+        return True
+    if shutil.which("unsquashfs") is None:
+        report.warn("unsquashfs unavailable; the manifest is the only tool proof")
+        return True
+    proc = subprocess.run(
+        ["unsquashfs", "-l", "-o", str(offset), str(image)],
+        capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        report.fail(
+            f"cannot list the release rootfs at offset {offset}: {proc.stderr.strip()[:200]}"
+        )
+        return False
+    listing = {line.strip() for line in proc.stdout.splitlines()}
+    missing = [
+        path
+        for path in REQUIRED_CLI_TOOLS.values()
+        if f"squashfs-root{path}" not in listing
+    ]
+    if missing:
+        report.fail("release rootfs is missing required CLI path(s): " + ", ".join(missing))
+        return False
+    report.ok("required CLI paths present in the release rootfs")
+    return True
+
+
 def check_image_stage(image_dir: Path, kdir: Path, kernel_dir: Path, report: Report) -> bool:
     image = select_release_image(image_dir)
     report.note(f"release image: {image}")
+    if not check_required_tools(image_dir, image, report):
+        return False
+    if not check_rootfs_tools(image, report):
+        return False
     vmlinux = kernel_dir / "vmlinux"
     if not vmlinux.is_file():
         raise GateError(f"kernel build tree not found at {kernel_dir}; cannot verify the image", 3)
@@ -870,6 +958,8 @@ def print_guidance() -> None:
     print()
     print("The gate is read-only: it did not flash, reboot or change anything.")
     print("To get an image that passes:")
+    print("  If the failure names a CLI package or manifest, run make defconfig")
+    print("  (or set CONFIG_PACKAGE_<name>=y) and rebuild; the kernel steps below do not apply.")
     print("  1. Build from a tree that carries both changes (968 first, then 974).")
     print("     If the branch has no 968/974 in the patches dir the gate reported, it")
     print("     will never be in the image; pass --kver if the version looks wrong.")
@@ -937,8 +1027,8 @@ def resolve_image_dir(args, repo: Path, report: Report) -> Path | None:
 
 def parse_args(argv):
     parser = argparse.ArgumentParser(
-        description="Verify that 974 (BQL) and 968 (napi_complete_done) are in the "
-        "XR1710G release image.",
+        description="Verify that 974 (BQL), 968 (napi_complete_done) and the required "
+        "CLI tools (bridge, base64) are in the XR1710G release image.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="The check is offline and read-only; it never flashes or reboots.\n"
         "Exit codes: 0 pass, 1 gate failure, 2 usage/input error, 3 cannot verify.",
@@ -975,6 +1065,7 @@ def main(argv=None) -> int:
 
     repo = Path(args.repo).resolve() if args.repo else Path(__file__).resolve().parent.parent
     print(f"repository: {repo}")
+    tools_ok = False
 
     try:
         hinted = Path(args.build_dir).resolve() if args.build_dir else repo / BUILD_DIR_REL
@@ -1012,7 +1103,7 @@ def main(argv=None) -> int:
             print("image:")
             if kdir is None:
                 raise GateError("the image check needs --build-dir to locate $(KDIR)/Image", 3)
-            check_image_stage(image_dir, kdir, kernel_dir, report)
+            tools_ok = check_image_stage(image_dir, kdir, kernel_dir, report)
 
         if args.capture is not None:
             print()
@@ -1037,7 +1128,10 @@ def main(argv=None) -> int:
         print(f"FAILED: {len(report.failures)} check(s) failed.")
         print_guidance()
         return 1
-    print("PASS: 974 (BQL) and 968 (napi_complete_done) are accounted for.")
+    if tools_ok:
+        print("PASS: 974/968 are accounted for and the required CLI providers are present.")
+    else:
+        print("PASS: 974 (BQL) and 968 (napi_complete_done) are accounted for.")
     if report.warnings:
         print(f"({len(report.warnings)} warning(s) above do not affect the result.)")
     return 0

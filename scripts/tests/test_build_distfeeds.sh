@@ -219,5 +219,56 @@ else
 	no "no stored copy of the build patch"
 fi
 
+# P1-4: empty *.apk feed and missing index.json must not abort under set -eu.
+empty_tree=$tmp/empty-feed-tree
+mkdir -p "$empty_tree/bin/targets/board/sub/packages" \
+	"$empty_tree/bin/packages/arch/emptyfeed" \
+	"$empty_tree/bin/packages/arch/nojson"
+: >"$empty_tree/bin/targets/board/sub/packages/kernel-7.4-r1.apk"
+: >"$empty_tree/bin/targets/board/sub/packages/packages.adb"
+cat >"$empty_tree/bin/targets/board/sub/packages/index.json" <<'EOF'
+{"packages": {"kernel": "7.4-r1", "kmod-fake": "7.4-r1"}}
+EOF
+: >"$empty_tree/bin/targets/board/sub/packages/kmod-fake-7.4-r1.apk"
+: >"$empty_tree/bin/packages/arch/emptyfeed/packages.adb"
+cat >"$empty_tree/bin/packages/arch/emptyfeed/index.json" <<'EOF'
+{"packages": {}}
+EOF
+: >"$empty_tree/bin/packages/arch/nojson/packages.adb"
+if TOPDIR=$empty_tree sh "$script" "$tmp/out-empty" >"$tmp/empty.log" 2>"$tmp/empty.err"; then
+	ok "handles empty *.apk glob and missing index.json cleanly under set -eu"
+else
+	no "handles empty *.apk glob and missing index.json cleanly under set -eu ($(cat "$tmp/empty.err"))"
+fi
+
+# P1-4: every target feed under targets/ must carry kernel/kmod, not just core[0].
+# Test both directory orderings so whichever target os.walk visits first, a buggy
+# core[0]-only check fails on the opposite pair.
+for pair in "aaa:zzz" "zzz:aaa"; do
+	good_t=${pair%:*}
+	bad_t=${pair#*:}
+	multi_tree=$tmp/multi-core-$good_t-$bad_t
+	mkdir -p "$multi_tree/bin/targets/$good_t/sub/packages" \
+		"$multi_tree/bin/targets/$bad_t/sub/packages"
+	: >"$multi_tree/bin/targets/$good_t/sub/packages/kernel-7.4-r1.apk"
+	: >"$multi_tree/bin/targets/$good_t/sub/packages/kmod-fake-7.4-r1.apk"
+	: >"$multi_tree/bin/targets/$good_t/sub/packages/packages.adb"
+	cat >"$multi_tree/bin/targets/$good_t/sub/packages/index.json" <<'EOF'
+{"packages": {"kernel": "7.4-r1", "kmod-fake": "7.4-r1"}}
+EOF
+	: >"$multi_tree/bin/targets/$bad_t/sub/packages/base-files-1.apk"
+	: >"$multi_tree/bin/targets/$bad_t/sub/packages/packages.adb"
+	cat >"$multi_tree/bin/targets/$bad_t/sub/packages/index.json" <<'EOF'
+{"packages": {"base-files": "1"}}
+EOF
+	if TOPDIR=$multi_tree sh "$script" "$tmp/out-multi-$good_t" 2>"$tmp/multi-$good_t.log"; then
+		no "rejects when target $bad_t lacks kernel/kmod while $good_t has it"
+	elif grep -q 'core feed carries no kernel/kmod' "$tmp/multi-$good_t.log"; then
+		ok "rejects when target $bad_t lacks kernel/kmod while $good_t has it"
+	else
+		no "rejects when target $bad_t lacks kernel/kmod ($(cat "$tmp/multi-$good_t.log"))"
+	fi
+done
+
 [ "$fail" -eq 0 ] && printf 'all checks passed\n'
 exit "$fail"

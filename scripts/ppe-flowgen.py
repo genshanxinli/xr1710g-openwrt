@@ -15,7 +15,7 @@ each other out, and the folded hash then lands in only a few hundred of the
 
 The hash is a copy of airoha_ppe_foe_get_entry_hash() for
 PPE_PKT_TYPE_IPV4_HNAPT, and the fold is airoha_ppe_fold_hash() from
-target/linux/airoha/patches-7.3/212-net-airoha-address-PPE-entries-from-their-own-table.patch:
+target/linux/airoha/patches-7.4/212-net-airoha-address-PPE-entries-from-their-own-table.patch:
 
     32768 entries -> hash & (n - 1)
     24576 entries -> ((hash >> 13) % 3) * 8192 + (hash & 8191)

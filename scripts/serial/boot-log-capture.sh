@@ -90,28 +90,49 @@ if [ "$via" = serial ] && [ "$have_serial" -eq 0 ]; then
 	exit 3
 fi
 
+out_dir=$(dirname -- "$out")
+
 if [ "$dry_run" -eq 1 ]; then
 	echo "out=$out seconds=$seconds via=$via serial=$have_serial ssh=$ssh_host reboot=$reboot"
 	if [ "$have_serial" -eq 1 ]; then
-		echo "exec: mkdir -p ${out%/*}; timeout $seconds cat $device > $out"
+		echo "exec: mkdir -p $out_dir; stty -F $device 115200 cs8 -cstopb -parenb raw -echo; timeout $seconds cat $device > $out"
 		[ "$reboot" -eq 1 ] && echo "exec: ssh $ssh_host reboot   (fires just before the capture)"
 	else
-		echo "exec: mkdir -p ${out%/*}; ssh $ssh_host 'dmesg' > $out   (serial unavailable, captured via ssh)"
+		echo "exec: mkdir -p $out_dir; ssh $ssh_host 'dmesg' > $out   (serial unavailable, captured via ssh)"
 		[ "$reboot" -eq 1 ] && echo "exec: ssh $ssh_host reboot   (then wait and capture dmesg, not U-Boot)"
 	fi
 	exit 0
 fi
 
-mkdir -p "${out%/*}"
+mkdir -p "$out_dir"
 
+rebooted=0
+old_boot_id=''
 if [ "$have_serial" -eq 1 ]; then
 	echo "capturing $seconds s of raw serial from $device -> $out"
+	if ! stty -F "$device" 115200 cs8 -cstopb -parenb raw -echo; then
+		if [ "$via" = serial ]; then
+			echo "$prog: stty failed on $device" >&2
+			exit 3
+		fi
+		echo "$prog: stty failed on $device; falling back to ssh dmesg" >&2
+		have_serial=0
+	fi
+fi
+
+if [ "$have_serial" -eq 1 ]; then
 	if [ "$reboot" -eq 1 ]; then
+		old_boot_id=$(ssh -o ConnectTimeout=5 "$ssh_host" 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null || true)
 		# best effort: rebooting closes the ssh session, that is expected
 		ssh -o ConnectTimeout=5 "$ssh_host" 'reboot' >/dev/null 2>&1 || true
+		rebooted=1
 	fi
 	timeout "$seconds" cat "$device" >"$out" 2>/dev/null || true
 	if [ ! -s "$out" ]; then
+		if [ "$via" = serial ]; then
+			echo "$prog: --via serial produced no bytes from $device" >&2
+			exit 3
+		fi
 		echo "$prog: serial produced no bytes; falling back to ssh dmesg" >&2
 		have_serial=0
 	fi
@@ -122,18 +143,61 @@ fi
 
 if [ "$have_serial" -eq 0 ]; then
 	echo "$prog: serial unavailable, captured via ssh" >&2
-	printf '# serial unavailable, captured via ssh %s, %s\n' "$ssh_host" "$(date -Is)" >"$out"
 	dmesg_tmp="$out.dmesg"
-	ssh -o ConnectTimeout=10 "$ssh_host" 'dmesg' >"$dmesg_tmp" 2>/dev/null || {
-		echo "$prog: ssh dmesg failed" >&2
-		exit 4
-	}
+	rm -f "$dmesg_tmp"
+	if [ "$reboot" -eq 1 ]; then
+		if [ "$rebooted" -eq 0 ]; then
+			old_boot_id=$(ssh -o ConnectTimeout=10 "$ssh_host" 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null) || old_boot_id=''
+			if [ -z "$old_boot_id" ]; then
+				echo "$prog: cannot read /proc/sys/kernel/random/boot_id from $ssh_host before reboot" >&2
+				exit 4
+			fi
+			echo "$prog: rebooting $ssh_host over ssh, then waiting up to ${seconds}s for new boot_id and dmesg" >&2
+			ssh -o ConnectTimeout=5 "$ssh_host" 'reboot' >/dev/null 2>&1 || true
+			rebooted=1
+		else
+			echo "$prog: waiting up to ${seconds}s for $ssh_host to finish rebooting for ssh dmesg" >&2
+		fi
+		deadline=$(( $(date +%s) + seconds ))
+		dmesg_ok=0
+		while :; do
+			new_boot_id=$(ssh -o ConnectTimeout=5 "$ssh_host" 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null || true)
+			if [ -n "$new_boot_id" ] && { [ -z "$old_boot_id" ] || [ "$new_boot_id" != "$old_boot_id" ]; }; then
+				if ssh -o ConnectTimeout=5 "$ssh_host" 'dmesg' >"$dmesg_tmp" 2>/dev/null && [ -s "$dmesg_tmp" ]; then
+					dmesg_ok=1
+					break
+				fi
+			fi
+			now=$(date +%s)
+			[ "$now" -lt "$deadline" ] || break
+			rem=$((deadline - now))
+			[ "$rem" -gt 2 ] && rem=2
+			sleep "$rem"
+		done
+		if [ "$dmesg_ok" -ne 1 ]; then
+			rm -f "$dmesg_tmp"
+			echo "$prog: ssh dmesg failed after reboot (new boot_id not observed within ${seconds}s)" >&2
+			exit 4
+		fi
+	else
+		ssh -o ConnectTimeout=10 "$ssh_host" 'dmesg' >"$dmesg_tmp" 2>/dev/null || {
+			rm -f "$dmesg_tmp"
+			echo "$prog: ssh dmesg failed" >&2
+			exit 4
+		}
+	fi
+	printf '# serial unavailable, captured via ssh %s, %s\n' "$ssh_host" "$(date -Is)" >"$out"
 	cat "$dmesg_tmp" >>"$out"
 	rm -f "$dmesg_tmp"
 	echo "captured $(wc -l <"$out") lines via ssh dmesg -> $out"
 fi
 
 echo "--- boot anchors ($out)"
-grep -nE "$anchors" "$out" | head -40 || echo "no anchors matched"
+anchor_hits=$(grep -nE "$anchors" "$out" 2>/dev/null | head -n 40 || true)
+if [ -n "$anchor_hits" ]; then
+	printf '%s\n' "$anchor_hits"
+else
+	echo "no anchors matched"
+fi
 echo "--- first lines"
-head -20 "$out"
+head -n 20 "$out"

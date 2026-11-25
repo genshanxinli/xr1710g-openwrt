@@ -257,7 +257,10 @@ valid_hex() {
 }
 
 gen_hex() {
-	dd if=/dev/urandom bs="$1" count=1 2>/dev/null | od -An -tx1 | tr -d ' \012'
+	# BusyBox on OpenWrt ships CONFIG_HEXDUMP=y without od; -v prevents '*'
+	# squashing on identical 16-byte blocks and 1/1 "%02x" emits lowercase
+	# byte-order hex identical on BusyBox and GNU/BSD hexdump.
+	dd if=/dev/urandom bs="$1" count=1 2>/dev/null | hexdump -v -e '1/1 "%02x"'
 }
 
 log_cmd() {
@@ -875,19 +878,6 @@ fi
 valid_ipv4 "$LOCAL" || usage_error "LOCAL is not an IPv4 address: '$LOCAL'"
 valid_ipv4 "$PEER" || usage_error "PEER is not an IPv4 address: '$PEER'"
 
-# Key material is generated per run and never shown or logged: it only
-# protects the lab link for the duration of the measurement.
-ENC_KEY_OUT=$(gen_hex "$_enc_bytes")
-AUTH_KEY_OUT=$(gen_hex "$_auth_bytes")
-ENC_KEY_IN=$(gen_hex "$_enc_bytes")
-AUTH_KEY_IN=$(gen_hex "$_auth_bytes")
-valid_hex "$ENC_KEY_OUT" || die "could not generate a random ESP key (is /dev/urandom readable?)"
-valid_hex "$AUTH_KEY_OUT" || die "could not generate a random ESP auth key (is /dev/urandom readable?)"
-valid_hex "$ENC_KEY_IN" || die "could not generate a random ESP key (is /dev/urandom readable?)"
-valid_hex "$AUTH_KEY_IN" || die "could not generate a random ESP auth key (is /dev/urandom readable?)"
-ENC_KEY_BITS=$((${#ENC_KEY_OUT} * 4))
-AUTH_KEY_BITS=$((${#AUTH_KEY_OUT} * 4))
-
 if [ -z "$OUT" ]; then
 	OUT=./eip93-ipsec-smoke-$(date +%s).json
 fi
@@ -925,7 +915,20 @@ iperf\ 3*) ;;
 *) fail_run "iperf3 3.x is required on the local end, found '$_iperf_ver'" ;;
 esac
 command -v ssh >/dev/null 2>&1 || fail_run "ssh not found on the local end"
-command -v od >/dev/null 2>&1 || fail_run "od not found on the local end"
+command -v hexdump >/dev/null 2>&1 || fail_run "hexdump not found on the local end"
+
+# Key material is generated per run (after confirming hexdump exists) and never
+# shown or logged: it only protects the lab link for the measurement duration.
+ENC_KEY_OUT=$(gen_hex "$_enc_bytes")
+AUTH_KEY_OUT=$(gen_hex "$_auth_bytes")
+ENC_KEY_IN=$(gen_hex "$_enc_bytes")
+AUTH_KEY_IN=$(gen_hex "$_auth_bytes")
+valid_hex "$ENC_KEY_OUT" || fail_run "could not generate a random ESP key (is /dev/urandom readable?)"
+valid_hex "$AUTH_KEY_OUT" || fail_run "could not generate a random ESP auth key (is /dev/urandom readable?)"
+valid_hex "$ENC_KEY_IN" || fail_run "could not generate a random ESP key (is /dev/urandom readable?)"
+valid_hex "$AUTH_KEY_IN" || fail_run "could not generate a random ESP auth key (is /dev/urandom readable?)"
+ENC_KEY_BITS=$((${#ENC_KEY_OUT} * 4))
+AUTH_KEY_BITS=$((${#AUTH_KEY_OUT} * 4))
 
 # The module autoloads at boot on OpenWrt; try it once in case only the
 # package was installed without a reboot.

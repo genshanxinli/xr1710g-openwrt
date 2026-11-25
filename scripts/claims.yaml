@@ -36,7 +36,7 @@ claims:
       - target/linux/airoha/patches-7.4/209-net-airoha-size-the-SRAM-tables-the-way-the-hardware-sees-them.patch:36
       - target/linux/airoha/patches-7.4/214-net-airoha-stop-paying-for-unused-flow-counters.patch:85
       - target/linux/airoha/patches-7.4/9999-net-airoha-report-the-derived-IPv4-capacity-in-ppe-usage.patch:72
-      - target/linux/airoha/an7581/config-7.4:294
+      - target/linux/airoha/an7581/config-7.4:296
     evidence: 代码
     date: "2026-11-15"
     status: supported
@@ -69,44 +69,44 @@ claims:
   - id: ppe-counter-index-identity
     claim: "流计数器按流自身的 hash 做恒等映射：只有 hash < 8192 的 SRAM 流能拿到计数器，块外 hash 直接返回无计数器，不会折叠到别的流的槽位。"
     source:
-      - target/linux/airoha/patches-7.4/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:13
-      - target/linux/airoha/patches-7.4/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:11
-      - target/linux/airoha/patches-7.4/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:20
+      - target/linux/airoha/patches-7.4/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:49
+      - target/linux/airoha/patches-7.4/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:47
+      - target/linux/airoha/patches-7.4/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:56
     evidence: 代码
     date: "2026-11-15"
     status: supported
-    notes: "修复前的 hash - PPE_STATS_NUM_ENTRIES 会让 hash 4096 与 8192、4097 与 8193 等 4096 对槽位别名（patch 210:20）。静态代码结论，未用 NPU 计数器做硬件验证。"
+    notes: "修复前的 hash - PPE_STATS_NUM_ENTRIES 会让 hash 4096 与 8192、4097 与 8193 等 4096 对槽位别名（patch 210:20-21）。静态代码结论，未用 NPU 计数器做硬件验证。"
 
     verify:
-      - "text: target/linux/airoha/patches-7.4/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:9 Every SRAM entry owns the counter slot named by its own hash"
-      - "text: target/linux/airoha/patches-7.4/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:17 if (hash >= ppe_num_stats_entries)"
+      - "text: target/linux/airoha/patches-7.4/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:45 Every SRAM entry owns the counter slot named by its own hash"
+      - "text: target/linux/airoha/patches-7.4/210-net-airoha-do-not-alias-flow-counters-onto-unrelated-flows.patch:53 if (hash >= ppe_num_stats_entries)"
   - id: ppe-hash-bijective
     claim: "PPE 的 hash 折叠对 32768 和 24576 两种表几何都覆盖全部槽位（32768→32768，24576→24576），且不引入每包 udiv。"
     source:
-      - target/linux/airoha/patches-7.4/212-net-airoha-address-PPE-entries-from-their-own-table.patch:30
-      - target/linux/airoha/patches-7.4/212-net-airoha-address-PPE-entries-from-their-own-table.patch:31
+      - target/linux/airoha/patches-7.4/212-net-airoha-address-PPE-entries-from-their-own-table.patch:60
+      - target/linux/airoha/patches-7.4/212-net-airoha-address-PPE-entries-from-their-own-table.patch:61
     evidence: 代码
     date: "2026-11-15"
     status: supported
     notes: "取自 patch 212 的 split-fold 说明；只有静态一致性检查，没有运行时碰撞或覆盖率统计。"
 
     verify:
-      - "text: target/linux/airoha/patches-7.4/212-net-airoha-address-PPE-entries-from-their-own-table.patch:30 if (num_entries == 3 * PPE_SRAM_NUM_ENTRIES)"
-      - "text: target/linux/airoha/patches-7.4/212-net-airoha-address-PPE-entries-from-their-own-table.patch:31 return ((hash >> 13) % 3) * PPE_SRAM_NUM_ENTRIES +"
+      - "text: target/linux/airoha/patches-7.4/212-net-airoha-address-PPE-entries-from-their-own-table.patch:60 if (num_entries == 3 * PPE_SRAM_NUM_ENTRIES)"
+      - "text: target/linux/airoha/patches-7.4/212-net-airoha-address-PPE-entries-from-their-own-table.patch:61 return ((hash >> 13) % 3) * PPE_SRAM_NUM_ENTRIES +"
   - id: bridge-ttl-hardware-path
     claim: "同一个 bridge 两个端口之间转发的流保持 IP TTL；PPE 只在这类流上清 IB1.BIND_TTL，routed 流仍递减。该修复只覆盖已绑定 PPE 的硬件路径，未绑定流仍由软件 ip_decrease_ttl() 递减。"
     source:
-      - target/linux/airoha/patches-7.4/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:21
-      - target/linux/airoha/patches-7.4/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:26
-      - target/linux/airoha/patches-7.4/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:46
+      - target/linux/airoha/patches-7.4/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:48
+      - target/linux/airoha/patches-7.4/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:53
+      - target/linux/airoha/patches-7.4/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:73
     evidence: 代码
     date: "2026-11-15"
     status: supported
     notes: "patch 963 记录修复前实测：TTL 5 的帧从 lan2 进、phy0.0-ap0 出变成 TTL 4。修复本身是代码结论，未做修复后的 TTL A/B。"
 
     verify:
-      - "text: target/linux/airoha/patches-7.4/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:21 Bridged flows that stay inside one bridge"
-      - "text: target/linux/airoha/patches-7.4/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:27 val |= AIROHA_FOE_IB1_BIND_TTL;"
+      - "text: target/linux/airoha/patches-7.4/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:48 Bridged flows that stay inside one bridge"
+      - "text: target/linux/airoha/patches-7.4/963-net-airoha-keep-TTL-on-flows-bridged-within-one-bridge.patch:54 val |= AIROHA_FOE_IB1_BIND_TTL;"
   - id: eip93-no-gcm
     claim: "EIP93 的 AEAD 只注册 authenc(hmac(md5/sha1/sha224/sha256), cbc(aes|des|des3_ede) 或 rfc3686(ctr(aes)))，没有 gcm(aes) 或 ChaCha；IPsec 只能按 classic ESP 规划。"
     source:
@@ -134,29 +134,29 @@ claims:
   - id: cpu-top-opp-1200
     claim: "当前树的 CPU OPP 表最高 1.2 GHz（an7581.dtsi 的 opp-1200000000），不是 issue #1 验收里写的 1.35 GHz。"
     source:
-      - target/linux/airoha/dts/an7581.dtsi:242
       - target/linux/airoha/dts/an7581.dtsi:243
+      - target/linux/airoha/dts/an7581.dtsi:244
     evidence: 代码
     date: "2026-11-15"
     status: supported
     notes: "issue #1（D15）按 1.35 GHz 验收，但本树 DTS 只到 1.2 GHz；在 DTS 改到 1.35 GHz 前不能把 D15 当既有事实。"
 
     verify:
-      - "text: target/linux/airoha/dts/an7581.dtsi:243 opp-hz = /bits/ 64 <1200000000>;"
+      - "text: target/linux/airoha/dts/an7581.dtsi:244 opp-hz = /bits/ 64 <1200000000>;"
   - id: 5g-half-offload
-    claim: "5G（band1）默认仍是半卸载：树内 mt76 0016 只提供 opt-in 的 npu_band1_tx 窗口（默认关闭，要设 module param 才建），关着时 band1 没有独立的 NPU TX buffer window，WAN→5G 只能走 host 注入（约 1 核/G）；2.4G/6G 有自有窗口。"
+    claim: "5G（band1）默认仍是半卸载：树内 mt76 0016-04 只提供 opt-in 的 npu_band1_tx 窗口（默认关闭，要设 module param 才建），关着时 band1 没有独立的 NPU TX buffer window，WAN→5G 只能走 host 注入（约 1 核/G）；2.4G/6G 有自有窗口。"
     source:
-      - package/kernel/mt76/patches/0016-wifi-mt76-mt7996-give-band1-its-own-NPU-TX-buffer-space.patch:7
-      - package/kernel/mt76/patches/0016-wifi-mt76-mt7996-give-band1-its-own-NPU-TX-buffer-space.patch:11
+      - package/kernel/mt76/patches/0016-04-wifi-mt76-mt7996-give-band1-its-own-NPU-TX-buffer-space.patch:6
+      - package/kernel/mt76/patches/0016-04-wifi-mt76-mt7996-give-band1-its-own-NPU-TX-buffer-space.patch:10
       - https://github.com/genshanxinli/xr1710g-openwrt/issues/98
     evidence: 推断
-    date: "2026-11-21"
+    date: "2026-11-26"
     status: unverified
-    notes: "0016 在树里但默认不建窗口：The NPU TX window setup ... 只给 band0/band2 装了 band、band+5、band+10 三块；band1 要 npu_band1_tx=1 才装同样的三块，失败或固件拒绝就退回 host 注入。约 1 核/G 与 2.4G/6G 有窗口仍是 issue #98 的背景推断，未在本树测；窗口是否被固件接受、开窗后吞吐多少未验，issue #98 仍 open。"
+    notes: "0016-04 在树里但默认不建窗口：The NPU TX window setup ... 只给 band0/band2 装了 band、band+5、band+10 三块；band1 要 npu_band1_tx=1 才装同样的三块，失败或固件拒绝就退回 host 注入。约 1 核/G 与 2.4G/6G 有窗口仍是 issue #98 的背景推断，未在本树测；窗口是否被固件接受、开窗后吞吐多少未验，issue #98 仍 open。"
 
     verify:
-      - "text: package/kernel/mt76/patches/0016-wifi-mt76-mt7996-give-band1-its-own-NPU-TX-buffer-space.patch:7 buffer spaces for band0 and band2.  Band1 (5 GHz) has no window"
-      - "text: package/kernel/mt76/patches/0016-wifi-mt76-mt7996-give-band1-its-own-NPU-TX-buffer-space.patch:11 Add an opt-in npu_band1_tx module parameter (default off)"
+      - "text: package/kernel/mt76/patches/0016-04-wifi-mt76-mt7996-give-band1-its-own-NPU-TX-buffer-space.patch:6 buffer spaces for band0 and band2.  Band1 (5 GHz) has no window"
+      - "text: package/kernel/mt76/patches/0016-04-wifi-mt76-mt7996-give-band1-its-own-NPU-TX-buffer-space.patch:10 Add an opt-in npu_band1_tx module parameter (default off)"
 
   - id: 10g-unidirectional-baseline
     claim: "10G 上限工作只把单向 iperf3 结果当基线：TX 与 RX 分开跑，禁止同时双向；本仓库尚未提交同构建的双向/全双工基线。"
@@ -179,7 +179,7 @@ claims:
     notes: "补齐这条需要的两件外部条件，本机都拿不到：(1) stock 固件镜像——本机无法取得，手上只有本移植的构建产物；(2) 能承载 2.5G/10G 的对端与对等端口——本机只有 1000 Mb/s 的 lan4，lan2/wan 的 carrier 为 0，也没有 2.5G USB 网卡。因此 stock 侧数据不可得，本条保持 unverified。已有的 1G 单向实测见 baseline-lan4-1g-2026-11-20（TX 0.704 / RX 0.887 Gbit/s），它是本移植单侧记录，与 9.4/3.2 既不可比，也不能据此推算 10G 比值或双向吞吐。"
 
   - id: baseline-lan4-1g-2026-11-20
-    claim: "1000 Mb/s lan4 链路上，本移植单向 iperf3 吞吐为 TX 0.704 Gbit/s、RX 0.887 Gbit/s；该次流量没有被 PPE 绑定（bound_delta 0），按软件路径处理，CPU busy 约 9.5%（TX）/37.9%（RX）占墙钟。"
+    claim: "1000 Mb/s lan4 链路上，本移植单向 iperf3 吞吐为 TX 0.704 Gbit/s、RX 0.887 Gbit/s；该次流量没有被 PPE 绑定（bound_delta 0），按软件路径处理，CPU busy 约 9.5%（TX）/37.9%（RX）占 4 核总 CPU 容量。"
     source:
       - "scripts/perf-baselines/lan4-1g-2026-11-20/result.json:1"
     evidence: 实测
@@ -210,21 +210,21 @@ claims:
     claim: "XR1710G 上 pbus_csr（0x1fbe3400）的 0x18 偏移即 0x1fbe3418，开机后读 0x00000007。"
     source:
       - scripts/tests/fixtures/pbus_csr-1fbe3400.registers:12
-      - target/linux/airoha/dts/an7581.dtsi:589
+      - target/linux/airoha/dts/an7581.dtsi:614
     evidence: 实测
-    date: "2026-11-20"
+    date: "2026-11-26"
     status: supported
     notes: "来自 /sys/kernel/debug/regmap/dummy-syscon@0x000000001fbe3400/registers 的整份 dump（63 行，r38047-a86ce12e27，kernel 7.3）。只证明读数；0x7 的字段语义仍是推断，an7581.dtsi 的三个 mediatek,pbus-csr 窗口（0x0-0x4 / 0x8-0xc / 0x10-0x14）都不覆盖 0x18，即没有 in-tree 消费者。写 0x0 能否关掉 pcie_single_cut、能否改善延迟：未验证（本机无 CONFIG_DEVMEM/devmem）。"
 
     verify:
       - "text: scripts/tests/fixtures/pbus_csr-1fbe3400.registers:12 18: 00000007"
-      - "text: target/linux/airoha/dts/an7581.dtsi:589 pbus_csr: syscon@1fbe3400"
+      - "text: target/linux/airoha/dts/an7581.dtsi:614 pbus_csr: syscon@1fbe3400"
   - id: pcie-topology-xr1710g
     claim: "XR1710G 上 pcie0（1fc00000，domain 0000）以 x2 / 8.0 GT/s 训练并枚举 14c3:7990（mt7996e），pcie2（1fc40000，domain 0002）以 x1 / 5.0 GT/s 枚举 14c3:7991，pcie1（1fc20000）未枚举。"
     source:
-      - target/linux/airoha/dts/an7581-xr1710g-ubi.dts:235
+      - target/linux/airoha/dts/an7581-xr1710g-ubi.dts:245
     evidence: 实测
-    date: "2026-11-20"
+    date: "2026-11-26"
     status: supported
     notes: "宽度/速率取自 /sys/bus/pci/devices/*/current_link_* 当前值；该机 dmesg 只剩 22 行、开机枚举段已滚掉，所以“开机时如何训练起来的”没有留证。与板级 DT 一致：num-lanes=<2>，&pcie1 disabled，&pcie2 okay。"
 
@@ -233,7 +233,7 @@ claims:
       - "device: /sys/bus/pci/devices/0000:00:00.0/current_link_speed 8.0 GT/s PCIe"
       - "device: /sys/bus/pci/devices/0000:01:00.0/device 0x7990"
       - "device: /sys/bus/pci/devices/0002:00:00.0/current_link_width 1"
-      - "text: target/linux/airoha/dts/an7581-xr1710g-ubi.dts:235 num-lanes = <2>;"
+      - "text: target/linux/airoha/dts/an7581-xr1710g-ubi.dts:245 num-lanes = <2>;"
   - id: reg-arbitrate-us-agree
     claim: "美规 XR1710G 出厂 radio1.country=radio2.country=US，运行 60_xr1710g-reg-arbitrate 只记一行 reg=US 日志、rc=0、不改 /etc/config/wireless。"
     source:
@@ -261,7 +261,7 @@ claims:
     claim: "2026-11-20 04:38 UTC（f2a62be998 之前）的一次快照里，运行时已加载的 inet fw4 flowtable ft 的设备集合是 {lan2,lan3,lan4,wan}，不含 br-lan 里的 wlan vif；同一时刻 fw4 print 按当前状态给出含 phy0.0-ap0/phy0.1-ap0 的集合，即已加载的 ft 是重载旧快照，缺口是重载竞争而不是 fw4 过滤。HEAD 已把重载排队上限从 10 s 提到 200 s，修后的行为未复测。"
     source:
       - target/linux/airoha/an7581/base-files/etc/hotplug.d/iface/51-bridge-hw-offload:17
-      - target/linux/airoha/an7581/base-files/etc/hotplug.d/net/50-bridge-hw-offload:44
+      - target/linux/airoha/an7581/base-files/etc/hotplug.d/net/50-bridge-hw-offload:49
     evidence: 实测
     date: "2026-11-20"
     status: supported
@@ -271,12 +271,12 @@ claims:
     verified_at: 78486b870b
 
     verify:
-      - "text: target/linux/airoha/an7581/base-files/etc/hotplug.d/net/50-bridge-hw-offload:58 [ \"$waits\" -lt 200 ]"
+      - "text: target/linux/airoha/an7581/base-files/etc/hotplug.d/net/50-bridge-hw-offload:63 [ \"$waits\" -lt 200 ]"
   - id: nf-flow-pppoe-trace-compiled
     claim: "airoha/an7581 的内核会编入 nf_flow_pppoe tracepoint：config/Config-kernel.in 给 KERNEL_FTRACE 和 KERNEL_ENABLE_DEFAULT_TRACERS 加了 default y if TARGET_airoha_an7581；当前的 7.4（KERNEL_PATCHVER）生成的 linux-7.4/.config 有 CONFIG_TRACEPOINTS=y，net/netfilter/nf_flow_table_ip.o 里有 __tracepoint_nf_flow_pppoe；同一份源码在改之前的 tracing-off 配置下该符号为 0（那次对照跑在当时的 7.3 队列上）。"
     source:
-      - config/Config-kernel.in:377
-      - config/Config-kernel.in:400
+      - config/Config-kernel.in:378
+      - config/Config-kernel.in:401
       - target/linux/airoha/patches-7.4/917-netfilter-flowtable-add-opt-in-pppoe-ingress-trace.patch:102
       - https://github.com/genshanxinli/xr1710g-openwrt/issues/60
     evidence: 实测
@@ -284,7 +284,7 @@ claims:
     status: supported
     notes: "实测(2026-11-21)已到运行期：镜像 r38189+1-bc6ee752a1 / linux-7.4-rc3 的 .config 有 CONFIG_FTRACE=y(4568)/CONFIG_TRACING=y(4566)/CONFIG_TRACEPOINTS=y(292)，打包进 kmod-nf-flow 的 nf_flow_table.ko 有 6 个 nf_flow_pppoe 符号（含 __tracepoint_nf_flow_pppoe 与 __traceiter_nf_flow_pppoe），/proc/kallsyms 有 __traceiter_nf_flow_pppoe [nf_flow_table]，临时挂 tracefs 后 available_events 含 nf_flow_table:nf_flow_pppoe；vmlinux 与 mt7996e.ko 里为 0，因为 CONFIG_NF_FLOW_TABLE=m 且该 tracepoint 归 netfilter 不归无线，属预期。踩过的坑：build_dir/**/linux-7.4-rc3/.config 会同时命中 toolchain-* 下那份 kernel-headers 的 .config（CONFIG_TRACEPOINTS 未开），路径必须窄到 build_dir/target-*/；另 /sys/kernel/debug/tracing 在本镜像不存在、tracefs 未挂载，所以「available_events 里看不到」曾被误判成「没编进内核」。未验证：本机没有 PPPoE 会话（wan proto=dhcp，/proc/net/pppoe 0 条），从未采到真实 PPPoE 入向事件。"
     verify:
-      - "text: config/Config-kernel.in:377 default y if TARGET_airoha_an7581"
+      - "text: config/Config-kernel.in:378 default y if TARGET_airoha_an7581"
       - "text: target/linux/airoha/patches-7.4/917-netfilter-flowtable-add-opt-in-pppoe-ingress-trace.patch:54 trace_nf_flow_pppoe(skb, tuple, NF_FLOW_PPPOE_HOOK_INGRESS);"
       - "kconfig: build_dir/target-*/linux-airoha_an7581/linux-7.4-rc3/.config CONFIG_TRACEPOINTS=y"
       - "symbol: build_dir/target-*/linux-airoha_an7581/linux-7.4-rc3/net/netfilter/nf_flow_table_ip.o __tracepoint_nf_flow_pppoe"
@@ -323,21 +323,21 @@ claims:
     verify:
       - "text: package/kernel/mac80211/Makefile:13 PKG_SOURCE_VERSION:=7.2"
   - id: soe-probe-off-by-default
-    claim: "990/970 的 SOE 只读探针在 an7581/config-7.4 里显式关掉（config-7.4:490 写 `# CONFIG_NET_AIROHA_SOE is not set`，Kconfig 里 `default n`），所以默认镜像里不编 `airoha_soe_probe.o`；2026-11-20 在当时的 linux-7.3 树上 `yes \"\" | make ARCH=arm64 syncconfig` 只剩 0 个 `(NEW)` 符号，同一条 `# CONFIG_NET_AIROHA_SOE is not set` 仍在 7.4 配置的 490 行。"
+    claim: "990/970 的 SOE 只读探针在 an7581/config-7.4 里显式关掉（config-7.4:495 写 `# CONFIG_NET_AIROHA_SOE is not set`，Kconfig 里 `default n`），所以默认镜像里不编 `airoha_soe_probe.o`；2026-11-20 在当时的 linux-7.3 树上 `yes \"\" | make ARCH=arm64 syncconfig` 只剩 0 个 `(NEW)` 符号，同一条 `# CONFIG_NET_AIROHA_SOE is not set` 仍在 7.4 配置的 495 行。"
     source:
-      - target/linux/airoha/an7581/config-7.4:490
+      - target/linux/airoha/an7581/config-7.4:495
       - target/linux/airoha/patches-7.4/970-net-airoha-soe-readonly-probe.patch:29
     evidence: 实测
     date: "2026-11-20"
     status: supported
     notes: "2026-11-20 在 build_dir 的 linux-7.3 上实测：0 个 (NEW)；去掉 7.3 配置的 281 行后同一棵树恰好出现 1 个 (NEW)=NET_AIROHA_SOE，这行就是它缺席时 syncconfig 卡住的原因。未验证的是这套配置在新 untar 的树上重复一遍时要重新 apply 队列（本次 fresh tree 队列 338 个补丁全过）；618 对等性清单见 issue #9。"
     verify:
-      - "text: target/linux/airoha/an7581/config-7.4:490 # CONFIG_NET_AIROHA_SOE is not set"
+      - "text: target/linux/airoha/an7581/config-7.4:495 # CONFIG_NET_AIROHA_SOE is not set"
       - "kconfig: target/linux/airoha/an7581/config-7.4 CONFIG_NET_AIROHA_SOE=n"
       - "text: target/linux/airoha/patches-7.4/970-net-airoha-soe-readonly-probe.patch:47 obj-$(CONFIG_NET_AIROHA_SOE) += airoha_soe_probe.o"
 
   - id: mt76-pin-drift
-    claim: "本树 mt76 pin 是 package/kernel/mt76/Makefile 的 2026-10-28 / 46b67e5b（OpenWRT-fanboy/mt76-firmware 的 main 分支上的提交，落后 main 尖 8 个 commit）。它已从 261008 线的 639e1287 换到 main 线：639e1287 不是 main 的祖先（merge-base = 467ae2e3），换线后 scripts/check-mt76-pin.sh 的判定从 blocked(rc=2) 变成 keep(rc=0)。不再前推到 main 尖 0936617d 的原因不是面子问题：main 最后 8 个 commit 用到本树 cfg80211（linux-7.4-rc3 / backports-7.2）没有的 API，编译不过。"
+    claim: "本树 mt76 pin 是 package/kernel/mt76/Makefile 的 2026-10-28 / 46b67e5b（OpenWRT-fanboy/mt76-firmware 的 main 分支上的提交）。它已从 261008 线的 639e1287 换到 main 线：639e1287 不是 main 的祖先（merge-base = 467ae2e3），换线后 scripts/check-mt76-pin.sh 的判定从 blocked(rc=2) 变成 keep(rc=0)。不再继续前推到后续 main 提交（如 0936617d）的原因不是面子问题：后续上游提交用到本树 cfg80211（linux-7.4-rc3 / backports-7.2）没有的 API，编译不过（实时漂移由 scripts/check-mt76-pin.sh 与 scripts/track-upstream.sh 计算）。"
     source:
       - package/kernel/mt76/Makefile:11
       - package/kernel/mt76/Makefile:12
@@ -345,9 +345,9 @@ claims:
       - scripts/tests/test_check_mt76_pin.sh:187
       - package/kernel/mt76/patches/0010-enable-firmware-txpower-limit.patch:1
     evidence: 实测
-    date: "2026-11-21"
+    date: "2026-11-26"
     status: supported
-    notes: "2026-11-21 实测（git-common-dir 的 mt76-upstream.git 缓存）：main=0936617d(2026-10-28)，261008=639e1287(2026-10-08) 只在 261008 上，639e1287..main=83、main..639e1287=1（那 1 个是 639e1287 自己的 firmware 提交）。新 pin 46b67e5b 是 main 的祖先，落后 8 个 commit，<= MT76_BUMP_MIN_COMMITS(10)，所以脚本判 keep。为什么停在 46b67e5b：真编三次——0936617d 在 mt7996/init.c:545-546 报 NL80211_EXT_FEATURE_SCS/MSCS 未定义且 mt7996/mt7996.h:870 的 cfg80211_scs_desc 不可见；d7e3bee8 在 mt7996/mcu.c:683 报 cfg80211_dscp_to_up 隐式声明；再往前 7f2f67ee/238538d7/0936617d 还要 cfg80211_flow_info、ieee80211_sta_flow_prio、IEEE80211_TX_CTRL_STREAM_CLASSIFIED/EXPLICIT_UP。linux-7.4-rc3 的 include/net/cfg80211.h 与 include/linux/nl80211.h 里都没有这些符号，backports 最新发布也只是 7.2，所以 46b67e5b 是本树当前能编过的最新上游 commit。补丁侧：20 个本地补丁全量 -F0 重放 BAD=0/fuzz=0/no .rej，0013/0014/0023 因上游已实现而删除（a13a2be9 等 6 个、2bb98336+d2712ce4、cd0c5fdf），0010 的两个 hunk 用 diff -u 重锚，0022 保留（46b67e5b 上上游还是 4 参数调用，本树内核是 5 参数）。"
+    notes: "2026-11-21 实测（git-common-dir 的 mt76-upstream.git 缓存）：旧 pin 639e1287(2026-10-08) 在侧分支 261008 上，新 pin 46b67e5b 是 main 的祖先，具体领先/落后提交数以 scripts/check-mt76-pin.sh 现场计算为准。为什么停在 46b67e5b：真编三次——0936617d 在 mt7996/init.c:545-546 报 NL80211_EXT_FEATURE_SCS/MSCS 未定义且 mt7996/mt7996.h:870 的 cfg80211_scs_desc 不可见；d7e3bee8 在 mt7996/mcu.c:683 报 cfg80211_dscp_to_up 隐式声明；再往前 7f2f67ee/238538d7/0936617d 还要 cfg80211_flow_info、ieee80211_sta_flow_prio、IEEE80211_TX_CTRL_STREAM_CLASSIFIED/EXPLICIT_UP。linux-7.4-rc3 的 include/net/cfg80211.h 与 include/linux/nl80211.h 里都没有这些符号，backports 最新发布也只是 7.2，所以 46b67e5b 是本树当前能编过的最新上游 commit。补丁侧：本地补丁全量 -F0 重放无 fuzz，0013/0014/0023 因上游已实现而删除（a13a2be9 等、2bb98336+d2712ce4、cd0c5fdf），0010 的两个 hunk 用 diff -u 重锚，0022 保留（46b67e5b 上上游还是 4 参数调用，本树内核是 5 参数）。"
     verify:
       - "text: package/kernel/mt76/Makefile:11 PKG_SOURCE_DATE:=2026-10-28"
       - "text: package/kernel/mt76/Makefile:12 PKG_SOURCE_VERSION:=46b67e5b7c49313d11b2b2d83df3c8025406d63e"
@@ -372,72 +372,74 @@ claims:
       - "text: scripts/tests/test_wan_defaults_rollback.sh:140 assert_state baseline 0 ppe.pppoe_decap SKIP"
 
   - id: flash-gate-exit-table
-    claim: "G0 门禁的「不行」是 6 个值的封闭表：0 通过、2 用法缺失、3 无 -i-know 的 -F、4 布局或镜像不匹配、5 备份失败、6 sysupgrade -T 拒收。scripts/tests/test_flash_gate_exitcodes.sh 给每个码跑一个情境，并把 EXIT_* 常量、--help 里的表、实测退出码三者交叉核对；renumber 或漏进 help 都会让它红。"
+    claim: "G0 门禁的「不行」是 6 个值的封闭表：0 通过、2 用法缺失、3 无 -i-know 的 -F、4 布局或镜像不匹配（含缺预期摘要；sha256sums 比镜像旧且摘要不符）、5 备份失败、6 sysupgrade -T 拒收。scripts/tests/test_flash_gate_exitcodes.sh 给每个码跑一个情境，并把 EXIT_* 常量、--help 里的表、实测退出码三者交叉核对；renumber 或漏进 help 都会让它红。"
     source:
-      - scripts/flash-gate.sh:103
-      - scripts/flash-gate.sh:107
-      - scripts/tests/test_flash_gate_exitcodes.sh:93
+      - scripts/flash-gate.sh:112
+      - scripts/flash-gate.sh:116
+      - scripts/tests/test_flash_gate_exitcodes.sh:94
     evidence: 实测
-    date: "2026-11-21"
+    date: "2026-11-26"
     status: supported
-    notes: "6 个情境都是离线 fixture（stub dd/sysupgrade/fwtool，合成 /proc/mtd 与分区块），不碰真机；-F 之后 code 74 是否仍存活由别处验证，这里只证明退出码可枚举。sysupgrade -T 的 rc=1 由 stub 注入，真机的 rc=1 未在本轮复现。"
+    notes: "6 个情境都是离线 fixture（stub dd/sysupgrade/fwtool，合成 /proc/mtd 与分区块），不碰真机；-F 之后 code 74 是否仍存活由别处验证，这里只证明退出码可枚举。sysupgrade -T 的 rc=1 由 stub 注入，真机的 rc=1 未在本轮复现。code 4 的 stale 分支（sha256sums 旧且摘要不符）与 stale 但摘要相符只记 SKIP 的另一半，由 scripts/tests/test_recovery_gate_hashes.py:789-803,805-817 覆盖。"
     verify:
-      - "text: scripts/flash-gate.sh:103 EXIT_USAGE=2"
-      - "text: scripts/flash-gate.sh:104 EXIT_FORCE=3"
-      - "text: scripts/flash-gate.sh:107 EXIT_IMAGE=6"
-      - "text: scripts/tests/test_flash_gate_exitcodes.sh:93 TABLE_CONST=$(printf '0"
+      - "text: scripts/flash-gate.sh:112 EXIT_USAGE=2"
+      - "text: scripts/flash-gate.sh:113 EXIT_FORCE=3"
+      - "text: scripts/flash-gate.sh:116 EXIT_IMAGE=6"
+      - "text: scripts/tests/test_flash_gate_exitcodes.sh:94 TABLE_CONST=$(printf '0"
 
   - id: softirq-hotspot-follows-rps
     claim: "%soft 的 TASKLET/NET_RX 落点由每队列的 RPS 掩码 /sys/class/net/cpu/queues/rx-*/rps_cpus 决定，不由 mt76-npu 的 IRQ affinity 决定：32 个掩码全 f 时 NET_RX 99.0% 在 cpu1，全写 0 后迁到 cpu2（86.5%），再把 irq23 从 cpu0 挪到 cpu3，NET_RX 仍留 cpu2（91.6%）。"
     source:
-      - scripts/wireless/irq-napi-ab.sh:980
-      - scripts/wireless/irq-napi-ab.sh:154
+      - scripts/wireless/irq-napi-ab.sh:1017
+      - scripts/wireless/irq-napi-ab.sh:171
       - https://github.com/genshanxinli/xr1710g-openwrt/issues/66#issuecomment-7056263260
     evidence: 实测
-    date: "2026-11-21"
+    date: "2026-11-26"
     status: supported
     notes: "四臂读数来自设备上的实测（issue #66 评论 7056263260、issue #315），不进断言：CI 没有设备。verify 只证明 harness 会读 rps_cpus，并在掩码非零时拒绝把 IRQ-only split 当成 hotspot 的归因（除非 --with-rps）。"
     verify:
-      - "text: scripts/wireless/irq-napi-ab.sh:980 for f in \"$base/$dev/queues/rx-\"*/rps_cpus; do"
-      - "text: scripts/wireless/irq-napi-ab.sh:154 RPS_SKIP_REASON='SKIP: softirq hotspot is decided by rps_cpus"
+      - "text: scripts/wireless/irq-napi-ab.sh:1017 for f in \"$base/$dev/queues/rx-\"*/rps_cpus; do"
+      - "text: scripts/wireless/irq-napi-ab.sh:171 RPS_SKIP_REASON='SKIP: softirq hotspot is decided by rps_cpus"
 
   - id: npu-irq-beacon-rate-no-sta
     claim: "无关联 STA 时 mt76-npu 的 irq40/irq41 仍按信标节拍触发：13 s delta 得 irq40 20.0/s、irq41 6.9/s；同期 mt76 debugfs npu-tx 的 passthrough 为 670、linearized 为 0。"
     source:
-      - scripts/wireless/irq-napi-ab.sh:1809
-      - package/kernel/mt76/patches/0021-wifi-mt76-skip-redundant-NPU-TX-linearize.patch:97
+      - scripts/wireless/irq-napi-ab.sh:1940
+      - package/kernel/mt76/patches/0021-wifi-mt76-skip-redundant-NPU-TX-linearize.patch:98
       - https://github.com/genshanxinli/xr1710g-openwrt/issues/316
     evidence: 实测
-    date: "2026-11-21"
+    date: "2026-11-26"
     status: supported
     notes: "20.0/s 与 6.9/s、passthrough 670 都是设备读数（issue #316），不进断言。harness 在无 STA 时以 1 s delta 做 baseline sanity check，区间外只 WARN；verify 断言这条代码路径与 npu-tx passthrough 计数器存在。"
     verify:
-      - "text: scripts/wireless/irq-napi-ab.sh:1809 npu_beacon_rate \"$before\" \"$after\" \"${IRQ_SAMPLE_S:-1}\""
-      - "text: package/kernel/mt76/patches/0021-wifi-mt76-skip-redundant-NPU-TX-linearize.patch:97 passthrough: %llu"
+      - "text: scripts/wireless/irq-napi-ab.sh:1940 npu_beacon_rate \"$before\" \"$after\" \"${IRQ_SAMPLE_S:-1}\""
+      - "text: package/kernel/mt76/patches/0021-wifi-mt76-skip-redundant-NPU-TX-linearize.patch:98 passthrough: %llu"
   - id: nft-bridged-guard-inet-only
-    claim: "With 675-05 alone applied, the nft flowtable offload guard that records the per-direction ingress and egress port and refuses to offload once a new ingress port equals the peer direction's egress port only runs on table bridge flowtables.  The 675-05 pending patch computes \"bool routing = flowtable->type->family != NFPROTO_BRIDGE;\" so the family split happens before the guard, and this firmware feeds br-lan bridged packets into the inet fw4 flowtable instead (50-nf-bridge-call sets nf_call_iptables=1), where that guard never executes.  At the tip 675-06 has deleted the split, so the 'never executes' half holds for 675-05 in isolation only; see nft-bridged-guard-applied-to-inet."
+    claim: "With 675-05 alone applied, the nft flowtable offload guard that records the per-direction ingress and egress port and refuses to offload once a new ingress port equals the peer direction's egress port only runs on table bridge flowtables.  The 675-05 pending patch computes \"bool routing = flowtable->type->family != NFPROTO_BRIDGE;\" so the family split happens before the guard, and this firmware feeds br-lan bridged packets into the inet fw4 flowtable instead (50-nf-bridge-call sets nf_call_iptables=1; the earlier fw4 bridge-flowtable patch was withdrawn), where that guard never executes.  At the tip 675-06 has deleted the split, so the 'never executes' half holds for 675-05 in isolation only; see nft-bridged-guard-applied-to-inet."
     source:
-      - target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:317
+      - target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:320
       - target/linux/airoha/an7581/base-files/etc/hotplug.d/net/50-nf-bridge-call:28
     evidence: 代码
-    date: 2026-11-21
+    date: "2026-11-26"
     status: supported
     verify:
-      - "text: target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:317 bool routing = flowtable->type->family != NFPROTO_BRIDGE;"
-      - "text: package/network/config/firewall4/patches/001-add-bridge-flowtable-support.patch:39 flowtable bridge fw4 fb"
-    notes: "Consequence for #2: the guard does not cover the GDM4/GDM1 shape on the default fw4 inet flowtable.  Verified by bypass2 against the applied 7.4 tree.  This describes 675-05 on its own; 675-06 applies the same guard to every family, see nft-bridged-guard-applied-to-inet."
+      - "text: target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:320 bool routing = flowtable->type->family != NFPROTO_BRIDGE;"
+      - "text: target/linux/airoha/an7581/base-files/etc/hotplug.d/net/50-nf-bridge-call:28 echo 1 > \"$bridge/nf_call_iptables\""
+    notes: "Consequence for #2: the guard does not cover the GDM4/GDM1 shape on the default fw4 inet flowtable (the standalone fw4 bridge-flowtable patch was withdrawn).  Verified by bypass2 against the applied 7.4 tree.  This describes 675-05 on its own; 675-06 applies the same guard to every family, see nft-bridged-guard-applied-to-inet."
 
   - id: nft-bridged-guard-roam-not-a-crossing
-    claim: "675-05/675-06 的跨桥判据不止看入口口：每个方向同时记首个入口口和首个桥出口（nf_bridge_get_physoutif()），只有新入口口等于对向方向记下的出口口时才置 multi。5 GHz↔6 GHz 漫游（同一 BSS，换桥口不换方向）因此不再被判成第二次穿越，流不被 gc 拆掉、该 conntrack 继续可卸载；经桥后路由器的真实二次穿越仍被拆流并拒绝卸载。scripts/tests/test_bridged_crossing_roam.py 在 netns 里把两种形状的 hook 入参跑出来，再分别喂给新旧两种判据做断言。"
+    claim: "675-05/675-06 的跨桥判据不止看入口口：每个方向同时记首个入口口、首个桥出口（nf_bridge_get_physoutif()）与首次观测顺序 order[dir]，只有新入口口等于对向方向记下的出口口且满足 order[peer] < order[dir] 时才置 multi。5 GHz↔6 GHz 漫游（同一 BSS，换桥口不换方向，含首包回复前漫游）因此不再被判成第二次穿越，流不被 gc 拆掉、该 conntrack 继续可卸载；经桥后路由器的真实二次穿越仍被拆流并拒绝卸载。scripts/tests/test_bridged_crossing_roam.py 在 netns 里把两种形状的 hook 入参跑出来，再分别喂给新旧两种判据做断言。"
     source:
-      - target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:267
+      - target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:270
+      - target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:278
       - scripts/tests/bridged-crossing-roam.sh:58
       - scripts/tests/test_bridged_crossing_roam.py:183
     evidence: 代码
-    date: "2026-11-21"
+    date: "2026-11-26"
     status: supported
     verify:
-      - "text: target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:267 if (iif != READ_ONCE(rec->outif[peer]))"
+      - "text: target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:270 if (iif != READ_ONCE(rec->outif[peer]))"
+      - "text: target/linux/generic/pending-7.4/675-05-netfilter-nft_flow_offload-bridged-connections-crossing-twice.patch:278 if (READ_ONCE(rec->order[peer]) >= READ_ONCE(rec->order[dir]))"
       - "text: scripts/tests/test_bridged_crossing_roam.py:183 self.assertFalse("
     notes: "判据只到代码与同机 netns 的 hook 入参实测：iptables -m physdev 读的正是 nf_bridge 的 physinif/physoutdev 这一对字段，脚本把换入口的 5 元组跑两遍并打印每次穿越的入/出口口。没有在 XR1710G 上做双主机漫游实测，PPE 侧未实测；CI 未跑。"
 
@@ -447,13 +449,13 @@ claims:
       - target/linux/generic/pending-7.4/675-06-netfilter-nft_flow_offload-apply-crossing-guard-to-inet-flowtables.patch:45
       - target/linux/generic/pending-7.4/675-06-netfilter-nft_flow_offload-apply-crossing-guard-to-inet-flowtables.patch:129
     evidence: 代码
-    date: "2026-11-21"
+    date: "2026-11-26"
     status: supported
     verify:
       - "text: target/linux/generic/pending-7.4/675-06-netfilter-nft_flow_offload-apply-crossing-guard-to-inet-flowtables.patch:45 static int nft_flow_offload_bridge_iif(const struct nft_pktinfo *pkt)"
       - "text: target/linux/generic/pending-7.4/675-06-netfilter-nft_flow_offload-apply-crossing-guard-to-inet-flowtables.patch:99 nft_flow_offload_bridge_record(pkt, flowtable, ct, ctinfo);"
       - "text: target/linux/generic/pending-7.4/675-06-netfilter-nft_flow_offload-apply-crossing-guard-to-inet-flowtables.patch:129 flowtable_inet.gc = nf_flow_bridge_gc;"
-    notes: "判据只到代码与同机 netns 语义实测：inet forward hook 里 meta iifname 两次穿越都给 br0，iptables -m physdev --physdev-in 分别给 a1 和 s1（见 /home/l1n/projects/.scratch/reports/bridge2/report.md）。没有在 XR1710G 上跑双主机穿越，PPE 侧未实测；f0 队列 7.4 449/0、7.3 344/0、6.18 691/0。"
+    notes: "判据只到代码与同机 netns 语义实测：inet forward hook 里 meta iifname 两次穿越都给 br0，iptables -m physdev --physdev-in 分别给 a1 和 s1。没有在 XR1710G 上跑双主机穿越，PPE 侧未实测；f0 队列校验由 scripts/tests/apply-queue-f0.sh 覆盖（7.4 队列 fuzz=0）。"
 
   - id: flower-packaged-for-per-flow-meter
     claim: "kmod-sched-flower 进了 an7581 的默认镜像，tc flower 才能在设备上构造出来；patch 989 只在 flower 过滤器上接受 police action 并分配每流 PPE meter 组，缺了 cls_flower 这条每流 meter 路径在实机上无法验证。"
@@ -470,7 +472,7 @@ claims:
       - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:9 Add a default-off module parameter, airoha_ppe_meter."
 
   - id: matchall-police-mtu-gate
-    claim: "tc matchall police 在 7.3/7.4 上不再被 airoha_tc_matchall_act_validate() 的 mtu 项拒绝：act_police 对任何 police action 都会把 tcfp_mtu 填成 ~0 或 rate-table cell size（net/sched/act_police.c:168-172 → :465），旧守卫对 matchall police 恒真；flower 的 99991 报错串只有 avrate/overhead，matchall 仍拒绝 peakrate，所以 99992 的报错串保留 peakrate。"
+    claim: "tc matchall police 在 7.4 上不再被 airoha_tc_matchall_act_validate() 的 mtu 项拒绝：act_police 对任何 police action 都会把 tcfp_mtu 填成 ~0 或 rate-table cell size（net/sched/act_police.c:168-172 → :465），旧守卫对 matchall police 恒真；flower 的 99991 报错串只有 avrate/overhead，matchall 仍拒绝 peakrate，所以 99992 的报错串保留 peakrate。"
     source:
       - target/linux/airoha/patches-7.4/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:10
       - target/linux/airoha/patches-7.4/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:38
@@ -480,7 +482,7 @@ claims:
     evidence: 代码
     date: "2026-11-22"
     status: supported
-    notes: "代码与 f0 结论，未上设备：实机验收（matchall police rc=0 与 in_hw）仍需在 r38221 上补。6.18 队列没有 989/99991 的 PPE meter，en7523/an7583 也不打包 kmod-sched-act-police/kmod-sched-flower，故 6.18 不加这份 matchall 补丁；7.3 与 7.4 各加一份，互不混入 flower 的 99991 改动。"
+    notes: "代码与 f0 结论，未上设备：实机验收（matchall police rc=0 与 in_hw）仍需在 r38221 上补。6.18 队列没有 989/99991 的 PPE meter，en7523/an7583 也不打包 kmod-sched-act-police/kmod-sched-flower，故 6.18 不加这份 matchall 补丁；7.3 队列退役后只保留 7.4 的一份，与 flower 的 99991 改动互不混入。"
     verify:
       - "text: target/linux/airoha/patches-7.4/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:10 net/sched/act_police.c:168-172"
       - "text: target/linux/airoha/patches-7.4/99992-net-airoha-let-the-tc-matchall-police-reach-the-rx-meter.patch:38 act->police.overhead || act->police.mtu) {"
@@ -489,19 +491,19 @@ claims:
       - "text: target/linux/airoha/patches-7.4/99991-net-airoha-let-the-tc-police-flow-reach-the-PPE-meter.patch:54 avrate/overhead police is not supported"
 
   - id: cve-2026-98822-backported
-    claim: "CVE-2026-98822 的 AP_VLAN 单播绕过已封堵：mac80211 包补丁 018 把 ieee80211_lookup_ra_sta() 的非 control-port 查找从 sta_info_get_bss() 改成只查本接口的 sta_info_get()，同一 BSS 其它 VLAN 的 STA 不再被匹配；6.18 内核队列 947 同步同一修法，7.3/7.4 的内核树本身已带 bool bss 版本。"
+    claim: "CVE-2026-98822 的 AP_VLAN 单播绕过已封堵：mac80211 包补丁 018 把 ieee80211_lookup_ra_sta() 的非 control-port 查找从 sta_info_get_bss() 改成只查本接口的 sta_info_get()，同一 BSS 其它 VLAN 的 STA 不再被匹配；6.18 内核队列 947 同步同一修法，7.4 的内核树本身已带 bool bss 版本。"
     source:
       - package/kernel/mac80211/patches/subsys/018-wifi-mac80211-prevent-AP-VLAN-tx-from-other-interfa.patch:55
       - target/linux/generic/pending-6.18/947-net-mac80211-prevent-AP-VLAN-tx-from-other-interfaces.patch:66
       - package/kernel/mac80211/Makefile:15
     evidence: 代码
-    date: "2026-11-21"
+    date: "2026-11-26"
     status: supported
     verify:
       - "text: package/kernel/mac80211/patches/subsys/018-wifi-mac80211-prevent-AP-VLAN-tx-from-other-interfa.patch:55 sta = sta_info_get(sdata, skb->data);"
       - "text: target/linux/generic/pending-6.18/947-net-mac80211-prevent-AP-VLAN-tx-from-other-interfaces.patch:66 sta = sta_info_get(sdata, skb->data);"
       - "text: package/kernel/mac80211/Makefile:15 PKG_RELEASE:=11"
-    notes: "运行时 mac80211 来自 package/kernel/mac80211 的 backports-7.2，018 在这个源树上按 -F0 顺序应用（61 个 subsys 补丁含 018 全部无 fuzz），补丁号接在 016 之后。7.3 内核树判据：net/mac80211/tx.c:2533-2535 的签名带 bool bss、2557-2560 按 bss 分支；7.4-rc3 判据：net/mac80211/tx.c:2628-2630 与 2652-2655。两者都已含 7f93ca31f7fd，故不再往 pending-7.3/7.4 放重复补丁。f0（干净 worktree，不含主 checkout 的未提交 99991）：7.4 449/0/44、7.3 344/0/594、6.18 690→691/0/442。未上设备实测。"
+    notes: "运行时 mac80211 来自 package/kernel/mac80211 的 backports-7.2，018 在这个源树上按 -F0 顺序应用（61 个 subsys 补丁含 018 全部无 fuzz），补丁号接在 016 之后。7.4-rc3 内核树判据：net/mac80211/tx.c:2628-2630 的签名带 bool bss、2652-2655 按 bss 分支，已含 7f93ca31f7fd，故不再往 pending-7.4 放重复补丁（7.3 队列已退役）。未上设备实测。"
 
   - id: distfeeds-key-fingerprint
     claim: "每次构建现场生成一把 APK 签名密钥（规则见 package/Makefile:77-81，路径由 rules.mk:354-355 固定为 TOPDIR/private-key.pem 与 TOPDIR/public-key.pem），同一把 public-key.pem 既装进镜像的 /etc/apk/keys/（package/base-files/Makefile:142）又被复制进 distfeeds 树（scripts/build-distfeeds.sh:131），所以同一构建出的镜像与 feed 天然配套，装 feed 时无需手工拷 key；拿另一构建的 feed 来装只会得到 UNTRUSTED signature。MANIFEST.json 的 public_key_sha256 记录 feed 树里那把 key 的 sha256（scripts/build-distfeeds.sh:253），设备用 sha256sum /etc/apk/keys/public-key.pem 对照即可判断 feed 是否属于本机。"
@@ -525,7 +527,7 @@ claims:
       - "text: scripts/build-distfeeds.sh:253 manifest[\"public_key_sha256\"] = public_key_sha256"
 
   - id: matchall-police-takes-no-ppe-meter-group
-    claim: "tc matchall police 在 7.3/7.4 上刻意不分配 ppe->meter[] 组，这不是漏分配：ppe->meter[] 是 63 个按 FOE 表项（AIROHA_FOE_SHAPER_ID）命名的每流组，而 airoha_qdma_set_rx_meter() 一次编程该 QDMA 的全部 RX ring，是整口语义；matchall 规则没有 flow key，占掉一个组只会挤掉可单独整形的流。两条路径落在不同块：组寄存器在 frame-engine 窗口（0x200c + 16 * group），这个 TRTCM 在 QDMA 窗口，所以 matchall 之后 ppe/meter 空是设计，不是缺口；matchall 要看的量由 qdma/rx_meter 给出。"
+    claim: "tc matchall police 在 7.4 上刻意不分配 ppe->meter[] 组，这不是漏分配：ppe->meter[] 是 63 个按 FOE 表项（AIROHA_FOE_SHAPER_ID）命名的每流组，而 airoha_qdma_set_rx_meter() 一次编程该 QDMA 的全部 RX ring，是整口语义；matchall 规则没有 flow key，占掉一个组只会挤掉可单独整形的流。两条路径落在不同块：组寄存器在 frame-engine 窗口（0x200c + 16 * group），这个 TRTCM 在 QDMA 窗口，所以 matchall 之后 ppe/meter 空是设计，不是缺口；matchall 要看的量由 qdma/rx_meter 给出。"
     source:
       - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:411
       - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:413
@@ -540,7 +542,7 @@ claims:
       - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:417 + * blocks -- the group register is frame-engine space at 0x200c + 16 *"
 
   - id: matchall-meter-readback-boundary
-    claim: "qdma/rx_meter（7.3/7.4 的 99993）把 matchall police 变成可观测，但只报两类东西：软件记录的请求（rate/burst/unit，DESTROY 时归零）和每 ring 经 TRTCM_MISC_MODE 读回的 arming（meter_en/pps/tick_sel）。token rate 与 bucket shift 不打印——驱动只经 TRTCM 参数窗写它们、从不回读，从写入值反推一个数只会把软件记录伪装成寄存器值（与 ppe/meter 的 reg deadbeef 同一类错误）。"
+    claim: "qdma/rx_meter（7.4 的 99993）把 matchall police 变成可观测，但只报两类东西：软件记录的请求（rate/burst/unit，DESTROY 时归零）和每 ring 经 TRTCM_MISC_MODE 读回的 arming（meter_en/pps/tick_sel）。token rate 与 bucket shift 不打印——驱动只经 TRTCM 参数窗写它们、从不回读，从写入值反推一个数只会把软件记录伪装成寄存器值（与 ppe/meter 的 reg deadbeef 同一类错误）。"
     source:
       - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:132
       - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:433
@@ -571,49 +573,129 @@ claims:
   - id: ppe-meter-enabled-is-a-probe-snapshot
     claim: "ppe/meter 的 enabled= 打印 ppe->meter_enabled，该字段只在 airoha_ppe_init() 里从 airoha_ppe_meter 拷贝一次，是 probe 期快照；运行期闸 airoha_ppe_meter_validate() 读的是参数变量本身，所以参数在运行期改成 Y 之后 enabled= 仍为 0 是字段语义，不是缺陷。要判运行期状态读 /sys/module/airoha_eth/parameters/airoha_ppe_meter。"
     source:
-      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:564
-      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:359
-      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:601
+      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:556
+      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:353
+      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:594
     evidence: 代码
-    date: "2026-11-22"
+    date: "2026-11-26"
     status: supported
     notes: "实机两段：参数权限 0644，运行期 echo 1 > parameters/airoha_ppe_meter 返回 rc=0、值 N->Y；随后 tc filter ... action police 落地 in_hw、ppe/meter 长出 meter 行，而该文件的 enabled= 仍是 0。字段刻意不改成运行期值：enabled= 唯一有价值的信息是「这个镜像 probe 期开没开 meter」，改成读参数就把这条信息换掉了（issue #351 任务 1 判定 A，代码注释已写明）。"
     verify:
-      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:591 enabled= is the value airoha_ppe_meter had when this module"
-      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:597 keeps the probe-time snapshot on purpose"
-      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:359 +\tif (!airoha_ppe_meter)"
-      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:602 +\tseq_printf(m, \"enabled=%u groups_total=%u"
+      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:583 enabled= is the value airoha_ppe_meter had when this module"
+      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:589 keeps the probe-time snapshot on purpose"
+      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:353 +\tif (!airoha_ppe_meter)"
+      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:594 +\tseq_printf(m, \"enabled=%u groups_total=%u"
 
   - id: ppe-meter-reg-columns-cannot-be-the-written-word
-    claim: "ppe/meter 的 reg/hw_rate/hw_bucket 三列不是驱动写入值的回读证据：AN7581 上 FE + 0x200c + 16*group 读回 0xdeadbeef（bit 31 置位），而驱动写进这个字的位只有 2..18（TICK bit 2、RATE 16..3、BUCKET 18..17），所以这个 readback 不可能是那次写的回读；hw_rate 228816000 只是 ((0xdeadbeef>>3)&0x3fff)*16000 = 14301*16000 的算术结果，与请求速率无关。"
+    claim: "ppe/meter 的 reg/hw_rate/hw_bucket 三列不是驱动写入值的回读证据：AN7581 上 FE + 0x200c + 16*group 读回 0xdeadbeef（bit 31 置位），驱动在 AN7581 上已跳过该 FE 窗写入（只写 QDMA0 ingress TRTCM），且 vendor 布局仅使用位 2..18（TICK bit 2、RATE 16..3、BUCKET 18..17），所以 bit 31 置位的 readback 不可能是那次写的回读；hw_rate 228816000 只是 ((0xdeadbeef>>3)&0x3fff)*16000 = 14301*16000 的算术结果，与请求速率无关。"
     source:
-      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:576
-      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:578
-      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:74
-      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:619
+      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:568
+      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:570
+      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:73
+      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:613
       - target/linux/airoha/patches-7.4/999-net-airoha-add-minimal-PPE-multicast-replication.patch:355
     evidence: 代码
-    date: "2026-11-22"
+    date: "2026-11-26"
     status: supported
-    notes: "静态部分（本机可判）：写的 mask 上界是 bit 18，回读 bit 31 置位 ⇒ 该字不是这次写的结果；同理 hw_rate/hw_bucket 都是这个死值派生出来的，不看。动态部分（本机不可判）：为什么读回 0xdeadbeef —— 最可能该 offset 在 AN7581 上未实现，与同窗口先例 REG_PPE_MCAST_PPSE（FE+0x284，注释写明 not implemented on AN7581、reads back as 0xdeadbeef）一致；确定要靠 datasheet 或另一块板。越界已排除：FE 窗口 0x1fb50000 size 0x2600，0x200c+16*62=0x23ec 在窗内。三列保留，供将来与 vendor SDK dump 对照。"
+    notes: "静态部分（本机可判）：AN7581 跳过 FE 窗写入，且 vendor 布局上界是 bit 18，回读 bit 31 置位 ⇒ 该字不是这次写的结果；同理 hw_rate/hw_bucket 都是这个死值派生出来的，不看。动态部分（本机不可判）：为什么读回 0xdeadbeef —— 最可能该 offset 在 AN7581 上未实现，与同窗口先例 REG_PPE_MCAST_PPSE（FE+0x284，注释写明 not implemented on AN7581、reads back as 0xdeadbeef）一致；确定要靠 datasheet 或另一块板。越界已排除：FE 窗口 0x1fb50000 size 0x2600，0x200c+16*62=0x23ec 在窗内。三列保留，供将来与 vendor SDK dump 对照。"
     verify:
-      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:576 on AN7581 that read returns 0xdeadbeef"
-      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:580 so a word with bit 31 set cannot be that write coming back"
-      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:79 +#define AIROHA_PPE_METER_RATE\t\tGENMASK(16, 3)"
-      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:620 +\t\treg = airoha_fe_rr(eth, AIROHA_PPE_METER_GROUP(i));"
+      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:568 on AN7581 that read returns 0xdeadbeef"
+      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:572 so a word with bit 31 set cannot be that write coming back"
+      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:78 +#define AIROHA_PPE_METER_RATE\t\tGENMASK(16, 3)"
+      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:613 +\t\treg = airoha_fe_rr(eth, AIROHA_PPE_METER_GROUP(i));"
       - "text: target/linux/airoha/patches-7.4/999-net-airoha-add-minimal-PPE-multicast-replication.patch:355 0xdeadbeef and the vendor SDK never writes it"
 
   - id: ppe-meter-rate-is-bytes-per-second
     claim: "两个调试节点都有一列叫 rate，但单位不同：ppe/meter 的 rate/peakrate 是 tc 的 police.rate_bytes_ps 原值（bytes/s），qdma/rx_meter 的 rate 是驱动送进硬件的 Kbps（byte 单位）或 pps（packet 单位）。对账前必须先换算，不能逐字比较。"
     source:
-      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:422
-      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:626
+      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:414
+      - target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:620
       - target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:90
     evidence: 实测
-    date: "2026-11-22"
+    date: "2026-11-26"
     status: supported
     notes: "实机两个点：tc ... action police rate 10mbit burst 32k 之后 ppe/meter 打 rate 1250000（10e6/8，bytes/s）；另一台配置里 tc 写 rate 1250000bit，qdma/rx_meter 打 requested rate 1248 kbps（除以 1000 再 <<3 的既有换算，见 matchall-rx-meter-unit-is-kbps）。同名不同单位，是本条留档的唯一目的，不改代码。"
     verify:
-      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:422 rate_bps = min_t(u64, act->police.rate_bytes_ps,"
-      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:627 meter %2u refcount %u rate %u peakrate %u burst %u"
+      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:414 rate_bps = min_t(u64, act->police.rate_bytes_ps,"
+      - "text: target/linux/airoha/patches-7.4/989-net-airoha-add-an-opt-in-per-flow-PPE-meter.patch:620 meter %2u refcount %u rate %u peakrate %u burst %u"
       - "text: target/linux/airoha/patches-7.4/99993-net-airoha-make-the-matchall-police-meter-observable.patch:90 requested rate %u kbps burst %u unit %s"
+
+  - id: uboot-env-size-0x4000
+    claim: "Gemtek XR1710G 的 U-Boot defconfig 是 CONFIG_ENV_SIZE=0x4000，而 uboot-envtools 的 UBI 默认值把 envsize 写成 0x1f000：两侧都校验 envsize-5 字节，长度不同时 fw_setenv 报成功却存下 U-Boot 读不回的环境。现在 airoha_an7581 显式传 0x4000/0x1f000/1，已装机的 0x1f000 uci 记录由 uci-defaults 迁到 0x4000。"
+    source:
+      - package/boot/uboot-airoha/patches/999-airoha-add-gemtek-xr1710g.patch:26
+      - package/boot/uboot-tools/uboot-envtools/files/airoha_an7581:100
+      - package/boot/uboot-tools/uboot-envtools/files/airoha_an7581:56
+    evidence: 代码
+    date: "2026-11-26"
+    status: supported
+    notes: "代码与夹具结论：scripts/tests/test_uboot_env_size_contract.py 断言两个 Gemtek defconfig 都是 0x4000、helper harness 写出 envsize=0x4000。2026-11-26 实机刷后核验：/etc/fw_env.config 与 UCI ubootenv 均已自动从 0x1f000 迁移为 0x4000；fw_printenv 仍报 Bad CRC 是因实机 /dev/ubi0_1 与 /dev/ubi0_2 头部全为 0xff、尚未执行过 saveenv/fw_setenv，故「U-Boot 真能读回」仍待后续写盘回读验证。"
+
+    verify:
+      - "text: package/boot/uboot-airoha/patches/999-airoha-add-gemtek-xr1710g.patch:26 +CONFIG_ENV_SIZE=0x4000"
+      - "text: package/boot/uboot-tools/uboot-envtools/files/airoha_an7581:100 ubootenv_add_ubi_default \"0x4000\" \"0x1f000\" \"1\""
+      - "text: package/boot/uboot-tools/uboot-envtools/files/airoha_an7581:56 uci -q set \"ubootenv.@ubootenv[$idx].envsize=0x4000\""
+
+  - id: wdt-reg-window-and-scu
+    claim: "an7581.dtsi 把 watchdog 窗口从 0x38 扩到 0x3c，并给驱动 airoha,scu phandle：WDT_RELOAD 在 +0x38，旧窗口在它前一个寄存器就结束，驱动 ping 写的重载位不在资源内；SCU regmap 用来读 PMC 的复位原因。phandle 缺失只丢诊断行，不影响看门狗本身。"
+    source:
+      - target/linux/airoha/dts/an7581.dtsi:451
+      - target/linux/airoha/dts/an7581.dtsi:452
+      - target/linux/airoha/patches-7.4/9908-watchdog-airoha-report-reset-cause.patch:23
+    evidence: 代码
+    date: "2026-11-26"
+    status: supported
+    notes: "静态代码与 DTS 结论。2026-11-26 实机标准 sysupgrade 重启后实测读数：airoha-wdt 1fbf0100.watchdog: SCU PMC=0x80010000 WDG_RST_R=1 SYS_RST_R=0（options=0x8180，bootstatus=0）；因 AN7581 TF-A 的 PSCI SYSTEM_RESET 本身走 Timer3+WDT 拉起复位，干净重启同样会置 WDG_RST_R=1、SYS_RST_R=0，故二阶段前保持只读诊断、不置 WDIOF_CARDRESET，bootstatus 仍为结构零。"
+
+    verify:
+      - "text: target/linux/airoha/dts/an7581.dtsi:451 reg = <0x0 0x1fbf0100 0x0 0x3c>;"
+      - "text: target/linux/airoha/dts/an7581.dtsi:452 airoha,scu = <&scuclk>;"
+      - "text: target/linux/airoha/patches-7.4/9908-watchdog-airoha-report-reset-cause.patch:23 WDT_RELOAD lives at 0x38 and the old size ended one register early"
+
+  - id: an7581-kaslr-and-lockup-config
+    claim: "an7581 的 7.4 配置打开了 KASLR（CONFIG_RANDOMIZE_BASE=y 与 CONFIG_RANDOMIZE_MODULE_REGION_FULL=y）、CONFIG_PERF_EVENTS=y、CONFIG_DETECT_HUNG_TASK=y（超时 15 s）、CONFIG_SOFTLOCKUP_DETECTOR=y、CONFIG_HARDLOCKUP_DETECTOR=y 与 CONFIG_THERMAL_EMERGENCY_POWEROFF_DELAY_MS=3000，且 config/Config-kernel.in 对 TARGET_airoha 默认开启 KERNEL_PERF_EVENTS / KERNEL_SOFTLOCKUP_DETECTOR / KERNEL_HARDLOCKUP_DETECTOR，使 arm_pmu、内核地址随机化、软硬锁检测与热关机延迟在 7.4 上生效。"
+    source:
+      - target/linux/airoha/an7581/config-7.4:404
+      - target/linux/airoha/an7581/config-7.4:405
+      - target/linux/airoha/an7581/config-7.4:359
+      - target/linux/airoha/an7581/config-7.4:126
+      - target/linux/airoha/an7581/config-7.4:125
+      - target/linux/airoha/an7581/config-7.4:440
+      - target/linux/airoha/an7581/config-7.4:193
+      - target/linux/airoha/an7581/config-7.4:460
+      - config/Config-kernel.in:106
+      - config/Config-kernel.in:819
+      - config/Config-kernel.in:832
+    evidence: 代码
+    date: "2026-11-26"
+    status: supported
+    notes: "只证明配置位；CONFIG_WQ_WATCHDOG 没有出现在这份配置里，别把 wq watchdog 算进来。2026-11-26 实机刷后验证：soft_watchdog=1、watchdog=1、hung_task_timeout_secs=15、ramoops-1 console_size=16384、S15pstore-report 正常输出；因本次未刷写 mtd1 旧版 XR1710G-2026-10-16 chainloader U-Boot（早期熵种子由 U-Boot 侧 ac5930509b 从 TRNG 播种），dmesg 显示 KASLR disabled due to lack of seed，故 KASLR 偏移与热启保留仍待后续单刷 chainloader U-Boot 与受控重启复测。"
+
+    verify:
+      - "kconfig: target/linux/airoha/an7581/config-7.4 CONFIG_RANDOMIZE_BASE=y"
+      - "kconfig: target/linux/airoha/an7581/config-7.4 CONFIG_RANDOMIZE_MODULE_REGION_FULL=y"
+      - "kconfig: target/linux/airoha/an7581/config-7.4 CONFIG_PERF_EVENTS=y"
+      - "kconfig: target/linux/airoha/an7581/config-7.4 CONFIG_DETECT_HUNG_TASK=y"
+      - "kconfig: target/linux/airoha/an7581/config-7.4 CONFIG_DEFAULT_HUNG_TASK_TIMEOUT=15"
+      - "kconfig: target/linux/airoha/an7581/config-7.4 CONFIG_SOFTLOCKUP_DETECTOR=y"
+      - "kconfig: target/linux/airoha/an7581/config-7.4 CONFIG_HARDLOCKUP_DETECTOR=y"
+      - "kconfig: target/linux/airoha/an7581/config-7.4 CONFIG_THERMAL_EMERGENCY_POWEROFF_DELAY_MS=3000"
+      - "text: config/Config-kernel.in:106 default y if TARGET_airoha"
+      - "text: config/Config-kernel.in:819 default y if TARGET_airoha"
+      - "text: config/Config-kernel.in:832 default y if TARGET_airoha"
+
+  - id: patches-73-retired
+    claim: "7.3 的 airoha 补丁队列已退役：34 个丢失的补丁头回填进 patches-7.4 之后删除 7.3 队列，树里只剩 patches-6.18 与 patches-7.4（an7581 的 KERNEL_PATCHVER=7.4）；一条测试禁止 scripts/ 与 target/linux/airoha 再引用 7.3 队列，并把 7.3 记为退役队列。"
+    source:
+      - target/linux/airoha/an7581/target.mk:6
+      - scripts/tests/test_patch_queues_exist.py:49
+      - scripts/tests/test_patch_queues_exist.py:19
+    evidence: 代码
+    date: "2026-11-26"
+    status: supported
+    notes: "退役是树内事实（目录不存在 + 测试守着）；34 这个数来自退役当时离线回填记录，不在树内可复算，引用时按「该次回填」理解。ledger 的 matchall-* 条目已按 7.4 单一队列描述。"
+
+    verify:
+      - "text: target/linux/airoha/an7581/target.mk:6 KERNEL_PATCHVER:=7.4"
+      - "text: scripts/tests/test_patch_queues_exist.py:19 RETIRED = {\"7.3\"}"
+      - "text: scripts/tests/test_patch_queues_exist.py:49 self.assertFalse((REPO / \"target/linux/airoha/"

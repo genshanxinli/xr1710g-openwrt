@@ -29,7 +29,7 @@ export LC_ALL
 MAIN_PID=$$
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-SCRIPT=${PPPOE4PATH_SCRIPT:-$HERE/../pppoe-4path.sh}
+SCRIPT=${PPPOE_4PATH_UNDER_TEST:-${PPPOE4PATH_SCRIPT:-$HERE/../pppoe-4path.sh}}
 [ -x "$SCRIPT" ] || { printf 'not executable: %s\n' "$SCRIPT" >&2; exit 1; }
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/pppoe-4path-test.XXXXXX") || exit 1
@@ -378,6 +378,100 @@ rc=$?
 awk -F'\t' 'NR > 1 && ($2 == "nan" && $3 == "nan") && $7 ~ /no listener/ { g++ } END { exit g == 4 ? 0 : 1 }' "$TMP/nl.tsv" &&
 	ok "invalid arms are nan with a 'no listener' note, not invented numbers" ||
 	no "invalid arms are nan with a 'no listener' note, not invented numbers"
+
+# ------------------------------------- P1-3 direct nft & dev_sweep fixtures
+# Execute the exact remote shell commands emitted by nft_delete_commented()
+# and dev_sweep() in $SCRIPT against real local fixture inputs, so a broken
+# awk field expression ($i+1 vs $(i+1)) or broken tr/port regex fails here.
+NFT_CMD_FILE=$TMP/nft_cmd.txt
+awk '/^nft_delete_commented\(\)/,/^}/' "$SCRIPT" >"$TMP/nft_fn.sh"
+NFT_CMD_FILE="$NFT_CMD_FILE" sh -c '. "$1"; rsh() { printf "%s\n" "$1" >"$NFT_CMD_FILE"; }; nft_delete_commented' _ "$TMP/nft_fn.sh"
+NFT_CMD=$(cat "$NFT_CMD_FILE")
+[ -n "$NFT_CMD" ] || no "extracted non-empty nft_delete_commented command"
+NFT_BIN=$TMP/nft-fixture-bin
+NFT_DEL_LOG=$TMP/nft-deleted.log
+mkdir -p "$NFT_BIN"
+: >"$NFT_DEL_LOG"
+cat >"$NFT_BIN/nft" <<'FAKE'
+#!/bin/sh
+case "$*" in
+"list chain inet fw4 input")
+	exit 0
+	;;
+"list chain inet fw4 "*)
+	exit 1
+	;;
+"-a list chain inet fw4 input")
+	cat <<'OUT'
+table inet fw4 {
+	chain input {
+		iifname "lan" accept # handle 17
+		iifname "ppp0" accept comment "pppoe4path" # handle 42
+		iifname "wan" drop # handle 99
+	}
+}
+OUT
+	exit 0
+	;;
+"delete rule inet fw4 input handle "*)
+	printf '%s\n' "$*" >>"$NFT_DEL_LOG"
+	exit 0
+	;;
+esac
+exit 0
+FAKE
+chmod +x "$NFT_BIN/nft"
+PATH="$NFT_BIN:$PATH" NFT_DEL_LOG="$NFT_DEL_LOG" sh -c "$NFT_CMD"
+got_nft_del=$(cat "$NFT_DEL_LOG")
+[ "$got_nft_del" = "delete rule inet fw4 input handle 42" ] &&
+	ok "nft_delete_commented deletes exact handle 42 (not \$i+1 => 1)" ||
+	no "nft_delete_commented deletes exact handle 42 (got: '$got_nft_del')"
+
+SWEEP_CMD_FILE=$TMP/sweep_cmd.txt
+awk '/^dev_sweep\(\)/,/^}/' "$SCRIPT" >"$TMP/sweep_fn.sh"
+SWEEP_CMD_FILE="$SWEEP_CMD_FILE" sh -c '. "$1"; PORT_BASE=5531; PPP_PLUGIN=pppoe.so; rsh() { printf "%s\n" "$1" >"$SWEEP_CMD_FILE"; }; dev_sweep' _ "$TMP/sweep_fn.sh"
+SWEEP_CMD=$(cat "$SWEEP_CMD_FILE")
+[ -n "$SWEEP_CMD" ] || no "extracted non-empty dev_sweep command"
+FAKE_PROC=$TMP/fake-proc
+mkdir -p "$FAKE_PROC/101" "$FAKE_PROC/102" "$FAKE_PROC/103" "$FAKE_PROC/104" \
+	"$FAKE_PROC/105" "$FAKE_PROC/106" "$FAKE_PROC/107" "$FAKE_PROC/108" \
+	"$FAKE_PROC/109" "$FAKE_PROC/110"
+printf 'pppd\n' >"$FAKE_PROC/101/comm"
+printf 'pppd\000plugin\000pppoe.so\000br-lan\000' >"$FAKE_PROC/101/cmdline"
+printf 'iperf3\n' >"$FAKE_PROC/102/comm"
+printf 'iperf3\000-s\000-1\000-p\0005531\000-B\00010.99.0.2\000' >"$FAKE_PROC/102/cmdline"
+printf 'iperf3\n' >"$FAKE_PROC/103/comm"
+printf 'iperf3\000-s\000-1\000-p\0005532\000-B\00010.99.0.2\000' >"$FAKE_PROC/103/cmdline"
+printf 'iperf3\n' >"$FAKE_PROC/104/comm"
+printf 'iperf3\000-s\000-1\000-p\0005533\000-B\00010.99.0.2\000' >"$FAKE_PROC/104/cmdline"
+printf 'iperf3\n' >"$FAKE_PROC/105/comm"
+printf 'iperf3\000-s\000-1\000-p\0005534\000-B\00010.99.0.2\000' >"$FAKE_PROC/105/cmdline"
+printf 'iperf3\n' >"$FAKE_PROC/106/comm"
+printf 'iperf3\000-s\000-1\000-p\0005535\000-B\00010.99.0.2\000' >"$FAKE_PROC/106/cmdline"
+printf 'iperf3\n' >"$FAKE_PROC/107/comm"
+printf 'iperf3\000-s\000-1\000-p\00055310\000-B\00010.99.0.2\000' >"$FAKE_PROC/107/cmdline"
+# P0: a remote sh -c carrying $SWEEP_CMD itself (with and without /proc/pid/comm)
+# must NEVER match and kill itself or its parent shell mid-loop.
+printf 'sh\n' >"$FAKE_PROC/108/comm"
+printf 'sh\000-c\000%s\000' "$SWEEP_CMD" >"$FAKE_PROC/108/cmdline"
+printf 'sh\000-c\000%s\000' "$SWEEP_CMD" >"$FAKE_PROC/109/cmdline"
+printf 'pppd\n' >"$FAKE_PROC/110/comm"
+printf '/usr/sbin/pppd\000plugin\000pppoe.so\000br-lan\000' >"$FAKE_PROC/110/cmdline"
+SWEEP_KILLED=$TMP/sweep-killed.log
+: >"$SWEEP_KILLED"
+SWEEP_CMD_LOCAL=$(printf '%s\n' "$SWEEP_CMD" | sed "s|/proc/\[0-9\]\*|$FAKE_PROC/[0-9]*|g")
+# Also create a fake /proc/$$ entry inside the subshell so self-skip is exercised directly.
+SWEEP_KILLED="$SWEEP_KILLED" FAKE_PROC="$FAKE_PROC" sh -c "
+	mkdir -p \"\$FAKE_PROC/\$\$\"
+	printf 'pppd\n' >\"\$FAKE_PROC/\$\$/comm\"
+	printf 'pppd\000plugin\000pppoe.so\000br-lan\000' >\"\$FAKE_PROC/\$\$/cmdline\"
+	kill() { printf '%s\n' \"\$1\" >>\"\$SWEEP_KILLED\"; }
+	$SWEEP_CMD_LOCAL
+"
+got_swept=$(sort -n "$SWEEP_KILLED" | tr '\n' ' ' | sed 's/ $//')
+[ "$got_swept" = "101 102 103 104 105 110" ] &&
+	ok "dev_sweep kills pppd and all 4 arm iperf3 ports (5531..5534) without killing itself or parent sh" ||
+	no "dev_sweep kills pppd and all 4 arm iperf3 ports without self-kill (got: '$got_swept')"
 
 [ "${KEEP_TMP:-}" = 1 ] && printf 'scratch: %s\n' "$TMP"
 printf '\n%s: %s passed, %s failed\n' "$(basename "$0")" "$PASS" "$FAIL"

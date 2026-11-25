@@ -29,7 +29,7 @@ green.
 Run from the repository root:
 
     python3 scripts/tests/test_agents_md_references.py
-    AGENTS_MD_PATH=/home/l1n/projects/.scratch/agentsmd/AGENTS.md.broken \\
+    AGENTS_MD_PATH=.scratch/agentsmd/AGENTS.md.broken \\
         python3 scripts/tests/test_agents_md_references.py
 """
 

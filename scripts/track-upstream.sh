@@ -22,6 +22,10 @@
 # A cron run that cannot see upstream must not look like a clean run, and a
 # branch that is behind must not look like a broken checkout.
 #
+# --verdict renumbers those codes: there 2 means must-act, so every "cannot
+# judge" exit is 3.  A fetch that fails on a scheduled runner therefore reads
+# as unknown, not as "upstream moved far enough to act".
+#
 # README.md records the measurement as one <!-- upstream-record: ... --> line
 # instead of prose no build can contradict. --check turns that line into an
 # assertion: the recorded ancestor/merge-base/mirror-tree facts are recomputed
@@ -135,6 +139,15 @@ short() { printf '%s' "$1" | cut -c1-10; }
 when() { git log -1 --format=%cs "$1" 2>/dev/null || printf '?'; }
 has_ref() { git rev-parse --verify --quiet "$1^{commit}" >/dev/null 2>&1; }
 
+# "Cannot judge" in whichever numbering the caller asked for: the report mode
+# keeps 2 = unknown, --verdict needs 3 because it spends 2 on must-act.
+unknown_exit() {
+	if [ "$VERDICT" = 1 ]; then
+		exit 3
+	fi
+	exit 2
+}
+
 record_line() { sed -n 's/.*<!-- *upstream-record: *\(.*\) *-->.*/\1/p' "$RECFILE" | head -n 1; }
 record_get() { printf '%s\n' "$REC_FIELDS" | tr ' ' '\n' | sed -n "s/^$1=//p" | head -n 1; }
 
@@ -179,7 +192,7 @@ record_facts() {
 	umirror="refs/remotes/$REMOTE/kernel73"
 	if ! has_ref "$umirror"; then
 		echo "track-upstream: cannot judge the record: missing $umirror (run with --fetch)" >&2
-		exit 2
+		unknown_exit
 	fi
 	act_anc=no
 	git merge-base --is-ancestor "$umirror" "$LOCAL_SHA" 2>/dev/null && act_anc=yes
@@ -244,19 +257,19 @@ fi
 
 git rev-parse --git-dir >/dev/null 2>&1 || {
 	echo "track-upstream: not inside a git checkout" >&2
-	exit 2
+	unknown_exit
 }
 
 if [ "$FETCH" = 1 ]; then
 	if ! git fetch --prune --quiet "$REMOTE" 2>/dev/null; then
 		echo "track-upstream: git fetch $REMOTE failed" >&2
-		exit 2
+		unknown_exit
 	fi
 fi
 
 LOCAL_SHA=$(git rev-parse --verify --quiet "$LOCAL^{commit}" 2>/dev/null) || {
 	echo "track-upstream: cannot resolve --local $LOCAL" >&2
-	exit 2
+	unknown_exit
 }
 
 # The branch a sync verdict is measured on is the one the target actually
@@ -425,8 +438,10 @@ fi
 
 say ""
 if [ "$resolved" -eq 0 ]; then
-	say "verdict: unknown - no refs/remotes/$REMOTE/*; run with --fetch"
-	exit 2
+	# A verdict line is the output of this mode, so --quiet must not eat it:
+	# the workflow copies it into the step summary to say why it stopped.
+	printf '%s\n' "verdict: unknown - no refs/remotes/$REMOTE/*; run with --fetch"
+	unknown_exit
 fi
 
 # --verdict turns the drift report into a decision with an expiry date: three
@@ -465,7 +480,7 @@ if [ "$VERDICT" = 1 ]; then
 fi
 if [ "$unknown" -eq 1 ]; then
 	say "verdict: unknown - cannot judge every branch above"
-	exit 2
+	unknown_exit
 fi
 if [ "$drift" -eq 1 ]; then
 	say "verdict: drift"

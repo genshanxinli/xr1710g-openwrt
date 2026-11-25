@@ -15,7 +15,7 @@
 #
 # Output is "key expected actual verdict" per row; rc 0 only when nothing
 # FAILed.  A knob the running kernel does not have is reported SKIP (the
-# pppoe_decap knob only exists once patches-7.3/9907 is in the image); pass
+# pppoe_decap knob only exists once patches-7.4/9907 is in the image); pass
 # --strict to turn SKIP into FAIL.
 #
 # Everything is read, never written: /etc/config/{network,firewall} are parsed

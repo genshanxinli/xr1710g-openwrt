@@ -491,7 +491,7 @@ ptype_name() {
 	esac
 }
 
-# airoha_ppe_fold_hash() from patches-7.3/212, including the 24576 special
+# airoha_ppe_fold_hash() from patches-7.4/212, including the 24576 special
 # case the tree uses once flow counters carve the SRAM in half.
 fold_hash() {
 	if [ $(( $2 & ($2 - 1) )) -eq 0 ]; then

@@ -256,7 +256,7 @@ nft_delete_commented() {
 	rsh 'for chain in input forward output; do
 	       nft list chain inet fw4 "$chain" >/dev/null 2>&1 || continue
 	       nft -a list chain inet fw4 "$chain" 2>/dev/null |
-	         awk "/comment \"pppoe4path\"/ {for (i=1;i<=NF;i++) if (\$i==\"handle\") print \$i+1}" |
+	         awk "/comment \"pppoe4path\"/ {for (i=1;i<=NF;i++) if (\$i==\"handle\") print \$(i+1)}" |
 	         while read -r h; do nft delete rule inet fw4 "$chain" handle "$h" 2>/dev/null || true; done
 	     done' >/dev/null 2>&1 || true
 }
@@ -282,12 +282,27 @@ dev_kill() {
 }
 
 # busybox has no pkill on the device, so sweep /proc for this run's own
-# processes only: pppd running our plugin, and iperf3 servers on our port base.
+# processes only: pppd running our plugin, and iperf3 servers on our four arm ports.
+# Skip self ($$), restrict by /proc/<pid>/comm when readable, and bracket-escape
+# the ERE + anchor argv0 so neither $$ nor a parent sh/ssh carrying this command
+# string can ever match itself.
 dev_sweep() {
+	_p0=$PORT_BASE
+	_p1=$((PORT_BASE + 1))
+	_p2=$((PORT_BASE + 2))
+	_p3=$((PORT_BASE + 3))
 	rsh "for d in /proc/[0-9]*; do
-	        tr '\000' '\n' < \$d/cmdline 2>/dev/null |
-	          grep -qE 'pppd.*$PPP_PLUGIN|iperf3 -s -1 -p $PORT_BASE' &&
-	          kill \${d##*/} 2>/dev/null
+	        _pid=\${d##*/}
+	        [ \"\$_pid\" = \"\$\$\" ] && continue
+	        if [ -r \"\$d/comm\" ]; then
+	          case \$(cat \"\$d/comm\" 2>/dev/null) in
+	            pppd|iperf3) ;;
+	            *) continue ;;
+	          esac
+	        fi
+	        tr '\000' ' ' < \"\$d/cmdline\" 2>/dev/null |
+	          grep -qE '^(([^ ]*/)?[p]ppd .*$PPP_PLUGIN|([^ ]*/)?[i]perf3 -s -1 -p ($_p0|$_p1|$_p2|$_p3)( |\$))' &&
+	          kill \"\$_pid\" 2>/dev/null
 	     done" >/dev/null 2>&1 || true
 }
 

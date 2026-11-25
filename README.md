@@ -7,45 +7,45 @@ all device work lives on branch **`xr1710g`**.
 
 ### Where `xr1710g` comes from
 
-`xr1710g` is **based on the `kernel73` branch** of the upstream repository,
-which is where the AN7581 target, the kernel 7.3 port and the MediaTek MT7996
-work come from:
+`xr1710g` originated from the upstream fork parent (`OpenW1700k`), which is
+where the AN7581 target and MediaTek MT7996 base came from (this branch now
+targets kernel 7.4 for `an7581`; see `scripts/track-upstream.sh`):
 
 ```
 openwrt/openwrt                  (upstream source, default: main)
-  └─ OpenWRT-fanboy/OpenW1700k   (fork parent, branch: kernel73)
+  └─ OpenWRT-fanboy/OpenW1700k   (fork parent; tracked via track-upstream.sh)
        └─ xr1710g-openwrt        (this repository, branch: xr1710g)
 ```
 
 The branch was originally carried over by replaying it, so the SHAs differ
 from upstream's even where the subject lines match. It has since drifted away
-from a clean ancestry: measured on 2026-11-21, the fork parent's `kernel73`
-tip is **not** an ancestor of `xr1710g` — the merge-base is still
-`5192094fd6`, and the last real absorption of upstream work is `bc0b2ed82a`
-(2026-10-24): `xr1710g` carried 511 commits upstream did not have and missed
-880 of theirs; both move with every commit — read them below, not here:
+from a clean ancestry: the fork parent tip is **not** an ancestor of
+`xr1710g` (merge-base `5192094fd6`; last absorption `bc0b2ed82a`,
+2026-10-24). Commit and file drift counts move with every push and are not
+copied into prose; compute the live ahead/behind counts and sync verdict
+directly with `scripts/track-upstream.sh`:
 
 ```sh
 scripts/track-upstream.sh                 # the table; exits 1 while it drifts
-git merge-base --is-ancestor upstream/kernel73 HEAD; echo "exit=$?"   # 1
+scripts/track-upstream.sh --verdict       # ok / review / must-act on active kernel
 ```
 
 The pre-sync state is preserved as the tag `pre-sync-2026-10-24`, which is the
 rollback point (`git reset --hard pre-sync-2026-10-24`).
 
-Because `kernel73` does not exist in the fork by default, GitHub's *Sync fork*
-button never offers it, and syncing `main` would replace `xr1710g` with the
-fork parent's default branch — do not use it. The branch is mirrored here so
-the relationship is visible and so a sync has somewhere to land. The mirror is
-tracked, not trusted: on 2026-11-21 it was 35 commits ahead of and 273 behind
-`upstream/kernel73`, with 628 differing files — a recorded deviation, not a
-byte-identical copy. Refresh it only after a sync has landed:
+Because the upstream tracking branch does not exist in the fork by default,
+GitHub's *Sync fork* button never offers it, and syncing `main` would replace
+`xr1710g` with the fork parent's default branch — do not use it. The mirror
+ref is kept so drift remains inspectable, and is tracked
+rather than assumed byte-identical — run `scripts/track-upstream.sh` for its
+current ahead/behind counts and differing file count instead of copying
+static numbers here. Refresh it only after a sync has landed:
 
 ```sh
 git fetch upstream
 git switch xr1710g
-git merge upstream/kernel73        # resolve, then make target/linux/prepare
-git push --force origin upstream/kernel73:refs/heads/kernel73   # re-mirror
+git merge upstream/<branch>        # resolve, then make target/linux/prepare
+scripts/track-upstream.sh --record # refresh the upstream-record line below
 ```
 
 What is machine-checked — and where the moving counters live — is in
@@ -137,11 +137,12 @@ recovery path as untested on hardware.
   back to plain NAT with a warning in `logread` if it cannot be loaded.
 - NPU offload for wired and wireless traffic, plus MT7996 NPU firmware.
 - CPU frequency scaling up to 1200 MHz, the top OPP in the base `an7581.dtsi`
-  table (`performance` governor default), with a tickless idle kernel
+  table (`ondemand` governor default), with a tickless idle kernel
   (`CONFIG_NO_HZ_IDLE`), so the periodic tick stops while the CPU is idle
   instead of firing at a fixed CONFIG_HZ=250.
-- Status LEDs, including the 10G port LEDs, which are driven by the RTL8261BE
-  LED engine rather than by GPIOs.
+- Status LEDs and 1G port LEDs (MT7530 LED controller); the 10G RTL8261BE
+  port LEDs currently use hardware/firmware defaults on kernel 7.4 (software
+  LED ops are tracked separately rather than driven by OpenWrt).
 - A single fan owner: `/etc/init.d/airoha_fan` applies the stock curve only
   when `luci-app-airoha-fancontrol` is not installed, and stays out of the way
   once it is.

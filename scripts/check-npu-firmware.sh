@@ -151,7 +151,7 @@ check_file() {
 		_versions=$(strings "$_file" 2>/dev/null |
 			grep -oE "$VERSION_RE" 2>/dev/null)
 	else
-		_versions=$(tr -c '[:print:]' '\n' 2>/dev/null < "$_file" |
+		_versions=$(tr -c '\040-\176' '\n' 2>/dev/null < "$_file" |
 			grep -oE "$VERSION_RE" 2>/dev/null)
 	fi
 	_versions=$(printf '%s\n' "$_versions" | sort -u)

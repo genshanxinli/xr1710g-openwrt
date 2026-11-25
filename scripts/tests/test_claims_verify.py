@@ -273,6 +273,28 @@ class SkipAndSummaryTest(unittest.TestCase):
         self.assertIn("class text skipped", out)
         self.assertIn("verified=0 failed=0 skipped=1", out)
 
+    def test_repeated_skip_flags_union_instead_of_overwriting(self) -> None:
+        # r28 CI-13: the usage block spelled the CI command as
+        # `--skip device --skip symbol`.  argparse's default action keeps only
+        # the last value, so that spelling skipped one class and silently left
+        # the other live.  Both spellings must skip the same classes.
+        self.fixture.write("README.md", "text\n")
+        text = ledger(
+            record("txt-1", "README.md:1", ["text: README.md:1 absent substring"]),
+            record("dev-1", "README.md:1", [
+                "device: /sys/class/watchdog/watchdog0/min_timeout 28"]),
+        )
+        code, repeated = run_verify(
+            self.fixture.root, text, "--skip", "text", "--skip", "device")
+        self.assertEqual(code, 0, repeated)
+        self.assertNotIn("FAIL", repeated)
+        for cls in ("text", "device"):
+            self.assertIn("class %s skipped" % cls, repeated)
+
+        code, comma = run_verify(self.fixture.root, text, "--skip", "text,device")
+        self.assertEqual(code, 0, comma)
+        self.assertEqual(comma.splitlines()[-1], repeated.splitlines()[-1])
+
     def test_unknown_skip_class_is_a_usage_error(self) -> None:
         with self.assertRaises(SystemExit):
             run_verify(self.fixture.root, ledger(record("x", "README.md:1")), "--skip", "banana")

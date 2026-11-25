@@ -28,6 +28,13 @@ on:
       # Same list as push, or a PR that touches the patch queue passes a gate
       # that only asks the question after the merge.
       - 'target/linux/airoha/patches-*/**'
+      # The gate reads the image recipe, the kernel patch version (target.mk is
+      # 7.4, the subtree Makefile is 6.18) and the flowsense package; a PR that
+      # edits those inputs must run the gate that checks them.
+      - 'target/linux/airoha/image/**'
+      - 'package/luci-app-airoha-flowsense/**'
+      - 'target/linux/airoha/an7581/target.mk'
+      - 'target/linux/airoha/Makefile'
       - '.github/workflows/check-release-image-features.yml'
   push:
     branches:
@@ -37,6 +44,10 @@ on:
       - 'scripts/tests/check-release-image-features.py'
       - 'scripts/tests/test_release_image_gate_workflow.py'
       - 'target/linux/airoha/patches-*/**'
+      - 'target/linux/airoha/image/**'
+      - 'package/luci-app-airoha-flowsense/**'
+      - 'target/linux/airoha/an7581/target.mk'
+      - 'target/linux/airoha/Makefile'
       - '.github/workflows/check-release-image-features.yml'
   schedule:
     # Weekly: the full tier only runs where a build tree exists, so this is the

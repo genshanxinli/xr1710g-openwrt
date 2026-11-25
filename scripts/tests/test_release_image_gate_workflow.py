@@ -41,6 +41,17 @@ WORKFLOW = REPO_ROOT / ".github/workflows/check-release-image-features.yml"
 # the self-test and must not be mistaken for the gate itself.
 GATE = "scripts/check-release-image-features.py"
 
+# Inputs the gate actually reads beyond the patch queue: the image recipe, the
+# flowsense package (its Makefile is a gate input), and the two KERNEL_PATCHVER
+# files (an7581/target.mk says 7.4, target/linux/airoha/Makefile says 6.18).
+# r16 P1-1 + r28 CI-20: a PR could edit any of them and run no gate at all.
+GATE_INPUT_PATHS = (
+    "target/linux/airoha/image/**",
+    "package/luci-app-airoha-flowsense/**",
+    "target/linux/airoha/an7581/target.mk",
+    "target/linux/airoha/Makefile",
+)
+
 
 def load() -> dict:
     return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
@@ -184,6 +195,23 @@ class TierTest(unittest.TestCase):
                             "the PR paths filter %r was not in the PR block" % path)
         self.assertIn(path, path_filter_problems(yaml.safe_load(mutated)),
                       "the check stayed green with the PR filter deleted")
+
+    def test_gate_inputs_trigger_both_events(self):
+        triggers = self.data.get("on") or self.data.get(True)
+        for event in ("pull_request", "push"):
+            paths = set(triggers[event]["paths"])
+            for path in GATE_INPUT_PATHS:
+                self.assertIn(
+                    path, paths,
+                    "%s does not re-run the image gate for %r" % (event, path),
+                )
+
+    def test_dropping_an_image_input_from_the_pr_turns_it_red(self):
+        path = "target/linux/airoha/an7581/target.mk"
+        text = WORKFLOW.read_text(encoding="utf-8")
+        mutated = without_pr_path(text, path)
+        self.assertNotEqual(mutated, text, "the %r filter was not in the PR block" % path)
+        self.assertIn(path, path_filter_problems(yaml.safe_load(mutated)))
 
     def test_a_pr_superset_stays_green(self):
         data = copy.deepcopy(self.data)

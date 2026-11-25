@@ -31,7 +31,10 @@ import unittest
 from pathlib import Path
 
 TESTS = Path(__file__).resolve().parent
-GATE = TESTS.parent / "check-release-image-features.py"
+GATE = Path(
+    os.environ.get("RELEASE_GATE_UNDER_TEST")
+    or TESTS.parent / "check-release-image-features.py"
+)
 CC = shutil.which("cc") or shutil.which("gcc")
 
 PATCH_968 = """--- a/drivers/net/ethernet/airoha/airoha_eth.c
@@ -264,9 +267,21 @@ def build_fdt(root: dict) -> bytes:
     return header + bytes(struct_block) + reserve + bytes(strings)
 
 
-def make_image(root: Path, build: Path, corrupt: bool = False, no_kernel: bool = False) -> Path:
+DEFAULT_MANIFEST = {"ip-bridge": "6.18.0-r2", "coreutils-base64": "9.11-r1"}
+
+
+def make_image(root: Path, build: Path, corrupt: bool = False, no_kernel: bool = False,
+               manifest: dict[str, str] | None = None,
+               with_manifest: bool = True) -> Path:
     image_dir = root / "images"
     image_dir.mkdir(parents=True, exist_ok=True)
+    if with_manifest:
+        lines = ["# pkg - version"] + [
+            f"{pkg} - {ver}" for pkg, ver in (DEFAULT_MANIFEST if manifest is None else manifest).items()
+        ]
+        (image_dir / "openwrt-airoha-an7581-gemtek_xr1710g-ubi.manifest").write_text(
+            "\n".join(lines) + "\n"
+        )
     kernel_bytes = (build / "Image").read_bytes()
     payload = gzip.compress(kernel_bytes if not corrupt else kernel_bytes + b"different")
     props = {
@@ -355,6 +370,17 @@ def test_build() -> None:
         check("Image and vmlinux from different builds fail",
               rc == 1 and "different builds" in out, out[-400:])
 
+        # A non-ELF file containing the symbol names as raw text must never pass
+        # require_symbols() just because the byte substrings appear in the file.
+        build = make_build(root / "nonelf")
+        obj = build / "linux-7.3/drivers/net/ethernet/airoha/airoha_eth.o"
+        obj.write_bytes(b"NOT_ELF airoha_qdma_tx_bql_add airoha_qdma_tx_bql_flush\n")
+        base = 1_700_000_000
+        os.utime(obj, (base + 10, base + 10))
+        rc, out = run_gate("--repo", str(repo), "--build-dir", str(build), "--skip-image")
+        check("non-ELF object carrying symbol text fails",
+              rc == 1 and "ELF" in out, out[-400:])
+
 
 def test_image() -> None:
     print("image checks")
@@ -382,6 +408,115 @@ def test_image() -> None:
             "--repo", str(repo), "--build-dir", str(build), "--image-dir", str(image_dir)
         )
         check("FIT without kernel node fails", rc != 0, out[-300:])
+
+
+def test_image_tooling() -> None:
+    print("image CLI tooling checks")
+    if CC is None:
+        print("  SKIP: no C compiler")
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo = make_repo(root)
+        build = make_build(root)
+
+        image_dir = make_image(root / "ok", build)
+        rc, out = run_gate(
+            "--repo", str(repo), "--build-dir", str(build), "--image-dir", str(image_dir)
+        )
+        check(
+            "manifest with both providers passes",
+            rc == 0 and "required CLI packages present: coreutils-base64, ip-bridge" in out,
+            out[-400:],
+        )
+
+        image_dir = make_image(root / "nopkg", build, manifest={"ip-bridge": "6.18.0-r2"})
+        rc, out = run_gate(
+            "--repo", str(repo), "--build-dir", str(build), "--image-dir", str(image_dir)
+        )
+        check(
+            "missing coreutils-base64 fails",
+            rc == 1 and "missing required CLI package(s): coreutils-base64" in out,
+            out[-400:],
+        )
+
+        image_dir = make_image(root / "nomanifest", build, with_manifest=False)
+        rc, out = run_gate(
+            "--repo", str(repo), "--build-dir", str(build), "--image-dir", str(image_dir)
+        )
+        check("missing manifest is exit 3", rc == 3 and "manifest" in out, out[-400:])
+
+        # rootfs-1 without data-position warns specifically about missing
+        # data-position rather than blaming missing unsquashfs.
+        def write_fit_with_rootfs(dest_dir: Path, rootfs_props: dict[str, bytes]) -> Path:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            lines = ["# pkg - version"] + [f"{k} - {v}" for k, v in DEFAULT_MANIFEST.items()]
+            (dest_dir / "openwrt-airoha-an7581-gemtek_xr1710g-ubi.manifest").write_text(
+                "\n".join(lines) + "\n"
+            )
+            kernel_bytes = (build / "Image").read_bytes()
+            payload = gzip.compress(kernel_bytes)
+            kprops = {
+                "data-size": struct.pack(">I", len(payload)),
+                "data-position": struct.pack(">I", 0x1000),
+                "compression": b"gzip\0",
+                "type": b"kernel\0",
+                "arch": b"arm64\0",
+                "os": b"linux\0",
+            }
+            root_node = fdt_node(
+                "",
+                {"description": b"test FIT\0"},
+                [
+                    fdt_node("images", {}, [
+                        fdt_node("kernel-1", kprops, []),
+                        fdt_node("rootfs-1", rootfs_props, []),
+                    ]),
+                    fdt_node("configurations", {"default": b"config-1\0"}, [
+                        fdt_node("config-1", {"kernel": b"kernel-1\0"}, []),
+                    ]),
+                ],
+            )
+            dtb = build_fdt(root_node)
+            blob = dtb + b"\0" * (0x1000 - len(dtb)) + payload
+            (dest_dir / "openwrt-airoha-an7581-gemtek_xr1710g-ubi-squashfs-sysupgrade.itb").write_bytes(blob)
+            return dest_dir
+
+        nopos_dir = write_fit_with_rootfs(root / "rootfs-nopos", {"type": b"filesystem\0"})
+        rc, out = run_gate(
+            "--repo", str(repo), "--build-dir", str(build), "--image-dir", str(nopos_dir)
+        )
+        check(
+            "rootfs-1 without data-position names data-position (not unsquashfs)",
+            rc == 0 and "no data-position" in out and "unsquashfs unavailable" not in out,
+            out[-400:],
+        )
+
+        # Fake unsquashfs listing a decoy suffix path squashfs-root/tmp/fake/bin/base64
+        # must fail exact squashfs-root{path} matching.
+        pos_dir = write_fit_with_rootfs(
+            root / "rootfs-pos",
+            {"type": b"filesystem\0", "data-position": struct.pack(">I", 0x2000)},
+        )
+        fake_bin = root / "fake-unsquashfs"
+        fake_bin.mkdir()
+        fake_usq = fake_bin / "unsquashfs"
+        fake_usq.write_text(
+            "#!/bin/sh\nprintf 'squashfs-root/usr/sbin/bridge\\nsquashfs-root/tmp/fake/bin/base64\\n'\n"
+        )
+        fake_usq.chmod(0o755)
+        decoy_proc = subprocess.run(
+            [sys.executable, str(GATE), "--repo", str(repo),
+             "--build-dir", str(build), "--image-dir", str(pos_dir)],
+            env=dict(os.environ, PATH=f"{fake_bin}:{os.environ.get('PATH', '')}"),
+            capture_output=True, text=True, timeout=180,
+        )
+        decoy_out = decoy_proc.stdout + decoy_proc.stderr
+        check(
+            "decoy suffix squashfs-root/tmp/fake/bin/base64 does not satisfy /bin/base64",
+            decoy_proc.returncode == 1 and "/bin/base64" in decoy_out,
+            decoy_out[-400:],
+        )
 
 
 class KernelVersionResolution(unittest.TestCase):
@@ -440,6 +575,21 @@ class KernelVersionResolution(unittest.TestCase):
                                 "--skip-build", "--skip-image")
         self.assertEqual(rc, 0, out[-500:])
         self.assertIn("patches: patches-7.3", out)
+
+    def test_target_makefile_reads_kernel_testing_patchver_not_kernel_patchver(self) -> None:
+        # When subtarget target.mk has no KERNEL_PATCHVER, target/linux/airoha/Makefile
+        # declares both KERNEL_PATCHVER:=6.18 and KERNEL_TESTING_PATCHVER:=7.4.
+        # The fallback targets KERNEL_TESTING_PATCHVER specifically, not 6.18.
+        repo = self.root / "repo-testing"
+        write(
+            repo / "target/linux/airoha/Makefile",
+            "KERNEL_PATCHVER:=6.18\nKERNEL_TESTING_PATCHVER:=7.4\n",
+        )
+        write_patch_queue(repo, "7.4")
+        rc, out = self.run_gate("--repo", str(repo), "--skip-build", "--skip-image")
+        self.assertEqual(rc, 0, out[-500:])
+        self.assertIn("patches: patches-7.4", out)
+        self.assertNotIn("patches-6.18", out)
 
 
 def _flatten(suite) -> list:
@@ -512,6 +662,21 @@ def test_capture() -> None:
         rc, out = run_gate("--capture", str(capped), "--skip-source", "--skip-build", "--skip-image")
         check("BQL limit below 64 KiB fails", rc == 1 and "below" in out, out[-300:])
 
+        # Static sysfs limit_max (~1.8 GiB) must NOT mask a dynamic limit below
+        # 64 KiB (P1-7): only dynamic limit / min_limit / max_limit count.
+        static_max = root / "static_max.txt"
+        static_max.write_text(
+            "cpu/tx-16   limit_max=1879048192   limit=40000   max_inflight=116038\n"
+        )
+        rc, out = run_gate(
+            "--capture", str(static_max), "--skip-source", "--skip-build", "--skip-image"
+        )
+        check(
+            "static limit_max does not mask dynamic limit below 64 KiB",
+            rc == 1 and "40000" in out and "below" in out and "1879048192" not in out,
+            out[-300:],
+        )
+
         low = root / "low.txt"
         low.write_text("cpu/tx-16 l=2908 i=2884\n")
         rc, out = run_gate("--capture", str(low), "--skip-source", "--skip-build", "--skip-image")
@@ -527,6 +692,7 @@ def main() -> int:
     test_source()
     test_build()
     test_image()
+    test_image_tooling()
     test_kernel_version()
     test_usage()
     test_capture()

@@ -17,6 +17,11 @@ on:
       - "v*"
       - "distfeeds-*"
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag to create or update (required for workflow_dispatch)"
+        required: true
+        type: string
 
 env:
   # Every product this workflow talks about is built in genshanxinli/xr1710g-builds:
@@ -68,6 +73,7 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ inputs.tag_name }}
           draft: true
           prerelease: true
           fail_on_unmatched_files: true
@@ -108,28 +114,43 @@ jobs:
           set -eu
           fail() { printf '::error::%s\n' "$*"; exit 1; }
 
-          sha=$(git rev-parse --short HEAD)
-          echo "looking for distfeeds-$sha.tar.gz in $BUILDS_REPO's releases"
+          # Always resolve the full 40-char commit SHA rather than an
+          # abbreviated hash: actions/checkout defaults to fetch-depth: 1
+          # (7-char short SHA) while full clones abbreviate to 10+ chars.
+          # Prefix-match distfeeds-<sha>.tar.gz (7..40 hex chars) against HEAD
+          # and require an unambiguous single match.
+          full_sha=$(git rev-parse HEAD)
+          echo "looking for distfeeds-<prefix>.tar.gz matching $full_sha in $BUILDS_REPO's releases"
           curl -fsSL --retry 3 \
             "https://api.github.com/repos/$BUILDS_REPO/releases?per_page=100" \
             -o "$RUNNER_TEMP/releases.json" ||
-            fail "cannot list the releases of $BUILDS_REPO: the build that produced $sha never published its feeds"
+            fail "cannot list the releases of $BUILDS_REPO: the build that produced $full_sha never published its feeds"
 
           rc=0
-          python3 - "$sha" >"$RUNNER_TEMP/asset-url" <<'PY' || rc=$?
-          import json, os, sys
+          python3 - "$full_sha" >"$RUNNER_TEMP/asset-url" <<'PY' || rc=$?
+          import json, os, re, sys
 
-          want = "distfeeds-%s.tar.gz" % sys.argv[1]
+          full_sha = sys.argv[1].lower()
+          if not re.fullmatch(r"[0-9a-f]{40}", full_sha):
+              sys.exit("expected 40-char commit SHA, got %r" % (full_sha,))
+          pattern = re.compile(r"^distfeeds-([0-9a-f]{7,40})\.tar\.gz$")
           path = os.path.join(os.environ["RUNNER_TEMP"], "releases.json")
+          matches = []
           for rel in json.load(open(path)):
               for asset in rel.get("assets") or ():
-                  if asset.get("name") == want:
-                      print(asset["browser_download_url"])
-                      sys.exit(0)
-          sys.exit("no asset named %s" % want)
+                  name = asset.get("name") or ""
+                  m = pattern.match(name)
+                  if m and full_sha.startswith(m.group(1)):
+                      matches.append((name, asset["browser_download_url"]))
+          if not matches:
+              sys.exit("no asset matching distfeeds-<prefix>.tar.gz for %s" % full_sha)
+          if len(matches) > 1:
+              names = ", ".join(name for name, _ in matches)
+              sys.exit("ambiguous distfeeds assets for %s: %s" % (full_sha, names))
+          print(matches[0][1])
           PY
           [ "$rc" -eq 0 ] ||
-            fail "$BUILDS_REPO has no release asset distfeeds-$sha.tar.gz: run its build workflow for this commit first"
+            fail "$BUILDS_REPO has no unambiguous release asset distfeeds-<prefix>.tar.gz for $full_sha: run its build workflow for this commit first"
 
           url=$(cat "$RUNNER_TEMP/asset-url")
           echo "asset: $url"
@@ -165,6 +186,7 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ inputs.tag_name }}
           draft: true
           prerelease: true
           fail_on_unmatched_files: true
