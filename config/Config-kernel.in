@@ -103,6 +103,7 @@ config KERNEL_X86_VSYSCALL_EMULATION
 
 config KERNEL_PERF_EVENTS
 	bool "Compile the kernel with performance events and counters"
+	default y if TARGET_airoha
 	select KERNEL_ARM_PMU if (arm || aarch64)
 	select KERNEL_ARM_PMUV3 if (arm_v7 || aarch64)
 	select KERNEL_RISCV_PMU if riscv64
@@ -815,6 +816,7 @@ config KERNEL_PROVE_LOCKING
 
 config KERNEL_SOFTLOCKUP_DETECTOR
 	bool "Compile the kernel with detect Soft Lockups"
+	default y if TARGET_airoha
 	depends on KERNEL_DEBUG_KERNEL
 	help
 	  Say Y here to enable the kernel to act as a watchdog to detect
@@ -827,6 +829,7 @@ config KERNEL_SOFTLOCKUP_DETECTOR
 
 config KERNEL_HARDLOCKUP_DETECTOR
 	bool "Compile the kernel with detect Hard Lockups"
+	default y if TARGET_airoha
 	depends on KERNEL_DEBUG_KERNEL
 	help
 	  Say Y here to enable the kernel to act as a watchdog to detect

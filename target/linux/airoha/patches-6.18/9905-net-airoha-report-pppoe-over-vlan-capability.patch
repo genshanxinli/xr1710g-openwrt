@@ -57,7 +57,7 @@ queue position this file occupies there (after 989, before 992-x/999x).
 
 ---
 --- a/include/net/flow_offload.h
-+++ b/.stage/include/net/flow_offload.h
++++ b/include/net/flow_offload.h
 @@ -699,6 +699,13 @@
  	struct flow_rule *rule;
  	struct flow_stats stats;
@@ -73,7 +73,7 @@ queue position this file occupies there (after 989, before 992-x/999x).
  
  enum offload_act_command  {
 --- a/net/netfilter/nf_flow_table_offload.c
-+++ b/.stage/net/netfilter/nf_flow_table_offload.c
++++ b/net/netfilter/nf_flow_table_offload.c
 @@ -894,6 +894,21 @@
  				 const struct flow_offload_tuple *tuple,
  				 struct netlink_ext_ack *extack)
@@ -97,7 +97,7 @@ queue position this file occupies there (after 989, before 992-x/999x).
  	cls_flow->common.prio = priority;
  	cls_flow->common.extack = extack;
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
-+++ b/.stage/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
 @@ -24,6 +24,26 @@
  DEFINE_MUTEX(flow_offload_mutex);
  static DEFINE_SPINLOCK(ppe_lock);

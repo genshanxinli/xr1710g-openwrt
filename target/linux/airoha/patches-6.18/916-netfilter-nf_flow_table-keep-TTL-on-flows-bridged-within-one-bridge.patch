@@ -21,7 +21,7 @@ hooks ingress on the ports rather than on the bridge master.  Compare the two
 masters and skip the decrement when they are the same.  Packets with TTL 1
 never reach this code: they are rejected during tuple building.
 
-This patch lives under airoha/patches-7.3 rather than generic/pending-7.3
+This patch lives under airoha/patches-6.18 rather than generic/pending-6.18
 because 915-01 quotes the same two lines as context.  Generic patches are
 applied first, so the decrement still has to be there when this one runs.
 

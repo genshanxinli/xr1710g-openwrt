@@ -35,23 +35,18 @@ DEFAULT_PACKAGES += \
 # path fails silently while a PPE flow is BIND-active, which is exactly the
 # stale-filter black hole the current path avoids.
 #
-# Bridged traffic takes two routes here, and both matter.  br-lan carries
-# nf_call_iptables=1 (50-nf-bridge-call), so bridged IPv4/IPv6 also reaches
+# Bridged traffic is offloaded through the inet flowtable.  br-lan carries
+# nf_call_iptables=1 (50-nf-bridge-call), so bridged IPv4/IPv6 reaches
 # NF_INET_FORWARD and the ordinary "table inet fw4" flowtable, where the PPE
 # encodes it as a 5-tuple IPV4_HNAPT/IPV6_ROUTE entry, exactly like routed
 # traffic.  Measured: it binds, and a 3.5M-packet run spent 0.46 CPU-seconds
 # against 34.3 for the same traffic unbound.
 #
-# generic/pending-7.3/675-01..675-05 are what a *bridge-family* flowtable
-# needs, and firewall4/patches/001-add-bridge-flowtable-support.patch does
-# create one: "table bridge fw4" with flowtable fb over the bridge ports of
-# the same device list, no flow_offloading_bridge option involved.  Those
-# patches are live, not retained.  The bridge chain registers after
-# br_netfilter's NF_BR_FORWARD hook at the same priority and
-# net/netfilter/core.c inserts a new equal-priority hook ahead of the old
-# ones, so fb sees a bridged tcp/udp connection first; 675-05's
-# crossing-twice record/refuse then runs on it, and the inet flowtable only
-# gets connections the bridge chain declined (IPS_OFFLOAD_BIT is set once).
+# There is no separate "table bridge fw4" flowtable: generic/pending-7.4/
+# 675-01..675-06 provide kernel bridge flowtable support, but the firewall4
+# bridge flowtable patch was removed after measurement showed it added UNB
+# churn without improving PPE binding (see 50_firewall-offload and
+# 51-bridge-hw-offload).
 
 # Two facts about /sys/kernel/debug/ppe/usage that read as bugs but are not:
 #
@@ -71,7 +66,7 @@ DEFAULT_PACKAGES += \
 
 # A flow binds once its sustained *rate* clears REG_PPE_BIND_RATE.  Patch 964
 # sets AIROHA_PPE_DEFAULT_BIND_RATE to 10 packets/s for both the L3 and the
-# L2B half (patches-7.3/964:76, patches-7.4/964:45); the 30 pps figures
+# L2B half (patches-7.4/964:72); the 30 pps figures
 # measured before that patch lowered the default no longer describe this tree.
 # It is not a packet count -- an earlier reading of "31 packets" came from
 # tests that all ran about one second, which made count and time collinear.

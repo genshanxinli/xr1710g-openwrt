@@ -256,7 +256,7 @@ queue position this file occupies there (after 989, before 992-x/999x).
  	netdev_tx_sent_queue(txq, skb->len);
  	if (q->ndesc - q->queued < q->free_thr) {
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
-+++ b/.stage/drivers/net/ethernet/airoha/airoha_eth.h
++++ b/drivers/net/ethernet/airoha/airoha_eth.h
 @@ -613,6 +613,21 @@
  	struct airoha_queue q_rx[AIROHA_NUM_RX_RING];
  

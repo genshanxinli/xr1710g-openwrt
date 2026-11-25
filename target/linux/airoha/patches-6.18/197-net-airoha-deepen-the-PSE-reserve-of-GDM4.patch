@@ -1,1 +1,213 @@
-../patches-7.3/197-net-airoha-deepen-the-PSE-reserve-of-GDM4.patch
+From: OpenWrt <openwrt@example.org>
+Subject: [PATCH] net: airoha: deepen the PSE reserve of GDM4
+
+The PSE hands each egress queue a guaranteed reserve of
+PSE_QUEUE_RSV_PAGES (64) pages, and everything above that is shared.  The
+port/queue table gives GDM4 only two queues, so the reserve for that port
+is 2 * 64 * 128 B = 16 KiB.
+
+On the AN7581 GDM4 is the second 10G port.  At 10G, 16 KiB is about 13 us
+of traffic - less than the time it takes the CPU to get scheduled on a
+busy system, so a burst aimed at GDM4 is dropped although the shared pool
+is mostly idle.
+
+The queue count is a hardware property and is left alone; instead each of
+GDM4's queues is given a deeper reserve, capped by what the shared pool
+can actually give away.  The pool thresholds are derived as
+fq_limit - all_rsv - <headroom>, so the reserve is only raised while that
+subtraction stays positive; otherwise the thresholds would wrap.
+
+This used to be arithmetic at the GDM4 call site.  Keep the per-queue
+weight in pse_port_weight[] instead and apply it with
+airoha_pse_tune_port(), which owns the port/queue count and normalises the
+deeper request against the pool.  The table's defaults reproduce the
+reserve values this driver writes today, byte for byte: the GDM4 entry
+asks for 4 * PSE_QUEUE_RSV_PAGES, so the helper grants
+PSE_QUEUE_RSV_PAGES + min(available / queues, 3 * PSE_QUEUE_RSV_PAGES),
+exactly the cap that used to be hardcoded.  A different queue count, a
+different link rate or another port that needs the same treatment is now a
+table entry instead of another copy of the arithmetic.
+
+Signed-off-by: OpenWrt <openwrt@example.org>
+---
+
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -323,21 +323,76 @@ static int airoha_fe_set_pse_oq_rsv(stru
+ 	return 0;
+ }
+ 
++static const u32 pse_port_num_queues[] = {
++	[FE_PSE_PORT_CDM1] = 6,
++	[FE_PSE_PORT_GDM1] = 6,
++	[FE_PSE_PORT_GDM2] = 32,
++	[FE_PSE_PORT_GDM3] = 6,
++	[FE_PSE_PORT_PPE1] = 4,
++	[FE_PSE_PORT_CDM2] = 6,
++	[FE_PSE_PORT_CDM3] = 8,
++	[FE_PSE_PORT_CDM4] = 10,
++	[FE_PSE_PORT_PPE2] = 4,
++	[FE_PSE_PORT_GDM4] = 2,
++	[FE_PSE_PORT_CDM5] = 2,
++};
++
++/* Guaranteed PSE reserve of each port, in 128-byte pages per egress queue.
++ * The PSE accounts the reserve per queue and shares everything above it, so
++ * the useful quantity is the per-queue weight: a port's guaranteed buffer is
++ * weight * queue count.  Most ports take the stock reserve; GDM4 can deliver
++ * at 10G from only two queues, so it asks for a deeper weight and leaves the
++ * pool-aware cap to airoha_pse_tune_port().
++ */
++static const u32 pse_port_weight[] = {
++	[FE_PSE_PORT_CDM1] = PSE_QUEUE_RSV_PAGES,
++	[FE_PSE_PORT_GDM1] = PSE_QUEUE_RSV_PAGES,
++	[FE_PSE_PORT_GDM3] = PSE_QUEUE_RSV_PAGES,
++	[FE_PSE_PORT_PPE1] = PSE_QUEUE_RSV_PAGES,
++	[FE_PSE_PORT_CDM2] = PSE_QUEUE_RSV_PAGES,
++	[FE_PSE_PORT_CDM4] = PSE_QUEUE_RSV_PAGES,
++	[FE_PSE_PORT_PPE2] = PSE_QUEUE_RSV_PAGES,
++	[FE_PSE_PORT_GDM4] = PSE_QUEUE_RSV_PAGES * 4,
++	[FE_PSE_PORT_CDM5] = PSE_QUEUE_RSV_PAGES,
++};
++
++/* Give every egress queue of one port the same guaranteed reserve.  The
++ * caller states a weight in 128-byte pages per queue; the helper owns the
++ * port -> queue count mapping, so a port with a different queue count gets
++ * the same per-queue guarantee without further changes.
++ *
++ * The reserve feeds the shared-pool thresholds, which are computed as
++ * fq_limit - all_rsv - <headroom>.  A weight deeper than the stock one is
++ * therefore granted only as far as that subtraction stays positive;
++ * reserving more than the pool holds would wrap the thresholds.
++ */
++static void airoha_pse_tune_port(struct airoha_eth *eth, u32 port,
++				 u32 weight_pages)
++{
++	u32 weight = weight_pages;
++	u32 q;
++
++	if (weight > PSE_QUEUE_RSV_PAGES) {
++		u32 fq_limit, all_rsv, extra;
++
++		fq_limit = airoha_fe_get(eth, PSE_FQ_CFG, PSE_FQ_LIMIT_MASK);
++		all_rsv = airoha_fe_get_pse_all_rsv(eth);
++		extra = 0;
++		if (fq_limit > all_rsv + 0x400)
++			extra = (fq_limit - all_rsv - 0x400) /
++				pse_port_num_queues[port];
++		if (extra > weight - PSE_QUEUE_RSV_PAGES)
++			extra = weight - PSE_QUEUE_RSV_PAGES;
++
++		weight = PSE_QUEUE_RSV_PAGES + extra;
++	}
++
++	for (q = 0; q < pse_port_num_queues[port]; q++)
++		airoha_fe_set_pse_oq_rsv(eth, port, q, weight);
++}
++
+ static void airoha_fe_pse_ports_init(struct airoha_eth *eth)
+ {
+-	const u32 pse_port_num_queues[] = {
+-		[FE_PSE_PORT_CDM1] = 6,
+-		[FE_PSE_PORT_GDM1] = 6,
+-		[FE_PSE_PORT_GDM2] = 32,
+-		[FE_PSE_PORT_GDM3] = 6,
+-		[FE_PSE_PORT_PPE1] = 4,
+-		[FE_PSE_PORT_CDM2] = 6,
+-		[FE_PSE_PORT_CDM3] = 8,
+-		[FE_PSE_PORT_CDM4] = 10,
+-		[FE_PSE_PORT_PPE2] = 4,
+-		[FE_PSE_PORT_GDM4] = 2,
+-		[FE_PSE_PORT_CDM5] = 2,
+-	};
+ 	int q;
+ 
+ 	if (airoha_ppe_is_enabled(eth, 1)) {
+@@ -352,59 +407,55 @@ static void airoha_fe_pse_ports_init(str
+ 	}
+ 
+ 	/* CDM1 */
+-	for (q = 0; q < pse_port_num_queues[FE_PSE_PORT_CDM1]; q++)
+-		airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_CDM1, q,
+-					 PSE_QUEUE_RSV_PAGES);
++	airoha_pse_tune_port(eth, FE_PSE_PORT_CDM1,
++			     pse_port_weight[FE_PSE_PORT_CDM1]);
+ 	/* GDM1 */
+-	for (q = 0; q < pse_port_num_queues[FE_PSE_PORT_GDM1]; q++)
+-		airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_GDM1, q,
+-					 PSE_QUEUE_RSV_PAGES);
++	airoha_pse_tune_port(eth, FE_PSE_PORT_GDM1,
++			     pse_port_weight[FE_PSE_PORT_GDM1]);
+ 	/* GDM2 */
+ 	for (q = 6; q < pse_port_num_queues[FE_PSE_PORT_GDM2]; q++)
+ 		airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_GDM2, q, 0);
+ 	/* GDM3 */
+-	for (q = 0; q < pse_port_num_queues[FE_PSE_PORT_GDM3]; q++)
+-		airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_GDM3, q,
+-					 PSE_QUEUE_RSV_PAGES);
++	airoha_pse_tune_port(eth, FE_PSE_PORT_GDM3,
++			     pse_port_weight[FE_PSE_PORT_GDM3]);
+ 	/* PPE1 */
+ 	for (q = 0; q < pse_port_num_queues[FE_PSE_PORT_PPE1]; q++) {
+-		if (q < pse_port_num_queues[FE_PSE_PORT_PPE1] / 2)
+-			airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_PPE1, q,
+-						 PSE_QUEUE_RSV_PAGES);
+-		else
+-			airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_PPE1, q, 0);
++		u32 weight = q < pse_port_num_queues[FE_PSE_PORT_PPE1] / 2 ?
++			     pse_port_weight[FE_PSE_PORT_PPE1] : 0;
++
++		airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_PPE1, q, weight);
+ 	}
+ 	/* CDM2 */
+-	for (q = 0; q < pse_port_num_queues[FE_PSE_PORT_CDM2]; q++)
+-		airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_CDM2, q,
+-					 PSE_QUEUE_RSV_PAGES);
++	airoha_pse_tune_port(eth, FE_PSE_PORT_CDM2,
++			     pse_port_weight[FE_PSE_PORT_CDM2]);
+ 	/* CDM3 */
+ 	for (q = 0; q < pse_port_num_queues[FE_PSE_PORT_CDM3] - 1; q++)
+ 		airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_CDM3, q, 0);
+ 	/* CDM4 */
+ 	for (q = 4; q < pse_port_num_queues[FE_PSE_PORT_CDM4]; q++)
+ 		airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_CDM4, q,
+-					 PSE_QUEUE_RSV_PAGES);
++					 pse_port_weight[FE_PSE_PORT_CDM4]);
+ 	if (airoha_ppe_is_enabled(eth, 1)) {
+ 		/* PPE2 */
+ 		for (q = 0; q < pse_port_num_queues[FE_PSE_PORT_PPE2]; q++) {
+-			if (q < pse_port_num_queues[FE_PSE_PORT_PPE2] / 2)
+-				airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_PPE2,
+-							 q,
+-							 PSE_QUEUE_RSV_PAGES);
+-			else
+-				airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_PPE2,
+-							 q, 0);
++			u32 weight = q < pse_port_num_queues[FE_PSE_PORT_PPE2] / 2 ?
++				     pse_port_weight[FE_PSE_PORT_PPE2] : 0;
++
++			airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_PPE2, q,
++						 weight);
+ 		}
+ 	}
+-	/* GDM4 */
+-	for (q = 0; q < pse_port_num_queues[FE_PSE_PORT_GDM4]; q++)
+-		airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_GDM4, q,
+-					 PSE_QUEUE_RSV_PAGES);
++	/* GDM4. On the AN7581 this is the second 10G port, but the hardware
++	 * gives it only two queues, so the stock per-queue reserve leaves it
++	 * with 16 KiB of guaranteed buffer for a port that can deliver at
++	 * 10G.  Its table entry asks for a deeper weight and the helper caps
++	 * that to what the shared pool can actually back.
++	 */
++	airoha_pse_tune_port(eth, FE_PSE_PORT_GDM4,
++			     pse_port_weight[FE_PSE_PORT_GDM4]);
+ 	/* CDM5 */
+-	for (q = 0; q < pse_port_num_queues[FE_PSE_PORT_CDM5]; q++)
+-		airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_CDM5, q,
+-					 PSE_QUEUE_RSV_PAGES);
++	airoha_pse_tune_port(eth, FE_PSE_PORT_CDM5,
++			     pse_port_weight[FE_PSE_PORT_CDM5]);
+ }
+ 
+ static int airoha_fe_mc_vlan_clear(struct airoha_eth *eth)
