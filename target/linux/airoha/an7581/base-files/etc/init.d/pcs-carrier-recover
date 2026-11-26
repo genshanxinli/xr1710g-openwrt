@@ -10,12 +10,24 @@ PCS_DELAY="${PCS_DELAY:-180}"
 PCS_DOWN_SECS="${PCS_DOWN_SECS:-3}"
 PCS_UP_SECS="${PCS_UP_SECS:-12}"
 PCS_MAX_ATTEMPTS="${PCS_MAX_ATTEMPTS:-2}"
+PCS_SYS_NET="${PCS_SYS_NET:-/sys/class/net}"
+PCS_PROC_DIR="${PCS_PROC_DIR:-/proc}"
 LOG_TAG="pcs-carrier-recover"
 PIDFILE="${PCS_PIDFILE:-/var/run/${LOG_TAG}.pid}"
 LOCKFILE="${PCS_LOCKFILE:-/var/lock/${LOG_TAG}.lock}"
+SLEEP_PID=""
+PORT_DOWN=0
 
 log() {
 	logger -t "$LOG_TAG" "$@"
+}
+
+sleep_interruptible() {
+	[ "${1:-0}" -gt 0 ] || return 0
+	sleep "$1" &
+	SLEEP_PID=$!
+	wait "$SLEEP_PID" 2>/dev/null
+	SLEEP_PID=""
 }
 
 saw_calib_failure() {
@@ -23,22 +35,24 @@ saw_calib_failure() {
 }
 
 has_carrier() {
-	[ -r "/sys/class/net/$PCS_DEV/carrier" ] || return 0
-	[ "$(cat "/sys/class/net/$PCS_DEV/carrier" 2>/dev/null)" = "1" ]
+	[ -r "$PCS_SYS_NET/$PCS_DEV/carrier" ] || return 0
+	[ "$(cat "$PCS_SYS_NET/$PCS_DEV/carrier" 2>/dev/null)" = "1" ]
 }
 
 recover() {
 	log "$PCS_DEV: carrier down with PCS calibration failure, bouncing it"
+	PORT_DOWN=1
 	ip link set dev "$PCS_DEV" down 2>/dev/null
-	sleep "$PCS_DOWN_SECS"
+	sleep_interruptible "$PCS_DOWN_SECS"
 	ip link set dev "$PCS_DEV" up 2>/dev/null
-	sleep "$PCS_UP_SECS"
+	PORT_DOWN=0
+	sleep_interruptible "$PCS_UP_SECS"
 }
 
 main() {
 	local attempt=0
 
-	[ -d "/sys/class/net/$PCS_DEV" ] || return 0
+	[ -d "$PCS_SYS_NET/$PCS_DEV" ] || return 0
 
 	while [ "$attempt" -lt "$PCS_MAX_ATTEMPTS" ]; do
 		saw_calib_failure || return 0
@@ -57,20 +71,37 @@ main() {
 	return 0
 }
 
-pid_is_running() {
+pid_is_recover() {
 	local pid="$1" cmd
 
 	case "$pid" in
-	''|*[!0-9]*|0*) return 1 ;;
+	''|*[!0-9]*|0*|1) return 1 ;;
 	esac
+	[ "$pid" = "$$" ] && return 1
 	kill -0 "$pid" 2>/dev/null || return 1
-	[ -r /proc/self/cmdline ] || return 0
-	[ -r "/proc/$pid/cmdline" ] || return 1
-	cmd=$(tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
+	[ -r "$PCS_PROC_DIR/self/cmdline" ] || return 1
+	[ -r "$PCS_PROC_DIR/$pid/cmdline" ] || return 1
+	cmd=$(tr '\000' ' ' < "$PCS_PROC_DIR/$pid/cmdline" 2>/dev/null)
 	case "$cmd" in
-	*pcs-carrier-recover*) return 0 ;;
+	*" stop"*) return 1 ;;
+	*rc.common*"$LOG_TAG"*) return 0 ;;
 	*) return 1 ;;
 	esac
+}
+
+acquire_lock() {
+	local waits=0
+
+	case "$LOCKFILE" in
+	*/*) mkdir -p "${LOCKFILE%/*}" 2>/dev/null ;;
+	esac
+	exec 9>"$LOCKFILE"
+	while ! flock -n 9; do
+		[ "$waits" -lt 10 ] || return 1
+		waits=$((waits + 1))
+		sleep 1
+	done
+	return 0
 }
 
 start() {
@@ -79,51 +110,57 @@ start() {
 	*) return 0 ;;
 	esac
 
-	local pid lock_dir pid_dir
-
-	lock_dir="${LOCKFILE%/*}"
-	pid_dir="${PIDFILE%/*}"
-	[ -n "$lock_dir" ] && [ "$lock_dir" != "$LOCKFILE" ] && mkdir -p "$lock_dir" 2>/dev/null
-	[ -n "$pid_dir" ] && [ "$pid_dir" != "$PIDFILE" ] && mkdir -p "$pid_dir" 2>/dev/null
-
-	exec 9>"$LOCKFILE"
-	if ! flock -n 9; then
-		exec 9>&-
-		return 0
-	fi
-
-	if [ -f "$PIDFILE" ]; then
-		pid="$(cat "$PIDFILE" 2>/dev/null)"
-		if pid_is_running "$pid"; then
-			exec 9>&-
-			return 0
-		fi
-	fi
-
 	(
-		child=""
-		trap '[ -n "$child" ] && kill "$child" 2>/dev/null; rm -f "$PIDFILE"; exit 0' TERM INT
-		sleep "$PCS_DELAY" 9>&- &
-		child="$!"
-		wait "$child"
-		child=""
-		main 9>&-
-		rm -f "$PIDFILE"
-	) </dev/null >/dev/null 2>&1 &
-	echo "$!" > "$PIDFILE"
-	exec 9>&-
+		acquire_lock || exit 0
+		pid="$(cat "$PIDFILE" 2>/dev/null)"
+		if pid_is_recover "$pid"; then
+			exit 0
+		fi
+
+		case "$PIDFILE" in
+		*/*) mkdir -p "${PIDFILE%/*}" 2>/dev/null ;;
+		esac
+		(
+			WORKER_PID=$(exec sh -c 'echo "$PPID"')
+			cleaned=0
+			cleanup_worker() {
+				[ "$cleaned" -eq 0 ] || return 0
+				cleaned=1
+				[ -n "$SLEEP_PID" ] && kill "$SLEEP_PID" 2>/dev/null
+				if [ "${PORT_DOWN:-0}" -eq 1 ]; then
+					ip link set dev "$PCS_DEV" up 2>/dev/null || true
+				fi
+				if [ -f "$PIDFILE" ] && [ "$(cat "$PIDFILE" 2>/dev/null)" = "$WORKER_PID" ]; then
+					rm -f "$PIDFILE"
+				fi
+			}
+			trap 'cleanup_worker' EXIT
+			trap 'cleanup_worker; exit 0' INT TERM HUP
+
+			echo "$WORKER_PID" > "$PIDFILE"
+			# Release start/stop lock now that PIDFILE identifies this worker.
+			exec 9>&-
+
+			sleep_interruptible "$PCS_DELAY"
+			main
+		) </dev/null >/dev/null 2>&1 &
+	)
 }
 
 stop() {
-	local pid tries=0
-
-	pid="$(cat "$PIDFILE" 2>/dev/null)"
-	if [ -n "$pid" ] && pid_is_running "$pid"; then
-		kill "$pid" 2>/dev/null
-		while [ "$tries" -lt 10 ] && kill -0 "$pid" 2>/dev/null; do
-			tries=$((tries + 1))
-			sleep 1
-		done
-	fi
-	rm -f "$PIDFILE"
+	(
+		acquire_lock || exit 0
+		pid="$(cat "$PIDFILE" 2>/dev/null)"
+		tries=0
+		if [ -n "$pid" ] && pid_is_recover "$pid"; then
+			kill "$pid" 2>/dev/null
+			while [ "$tries" -lt 10 ] && kill -0 "$pid" 2>/dev/null; do
+				tries=$((tries + 1))
+				sleep 1
+			done
+		fi
+		if [ -f "$PIDFILE" ] && [ "$(cat "$PIDFILE" 2>/dev/null)" = "$pid" ]; then
+			rm -f "$PIDFILE"
+		fi
+	)
 }

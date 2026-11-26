@@ -12,9 +12,15 @@ command -v ethtool >/dev/null || {
 SYS_NET="${WAN_LRO_SYS_NET:-/sys/class/net}"
 
 resolve_phys_dev() {
-	local cur="$1" hop=0 lower count target
+	local cur="$1" hop=0 lower count target suffix devtype
 
 	while [ "$hop" -lt 4 ]; do
+		[ -d "$SYS_NET/$cur/bridge" ] && break
+		if [ -r "$SYS_NET/$cur/uevent" ]; then
+			devtype="$(sed -n '/^DEVTYPE=/{s/^DEVTYPE=//p;q;}' "$SYS_NET/$cur/uevent" 2>/dev/null)"
+			[ -n "$devtype" ] && [ "$devtype" != "vlan" ] && break
+		fi
+
 		count=0
 		target=""
 		for lower in "$SYS_NET/$cur"/lower_*; do
@@ -22,6 +28,7 @@ resolve_phys_dev() {
 			count=$((count + 1))
 			target="${lower##*/lower_}"
 		done
+		[ "$count" -gt 1 ] && break
 		if [ "$count" -eq 1 ] && [ -n "$target" ] && [ "$target" != "$cur" ]; then
 			cur="$target"
 			hop=$((hop + 1))
@@ -29,18 +36,18 @@ resolve_phys_dev() {
 		fi
 		case "$cur" in
 		*.*)
-			target="${cur%.*}"
-			if [ -n "$target" ] && [ -d "$SYS_NET/$target" ]; then
-				cur="$target"
-				hop=$((hop + 1))
-				continue
-			fi
-			target="${cur%%.*}"
-			if [ -n "$target" ] && [ -d "$SYS_NET/$target" ]; then
-				cur="$target"
-				hop=$((hop + 1))
-				continue
-			fi
+			suffix="${cur##*.}"
+			case "$suffix" in
+			''|*[!0-9]*) ;;
+			*)
+				target="${cur%.*}"
+				if [ -n "$target" ] && [ "$target" != "$cur" ] && [ -d "$SYS_NET/$target" ]; then
+					cur="$target"
+					hop=$((hop + 1))
+					continue
+				fi
+				;;
+			esac
 			;;
 		esac
 		break

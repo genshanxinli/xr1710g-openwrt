@@ -248,7 +248,7 @@ set_preset() {
 }
 
 set_custom_curve() {
-	local json i idx temp pwm valid=0
+	local json i idx temp pwm prev_temp="" valid=0
 	read -r json
 
 	if command -v jsonfilter >/dev/null 2>&1; then
@@ -257,14 +257,23 @@ set_custom_curve() {
 			temp=$(printf '%s\n' "$json" | jsonfilter -e "@.points[${idx}].temp" 2>/dev/null)
 			pwm=$(printf '%s\n' "$json" | jsonfilter -e "@.points[${idx}].pwm" 2>/dev/null)
 
-			[ -z "$temp" ] && [ -z "$pwm" ] && continue
+			if [ -z "$temp" ] && [ -z "$pwm" ]; then
+				temp=$(uci -q get "fan.custom.point${i}_temp")
+				is_uint "$temp" || continue
+			else
+				if ! is_uint "$temp" || ! [ "$temp" -ge 0 ] 2>/dev/null || ! [ "$temp" -le 100 ] 2>/dev/null ||
+				   ! is_uint "$pwm" || ! [ "$pwm" -ge 0 ] 2>/dev/null || ! [ "$pwm" -le 255 ] 2>/dev/null; then
+					echo '{"success":false,"error":"Invalid curve point values"}'
+					return
+				fi
+				valid=$((valid + 1))
+			fi
 
-			if ! is_uint "$temp" || ! [ "$temp" -ge 0 ] 2>/dev/null || ! [ "$temp" -le 100 ] 2>/dev/null ||
-			   ! is_uint "$pwm" || ! [ "$pwm" -ge 0 ] 2>/dev/null || ! [ "$pwm" -le 255 ] 2>/dev/null; then
-				echo '{"success":false,"error":"Invalid curve point values"}'
+			if [ -n "$prev_temp" ] && [ "$temp" -lt "$prev_temp" ]; then
+				echo '{"success":false,"error":"Curve temperatures must be non-decreasing"}'
 				return
 			fi
-			valid=$((valid + 1))
+			prev_temp="$temp"
 		done
 
 		if [ "$valid" -eq 0 ]; then

@@ -117,5 +117,6 @@ fwtool_check_image() {
 	done
 	v "$devices"
 
+	[ "$REQUIRE_IMAGE_METADATA" = 1 ] && return 74
 	return 1
 }

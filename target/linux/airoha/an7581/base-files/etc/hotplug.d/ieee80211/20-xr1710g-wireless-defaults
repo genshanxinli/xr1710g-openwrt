@@ -84,7 +84,11 @@ set_from() {
 
 	uci -q set wireless.radio0._xr1710g_tuned='1'
 	uci -q commit wireless
-	[ "$changed" -eq 1 ] && ubus call network reload >/dev/null 2>&1
+	exec 9>&-
+	if [ "$changed" -eq 1 ] && command -v ubus >/dev/null 2>&1; then
+		ubus -t 5 call network reload >/dev/null 2>&1 || true
+		ubus -t 5 call network.wireless retry >/dev/null 2>&1 || true
+	fi
 )
 
 exit 0

@@ -6,12 +6,13 @@ gemtek_factory_valid() {
 	local vol="$1"
 	local off mac
 
-	[ "$(hexdump -v -n 2 -e '2/1 "%02x"' "$vol")" = "9079" ] || return 1
+	[ "$(hexdump -v -n 2 -e '2/1 "%02x"' "$vol" 2>/dev/null)" = "9079" ] || return 1
 
 	for off in 0x5000 0x6000; do
-		mac="$(hexdump -v -s $((off)) -n 6 -e '6/1 "%02x"' "$vol")"
+		mac="$(hexdump -v -s $((off)) -n 6 -e '6/1 "%02x"' "$vol" 2>/dev/null)"
+		[ "${#mac}" -eq 12 ] || return 1
 		case "$mac" in
-		000000000000|ffffffffffff|?[13579bdf]*)
+		*[!0-9a-fA-F]*|000000000000|ffffffffffff|?[13579bdf]*)
 			return 1
 			;;
 		esac
@@ -59,7 +60,11 @@ gemtek_prepare_factory() {
 	done
 
 	# The EEPROM is in the first good block from 0x405000.
-	ebs="$(cat /sys/class/mtd/${mtd#/dev/}/erasesize)"
+	ebs="$(cat "/sys/class/mtd/${mtd#/dev/}/erasesize" 2>/dev/null)"
+	[ -n "$ebs" ] && [ "$ebs" -gt 0 ] 2>/dev/null || {
+		v "factory: cannot read vendor erasesize, not rebuilding"
+		return 0
+	}
 	for off in 0 1 2 3; do
 		off=$((0x405000 + off * ebs))
 		[ "$(hexdump -v -s "$off" -n 2 -e '2/1 "%02x"' "$mtd")" = "9079" ] && {
