@@ -81,6 +81,13 @@ function get_channel_frequency(band, channel) {
 	}
 }
 
+function set_txpower(cmd, txpower) {
+	for (let arg in split(txpower, ' '))
+		push(cmd, arg);
+
+	return system(cmd);
+}
+
 function setup_phy(phy, config, data) {
 	if (config.channel == "auto")
 		config.channel = 0;
@@ -88,6 +95,7 @@ function setup_phy(phy, config, data) {
 	config.frequency = get_channel_frequency(config.band, config.channel);
 
 	if (config.country_code && match(config.country_code, /^[A-Za-z][A-Za-z]$/)) {
+		config.country_code = uc(config.country_code);
 		log(`Setting country code to ${config.country_code}`);
 		system(`iw reg set ${config.country_code}`);
 	} else if (config.country_code) {
@@ -98,9 +106,9 @@ function setup_phy(phy, config, data) {
 	set_default(config, 'rxantenna', 0xffffffff);
 	set_default(config, 'txantenna', 0xffffffff);
 
-	if (config.txantenna == 'all')
+	if (config.txantenna == 'all' || config.txantenna - config.txantenna != 0)
 		config.txantenna = 0xffffffff;
-	if (config.rxantenna == 'all')
+	if (config.rxantenna == 'all' || config.rxantenna - config.rxantenna != 0)
 		config.rxantenna = 0xffffffff;
 
 	let antenna_changed = (config.txantenna != data?.txantenna || config.rxantenna != data?.rxantenna);
@@ -115,10 +123,13 @@ function setup_phy(phy, config, data) {
 		rxantenna: config.rxantenna
 	});
 
-	if (config.txpower != null)
-		config.txpower = 'fixed ' + config.txpower + '00';
-	else
+	let txpower = (config.txpower != null) ? +config.txpower : null;
+	if (txpower != null && txpower - txpower == 0 && txpower >= 0) {
+		let mbm = int(txpower * 100 + 0.5);
+		config.txpower = (type(mbm) == 'int') ? sprintf('fixed %d', mbm) : 'auto';
+	} else {
 		config.txpower = 'auto';
+	}
 
 	log(`Configuring '${phy}' distance: ${config.distance}`);
 	if (antenna_changed) {
@@ -133,13 +144,6 @@ function setup_phy(phy, config, data) {
 		system(`iw phy ${phy} set frag ${config.frag}`);
 	if (config.rts)
 		system(`iw phy ${phy} set rts ${config.rts}`);
-}
-
-function set_txpower(cmd, txpower) {
-	for (let arg in split(txpower, ' '))
-		push(cmd, arg);
-
-	return system(cmd);
 }
 
 function get_interface_info(ifname) {
@@ -164,24 +168,21 @@ function ap_interface_ready(ifname, info) {
 	return info.ssid != null && info.wiphy_freq != null && carrier == '1';
 }
 
-function txpower_configured(ifname, txpower, after_set) {
-	let info = get_interface_info(ifname);
+function txpower_configured(info, target, after_set) {
+	if (target == null)
+		return after_set;
 
-	if (!info)
+	if (info.wiphy_tx_power_level == null)
 		return false;
 
-	if (!ap_interface_ready(ifname, info))
-		return false;
-
-	let target = target_txpower(txpower);
-
-	return target != null ? info.wiphy_tx_power_level == target : after_set;
+	return after_set ? info.wiphy_tx_power_level <= target : info.wiphy_tx_power_level == target;
 }
 
 function setup_radio_txpower(phy, config, ifnames, quiet) {
 	if (config.radio == null || config.radio < 0)
 		return;
 
+	let target = target_txpower(config.txpower);
 	let configured = [];
 	let missing = [];
 	let pending = [];
@@ -193,7 +194,13 @@ function setup_radio_txpower(phy, config, ifnames, quiet) {
 			continue;
 		}
 
-		if (txpower_configured(ifname, config.txpower, false)) {
+		let info = get_interface_info(ifname);
+		if (!info || !ap_interface_ready(ifname, info)) {
+			push(pending, ifname);
+			continue;
+		}
+
+		if (txpower_configured(info, target, false)) {
 			push(configured, ifname);
 			continue;
 		}
@@ -206,7 +213,8 @@ function setup_radio_txpower(phy, config, ifnames, quiet) {
 			continue;
 		}
 
-		if (txpower_configured(ifname, config.txpower, true))
+		info = get_interface_info(ifname);
+		if (info && ap_interface_ready(ifname, info) && txpower_configured(info, target, true))
 			push(configured, ifname);
 		else
 			push(pending, ifname);
@@ -229,6 +237,9 @@ function setup_radio_txpower(phy, config, ifnames, quiet) {
 
 function pending_txpower_ifnames(status) {
 	let ifnames = [];
+
+	if (!status)
+		return ifnames;
 
 	for (let field in [ 'missing', 'pending', 'failed' ])
 		for (let ifname in status[field])

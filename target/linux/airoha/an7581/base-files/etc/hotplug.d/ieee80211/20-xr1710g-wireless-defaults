@@ -2,25 +2,28 @@
 # Apply one-time XR1710G MT7996 wireless defaults after 10-wifi-detect populates UCI.
 
 [ "$ACTION" = "add" ] || exit 0
-. /lib/functions.sh
+WIRELESS_CFG="${WIRELESS_CONFIG:-${IPKG_INSTROOT:-}/etc/config/wireless}"
+[ -f "$WIRELESS_CFG" ] && chmod 600 "$WIRELESS_CFG"
+# shellcheck disable=SC1090,SC1091
+. "${IPKG_INSTROOT:-}/lib/functions.sh"
 [ "$(board_name)" = "gemtek,xr1710g-ubi" ] || exit 0
-[ -s /etc/config/wireless ] || exit 0
+[ -s "$WIRELESS_CFG" ] || exit 0
 [ "$(uci -q get wireless.radio0._xr1710g_tuned)" = "1" ] && exit 0
 
 LOCK_FILE="${XR1710G_WIFI_LOCK:-/var/lock/xr1710g-wifi-defaults.lock}"
 [ "${LOCK_FILE%/*}" != "$LOCK_FILE" ] && mkdir -p "${LOCK_FILE%/*}" 2>/dev/null
 
 set_from() {
-	local sec="$1" opt="$2" val="$3" cur match=0 s
+	_sf_sec="$1"; _sf_opt="$2"; _sf_val="$3"; _sf_match=0
 	shift 3
-	cur="$(uci -q get "wireless.$sec.$opt")"
-	[ "$cur" = "$val" ] && return 0
-	[ -z "$cur" ] && match=1
-	for s in "$@"; do
-		[ "$cur" = "$s" ] && match=1
+	_sf_cur="$(uci -q get "wireless.$_sf_sec.$_sf_opt")"
+	[ "$_sf_cur" = "$_sf_val" ] && return 0
+	[ -z "$_sf_cur" ] && _sf_match=1
+	for _sf_s in "$@"; do
+		[ "$_sf_cur" = "$_sf_s" ] && _sf_match=1
 	done
-	[ "$match" -eq 1 ] || return 0
-	uci -q set "wireless.$sec.$opt=$val"
+	[ "$_sf_match" -eq 1 ] || return 0
+	uci -q set "wireless.$_sf_sec.$_sf_opt=$_sf_val"
 	changed=1
 }
 
@@ -74,7 +77,9 @@ set_from() {
 		set_from "default_$r" bss_transition 1
 	done
 
+	# shellcheck disable=SC2018,SC2019
 	c1="$(uci -q get wireless.radio1.country | tr 'a-z' 'A-Z')"
+	# shellcheck disable=SC2018,SC2019
 	c2="$(uci -q get wireless.radio2.country | tr 'a-z' 'A-Z')"
 	case "$c1:$c2" in
 	[A-Z][A-Z]:[A-Z][A-Z])
@@ -84,6 +89,7 @@ set_from() {
 
 	uci -q set wireless.radio0._xr1710g_tuned='1'
 	uci -q commit wireless
+	[ -f "$WIRELESS_CFG" ] && chmod 600 "$WIRELESS_CFG"
 	exec 9>&-
 	if [ "$changed" -eq 1 ] && command -v ubus >/dev/null 2>&1; then
 		ubus -t 5 call network reload >/dev/null 2>&1 || true

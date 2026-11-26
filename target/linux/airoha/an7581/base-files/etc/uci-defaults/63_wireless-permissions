@@ -1,0 +1,7 @@
+#!/bin/sh
+# Restrict /etc/config/wireless to root-only so WPA/SAE passphrases are not world-readable.
+
+WIRELESS_CFG="${WIRELESS_CONFIG:-${IPKG_INSTROOT:-}/etc/config/wireless}"
+[ -f "$WIRELESS_CFG" ] && chmod 600 "$WIRELESS_CFG"
+
+exit 0

@@ -694,9 +694,9 @@ define Install/hostapd/full
 	$(INSTALL_DIR) $(1)/etc/init.d $(1)/etc/config $(1)/etc/radius
 	ln -sf hostapd $(1)/usr/sbin/hostapd-radius
 	$(INSTALL_BIN) ./files/radius.init $(1)/etc/init.d/radius
-	$(INSTALL_DATA) ./files/radius.config $(1)/etc/config/radius
-	$(INSTALL_DATA) ./files/radius.clients $(1)/etc/radius/clients
-	$(INSTALL_DATA) ./files/radius.users $(1)/etc/radius/users
+	$(INSTALL_CONF) ./files/radius.config $(1)/etc/config/radius
+	$(INSTALL_CONF) ./files/radius.clients $(1)/etc/radius/clients
+	$(INSTALL_CONF) ./files/radius.users $(1)/etc/radius/users
 endef
 
 define Package/hostapd-full/conffiles
