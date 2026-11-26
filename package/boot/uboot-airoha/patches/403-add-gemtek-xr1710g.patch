@@ -2,49 +2,13 @@ From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Andrey Korshunov <razor1702@gmail.com>
 Subject: [PATCH] an7581: add uboot chainloader for Gemtek XR1710G
 
-The Gemtek XR1710G ships the same AXON vendor bootloader with
-Airoha BMT/BBT handling as the Gemtek W1700K, so it needs the same
-chainloader: the vendor bootloader only ever loads this U-Boot from the
-"chainloader" partition, and everything else lives in UBI.
+Add the U-Boot UBI chainloader target for Gemtek XR1710G (AN7581, 2 GiB RAM,
+no MMC) with loadaddr=0x85000000, CONFIG_ENV_SIZE=0x4000, preboot reset-button
+TFTP recovery, and bootcmd=run boot_ubi falling back to TFTP recovery.
 
-The board differs from the W1700K only in parts U-Boot does not use, so
-the configuration is a copy of the W1700K one with the names changed.
-
-On top of that:
-
-- CONFIG_PINCONF is replaced by CONFIG_PINCTRL_AIROHA_AN7581, as for
-  the AN7581 reference board. The W1700K configuration lacks the pin
-  controller driver, so the reset button and the status LEDs do not
-  work there.
-- The reset button is read: holding it while the chainloader starts
-  boots the recovery image via TFTP, retrying until a TFTP server
-  answers, so a device can be recovered without a serial console.
-- The default menu entry runs boot_ubi, so a broken production volume
-  falls back to the recovery volume, and when neither boots the
-  recovery image is loaded via TFTP until a server answers.
-- As on the Nokia boards, a ubi partition that does not attach is
-  formatted, missing ubootenv, ubootenv2 and factory volumes are
-  created, and the environment is saved once, so fw_printenv and
-  fw_setenv work. CONFIG_ENV_SIZE is the ubootenv volume size that
-  uboot-envtools uses. The factory volume holds the Wi-Fi EEPROM and
-  the MAC addresses and is filled by sysupgrade from the vendor
-  partition; created empty here, it lets the kernel fall back to random
-  MAC addresses instead of deferring the Ethernet probe, so the recovery
-  image has a working network.
-- MMC support is disabled, as on the Nokia boards: the board has no
-  eMMC, and with the environment in MMC and UBI the saveenv right after
-  a format went to MMC, because env_load() picks the first location when
-  none of them holds an environment.
-- The installer entries of the W1700K are dropped: the device is
-  installed by booting the recovery image and running sysupgrade.
-- CONFIG_CMD_ASKENV is enabled, as on the Nokia boards: the TFTP and
-  recovery menu entries wait for Enter with askenv when they fail.
-
-Based on the XR1710G chainloader by Kenneth Kasilag.
-
+Origin: openwrt/openwrt#26296 (b8d878f0b6), xr1710g overrides from archive/xr1710g-v1@4b840202be
 Signed-off-by: Andrey Korshunov <razor1702@gmail.com>
 [xr1710g: set loadaddr=0x85000000, CONFIG_ENV_SIZE=0x4000, bootcmd=run boot_ubi, TFTP recovery]
-Origin: openwrt/openwrt#26296 (b8d878f0b6), xr1710g overrides from archive/xr1710g-v1@4b840202be
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
  configs/an7581_xr1710g_defconfig                     | 107 ++++++++++++++++++++++++++++++++++++++++

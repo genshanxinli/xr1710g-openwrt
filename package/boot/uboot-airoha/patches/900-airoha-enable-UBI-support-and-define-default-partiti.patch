@@ -3,6 +3,11 @@ From: Christian Marangi <ansuelsmth@gmail.com>
 Date: Wed, 28 May 2025 03:10:53 +0200
 Subject: [PATCH 23/29] airoha: enable UBI support and define default partition
 
+Enable UBI/UBI block and default bl2/ubi SPI-NAND partitions for Airoha EVB
+targets, refreshing an7583_evb_defconfig context against MDIO/PCS patches for
+strict fuzz=0 application.
+
+Origin: openwrt/openwrt commit baeacca598 (refreshed for fuzz=0)
 Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
 ---
  arch/arm/dts/an7583-evb.dts         | 22 ++++++++++++++++++++++
@@ -166,9 +171,9 @@ index 7178f45e3f8..7517b1a6fb3 100644
  CONFIG_SPI_FLASH_MTD=y
 +CONFIG_UBI_BLOCK=y
  CONFIG_DM_MDIO=y
- CONFIG_AIROHA_ETH=y
- CONFIG_PHY=y
-@@ -78,4 +85,5 @@ CONFIG_SYS_NS16550=y
+ CONFIG_MDIO_AIROHA=y
+ CONFIG_PCS_AIROHA_AN7583=y
+@@ -80,4 +87,5 @@ CONFIG_SYS_NS16550=y
  CONFIG_SPI=y
  CONFIG_DM_SPI=y
  CONFIG_AIROHA_SNFI_SPI=y

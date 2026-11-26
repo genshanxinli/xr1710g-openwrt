@@ -1,0 +1,30 @@
+From 4978553131f8b70fe0302893c1656d0dff41a697 Mon Sep 17 00:00:00 2001
+From: David Lechner <dlechner@baylibre.com>
+Date: Thu, 3 Sep 2026 16:35:47 -0500
+Subject: [PATCH] net: airoha_eth: check dev_remap_addr_name() for NULL
+
+Check the return value of dev_remap_addr_name() for NULL instead of
+IS_ERR(). This function only ever returns NULL on failure.
+
+Fixes: 74fcb6a7a7e9 ("net: airoha: Add Airoha Ethernet driver")
+Origin: upstream, https://github.com/u-boot/u-boot/commit/4978553131f8b70fe0302893c1656d0dff41a697
+Signed-off-by: David Lechner <dlechner@baylibre.com>
+---
+ drivers/net/airoha_eth.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/airoha_eth.c b/drivers/net/airoha_eth.c
+index e5d39b95cc53..ac72df5b6608 100644
+--- a/drivers/net/airoha_eth.c
++++ b/drivers/net/airoha_eth.c
+@@ -687,8 +687,8 @@ static int airoha_qdma_init(struct udevice *dev,
+ 
+ 	qdma->eth = eth;
+ 	qdma->regs = dev_remap_addr_name(dev, "qdma0");
+-	if (IS_ERR(qdma->regs))
+-		return PTR_ERR(qdma->regs);
++	if (!qdma->regs)
++		return -ENOMEM;
+ 
+ 	err = airoha_qdma_init_rx(qdma);
+ 	if (err)

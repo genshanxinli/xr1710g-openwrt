@@ -1,0 +1,28 @@
+From a52df653649558fbfc14cbb22b6abda85d15714e Mon Sep 17 00:00:00 2001
+From: Vikrant Yadav <vikrantyadav4802@gmail.com>
+Date: Sun, 25 Oct 2026 15:56:33 +0530
+Subject: [PATCH] pinctrl: airoha: fix bias readback in airoha_pinconf_get()
+
+In airoha_pinconf_get(), the final "else if (pull_up || pull_down)" branch
+lacks a PIN_CONFIG_BIAS_DISABLE check, causing valid pull-up/pull-down
+readbacks to fail with -EINVAL. Guard the branch on PIN_CONFIG_BIAS_DISABLE.
+
+Origin: upstream, https://github.com/u-boot/u-boot/commit/a52df653649558fbfc14cbb22b6abda85d15714e
+Signed-off-by: Vikrant Yadav <vikrantyadav4802@gmail.com>
+---
+ drivers/pinctrl/airoha/pinctrl-airoha.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/pinctrl/airoha/pinctrl-airoha.c b/drivers/pinctrl/airoha/pinctrl-airoha.c
+index 6245f116bd22..093a6c05f659 100644
+--- a/drivers/pinctrl/airoha/pinctrl-airoha.c
++++ b/drivers/pinctrl/airoha/pinctrl-airoha.c
+@@ -350,7 +350,7 @@ static int airoha_pinconf_get(struct airoha_pinctrl *pinctrl,
+ 		else if (param == PIN_CONFIG_BIAS_PULL_DOWN &&
+ 			 !(pull_down && !pull_up))
+ 			return -EINVAL;
+-		else if (pull_up || pull_down)
++		else if (param == PIN_CONFIG_BIAS_DISABLE && (pull_up || pull_down))
+ 			return -EINVAL;
+ 
+ 		arg = 1;
