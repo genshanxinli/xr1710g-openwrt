@@ -88,7 +88,7 @@ define Device/gemtek_w1700k-ubi
        the end of flash. A reinstall including corrected chainloader is needed.
   DEVICE_PACKAGES := airoha-en7581-mt7996-npu-firmware fitblk \
 		    kmod-hwmon-nct7802 kmod-mt7996-firmware wpad-basic-mbedtls \
-		    rtl826x-firmware rtl8261c-firmware
+		    rtl826x-firmware rtl8261c-firmware dumpimage
   UBINIZE_OPTS := -E 5
   BLOCKSIZE := 128k
   PAGESIZE := 2048
@@ -96,7 +96,7 @@ define Device/gemtek_w1700k-ubi
   KERNEL_IN_UBI := 1
   KERNEL := kernel-bin | gzip
   KERNEL_INITRAMFS := kernel-bin | lzma | \
-	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb with-initrd | pad-to 128k
+	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb with-initrd | pad-to 128k | append-metadata
   KERNEL_INITRAMFS_SUFFIX := -recovery.itb
   IMAGES := sysupgrade.itb
   IMAGE/sysupgrade.itb := append-kernel | fit gzip $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb external-static-with-rootfs | append-metadata
@@ -114,9 +114,18 @@ define Device/gemtek_xr1710g-ubi
   DEVICE_ALT0_MODEL := XR1710G
   DEVICE_ALT0_VARIANT := (UBI)
   DEVICE_DTS := an7581-gemtek_xr1710g-ubi
-  DEVICE_PACKAGES := airoha-en7581-mt7996-npu-firmware fitblk \
-		    kmod-hwmon-nct7802 kmod-mt7996-firmware wpad-basic-mbedtls \
-		    rtl826x-firmware
+  DEVICE_COMPAT_VERSION := 2.0
+  DEVICE_COMPAT_MESSAGE := Partition table has been changed to cooperate \
+       with the vendor bootloader with regard to the BMT/BBT partition at \
+       the end of flash. A reinstall including corrected chainloader is needed.
+  # dumpimage is required by platform.sh to verify the FIT FDT board description.
+  DEVICE_PACKAGES := -airoha-en7581-npu-firmware \
+		    airoha-en7581-mt7996-npu-firmware fitblk \
+		    kmod-hwmon-nct7802 kmod-mt7996-firmware kmod-nft-fullcone \
+		    rtl826x-firmware rtl8261c-firmware dumpimage \
+		    kmod-br-netfilter wpad-mbedtls usteer ethtool-full \
+		    luci luci-app-airoha-fancontrol luci-app-mlo \
+		    luci-app-airoha-flowsense
   UBINIZE_OPTS := -E 5
   BLOCKSIZE := 128k
   PAGESIZE := 2048
@@ -124,7 +133,7 @@ define Device/gemtek_xr1710g-ubi
   KERNEL_IN_UBI := 1
   KERNEL := kernel-bin | gzip
   KERNEL_INITRAMFS := kernel-bin | lzma | \
-	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb with-initrd | pad-to 128k
+	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb with-initrd | pad-to 128k | append-metadata
   KERNEL_INITRAMFS_SUFFIX := -recovery.itb
   IMAGES := sysupgrade.itb
   IMAGE/sysupgrade.itb := append-kernel | \
@@ -183,7 +192,7 @@ define Device/nokia_xg-040g-md-ubi
   KERNEL_IN_UBI := 1
   KERNEL := kernel-bin | gzip
   KERNEL_INITRAMFS := kernel-bin | lzma | \
-	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb with-initrd | pad-to 128k
+	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb with-initrd | pad-to 128k | append-metadata
   KERNEL_INITRAMFS_SUFFIX := -recovery.itb
   IMAGES := sysupgrade.itb
   IMAGE/sysupgrade.itb := append-kernel | \
@@ -215,7 +224,7 @@ define Device/quantum_q1000k-ubi
   KERNEL_IN_UBI := 1
   KERNEL := kernel-bin | gzip
   KERNEL_INITRAMFS := kernel-bin | lzma | \
-	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb with-initrd | pad-to 128k
+	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb with-initrd | pad-to 128k | append-metadata
   KERNEL_INITRAMFS_SUFFIX := -recovery.itb
   IMAGES := sysupgrade.itb
   # Match the Q1000K HTTP recovery upload buffer (256 MiB).

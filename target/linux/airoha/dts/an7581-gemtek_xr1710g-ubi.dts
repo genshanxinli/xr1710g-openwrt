@@ -44,6 +44,73 @@
 	};
 };
 
+&i2c0 {
+	hwmon@2e {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		/* RTD2 has no external thermal diode wired on XR1710G (reads 127.875 C open). */
+		channel@2 {
+			reg = <2>;
+			sensor-type = "temperature";
+			temperature-mode = "thermal-diode";
+			status = "disabled";
+		};
+	};
+};
+
+&gdm1 {
+	openwrt,netdev-name = "cpu";
+};
+
+&phy5 {
+	/* Vendor bootloader leaves SDS page 6 reg 3 at 0x88c6 on XR1710G. */
+	realtek,sds-mode = <0x88c6>;
+	/* Re-apply RTK SerDes tuning after copper AN so USXGMII PCS locks. */
+	realtek,patch-rtk-serdes;
+
+	leds {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		led@2 {
+			reg = <2>;
+			color = <LED_COLOR_ID_YELLOW>;
+			function = LED_FUNCTION_LAN;
+			function-enumerator = <2>;
+		};
+
+		led@3 {
+			reg = <3>;
+			color = <LED_COLOR_ID_GREEN>;
+			function = LED_FUNCTION_LAN;
+			function-enumerator = <2>;
+		};
+	};
+};
+
+&phy8 {
+	/* Re-apply RTK SerDes tuning after copper AN so USXGMII PCS locks. */
+	realtek,patch-rtk-serdes;
+
+	leds {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		led@2 {
+			reg = <2>;
+			color = <LED_COLOR_ID_YELLOW>;
+			function = LED_FUNCTION_WAN;
+		};
+
+		led@3 {
+			reg = <3>;
+			color = <LED_COLOR_ID_GREEN>;
+			function = LED_FUNCTION_WAN;
+		};
+	};
+};
+
 &gsw_phy1 {
 	pinctrl-names = "gbe-led";
 	pinctrl-0 = <&gswp1_led0_pins>, <&gswp1_led1_pins>;
