@@ -53,12 +53,18 @@ while [ $# -gt 0 ]; do
 	-F|--force)
 		row force.policy plain-sysupgrade "$1" FAIL
 		die "$EXIT_FORCE" "-F/--force is unconditionally refused; never force-flash XR1710G" ;;
-	--) shift; break ;;
+	--)
+		shift
+		while [ $# -gt 0 ]; do
+			[ -z "$IMAGE" ] || die "$EXIT_USAGE" "only one image may be given"
+			IMAGE=$1; shift
+		done
+		break ;;
 	-*) err "unknown option: $1"; usage >&2; exit "$EXIT_USAGE" ;;
 	*) [ -z "$IMAGE" ] || die "$EXIT_USAGE" "only one image may be given"; IMAGE=$1; shift ;;
 	esac
 done
-[ $# -eq 0 ] || die "$EXIT_USAGE" "unexpected argument: $1"
+case "$IMAGE" in -*) IMAGE="./$IMAGE" ;; esac
 [ "$RUN" = 1 ] && [ "$CHECK_ONLY" = 1 ] && die "$EXIT_USAGE" "--run conflicts with --probe/--dry-run/--check-only"
 case "$HEAD_KB" in ''|*[!0-9]*) die "$EXIT_USAGE" "--head-kb must be a positive integer" ;; esac
 [ "$HEAD_KB" -gt 0 ] || die "$EXIT_USAGE" "--head-kb must be > 0"
@@ -228,14 +234,24 @@ if [ "$PROBE" = 0 ]; then
 	fi
 
 	if command -v dumpimage >/dev/null 2>&1; then
-		DLIST=$(dumpimage -l "$IMAGE" 2>/dev/null || true)
-		if printf '%s' "$DLIST" | tr 'A-Z' 'a-z' | grep -Fq 'w1700k'; then
-			row image.fdt gemtek_xr1710g-ubi 'w1700k found' FAIL; die "$EXIT_COMPAT" "FIT FDT references W1700K"
-		elif printf '%s' "$DLIST" | grep -Fq 'OpenWrt gemtek_xr1710g-ubi device tree blob'; then
-			row image.fdt gemtek_xr1710g-ubi matched PASS
+		if DLIST=$(dumpimage -l "$IMAGE" 2>&1); then
+			if printf '%s' "$DLIST" | tr 'A-Z' 'a-z' | grep -Fq 'w1700k'; then
+				row image.fdt gemtek_xr1710g-ubi 'w1700k found' FAIL; die "$EXIT_COMPAT" "FIT FDT references W1700K"
+			elif printf '%s' "$DLIST" | grep -Fq 'OpenWrt gemtek_xr1710g-ubi device tree blob'; then
+				row image.fdt gemtek_xr1710g-ubi matched PASS
+			else
+				row image.fdt gemtek_xr1710g-ubi mismatch FAIL; die "$EXIT_COMPAT" "FIT FDT does not match gemtek_xr1710g-ubi"
+			fi
 		else
-			row image.fdt gemtek_xr1710g-ubi mismatch FAIL; die "$EXIT_COMPAT" "FIT FDT does not match gemtek_xr1710g-ubi"
+			DRC=$?
+			row image.fdt 'dumpimage rc=0' "rc=$DRC" FAIL
+			die "$EXIT_COMPAT" "dumpimage -l failed (rc=$DRC)"
 		fi
+	elif [ "$RUN" = 1 ]; then
+		row image.fdt gemtek_xr1710g-ubi missing FAIL
+		die "$EXIT_COMPAT" "dumpimage not found; refusing --run without FIT FDT verification"
+	else
+		row image.fdt gemtek_xr1710g-ubi 'not installed' SKIP
 	fi
 
 	SUP=$(command -v "$SYSUPGRADE" 2>/dev/null || true)
@@ -264,9 +280,24 @@ while read -r pnum psize perase pname; do
 	SIZE=$((0x$psize)); CAP=$((HEAD_KB * 1024)); [ "$CAP" -le "$SIZE" ] || CAP=$SIZE
 	CNT=$(( (CAP + 4095) / 4096 )); WANT=$((CNT * 4096)); [ "$WANT" -le "$SIZE" ] || WANT=$SIZE
 	if [ "$CHECK_ONLY" = 1 ]; then
-		SHA=$(dd if="$DEV" bs=4096 count="$CNT" 2>/dev/null | sha256sum | awk '{print $1}')
-		if [ -n "$SHA" ] && [ "$SHA" != "$EMPTY_SHA" ]; then row "ro-read.${pname}" "${CNT}x4KiB" "$SHA" PASS
-		else row "ro-read.${pname}" "${CNT}x4KiB" 'read failed' FAIL; BK_FAIL="$BK_FAIL $pname"; fi
+		TMP="$WORK/head.tmp"
+		rm -f "$TMP"
+		if dd if="$DEV" of="$TMP" bs=4096 count="$CNT" 2>/dev/null; then
+			GOT=$(wc -c < "$TMP" | tr -d ' ')
+			if [ "$GOT" = "$WANT" ]; then
+				SHA=$(sha256sum "$TMP" | awk '{print $1}')
+				if [ -n "$SHA" ] && [ "$SHA" != "$EMPTY_SHA" ]; then
+					row "ro-read.${pname}" "${WANT}B" "$SHA" PASS
+				else
+					row "ro-read.${pname}" "${WANT}B" 'sha256 failed' FAIL; BK_FAIL="$BK_FAIL $pname"
+				fi
+			else
+				row "ro-read.${pname}" "${WANT}B" "short-read(${GOT}B)" FAIL; BK_FAIL="$BK_FAIL $pname"
+			fi
+		else
+			row "ro-read.${pname}" "${WANT}B" 'dd failed' FAIL; BK_FAIL="$BK_FAIL $pname"
+		fi
+		rm -f "$TMP"
 	else
 		OUT="$BKDIR/${pname}.head"
 		if dd if="$DEV" of="$OUT" bs=4096 count="$CNT" 2>/dev/null && [ "$(wc -c < "$OUT" | tr -d ' ')" = "$WANT" ]; then
@@ -284,6 +315,12 @@ if [ "$CHECK_ONLY" = 0 ]; then
 	}
 	row backup.verify 'sha256sum -c' ok PASS
 	say "backup: $BKDIR"
+	if [ "$RUN" = 1 ]; then
+		case "$BACKUP_ROOT" in
+		/tmp|/tmp/*)
+			err "WARN: backup dir '$BKDIR' is on /tmp (tmpfs) and will not survive sysupgrade reboot; use -d <persistent-dir> or copy off-device first" ;;
+		esac
+	fi
 fi
 
 say "GATE PASS"

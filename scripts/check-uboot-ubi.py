@@ -19,8 +19,19 @@ BUILD_CFG_RE = re.compile(r"^define Build/Configure\n(.*?)^endef$", re.MULTILINE
 MAKE_VAR_RE = re.compile(r"\$(?:\([^()$]+\)|\{[^{}$]+\})")
 HUSH_PREFIX = frozenset({"if", "elif", "then", "else", "do", "!"})
 RUNTIME_UBI_VOLUMES = frozenset({"rootfs_data"})
+EXPECTED_PARTS = [
+    ("vendor", 0x0, 0x600000, True),
+    ("chainloader", 0x600000, 0x100000, True),
+    ("ubi", 0x700000, 0x1B700000, False),
+    ("reserved_bmt", 0x1BE00000, 0x4200000, True),
+]
 KASLR_REQ = ("CONFIG_DM_RNG=y", "CONFIG_RNG_AIROHA=y")
 KASLR_FORBID = ("CONFIG_MEASURED_BOOT=y", "CONFIG_ARMV8_SEC_FIRMWARE_SUPPORT=y")
+KERNEL_KASLR_REQ = (
+    "CONFIG_RANDOMIZE_BASE=y",
+    "CONFIG_RANDOMIZE_MODULE_REGION_FULL=y",
+    "CONFIG_RELOCATABLE=y",
+)
 
 
 class PatchError(Exception):
@@ -126,6 +137,63 @@ def collect_dts_volumes(paths: list[Path]) -> tuple[set[str], list[Path]]:
     return vols, visited
 
 
+def _strip_dts_comments(text: str) -> str:
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    return re.sub(r"//[^\n]*", "", text)
+
+
+def _extract_brace_body(text: str, open_idx: int) -> tuple[str, int]:
+    depth = 0
+    for idx in range(open_idx, len(text)):
+        ch = text[idx]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[open_idx + 1 : idx], idx + 1
+    raise PatchError("unterminated '{' block in DTS")
+
+
+def parse_fixed_partitions(text: str) -> list[tuple[str, int, int, bool]]:
+    clean = _strip_dts_comments(text)
+    for m in re.finditer(r"\bpartitions\s*\{", clean):
+        body, _ = _extract_brace_body(clean, m.end() - 1)
+        if not re.search(r'compatible\s*=\s*"fixed-partitions"\s*;', body):
+            continue
+        parts: list[tuple[str, int, int, bool]] = []
+        pos = 0
+        while pos < len(body):
+            nm = re.search(r"([A-Za-z0-9_,.-]+(?:@[0-9A-Fa-f]+)?)\s*\{", body[pos:])
+            if not nm:
+                break
+            open_pos = pos + nm.end() - 1
+            node_body, next_pos = _extract_brace_body(body, open_pos)
+            pos = next_pos
+            top_chars: list[str] = []
+            depth = 0
+            for ch in node_body:
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                elif depth == 0:
+                    top_chars.append(ch)
+            top = "".join(top_chars)
+            lm = re.search(r'\blabel\s*=\s*"([^"]+)"\s*;', top)
+            rm = re.search(r"\breg\s*=\s*<\s*([^\s>]+)\s+([^\s>]+)\s*>\s*;", top)
+            if not lm or not rm:
+                raise PatchError(f"fixed-partitions node {nm.group(1)!r} missing label or reg")
+            try:
+                off, sz = int(rm.group(1), 0), int(rm.group(2), 0)
+            except ValueError as exc:
+                raise PatchError(f"fixed-partitions node {nm.group(1)!r} invalid reg: {exc}") from exc
+            ro = bool(re.search(r"(?:^|;)\s*read-only\s*;", top))
+            parts.append((lm.group(1), off, sz, ro))
+        return parts
+    return []
+
+
 def parse_env_ubi_volumes(env_lines: list[str]) -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
     for raw in env_lines:
@@ -201,16 +269,19 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--uboot-makefile", type=Path, help="uboot-airoha Makefile")
     ap.add_argument("--envtools", type=Path, help="uboot-envtools airoha_an7581 script")
     ap.add_argument("--dts", type=Path, action="append", help="board DTS/DTSI (auto-follows #include)")
+    ap.add_argument("--kernel-config", type=Path, help="kernel config (default: target/linux/airoha/an7581/config-7.4)")
     args = ap.parse_args(argv)
     repo = args.repo.resolve()
     patch_p = args.uboot_patch or repo / "package/boot/uboot-airoha/patches/403-add-gemtek-xr1710g.patch"
     mk_p = args.uboot_makefile or repo / "package/boot/uboot-airoha/Makefile"
     env_p = args.envtools or repo / "package/boot/uboot-tools/uboot-envtools/files/airoha_an7581"
     dts_ps = args.dts or [repo / "target/linux/airoha/dts/an7581-gemtek_xr1710g-ubi.dts"]
+    kcfg_p = args.kernel_config or repo / "target/linux/airoha/an7581/config-7.4"
 
     try:
         by_file = validate_and_split_patch(patch_p.read_text(encoding="utf-8"))
         mk_txt, envtools_txt = mk_p.read_text(encoding="utf-8"), env_p.read_text(encoding="utf-8")
+        kcfg_lines = {ln.strip() for ln in kcfg_p.read_text(encoding="utf-8").splitlines()}
         dts_vols, visited_dts = collect_dts_volumes(dts_ps)
         env_lines = [ln.strip() for k, v in by_file.items() if "defenvs/" in k for ln in v]
         refs = parse_env_ubi_volumes(env_lines)
@@ -219,6 +290,7 @@ def main(argv: list[str]) -> int:
         return 2
 
     defcfg = [ln.strip() for k, v in by_file.items() if "configs/" in k for ln in v]
+    uboot_dts_txt = "\n".join(ln for k, v in by_file.items() if k.endswith(".dts") for ln in v)
     env_kv = dict(ln.split("=", 1) for ln in env_lines if "=" in ln and not ln.startswith("#"))
     cfg_kv = dict(ln.split("=", 1) for ln in defcfg if "=" in ln and not ln.startswith("#"))
     fails: list[str] = []
@@ -226,9 +298,42 @@ def main(argv: list[str]) -> int:
         fails.append("no 'ubi check'/'ubi read' commands found in U-Boot defenv")
     if missing := sorted({v for _, v in refs} - (dts_vols | RUNTIME_UBI_VOLUMES)):
         fails.append(f"UBI volumes absent from DTS ({', '.join(p.name for p in visited_dts)}): {', '.join(missing)}")
-    for k, want, src in (("CONFIG_SYS_LOAD_ADDR", "0x85000000", cfg_kv), ("loadaddr", "0x85000000", env_kv), ("CONFIG_ENV_SIZE", "0x4000", cfg_kv)):
+    for k, want, src in (
+        ("CONFIG_SYS_LOAD_ADDR", "0x85000000", cfg_kv),
+        ("loadaddr", "0x85000000", env_kv),
+        ("CONFIG_ENV_SIZE", "0x4000", cfg_kv),
+        ("CONFIG_ENV_IS_IN_UBI", "y", cfg_kv),
+        ("CONFIG_ENV_REDUNDANT", "y", cfg_kv),
+        ("CONFIG_ENV_UBI_PART", '"ubi"', cfg_kv),
+        ("CONFIG_ENV_UBI_VOLUME", '"ubootenv"', cfg_kv),
+        ("CONFIG_ENV_UBI_VOLUME_REDUND", '"ubootenv2"', cfg_kv),
+    ):
         if src.get(k, "").lower() != want:
             fails.append(f"{k}={src.get(k)!r} != {want!r}")
+    for env_vol_k in ("CONFIG_ENV_UBI_VOLUME", "CONFIG_ENV_UBI_VOLUME_REDUND"):
+        vname = cfg_kv.get(env_vol_k, "").strip('"')
+        if vname and vname not in dts_vols:
+            fails.append(f"{env_vol_k}={vname!r} absent from kernel DTS UBI volumes")
+    try:
+        uboot_parts = parse_fixed_partitions(uboot_dts_txt)
+        kernel_parts: list[tuple[str, int, int, bool]] = []
+        for dp in visited_dts:
+            if found := parse_fixed_partitions(dp.read_text(encoding="utf-8")):
+                kernel_parts = found
+                break
+    except PatchError as exc:
+        fails.append(f"fixed-partitions parse error: {exc}")
+        uboot_parts, kernel_parts = [], []
+    if not uboot_parts:
+        fails.append("U-Boot DTS missing fixed-partitions table")
+    elif uboot_parts != EXPECTED_PARTS:
+        fails.append(f"U-Boot DTS fixed-partitions {uboot_parts!r} != expected {EXPECTED_PARTS!r}")
+    if not kernel_parts:
+        fails.append(f"kernel DTS ({', '.join(p.name for p in visited_dts)}) missing fixed-partitions table")
+    elif kernel_parts != EXPECTED_PARTS:
+        fails.append(f"kernel DTS fixed-partitions {kernel_parts!r} != expected {EXPECTED_PARTS!r}")
+    if uboot_parts and kernel_parts and uboot_parts != kernel_parts:
+        fails.append(f"fixed-partitions mismatch: u-boot={uboot_parts!r} != kernel={kernel_parts!r}")
     if env_kv.get("bootcmd") != "run boot_ubi":
         fails.append(f"defenv bootcmd={env_kv.get('bootcmd')!r} != 'run boot_ubi'")
     if "run bootcmd" not in env_kv.get("bootmenu_0", ""):
@@ -243,11 +348,18 @@ def main(argv: list[str]) -> int:
     if et_err := check_envtools(envtools_txt, "0x4000"):
         fails.append(f"uboot-envtools ({env_p.name}): {et_err}")
     fails.extend(f"uboot-airoha/Makefile: {e}" for e in check_uboot_makefile(mk_txt))
+    fails.extend(f"kernel config ({kcfg_p.name}) missing {sym}" for sym in KERNEL_KASLR_REQ if sym not in kcfg_lines)
+    rng_patches = sorted((repo / "package/boot/uboot-airoha/patches").glob("*rng-airoha*.patch"))
+    if not rng_patches:
+        fails.append("package/boot/uboot-airoha/patches/ missing *rng-airoha*.patch")
     if fails:
         for f in fails:
             print(f"FAIL: {f}", file=sys.stderr)
         return 1
-    print(f"OK: U-Boot hunks, UBI volumes ({', '.join(sorted({v for _, v in refs}))}), env 0x4000, loadaddr 0x85000000, and KASLR guards verified")
+    print(
+        f"OK: U-Boot hunks, fixed-partitions ({', '.join(p[0] for p in uboot_parts)}), "
+        f"UBI volumes ({', '.join(sorted({v for _, v in refs}))}), env 0x4000, loadaddr 0x85000000, and KASLR guards verified"
+    )
     return 0
 
 

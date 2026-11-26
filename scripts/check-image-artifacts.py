@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import struct
 import subprocess
@@ -23,6 +24,12 @@ TRAILER_SIG, TRAILER_INFO = 0, 1
 INFO_HDR_LEN = 8
 META_MAX = 30 * 1024
 SIG_MAX = 1024
+# 0x86ff0000 (ramoops) - 0x85000000 (U-Boot loadaddr) = 31.9375 MiB
+FIT_RAMOOPS_CEILING = 0x1FF0000
+# 128 KiB PEB - 2x2 KiB UBI headers = 124 KiB dynamic-volume LEB
+UBI_LEB_SIZE = 0x1F000
+# mtd1 (chainloader) partition size = 1 MiB
+CHAINLOADER_MAX_BYTES = 0x100000
 
 BOARD_COMPAT = "gemtek,xr1710g-ubi"
 FDT_DESC_NEEDLE = "OpenWrt gemtek_xr1710g-ubi device tree blob"
@@ -34,11 +41,14 @@ REQUIRED_PKGS = (
     "kmod-mt7996-firmware",
     "rtl826x-firmware",
     "rtl8261c-firmware",
+    "px5g-mbedtls",
     "luci-app-airoha-fancontrol",
     "luci-app-mlo",
     "luci-app-airoha-flowsense",
 )
+REQUIRED_ABI_PKGS = ("libustream-mbedtls",)
 BANNED_PKGS = (
+    "airoha-en7581-npu-firmware",
     "luci-app-wifi7",
     "luci-app-airoha-npu",
     "luci-app-netspeedtest",
@@ -49,7 +59,7 @@ BANNED_PKGS = (
 )
 
 
-def parse_fwx0_metadata(data: bytes, label: str) -> dict:
+def parse_fwx0_metadata(data: bytes, label: str, fit_total: int) -> dict:
     """Validate 16-byte big-endian FWx0 trailer(s) and return decoded metadata JSON."""
     tlen = TRAILER_STRUCT.size
     end = len(data)
@@ -86,6 +96,8 @@ def parse_fwx0_metadata(data: bytes, label: str) -> dict:
         _, info_size = read_trailer(info_end, expect_kind=TRAILER_INFO)
 
     info_start = info_end - info_size
+    if info_start < fit_total:
+        raise ValueError(f"{label}: FWx0 metadata starts at {info_start} before FIT end {fit_total}")
     hdr_ver, _hdr_flags = struct.unpack_from(">II", data, info_start)
     if hdr_ver != 0:
         raise ValueError(f"{label}: unsupported fwimage_header version {hdr_ver} (expected 0)")
@@ -99,7 +111,15 @@ def parse_fwx0_metadata(data: bytes, label: str) -> dict:
     return meta
 
 
-def check_image(path: Path, dumpimage: str | None, require_dumpimage: bool) -> list[str]:
+def check_image(
+    path: Path,
+    dumpimage: str | None,
+    require_dumpimage: bool,
+    *,
+    expect_fwx0: bool = True,
+    max_bytes: int | None = None,
+    ubi_leb_size: int | None = None,
+) -> list[str]:
     errs: list[str] = []
     name = path.name
     data = path.read_bytes()
@@ -110,11 +130,19 @@ def check_image(path: Path, dumpimage: str | None, require_dumpimage: bool) -> l
     if fit_total < 8 or len(data) < fit_total:
         errs.append(f"{name}: truncated FIT (size={len(data)} < totalsize={fit_total})")
 
-    try:
-        meta = parse_fwx0_metadata(data, name)
-    except ValueError as exc:
-        errs.append(str(exc))
-        meta = None
+    meta: dict | None = None
+    if expect_fwx0:
+        try:
+            meta = parse_fwx0_metadata(data, name, fit_total)
+        except ValueError as exc:
+            errs.append(str(exc))
+
+    actual_size = max(len(data), fit_total)
+    eff_size = ((actual_size + ubi_leb_size - 1) // ubi_leb_size) * ubi_leb_size if ubi_leb_size else actual_size
+    if max_bytes is not None and eff_size > max_bytes:
+        errs.append(
+            f"{name}: image {actual_size}B (read footprint {eff_size:#x}) exceeds ceiling {max_bytes:#x} ({max_bytes}B)"
+        )
 
     if meta is not None:
         raw_meta = json.dumps(meta).lower()
@@ -192,6 +220,10 @@ def check_manifest(image_dir: Path) -> list[str]:
             pkgs.add(s.split()[0])
     errs: list[str] = []
     missing = [p for p in REQUIRED_PKGS if p not in pkgs]
+    missing.extend(
+        p for p in REQUIRED_ABI_PKGS
+        if not any(pkg == p or re.fullmatch(rf"{re.escape(p)}-?[0-9]+", pkg) for pkg in pkgs)
+    )
     present_banned = [p for p in BANNED_PKGS if p in pkgs]
     if missing:
         errs.append(f"{manifests[0].name}: missing required packages: {', '.join(missing)}")
@@ -219,21 +251,33 @@ def main(argv: list[str]) -> int:
     try:
         sysupgrade = find_single(image_dir, "*gemtek_xr1710g-ubi-squashfs-sysupgrade.itb")
         recovery = find_single(image_dir, "*gemtek_xr1710g-ubi-initramfs-recovery.itb")
+        chainloader = find_single(image_dir, "*gemtek_xr1710g-ubi-chainload-uboot.itb")
     except FileNotFoundError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
     fails: list[str] = []
-    for img in (sysupgrade, recovery):
-        fails.extend(check_image(img, dumpimage, args.require_dumpimage))
-    fails.extend(check_sha256sums(image_dir, [sysupgrade, recovery]))
+    fails.extend(
+        check_image(
+            sysupgrade,
+            dumpimage,
+            args.require_dumpimage,
+            max_bytes=FIT_RAMOOPS_CEILING,
+            ubi_leb_size=UBI_LEB_SIZE,
+        )
+    )
+    fails.extend(check_image(recovery, dumpimage, args.require_dumpimage))
+    fails.extend(
+        check_image(chainloader, dumpimage, args.require_dumpimage, expect_fwx0=False, max_bytes=CHAINLOADER_MAX_BYTES)
+    )
+    fails.extend(check_sha256sums(image_dir, [sysupgrade, recovery, chainloader]))
     fails.extend(check_manifest(image_dir))
 
     if fails:
         for f in fails:
             print(f"FAIL: {f}", file=sys.stderr)
         return 1
-    print(f"OK: {sysupgrade.name}, {recovery.name}, sha256sums, and manifest verified")
+    print(f"OK: {sysupgrade.name}, {recovery.name}, {chainloader.name}, sha256sums, and manifest verified")
     return 0
 
 

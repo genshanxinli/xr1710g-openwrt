@@ -28,15 +28,21 @@ try_git() {
 		;&  # FALLTHROUGH
 	*)
 		BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-		ORIGIN="$(git rev-parse --verify --symbolic-full-name ${BRANCH}@{u} 2>/dev/null)"
+		ORIGIN="$(git rev-parse --verify --symbolic-full-name "${BRANCH}@{u}" 2>/dev/null)"
 		[ -n "$ORIGIN" ] || ORIGIN="$(git rev-parse --verify --symbolic-full-name main@{u} 2>/dev/null)"
+		[ -n "$ORIGIN" ] || ORIGIN="$(git rev-parse --verify --symbolic-full-name xr1710g@{u} 2>/dev/null)"
+		[ -n "$ORIGIN" ] || ORIGIN="$(git rev-parse --verify --symbolic-full-name refs/remotes/origin/xr1710g 2>/dev/null)"
 		REV="$(git rev-list ${REBOOT}..$GET_REV 2>/dev/null | wc -l | awk '{print $1}')"
 
+		UPSTREAM_BASE=""
 		if [ -n "$ORIGIN" ]; then
-			UPSTREAM_BASE="$(git merge-base $GET_REV $ORIGIN)"
+			UPSTREAM_BASE="$(git merge-base "$GET_REV" "$ORIGIN" 2>/dev/null)"
+		fi
+		if [ -n "$UPSTREAM_BASE" ]; then
 			UPSTREAM_REV="$(git rev-list ${REBOOT}..$UPSTREAM_BASE 2>/dev/null | wc -l | awk '{print $1}')"
 		else
-			UPSTREAM_REV=0
+			UPSTREAM_REV=$REV
+			UPSTREAM_BASE=$GET_REV
 		fi
 
 		if [ "$REV" -gt "$UPSTREAM_REV" ]; then
