@@ -5,6 +5,7 @@ set -u
 
 TOPDIR=${TOPDIR:-$PWD}
 PATCH_BASE_REF=${PATCH_BASE_REF:-db9128c34652317cfbfffdf71e2b813edbe0cf0e}
+PATCH_FORMAT_BASE_REF=${PATCH_FORMAT_BASE_REF:-a0d2179730edacfd6791a5e341936134b61c43b3}
 DRY_RUN=0; DO_DEFAULT=1; DO_PATCHES=0; REQUIRE_TARBALL=0; TARBALL=''; FAILS=0; WORK=''
 
 cleanup() { [ -n "$WORK" ] && rm -rf "$WORK"; }
@@ -313,6 +314,14 @@ PY
 	[ "$FAILS" -eq "$hyg_before" ] && ok "repository hygiene verified"
 }
 
+changed_patches_since() {
+	_ref=$1; shift
+	{ git -C "$TOPDIR" diff -M --name-only --diff-filter=AMR "$_ref"..HEAD -- "$@"
+	  git -C "$TOPDIR" diff -M --cached --name-only --diff-filter=AMR -- "$@"
+	  git -C "$TOPDIR" diff -M --name-only --diff-filter=AMR -- "$@"
+	  git -C "$TOPDIR" ls-files --others --exclude-standard -- "$@"; } | LC_ALL=C sort -u
+}
+
 check_patch_queue() {
 	pq_fails=$FAILS
 	for d in target/linux/airoha/patches-7.4 package/kernel/mt76/patches package/boot/uboot-airoha/patches; do
@@ -329,31 +338,40 @@ check_patch_queue() {
 		done < "$WORK/dir_patches"
 	done
 
+	set -- \
+		target/linux/airoha/patches-7.4 \
+		target/linux/generic/backport-7.4 \
+		target/linux/generic/pending-7.4 \
+		target/linux/generic/hack-7.4 \
+		package/kernel/mt76/patches \
+		package/boot/uboot-airoha/patches \
+		package/network/services/hostapd/patches \
+		package/kernel/mac80211/patches \
+		package/network/config/firewall4/patches \
+		package/network/utils/fullconenat-nft/patches \
+		package/system/procd/patches \
+		tools/fakeroot/patches
 	if git -C "$TOPDIR" rev-parse --verify -q "$PATCH_BASE_REF" >/dev/null 2>&1; then
-		set -- \
-			target/linux/airoha/patches-7.4 \
-			target/linux/generic/backport-7.4 \
-			target/linux/generic/pending-7.4 \
-			target/linux/generic/hack-7.4 \
-			package/kernel/mt76/patches \
-			package/boot/uboot-airoha/patches \
-			package/network/services/hostapd/patches \
-			package/kernel/mac80211/patches \
-			package/network/config/firewall4/patches \
-			package/network/utils/fullconenat-nft/patches \
-			package/system/procd/patches \
-			tools/fakeroot/patches
-		{ git -C "$TOPDIR" diff -M --name-only --diff-filter=AM "$PATCH_BASE_REF"..HEAD -- "$@"
-		  git -C "$TOPDIR" diff -M --cached --name-only --diff-filter=AM -- "$@"
-		  git -C "$TOPDIR" diff -M --name-only --diff-filter=AM -- "$@"
-		  git -C "$TOPDIR" ls-files --others --exclude-standard -- "$@"; } | LC_ALL=C sort -u > "$WORK/changed_patches"
-		while read -r rel; do
+		changed_patches_since "$PATCH_BASE_REF" "$@" > "$WORK/changed_patches"
+		while IFS= read -r rel; do
 			[ -f "$TOPDIR/$rel" ] || continue
 			case "$rel" in *.patch) ;; *) continue ;; esac
 			awk '/^(diff --git |--- (a\/|\/dev\/null))/{exit} /^From: /{f=1} /^Subject: /{s=1} /^Origin: /{o=1}
 			     END{ if(!f) print "From:"; if(!s) print "Subject:"; if(!o) print "Origin:" }' "$TOPDIR/$rel" > "$WORK/hdr.miss"
 			[ ! -s "$WORK/hdr.miss" ] || fail "$rel missing header(s): $(tr '\n' ' ' < "$WORK/hdr.miss")"
 		done < "$WORK/changed_patches"
+	fi
+	if git -C "$TOPDIR" rev-parse --verify -q "$PATCH_FORMAT_BASE_REF" >/dev/null 2>&1; then
+		changed_patches_since "$PATCH_FORMAT_BASE_REF" "$@" > "$WORK/format_patches"
+		while IFS= read -r rel; do
+			[ -f "$TOPDIR/$rel" ] || continue
+			case "$rel" in *.patch) ;; *) continue ;; esac
+			bad=$(awk 'NR==1 && /^From [0-9a-f]+ Mon Sep 17/ && length($2)==40 { m=1 }
+			           f && /^[0-9]+\.[0-9]+/ { g=1 }
+			           { f = ($0 == "-- ") ? 1 : 0 }
+			           END { o = (m ? "From-mbox" : ""); if (g) o = (o ? o " " : "") "git-footer"; if (o) print o }' "$TOPDIR/$rel")
+			[ -z "$bad" ] || fail "$rel contains git format-patch artifact(s): $bad"
+		done < "$WORK/format_patches"
 	fi
 	[ "$FAILS" -eq "$pq_fails" ] && ok "patch-queue prefixes and headers verified"
 
