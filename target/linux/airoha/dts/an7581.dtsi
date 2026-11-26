@@ -58,6 +58,15 @@
 			no-map;
 			reg = <0x0 0x89000000 0x0 0x1000000>;
 		};
+
+		/* AN7581 NPU V2 aliases DRAM >= 0xc0000000 into 0x80000000..0xbfffffff */
+		npu_dma: npu-dma {
+			compatible = "shared-dma-pool";
+			no-map;
+			size = <0x0 0x1000000>;
+			alignment = <0x0 0x100000>;
+			alloc-ranges = <0x0 0x91000000 0x0 0x2f000000>;
+		};
 	};
 
 	psci {
@@ -155,8 +164,9 @@
 	};
 
 	cpufreq: cpufreq {
-		reg = <0x0 0x1fa20000 0x0 0x2c0>, <0x0 0x1efbe000 0x0 0x800>;
-		reg-names = "chip-scu", "mcucfg";
+		reg = <0x0 0x1efbe000 0x0 0x800>;
+		reg-names = "mcucfg";
+		airoha,chip-scu = <&chip_scu>;
 		compatible = "airoha,en7581-cpufreq";
 
 		operating-points-v2 = <&cpu_smcc_opp_table>;
@@ -926,8 +936,8 @@
 				     <GIC_SPI 121 IRQ_TYPE_LEVEL_HIGH>,
 				     <GIC_SPI 122 IRQ_TYPE_LEVEL_HIGH>,
 				     <GIC_SPI 123 IRQ_TYPE_LEVEL_HIGH>;
-			memory-region = <&npu_binary>;
-			memory-region-names = "binary";
+			memory-region = <&npu_binary>, <&npu_dma>;
+			memory-region-names = "binary", "dma";
 
 			status = "disabled";
 		};

@@ -1,0 +1,46 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 10:50:00 +0800
+Subject: [PATCH] net: airoha: npu: bind named "dma" reserved-memory pool
+
+AN7581 NPU V2 aliases DRAM addresses >= 0xc0000000 into the lower 1 GiB
+window. Bind the optional DT "dma" shared-dma-pool before allocating
+coherent mailbox/WLAN buffers and release it via devm on unbind.
+
+Origin: openwrt/openwrt#25928; xr1710g #402
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/net/ethernet/airoha/airoha_npu.c
++++ b/drivers/net/ethernet/airoha/airoha_npu.c
+@@ -724,6 +724,11 @@ static const struct regmap_config regmap
+ 	.disable_locking	= true,
+ };
+ 
++static void airoha_npu_release_reserved_mem(void *data)
++{
++	of_reserved_mem_device_release(data);
++}
++
+ static int airoha_npu_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -807,6 +812,20 @@ static int airoha_npu_probe(struct platf
+ 	if (err)
+ 		return err;
+ 
++	if (of_property_match_string(dev->of_node, "memory-region-names",
++				     "dma") >= 0) {
++		err = of_reserved_mem_device_init_by_name(dev, dev->of_node,
++							  "dma");
++		if (err)
++			return err;
++
++		err = devm_add_action_or_reset(dev,
++					       airoha_npu_release_reserved_mem,
++					       dev);
++		if (err)
++			return err;
++	}
++
+ 	for (i = 0; i < ARRAY_SIZE(npu->cores); i++) {
+ 		struct airoha_npu_core *core = &npu->cores[i];
+ 
