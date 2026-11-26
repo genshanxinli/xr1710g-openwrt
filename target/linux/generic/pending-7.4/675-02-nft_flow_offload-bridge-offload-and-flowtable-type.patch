@@ -1,3 +1,15 @@
+From: fanboy <fanboy@openwrt.org>
+Date: Sat, 18 Jul 2026 02:25:20 -1000
+Subject: [PATCH] netfilter: nft_flow_offload: bridge offload and flowtable type
+
+Add standalone NFPROTO_BRIDGE flowtable offload support to nft_flow_offload
+and check nft_dev_forward_path() < 0 unconditionally so failed forward-path
+lookups on routed FLOW_OFFLOAD_XMIT_NEIGH tuples are not silently ignored.
+
+Origin: archive/xr1710g-v1@e85677d284c0
+Signed-off-by: Jihong Min <hurryman2212@gmail.com>
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
 --- a/net/netfilter/nf_flow_table_inet.c
 +++ b/net/netfilter/nf_flow_table_inet.c
 @@ -75,6 +75,8 @@ static struct nf_flowtable_type flowtabl
@@ -269,7 +281,7 @@
  	switch (nft_pf(pkt)) {
  	case NFPROTO_IPV4:
  		fl.u.ip4.daddr = ct->tuplehash[dir].tuple.src.u3.ip;
-@@ -308,15 +385,19 @@ int nft_flow_route(const struct nft_pkti
+@@ -308,15 +385,17 @@ int nft_flow_route(const struct nft_pkti
  		return -ENOENT;
  	}
  
@@ -280,14 +292,12 @@
  
  	if (route->tuple[dir].xmit_type	== FLOW_OFFLOAD_XMIT_NEIGH &&
 -	    nft_dev_forward_path(pkt, route, ct, dir, ft) < 0)
-+	    nft_dev_forward_path(pkt, is_bridging, route, ct, dir, dir, ft) &&
-+	    is_bridging)
++	    nft_dev_forward_path(pkt, is_bridging, route, ct, dir, dir, ft) < 0)
  		goto err_dst_release;
  
  	if (route->tuple[!dir].xmit_type == FLOW_OFFLOAD_XMIT_NEIGH &&
 -	    nft_dev_forward_path(pkt, route, ct, !dir, ft) < 0)
-+	    nft_dev_forward_path(pkt, is_bridging, route, ct, !dir, dir, ft) &&
-+	    is_bridging)
++	    nft_dev_forward_path(pkt, is_bridging, route, ct, !dir, dir, ft) < 0)
  		goto err_dst_release;
  
  	return 0;

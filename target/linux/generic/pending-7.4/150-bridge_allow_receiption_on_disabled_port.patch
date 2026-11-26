@@ -1,31 +1,31 @@
 From: Stephen Hemminger <stephen@networkplumber.org>
-Subject: bridge: allow receiption on disabled port
+Date: Thu, 26 Nov 2026 10:45:00 +0800
+Subject: [PATCH] bridge: allow reception on disabled port
 
-When an ethernet device is enslaved to a bridge, and the bridge STP
-detects loss of carrier (or operational state down), then normally
-packet receiption is blocked.
+Allow local packet delivery (e.g. WPA control frames) on disabled bridge
+ports without learning FDB entries, updated for Linux 7.4-rc4 where
+br_handle_local_finish() frees queued skbs and callers use nf_hook().
 
-This breaks control applications like WPA which maybe expecting to
-receive packets to negotiate to bring link up. The bridge needs to
-block forwarding packets from these disabled ports, but there is no
-hard requirement to not allow local packet delivery.
-
+Origin: openwrt/generic/pending-7.4 (refreshed for linux-7.4-rc4)
 Signed-off-by: Stephen Hemminger <stephen@networkplumber.org>
 Signed-off-by: Felix Fietkau <nbd@nbd.name>
-
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
 --- a/net/bridge/br_input.c
 +++ b/net/bridge/br_input.c
-@@ -260,6 +260,9 @@ static void __br_handle_local_finish(str
- /* note: already called with rcu_read_lock */
+@@ -265,7 +265,10 @@ static void __br_handle_local_finish(str
+  */
  static int br_handle_local_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
  {
+-	__br_handle_local_finish(skb);
 +	struct net_bridge_port *p = br_port_get_rcu(skb->dev);
 +
 +	if (p->state != BR_STATE_DISABLED)
- 	__br_handle_local_finish(skb);
++		__br_handle_local_finish(skb);
+ 	kfree_skb(skb);
  
- 	/* return 1 to signal the okfn() was called so it's ok to use the skb */
-@@ -444,6 +447,17 @@ forward:
+ 	return 0;
+@@ -452,6 +455,18 @@ forward:
  		goto defer_stp_filtering;
  
  	switch (p->state) {
@@ -33,9 +33,10 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
 +		if (ether_addr_equal(p->br->dev->dev_addr, dest))
 +			skb->pkt_type = PACKET_HOST;
 +
-+		if (NF_HOOK(NFPROTO_BRIDGE, NF_BR_PRE_ROUTING,
-+			dev_net(skb->dev), NULL, skb, skb->dev, NULL,
-+			br_handle_local_finish) == 1) {
++		if (nf_hook(NFPROTO_BRIDGE, NF_BR_PRE_ROUTING,
++			    dev_net(skb->dev), NULL, skb, skb->dev, NULL,
++			    br_handle_local_finish) == 1) {
++			*pskb = skb;
 +			return RX_HANDLER_PASS;
 +		}
 +		break;

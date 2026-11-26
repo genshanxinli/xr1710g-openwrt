@@ -20,7 +20,14 @@ The files which need to be provided are depending on the PHY:
  - RTL8264 10Gbps PHY
  - RTL8264B 10Gbps PHY
 
+Deassert PHY reset before reading RTL826X_VEND1_PKG_MODEL during driver
+matching so a prior failed probe leaving reset asserted cannot break
+package identification.
+
+Origin: archive/xr1710g-v1@e85677d284c0
 Signed-off-by: Balázs Triszka <info@balika011.hu>
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
 
 --- a/drivers/net/phy/realtek/Makefile
 +++ b/drivers/net/phy/realtek/Makefile
@@ -474,10 +481,20 @@ Signed-off-by: Balázs Triszka <info@balika011.hu>
  MODULE_DESCRIPTION("Realtek PHY driver");
  MODULE_AUTHOR("Johnson Leung");
  MODULE_LICENSE("GPL");
-@@ -3338,6 +3361,125 @@ static int rtl8251b_c45_match_phy_device
+@@ -3338,6 +3361,135 @@ static int rtl8251b_c45_match_phy_device
  	return rtlgen_is_c45_match(phydev, RTL_8251B, true);
  }
  
++static int rtl826x_read_pkg_model(struct phy_device *phydev)
++{
++	/* A failed probe may have asserted reset. Release it before
++	 * reading the package identification registers.
++	 */
++	phy_device_reset(phydev, 0);
++
++	return phy_read_mmd(phydev, MDIO_MMD_VEND1, RTL826X_VEND1_PKG_MODEL);
++}
++
 +static int rtl8251l_match_phy_device(struct phy_device *phydev,
 +				     const struct phy_driver *phydrv)
 +{
@@ -489,7 +506,7 @@ Signed-off-by: Balázs Triszka <info@balika011.hu>
 +	if (!phydev->mdio.bus->read_c45)
 +		return 0;
 +
-+	data = phy_read_mmd(phydev, MDIO_MMD_VEND1, RTL826X_VEND1_PKG_MODEL);
++	data = rtl826x_read_pkg_model(phydev);
 +	if (data < 0)
 +		return 0;
 +
@@ -510,7 +527,7 @@ Signed-off-by: Balázs Triszka <info@balika011.hu>
 +	if (!phydev->mdio.bus->read_c45)
 +		return 0;
 +
-+	data = phy_read_mmd(phydev, MDIO_MMD_VEND1, RTL826X_VEND1_PKG_MODEL);
++	data = rtl826x_read_pkg_model(phydev);
 +	if (data < 0)
 +		return 0;
 +
@@ -531,7 +548,7 @@ Signed-off-by: Balázs Triszka <info@balika011.hu>
 +	if (!phydev->mdio.bus->read_c45)
 +		return 0;
 +
-+	data = phy_read_mmd(phydev, MDIO_MMD_VEND1, RTL826X_VEND1_PKG_MODEL);
++	data = rtl826x_read_pkg_model(phydev);
 +	if (data < 0)
 +		return 0;
 +
@@ -559,7 +576,7 @@ Signed-off-by: Balázs Triszka <info@balika011.hu>
 +	if (!phydev->mdio.bus->read_c45)
 +		return 0;
 +
-+	data = phy_read_mmd(phydev, MDIO_MMD_VEND1, RTL826X_VEND1_PKG_MODEL);
++	data = rtl826x_read_pkg_model(phydev);
 +	if (data < 0)
 +		return 0;
 +
@@ -587,7 +604,7 @@ Signed-off-by: Balázs Triszka <info@balika011.hu>
 +	if (!phydev->mdio.bus->read_c45)
 +		return 0;
 +
-+	data = phy_read_mmd(phydev, MDIO_MMD_VEND1, RTL826X_VEND1_PKG_MODEL);
++	data = rtl826x_read_pkg_model(phydev);
 +	if (data < 0)
 +		return 0;
 +
@@ -600,7 +617,7 @@ Signed-off-by: Balázs Triszka <info@balika011.hu>
  static int rtlgen_resume(struct phy_device *phydev)
  {
  	int ret = genphy_resume(phydev);
-@@ -3588,6 +3730,485 @@ static int rtl8365mb_read_status(struct
+@@ -3588,6 +3740,485 @@ static int rtl8365mb_read_status(struct
  	return genphy_read_status(phydev);
  }
  
@@ -1086,7 +1103,7 @@ Signed-off-by: Balázs Triszka <info@balika011.hu>
  static struct phy_driver realtek_drvs[] = {
  	{
  		PHY_ID_MATCH_EXACT(0x00008201),
-@@ -3949,6 +4570,108 @@ static struct phy_driver realtek_drvs[]
+@@ -3949,6 +4580,108 @@ static struct phy_driver realtek_drvs[]
  		.led_hw_control_get	= rtl8261x_led_hw_control_get,
  		.led_hw_control_set	= rtl8261x_led_hw_control_set,
  		.led_polarity_set	= rtl8261x_led_polarity_set,

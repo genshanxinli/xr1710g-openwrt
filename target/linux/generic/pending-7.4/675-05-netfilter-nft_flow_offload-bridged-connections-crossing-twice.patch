@@ -1,34 +1,19 @@
 From: Tao Gong <gongtao0607@gmail.com>
+Date: Mon, 28 Sep 2026 16:22:20 -1000
 Subject: [PATCH] netfilter: nft_flow_offload: do not offload bridged connections crossing twice
 
-A connection routed by a router reached through the bridge crosses the bridge
-twice with the same 5-tuple: once from the source to the router, and once
-from the router to the destination. Bridge conntrack merges both crossings
-into a single connection. Flow offload can only program one crossing's L2
-rewrite into hardware flow tables (like Airoha PPE), keyed solely by 5-tuple.
-As a result, packets of the other crossing match the same entry and receive
-this crossing's L2 rewrite. Routed packets are sent back to the router until
-their TTL expires, or the router is bypassed.
+Prevent hardware flowtable offload when a bridged connection crosses the
+bridge twice with the same 5-tuple, while recording first ingress, egress
+and sighting order per direction so Wi-Fi 5G/6G roaming across bridge
+ports is not misclassified as a double crossing.
 
-The second crossing always enters on another port than the first one, as it
-enters where the first crossing left. Record the first ingress port of each
-direction in a conntrack extension while the connection is not offloaded,
-and mark the connection when a direction shows up on a second port. Such
-connections are never offloaded. TCP is only offloaded once established, so
-both crossings of the handshake have been recorded by then. UDP is offloaded
-once a reply was seen, so the first packet made all its crossings.
-
-If a connection was offloaded before its second crossing was seen, the
-flowtable GC tears the flow down.
-
-Connections without a record (first seen after confirmation, e.g. picked up
-mid-stream) are not offloaded either.
-
+Origin: archive/xr1710g-v1@e85677d284c0
 Signed-off-by: Tao Gong <gongtao0607@gmail.com>
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- /dev/null
 +++ b/include/net/netfilter/nf_conntrack_brxing.h
-@@ -0,0 +1,35 @@
+@@ -0,0 +1,29 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +#ifndef _NF_CONNTRACK_BRXING_H
 +#define _NF_CONNTRACK_BRXING_H
@@ -36,21 +21,15 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
 +#include <linux/netfilter/nf_conntrack_tuple_common.h>
 +#include <net/netfilter/nf_conntrack_extend.h>
 +
-+/* Bridge crossings of a connection, recorded before it is offloaded.
-+ *
-+ * A connection routed by a router reached through the bridge crosses the
-+ * bridge twice with the same 5-tuple (A -> router, router -> B), and bridge
-+ * conntrack merges both crossings into one ct. A flow can only describe one
-+ * crossing, and PPE-style hardware keys entries by 5-tuple only, so the other
-+ * crossing would get this crossing's L2 rewrite (loop or router bypass).
-+ *
-+ * The second crossing always enters on another port than the first one: it
-+ * enters where the first crossing left. Record the first ingress port per
-+ * direction; a different ingress port in the same direction marks the
-+ * connection as crossing more than once. Such connections are not offloaded.
++/* Per-direction bridge crossing record; rejects double-crossing connections
++ * (same 5-tuple re-entering via peer's prior egress port) without tripping on
++ * bridge-port roams.
 + */
 +struct nf_conn_brxing {
 +	int	iif[IP_CT_DIR_MAX];
++	int	outif[IP_CT_DIR_MAX];
++	/* 1 = first-sighted dir, 2 = second; excludes post-roam replies. */
++	u8	order[IP_CT_DIR_MAX];
 +	bool	multi;
 +};
 +
@@ -151,7 +130,15 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
  	nft_register_flowtable_type(&flowtable_ipv6);
 --- a/net/netfilter/nft_flow_offload.c
 +++ b/net/netfilter/nft_flow_offload.c
-@@ -16,6 +16,7 @@
+@@ -5,6 +5,7 @@
+ #include <linux/init.h>
+ #include <linux/netlink.h>
+ #include <linux/netfilter.h>
++#include <linux/netfilter_bridge.h>
+ #include <linux/workqueue.h>
+ #include <linux/spinlock.h>
+ #include <linux/netfilter/nf_conntrack_common.h>
+@@ -16,6 +17,7 @@
  #include <net/netfilter/nf_conntrack_core.h>
  #include <net/netfilter/nf_conntrack_extend.h>
  #include <net/netfilter/nf_flow_table.h>
@@ -159,14 +146,27 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
  
  struct nft_flow_offload {
  	struct nft_flowtable	*flowtable;
-@@ -47,12 +48,82 @@ static void flow_offload_ct_tcp(struct n
+@@ -47,12 +49,117 @@ static void flow_offload_ct_tcp(struct n
  	spin_unlock_bh(&ct->lock);
  }
  
 +
-+/* Record the ingress port of each crossing of a bridged connection, see
-+ * struct nf_conn_brxing. Runs for every packet that reaches the bridge
-+ * forward chain, i.e. every packet not handled by the fast path.
++/* Egress bridge port if bridged; 0 for routed frames. */
++static int nft_flow_offload_bridge_oif(const struct nft_pktinfo *pkt)
++{
++#if IS_ENABLED(CONFIG_BRIDGE_NETFILTER)
++	int oif = nf_bridge_get_physoutif(pkt->skb);
++
++	if (oif)
++		return oif;
++#endif
++	return (nft_pf(pkt) == NFPROTO_BRIDGE && nft_out(pkt)) ?
++	       nft_out(pkt)->ifindex : 0;
++}
++
++/* Record the ports of each crossing of a bridged connection, see struct
++ * nf_conn_brxing. Runs for every packet that reaches the bridge forward
++ * chain, i.e. every packet not handled by the fast path.
 + */
 +static void nft_flow_offload_bridge_record(const struct nft_pktinfo *pkt,
 +					   struct nf_flowtable *flowtable,
@@ -174,14 +174,17 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
 +					   enum ip_conntrack_info ctinfo)
 +{
 +	enum ip_conntrack_dir dir = CTINFO2DIR(ctinfo);
++	enum ip_conntrack_dir peer = dir == IP_CT_DIR_ORIGINAL ?
++				     IP_CT_DIR_REPLY : IP_CT_DIR_ORIGINAL;
 +	u8 proto = ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple.dst.protonum;
 +	struct nf_conn_brxing *rec;
-+	int iif, old;
++	int iif, oif, old;
 +
 +	if ((proto != IPPROTO_TCP && proto != IPPROTO_UDP) || !nft_in(pkt))
 +		return;
 +
 +	iif = nft_in(pkt)->ifindex;
++	oif = nft_flow_offload_bridge_oif(pkt);
 +	rec = nf_conn_brxing_find(ct);
 +	if (!rec) {
 +		/* Extensions can only be added before confirmation. A
@@ -196,7 +199,26 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
 +	}
 +
 +	old = cmpxchg(&rec->iif[dir], 0, iif);
-+	if (!old || old == iif || READ_ONCE(rec->multi))
++	if (!old) {
++		WRITE_ONCE(rec->outif[dir], oif);
++		/* Publish outif before order becomes non-zero (with smp_rmb). */
++		smp_wmb();
++		WRITE_ONCE(rec->order[dir], 1 + !!READ_ONCE(rec->order[peer]));
++		return;
++	}
++
++	if (old == iif || READ_ONCE(rec->multi))
++		return;
++
++	/* Pair with smp_wmb() so outif[peer] is visible once order[peer] != 0. */
++	if (!READ_ONCE(rec->order[peer]) || !READ_ONCE(rec->order[dir]))
++		return;
++	smp_rmb();
++	if (iif != READ_ONCE(rec->outif[peer]))
++		return;
++
++	/* Peer egress must predate this dir's first sighting (excludes roams). */
++	if (READ_ONCE(rec->order[peer]) >= READ_ONCE(rec->order[dir]))
 +		return;
 +
 +	WRITE_ONCE(rec->multi, true);
@@ -242,7 +264,7 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
  	struct tcphdr _tcph, *tcph = NULL;
  	struct nf_flow_route route = {};
  	enum ip_conntrack_info ctinfo;
-@@ -68,6 +139,9 @@ static void nft_flow_offload_eval(const
+@@ -68,6 +175,9 @@ static void nft_flow_offload_eval(const
  	if (!ct)
  		goto out;
  
@@ -252,7 +274,7 @@ Signed-off-by: Tao Gong <gongtao0607@gmail.com>
  	switch (ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple.dst.protonum) {
  	case IPPROTO_TCP:
  		tcph = skb_header_pointer(pkt->skb, nft_thoff(pkt),
-@@ -102,6 +176,9 @@ static void nft_flow_offload_eval(const
+@@ -102,6 +212,9 @@ static void nft_flow_offload_eval(const
  	if (!nf_ct_is_confirmed(ct))
  		goto out;
  
