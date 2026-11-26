@@ -217,9 +217,9 @@ start_instance()
 			for listen in $https; do
 				procd_append_param command -s "$listen"
 			done
-		}
 
-		append_bool "$cfg" redirect_https "-q" 0
+			append_bool "$cfg" redirect_https "-q" 0
+		}
 	}
 
 	config_get json_script "$cfg" json_script

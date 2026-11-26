@@ -124,7 +124,7 @@ define Device/gemtek_xr1710g-ubi
 		    kmod-hwmon-nct7802 kmod-mt7996-firmware kmod-nft-fullcone \
 		    rtl826x-firmware rtl8261c-firmware dumpimage \
 		    kmod-br-netfilter wpad-mbedtls usteer ethtool-full \
-		    luci luci-app-airoha-fancontrol luci-app-mlo \
+		    luci-ssl luci-app-airoha-fancontrol luci-app-mlo \
 		    luci-app-airoha-flowsense
   UBINIZE_OPTS := -E 5
   BLOCKSIZE := 128k
@@ -136,10 +136,13 @@ define Device/gemtek_xr1710g-ubi
 	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb with-initrd | pad-to 128k | append-metadata
   KERNEL_INITRAMFS_SUFFIX := -recovery.itb
   IMAGES := sysupgrade.itb
+  # 263 * 124 KiB UBI LEB ceiling below ramoops@86ff0000 (0x85000000 + 0x1ff0000).
+  IMAGE_SIZE := 32612k
   IMAGE/sysupgrade.itb := append-kernel | \
-	fit gzip $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb external-static-with-rootfs | append-metadata
+	fit gzip $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb external-static-with-rootfs | \
+	append-metadata | check-size
   ARTIFACTS := chainload-uboot.itb
-  ARTIFACT/chainload-uboot.itb := an7581-chainloader gemtek_xr1710g
+  ARTIFACT/chainload-uboot.itb := an7581-chainloader gemtek_xr1710g | check-size 1024k
   SOC := an7581
 endef
 TARGET_DEVICES += gemtek_xr1710g-ubi
