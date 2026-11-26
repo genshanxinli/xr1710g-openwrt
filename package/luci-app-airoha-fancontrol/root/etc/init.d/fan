@@ -1,0 +1,119 @@
+#!/bin/sh /etc/rc.common
+
+START=98
+USE_PROCD=1
+
+HWMON_RETRIES=5
+HWMON_RETRY_DELAY=1
+
+is_uint() {
+	case "$1" in
+		''|0[0-9]*|*[!0-9]*) return 1 ;;
+		*) return 0 ;;
+	esac
+}
+
+# Dynamic lookup: hwmon index varies by probe order.
+find_nct7802() {
+	for hwmon in /sys/class/hwmon/hwmon*; do
+		if [ -f "$hwmon/name" ] && [ "$(cat "$hwmon/name" 2>/dev/null)" = "nct7802" ]; then
+			echo "$hwmon"
+			return
+		fi
+	done
+}
+
+curve_has_points() {
+	local preset="$1"
+	local i temp pwm
+
+	[ -n "$preset" ] || return 1
+
+	for i in 1 2 3 4 5; do
+		temp=$(uci -q get "fan.${preset}.point${i}_temp")
+		is_uint "$temp" && [ "$temp" -ge 0 ] 2>/dev/null || return 1
+
+		if [ "$i" -lt 5 ]; then
+			pwm=$(uci -q get "fan.${preset}.point${i}_pwm")
+			is_uint "$pwm" && [ "$pwm" -ge 0 ] 2>/dev/null && [ "$pwm" -le 255 ] 2>/dev/null || return 1
+		fi
+	done
+
+	return 0
+}
+
+apply_curve() {
+	local preset="$1"
+	local i temp pwm
+
+	# point5_pwm is read-only (fixed at 255).
+	for i in 1 2 3 4 5; do
+		temp=$(uci -q get "fan.${preset}.point${i}_temp")
+		pwm=$(uci -q get "fan.${preset}.point${i}_pwm")
+
+		if is_uint "$temp"; then
+			echo $((temp * 1000)) > "${HWMON}/pwm1_auto_point${i}_temp" 2>/dev/null
+		fi
+
+		if is_uint "$pwm" && [ "$i" -lt 5 ]; then
+			echo "$pwm" > "${HWMON}/pwm1_auto_point${i}_pwm" 2>/dev/null
+		fi
+	done
+}
+
+apply_settings() {
+	local mode preset manual_pwm attempt=0 pwm_rb enable_rb
+
+	HWMON=$(find_nct7802)
+	while { [ -z "$HWMON" ] || [ ! -d "$HWMON" ]; } && [ "$attempt" -lt "$HWMON_RETRIES" ]; do
+		attempt=$((attempt + 1))
+		sleep "$HWMON_RETRY_DELAY"
+		HWMON=$(find_nct7802)
+	done
+
+	[ -n "$HWMON" ] && [ -d "$HWMON" ] || {
+		logger -t fan "nct7802 not found, leaving the fan unmanaged"
+		return 1
+	}
+
+	mode=$(uci -q get fan.settings.mode)
+	preset=$(uci -q get fan.settings.curve_preset)
+	manual_pwm=$(uci -q get fan.settings.manual_pwm)
+
+	case "$mode" in
+		manual)
+			if ! is_uint "$manual_pwm" || ! [ "$manual_pwm" -ge 0 ] 2>/dev/null || ! [ "$manual_pwm" -le 255 ] 2>/dev/null; then
+				logger -t fan "invalid manual_pwm '${manual_pwm:-<empty>}', refusing to switch to manual"
+				return 1
+			fi
+			echo 1 > "${HWMON}/pwm1_enable" 2>/dev/null
+			echo "$manual_pwm" > "${HWMON}/pwm1" 2>/dev/null
+			;;
+		auto|*)
+			mode="${mode:-auto}"
+			if ! curve_has_points "$preset"; then
+				logger -t fan "curve preset '${preset:-<empty>}' has incomplete points, refusing to switch to auto"
+				return 1
+			fi
+			echo 1 > "${HWMON}/pwm1_enable" 2>/dev/null
+			apply_curve "$preset"
+			echo 2 > "${HWMON}/pwm1_enable" 2>/dev/null
+			;;
+	esac
+
+	pwm_rb=$(cat "${HWMON}/pwm1" 2>/dev/null)
+	enable_rb=$(cat "${HWMON}/pwm1_enable" 2>/dev/null)
+	logger -t fan "applied mode=${mode} preset=${preset:-none} pwm1=${pwm_rb:-?} pwm1_enable=${enable_rb:-?}"
+}
+
+start_service() {
+	apply_settings
+}
+
+reload_service() {
+	apply_settings
+}
+
+service_triggers() {
+	procd_add_reload_trigger "fan"
+}

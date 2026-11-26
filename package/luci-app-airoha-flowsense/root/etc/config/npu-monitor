@@ -1,0 +1,7 @@
+config jitter 'jitter'
+	option enabled '0'
+	option target '1.1.1.1'
+
+config settings 'settings'
+	# Airtime-to-goodput efficiency (%) for offloaded Wi-Fi throughput estimates.
+	option air_eff '80'
