@@ -43,12 +43,15 @@ On top of that:
 Based on the XR1710G chainloader by Kenneth Kasilag.
 
 Signed-off-by: Andrey Korshunov <razor1702@gmail.com>
+[xr1710g: set loadaddr=0x85000000, CONFIG_ENV_SIZE=0x4000, bootcmd=run boot_ubi, TFTP recovery]
+Origin: openwrt/openwrt#26296 (b8d878f0b6), xr1710g overrides from archive/xr1710g-v1@4b840202be
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
  configs/an7581_xr1710g_defconfig                     | 107 ++++++++++++++++++++++++++++++++++++++++
- defenvs/an7581_xr1710g_env                           |  31 +++++++++++++++++++++++++++++++
+ defenvs/an7581_xr1710g_env                           |  28 ++++++++++++++++++++++++++++
  dts/upstream/src/arm64/airoha/an7581-xr1710g-ubi.dts | 131 ++++++++++++++++++++++++++++++++++++++++
  arch/arm/dts/an7581-xr1710g-ubi-u-boot.dtsi          |   7 +++++++
- 4 files changed, 276 insertions(+)
+ 4 files changed, 273 insertions(+)
  create mode 100644 configs/an7581_xr1710g_defconfig
  create mode 100644 defenvs/an7581_xr1710g_env
  create mode 100644 dts/upstream/src/arm64/airoha/an7581-xr1710g-ubi.dts
@@ -66,10 +69,10 @@ Signed-off-by: Andrey Korshunov <razor1702@gmail.com>
 +CONFIG_TEXT_BASE=0x81e00000
 +CONFIG_SYS_MALLOC_F_LEN=0x4000
 +CONFIG_NR_DRAM_BANKS=1
-+CONFIG_ENV_SIZE=0x1f000
++CONFIG_ENV_SIZE=0x4000
 +CONFIG_DM_GPIO=y
 +CONFIG_DEFAULT_DEVICE_TREE="airoha/an7581-xr1710g-ubi"
-+CONFIG_SYS_LOAD_ADDR=0x81800000
++CONFIG_SYS_LOAD_ADDR=0x85000000
 +CONFIG_BUILD_TARGET="u-boot.bin"
 +# CONFIG_EFI_LOADER is not set
 +CONFIG_FIT=y
@@ -166,17 +169,16 @@ Signed-off-by: Andrey Korshunov <razor1702@gmail.com>
 +CONFIG_SHA512=y
 --- /dev/null
 +++ b/defenvs/an7581_xr1710g_env
-@@ -0,0 +1,31 @@
-+loadaddr=0x81800000
+@@ -0,0 +1,28 @@
++loadaddr=0x85000000
 +initaddr=0x89000000
 +ipaddr=192.168.1.1
 +serverip=192.168.1.254
 +bootfile=openwrt-airoha-an7581-gemtek_xr1710g-ubi-initramfs-recovery.itb
 +bootled_pwr=status:red
 +bootled_rec=status:blue
-+boot_ubi=run ubi_prepare ; run boot_production ; run boot_recovery ; run boot_tftp_forever
++boot_ubi=run ubi_prepare ; run boot_production ; run boot_tftp_forever
 +boot_production=led $bootled_pwr on ; run ubi_read_production && bootm $loadaddr#$bootconf ; led $bootled_pwr off
-+boot_recovery=led $bootled_rec on ; run ubi_read_recovery && bootm $initaddr#$bootconf ; led $bootled_rec off
 +boot_tftp=tftpboot $initaddr $bootfile && bootm $initaddr#$bootconf
 +boot_tftp_forever=led $bootled_rec on ; while true ; do run boot_tftp ; sleep 1 ; done
 +bootconf=config-1
@@ -188,12 +190,10 @@ Signed-off-by: Andrey Korshunov <razor1702@gmail.com>
 +bootmenu_title=      [0;34m( ( ( [1;39mOpenWrt[0;34m ) ) )
 +bootmenu_0=Run default boot command.=run bootcmd
 +bootmenu_1=Boot system via TFTP.=run boot_tftp ; run bootmenu_confirm_return
-+bootmenu_2=Boot recovery system from flash.=run boot_recovery ; run bootmenu_confirm_return
-+bootmenu_3=Reboot.=reset
++bootmenu_2=Reboot.=reset
 +check_buttons=if button reset ; then run boot_tftp_forever ; fi
 +preboot=run check_buttons
 +ubi_read_production=ubi read $loadaddr fit && iminfo $loadaddr
-+ubi_read_recovery=ubi check recovery && ubi read $initaddr recovery
 +ubi_prepare=ubi part ubi || run ubi_format ; run ubi_create_vols ; env exists _init_env && run _init_env
 +ubi_format=ubi detach ; mtd erase ubi && ubi part ubi ; reset
 +ubi_create_vols=ubi check ubootenv || ubi create ubootenv 0x1f000 dynamic ; ubi check ubootenv2 || ubi create ubootenv2 0x1f000 dynamic ; ubi check factory || ubi create factory 0x10000 static
