@@ -41,21 +41,21 @@ Vendor driver analysis (mt_wifi.ko from Xiaomi AX3000T MT7981 firmware)
 confirms the RCPI-to-RSSI conversion formula (rcpi - 220) / 2 and that
 the vendor never performs direct WTBL reads for statistics.
 
+[xr1710g: add UNI_ALL_STA_TXRX_AIR_TIME elem_size, report per-poll airtime
+deltas instead of cumulative firmware counters, and guard skb->len < sizeof(*res)
+before reading res->sta_num in mt7996_mcu_get_per_sta_info()]
+
 Fixes: 98686cd21624 ("wifi: mt76: mt7996: add driver for MediaTek Wi-Fi 7 (802.11be) devices")
 Link: https://github.com/openwrt/openwrt/issues/21177
+Origin: backport, archive/xr1710g-v1
 Signed-off-by: Joshua Klinesmith <joshuaklinesmith@gmail.com>
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
- .../mt76_connac_mcu.h  |   7 +
- .../mt7996/mac.c   | 144 +-----------------
- .../mt7996/mcu.c   | 133 ++++++++++++++++
- .../mt7996/mcu.h   |  25 +++
- .../mt7996/mt7996.h    |   2 +-
- 5 files changed, 168 insertions(+), 142 deletions(-)
-
 diff --git a/mt76_connac_mcu.h b/mt76_connac_mcu.h
+index 6769b7f..0394258 100644
 --- a/mt76_connac_mcu.h
 +++ b/mt76_connac_mcu.h
-@@ -1446,6 +1446,13 @@
+@@ -1457,6 +1457,13 @@ enum {
  	UNI_OFFLOAD_OFFLOAD_BMC_RPY_DETECT,
  };
  
@@ -70,9 +70,10 @@ diff --git a/mt76_connac_mcu.h b/mt76_connac_mcu.h
  	UNI_ALL_STA_TXRX_RATE,
  	UNI_ALL_STA_TX_STAT,
 diff --git a/mt7996/mac.c b/mt7996/mac.c
+index 8388014..efe7c4d 100644
 --- a/mt7996/mac.c
 +++ b/mt7996/mac.c
-@@ -72,118 +72,6 @@
+@@ -72,118 +72,6 @@ u32 mt7996_mac_wtbl_lmac_addr(struct mt7996_dev *dev, u16 wcid, u8 dw)
  	return MT_WTBL_LMAC_OFFS(wcid, dw);
  }
  
@@ -191,7 +192,7 @@ diff --git a/mt7996/mac.c b/mt7996/mac.c
  
  /* The HW does not translate the mac header to 802.3 for mesh point */
  static int mt7996_reverse_frag0_hdr_trans(struct sk_buff *skb, u16 hdr_gap)
-@@ -479,7 +367,6 @@
+@@ -486,7 +374,6 @@ mt7996_mac_fill_rx(struct mt7996_dev *dev, enum mt76_rxq_id q,
  		msta_link = container_of(status->wcid, struct mt7996_sta_link,
  					 wcid);
  		msta = msta_link->sta;
@@ -199,7 +200,7 @@ diff --git a/mt7996/mac.c b/mt7996/mac.c
  	}
  
  	status->freq = mphy->chandef.chan->center_freq;
-@@ -1391,9 +1278,6 @@
+@@ -1409,9 +1296,6 @@ mt7996_mac_tx_free(struct mt7996_dev *dev, void *data, int len)
  		info = le32_to_cpu(*cur_info);
  		if (info & MT_TXFREE_INFO_PAIR) {
  			struct ieee80211_sta *sta;
@@ -209,7 +210,7 @@ diff --git a/mt7996/mac.c b/mt7996/mac.c
  			u16 idx;
  
  			idx = FIELD_GET(MT_TXFREE_INFO_WLAN_ID, info);
-@@ -1407,22 +1291,6 @@
+@@ -1425,22 +1309,6 @@ mt7996_mac_tx_free(struct mt7996_dev *dev, void *data, int len)
  			link_sta = rcu_dereference(sta->link[wcid->link_id]);
  			if (!link_sta)
  				goto next;
@@ -232,7 +233,7 @@ diff --git a/mt7996/mac.c b/mt7996/mac.c
  next:
  			/* ver 7 has a new DW with pair = 1, skip it */
  			if (ver == 7 && ((void *)(cur_info + 1) < end) &&
-@@ -1460,8 +1328,6 @@
+@@ -1478,8 +1346,6 @@ next:
  		}
  	}
  
@@ -241,7 +242,7 @@ diff --git a/mt7996/mac.c b/mt7996/mac.c
  	if (wake)
  		mt76_set_tx_blocked(&dev->mt76, false);
  
-@@ -1626,7 +1492,6 @@
+@@ -1645,7 +1511,6 @@ out:
  
  static void mt7996_mac_add_txs(struct mt7996_dev *dev, void *data)
  {
@@ -249,7 +250,7 @@ diff --git a/mt7996/mac.c b/mt7996/mac.c
  	struct mt76_wcid *wcid;
  	__le32 *txs_data = data;
  	u16 wcidx;
-@@ -1646,12 +1511,6 @@
+@@ -1665,12 +1530,6 @@ static void mt7996_mac_add_txs(struct mt7996_dev *dev, void *data)
  
  	mt7996_mac_add_txs_skb(dev, wcid, pid, txs_data);
  
@@ -262,7 +263,7 @@ diff --git a/mt7996/mac.c b/mt7996/mac.c
  out:
  	rcu_read_unlock();
  }
-@@ -2993,6 +2852,8 @@
+@@ -3023,6 +2882,8 @@ void mt7996_mac_work(struct work_struct *work)
  		mt7996_mac_update_stats(phy);
  
  		mt7996_mcu_get_all_sta_info(phy, UNI_ALL_STA_TXRX_RATE);
@@ -272,9 +273,20 @@ diff --git a/mt7996/mac.c b/mt7996/mac.c
  			mt7996_mcu_get_all_sta_info(phy, UNI_ALL_STA_TXRX_ADM_STAT);
  			mt7996_mcu_get_all_sta_info(phy, UNI_ALL_STA_TXRX_MSDU_COUNT);
 diff --git a/mt7996/mcu.c b/mt7996/mcu.c
+index 5de535f..110e0b5 100644
 --- a/mt7996/mcu.c
 +++ b/mt7996/mcu.c
-@@ -696,6 +696,33 @@
+@@ -738,6 +738,9 @@ mt7996_mcu_rx_all_sta_info_event(struct mt7996_dev *dev, struct sk_buff *skb)
+ 	case UNI_ALL_STA_TXRX_MSDU_COUNT:
+ 		elem_size = sizeof(res->msdu_cnt[0]);
+ 		break;
++	case UNI_ALL_STA_TXRX_AIR_TIME:
++		elem_size = sizeof(res->airtime[0]);
++		break;
+ 	default:
+ 		return;
+ 	}
+@@ -787,6 +790,47 @@ mt7996_mcu_rx_all_sta_info_event(struct mt7996_dev *dev, struct sk_buff *skb)
  			wcid->stats.rx_packets +=
  				le32_to_cpu(res->msdu_cnt[i].rx_msdu_cnt);
  			break;
@@ -285,6 +297,7 @@ diff --git a/mt7996/mcu.c b/mt7996/mcu.c
 +				[IEEE80211_AC_VI] = 4,
 +				[IEEE80211_AC_VO] = 6
 +			};
++			struct mt7996_sta_link *msta_link;
 +			struct ieee80211_sta *sta;
 +
 +			wlan_idx = le16_to_cpu(res->airtime[i].wlan_idx);
@@ -293,22 +306,35 @@ diff --git a/mt7996/mcu.c b/mt7996/mcu.c
 +			if (!sta)
 +				break;
 +
++			msta_link = container_of(wcid, struct mt7996_sta_link, wcid);
++
 +			for (ac = 0; ac < IEEE80211_NUM_ACS; ac++) {
 +				u8 lmac_ac = mt76_connac_lmac_mapping(ac);
 +				u32 tx_cur = le32_to_cpu(res->airtime[i].tx[lmac_ac]);
 +				u32 rx_cur = le32_to_cpu(res->airtime[i].rx[lmac_ac]);
++				u32 tx_last = msta_link->airtime_prev_tx[lmac_ac];
++				u32 rx_last = msta_link->airtime_prev_rx[lmac_ac];
++				u32 tx_time, rx_time;
 +
-+				if (!tx_cur && !rx_cur)
++				/* Firmware counters are cumulative; report per-poll deltas, resyncing on reset. */
++				tx_time = tx_cur >= tx_last ? tx_cur - tx_last : 0;
++				rx_time = rx_cur >= rx_last ? rx_cur - rx_last : 0;
++
++				msta_link->airtime_prev_tx[lmac_ac] = tx_cur;
++				msta_link->airtime_prev_rx[lmac_ac] = rx_cur;
++
++				if (!tx_time && !rx_time)
 +					continue;
 +
-+				ieee80211_sta_register_airtime(sta, ac_to_tid[ac], tx_cur, rx_cur);
++				ieee80211_sta_register_airtime(sta, ac_to_tid[ac],
++							       tx_time, rx_time);
 +			}
 +			break;
 +		}
  		default:
  			break;
  		}
-@@ -5593,6 +5620,112 @@
+@@ -5959,6 +6003,117 @@ int mt7996_mcu_get_all_sta_info(struct mt7996_phy *phy, u16 tag)
  				 &req, sizeof(req), false);
  }
  
@@ -360,6 +386,11 @@ diff --git a/mt7996/mcu.c b/mt7996/mcu.c
 +						&req, sizeof(req), true, &skb);
 +		if (ret)
 +			return ret;
++
++		if (skb->len < sizeof(*res)) {
++			dev_kfree_skb(skb);
++			return -EINVAL;
++		}
 +
 +		res = (struct mt7996_mcu_per_sta_info_event *)skb->data;
 +
@@ -422,9 +453,10 @@ diff --git a/mt7996/mcu.c b/mt7996/mcu.c
  {
  	struct {
 diff --git a/mt7996/mcu.h b/mt7996/mcu.h
+index 172c937..3ec2d99 100644
 --- a/mt7996/mcu.h
 +++ b/mt7996/mcu.h
-@@ -255,6 +255,31 @@
+@@ -255,6 +255,31 @@ struct mt7996_mcu_all_sta_info_event {
  			__le32 tx_msdu_cnt;
  			__le32 rx_msdu_cnt;
  		} __packed, msdu_cnt);
@@ -457,17 +489,25 @@ diff --git a/mt7996/mcu.h b/mt7996/mcu.h
  } __packed;
  
 diff --git a/mt7996/mt7996.h b/mt7996/mt7996.h
+index 0d36788..d32a0a6 100644
 --- a/mt7996/mt7996.h
 +++ b/mt7996/mt7996.h
-@@ -293,7 +293,6 @@
- 	struct mt7996_sta *sta;
+@@ -294,11 +294,13 @@ struct mt7996_sta_link {
+ 	bool connected;
  
  	struct list_head rc_list;
 -	u32 airtime_ac[8];
  
  	int ack_signal;
  	struct ewma_avg_signal avg_ack_signal;
-@@ -848,6 +847,7 @@
+ 
++	u32 airtime_prev_tx[IEEE80211_NUM_ACS];
++	u32 airtime_prev_rx[IEEE80211_NUM_ACS];
++
+ 	unsigned long changed;
+ 
+ 	struct mt76_connac_sta_key_conf bip;
+@@ -906,6 +908,7 @@ int mt7996_mcu_trigger_assert(struct mt7996_dev *dev);
  void mt7996_mcu_rx_event(struct mt7996_dev *dev, struct sk_buff *skb);
  void mt7996_mcu_exit(struct mt7996_dev *dev);
  int mt7996_mcu_get_all_sta_info(struct mt7996_phy *phy, u16 tag);

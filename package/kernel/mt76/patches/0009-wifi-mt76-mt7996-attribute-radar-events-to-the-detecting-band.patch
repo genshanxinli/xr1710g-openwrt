@@ -1,0 +1,38 @@
+From: Gilly <gilroyscott1970@gmail.com>
+Date: Thu, 16 Oct 2026 12:05:00 +0800
+Subject: [PATCH] wifi: mt76: mt7996: attribute radar events to the detecting band
+
+mt7996_mcu_rx_radar_detected() calls ieee80211_radar_detected(mphy->hw, NULL),
+which marks every chanctx on the shared multi-band wiphy including 2.4 GHz.
+Read mphy->chanctx once with READ_ONCE() and pass its ieee80211_chanctx_conf
+so only the detecting band's channel context is marked radar-affected.
+
+Origin: https://github.com/Gilly1970/Gemtek-W1700K-6.18
+Signed-off-by: Gilly <gilroyscott1970@gmail.com>
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+diff --git a/mt7996/mcu.c b/mt7996/mcu.c
+index 110e0b5..a96cd2b 100644
+--- a/mt7996/mcu.c
++++ b/mt7996/mcu.c
+@@ -609,10 +609,19 @@ mt7996_mcu_rx_radar_detected(struct mt7996_dev *dev, struct sk_buff *skb)
+ 						&dev->rdd2_chandef,
+ 						GFP_ATOMIC);
+ 	} else {
++		struct ieee80211_chanctx_conf *conf = NULL;
+ 		struct mt7996_phy *phy = mphy->priv;
++		struct mt76_chanctx *ctx;
++
++		/* Attribute radar to the detecting band only; read unguarded chanctx once. */
++		ctx = READ_ONCE(mphy->chanctx);
++		if (ctx)
++			conf = container_of((void *)ctx,
++					    struct ieee80211_chanctx_conf,
++					    drv_priv);
+ 
+ 		phy->rdd_tx_paused = true;
+-		ieee80211_radar_detected(mphy->hw, NULL);
++		ieee80211_radar_detected(mphy->hw, conf);
+ 	}
+ 	dev->hw_pattern++;
+ 

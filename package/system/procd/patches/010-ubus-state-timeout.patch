@@ -1,0 +1,84 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 04:24:09 +0800
+Subject: [PATCH] procd: leave STATE_UBUS after a deadline instead of hanging forever
+
+STATE_UBUS only exits on a successful ubus_connect_cb(), so a failing ubusd
+freezes boot silently at "- ubus -" before STATE_INIT. Add a bounded deadline
+configurable via procd_ubus_timeout=<seconds> (default 10, max 300, 0 disables)
+so boot proceeds to STATE_INIT while background reconnect retries continue.
+
+Origin: backport, archive/xr1710g-v1
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/ubus.c
++++ b/ubus.c
+@@ -18,10 +18,15 @@
+ #include <signal.h>
+ 
+ #include "procd.h"
++#include "utils/utils.h"
++
++#define UBUS_STATE_TIMEOUT_DEFAULT_MS	10000
+ 
+ const char *ubus_socket = NULL;
+ static struct ubus_context *ctx;
+ static struct uloop_timeout ubus_timer;
++static struct uloop_timeout ubus_state_timer;
++static unsigned int ubus_state_timeout;
+ static int timeout;
+ static struct udebug_ubus udebug;
+ 
+@@ -83,14 +88,53 @@ ubus_connect_cb(struct uloop_timeout *ti
+ 
+ 	DEBUG(2, "Connected to ubus, id=%08x\n", ctx->local_id);
+ 	reset_timeout();
++	uloop_timeout_cancel(&ubus_state_timer);
+ 	ubus_add_uloop(ctx);
+ 	procd_state_ubus_connect();
+ }
+ 
++static void
++ubus_state_timeout_cb(struct uloop_timeout *t)
++{
++	/* Advance out of STATE_UBUS if ubusd never answers; safe no-op otherwise. */
++	ERROR("- ubus - no connection after %u ms, continuing without it\n",
++	       ubus_state_timeout);
++	procd_state_ubus_connect();
++}
++
++static unsigned int
++ubus_state_timeout_from_cmdline(void)
++{
++	char line[32];
++	char *v, *end;
++	unsigned long sec;
++
++	v = get_cmdline_val("procd_ubus_timeout", line, sizeof(line));
++	if (!v || *v < '0' || *v > '9')
++		return UBUS_STATE_TIMEOUT_DEFAULT_MS;
++
++	sec = strtoul(v, &end, 10);
++	if (end == v || *end != '\0')
++		return UBUS_STATE_TIMEOUT_DEFAULT_MS;
++
++	/* 0 disables deadline */
++	if (sec > 300)
++		sec = 300;
++
++	return (unsigned int)(sec * 1000);
++}
++
+ void
+ procd_connect_ubus(void)
+ {
+ 	ubus_timer.cb = ubus_connect_cb;
+ 	reset_timeout();
+ 	timeout_retry();
++
++	ubus_state_timeout = ubus_state_timeout_from_cmdline();
++	if (!ubus_state_timeout)
++		return;
++
++	ubus_state_timer.cb = ubus_state_timeout_cb;
++	uloop_timeout_set(&ubus_state_timer, ubus_state_timeout);
+ }

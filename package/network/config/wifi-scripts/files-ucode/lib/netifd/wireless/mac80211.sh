@@ -87,9 +87,12 @@ function setup_phy(phy, config, data) {
 	config.channel = +config.channel;
 	config.frequency = get_channel_frequency(config.band, config.channel);
 
-	if (config.country_code) {
+	if (config.country_code && match(config.country_code, /^[A-Za-z][A-Za-z]$/)) {
 		log(`Setting country code to ${config.country_code}`);
 		system(`iw reg set ${config.country_code}`);
+	} else if (config.country_code) {
+		/* Skip non-ISO codes (e.g. '00') so iw reg set does not reset to world regdomain. */
+		log(`Ignoring invalid country code '${config.country_code}'`);
 	}
 
 	set_default(config, 'rxantenna', 0xffffffff);

@@ -23,10 +23,10 @@ sub parse_targetinfo {
 			elsif ($line =~ /^Target-Arch-Packages: (.+)$/) {
 				$target_arch = $1;
 			}
-			elsif ($line =~ /^Linux-Version: (\d\.\d+)\.\d+$/) {
+			elsif ($line =~ /^Linux-Version: (\d\.\d+)(?:\.\d+)?(?:-rc\d+)?$/) {
 				$target_kernel = $1;
 			}
-			elsif ($line =~ /^Linux-Testing-Version: (\d\.\d+)\.\d+$/) {
+			elsif ($line =~ /^Linux-Testing-Version: (\d\.\d+)(?:\.\d+)?(?:-rc\d+)?$/) {
 				$target_testing_kernel = $1;
 			}
 			elsif ($line =~ /^Target-Features: (.+)$/) {

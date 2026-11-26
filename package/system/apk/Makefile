@@ -22,6 +22,9 @@ include $(INCLUDE_DIR)/package.mk
 include $(INCLUDE_DIR)/host-build.mk
 include $(INCLUDE_DIR)/meson.mk
 
+# Ensure glibc exposes le32toh/htole32 (__USE_MISC) for host builds.
+HOST_CFLAGS += -D_GNU_SOURCE
+
 define Package/apk/default
   SECTION:=base
   CATEGORY:=Base system

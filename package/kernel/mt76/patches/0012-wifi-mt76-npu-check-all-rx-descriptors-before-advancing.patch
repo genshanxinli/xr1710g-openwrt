@@ -1,0 +1,55 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 04:24:09 +0800
+Subject: [PATCH] wifi: mt76: npu: check all RX descriptors before advancing
+
+Bailing out mid-loop in mt76_npu_dequeue() when a trailing descriptor's DONE
+bit is still clear either double-frees descriptor 0 on rollback or delivers a
+truncated skb with orphaned fragments. Pre-check q->queued and DONE across all
+descriptors 0..nframes-1 with dma_rmb() before consuming any buffer or tail.
+
+Origin: backport, archive/xr1710g-v1
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+diff --git a/npu.c b/npu.c
+index dd954df..f169377 100644
+--- a/npu.c
++++ b/npu.c
+@@ -67,19 +67,33 @@ static struct sk_buff *mt76_npu_dequeue(struct mt76_dev *dev,
+ 	int i, nframes, index = q->tail;
+ 	struct sk_buff *skb = NULL;
+ 
++	if (!q->queued ||
++	    !FIELD_GET(NPU_RX_DMA_DESC_DONE_MASK, desc[index].ctrl))
++		return NULL;
++
++	dma_rmb();
++
+ 	nframes = FIELD_GET(NPU_RX_DMA_PKT_COUNT_MASK, desc[index].info);
+ 	nframes = max_t(int, nframes, 1);
+ 
++	if (nframes > q->queued)
++		return NULL;
++
++	/* Verify all descriptors are DONE before consuming any buffer or advancing tail. */
++	for (i = 1; i < nframes; i++) {
++		int idx = (index + i) % q->ndesc;
++
++		if (!FIELD_GET(NPU_RX_DMA_DESC_DONE_MASK, desc[idx].ctrl))
++			return NULL;
++	}
++	if (nframes > 1)
++		dma_rmb();
++
+ 	for (i = 0; i < nframes; i++) {
+ 		struct mt76_queue_entry *e = &q->entry[index];
+ 		int len = FIELD_GET(NPU_RX_DMA_DESC_CUR_LEN_MASK,
+ 				    desc[index].ctrl);
+ 
+-		if (!FIELD_GET(NPU_RX_DMA_DESC_DONE_MASK, desc[index].ctrl)) {
+-			dev_kfree_skb(skb);
+-			return NULL;
+-		}
+-
+ 		dma_sync_single_for_cpu(dev->dma_dev, e->dma_addr[0],
+ 					e->dma_len[0],
+ 					page_pool_get_dma_dir(q->page_pool));

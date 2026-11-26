@@ -1,0 +1,99 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Sat, 15 Nov 2026 08:00:00 +0800
+Subject: [PATCH] wifi: mt76: mt7996: notify the NPU when a station is removed
+
+The Airoha NPU retains per-WCID offload state across link teardown, causing a
+reconnecting station reusing that WCID to inherit stale forwarding state. Send
+WLAN_FUNC_SET_WAIT_DEL_STA from mt7996_mac_sta_remove_link() before destroying
+link state, skipping the mailbox when MT76_MCU_RESET or hw_full_reset is set.
+
+Origin: backport, archive/xr1710g-v1
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+diff --git a/mt7996/main.c b/mt7996/main.c
+index 0ad8a23..df32445 100644
+--- a/mt7996/main.c
++++ b/mt7996/main.c
+@@ -1453,6 +1453,9 @@ void mt7996_mac_sta_remove_link(struct mt7996_dev *dev,
+ 	if (!msta_link)
+ 		return;
+ 
++	/* Notify NPU before tearing down WTBL/BA/key state so reused WCIDs drop stale offload state. */
++	mt7996_npu_del_sta(dev, msta_link->wcid.phy_idx, msta_link->wcid.idx);
++
+ 	spin_lock_bh(&dev->mt76.sta_poll_lock);
+ 	if (!list_empty(&msta_link->wcid.poll_list))
+ 		list_del_init(&msta_link->wcid.poll_list);
+diff --git a/mt7996/mt7996.h b/mt7996/mt7996.h
+index 4a421d8..11eb239 100644
+--- a/mt7996/mt7996.h
++++ b/mt7996/mt7996.h
+@@ -573,6 +573,7 @@ struct mt7996_dev {
+ 	} wed_rro;
+ 
+ 	dma_addr_t npu_txd_addr[2 * MT7996_NPU_TXD_SIZE];
++	bool npu_del_sta_error;
+ 
+ 	bool ibf;
+ 	u8 fw_debug_wm;
+@@ -1077,6 +1078,7 @@ int __mt7996_npu_hw_init(struct mt7996_dev *dev);
+ int mt7996_npu_hw_init(struct mt7996_dev *dev);
+ int mt7996_npu_hw_stop(struct mt7996_dev *dev);
+ int mt7996_npu_rx_queues_init(struct mt7996_dev *dev);
++void mt7996_npu_del_sta(struct mt7996_dev *dev, u8 band_idx, u16 wcid_idx);
+ #else
+ static inline int __mt7996_npu_hw_init(struct mt7996_dev *dev)
+ {
+@@ -1097,6 +1099,11 @@ static inline int mt7996_npu_rx_queues_init(struct mt7996_dev *dev)
+ {
+ 	return 0;
+ }
++
++static inline void mt7996_npu_del_sta(struct mt7996_dev *dev, u8 band_idx,
++				      u16 wcid_idx)
++{
++}
+ #endif /* CONFIG_MT7996_NPU */
+ 
+ #endif
+diff --git a/mt7996/npu.c b/mt7996/npu.c
+index 3fb9f39..e9683eb 100644
+--- a/mt7996/npu.c
++++ b/mt7996/npu.c
+@@ -239,6 +239,36 @@ static int mt7996_npu_offload_init(struct mt7996_dev *dev,
+ 	return 0;
+ }
+ 
++void mt7996_npu_del_sta(struct mt7996_dev *dev, u8 band_idx, u16 wcid_idx)
++{
++	struct mt76_dev *mdev = &dev->mt76;
++	struct airoha_npu *npu;
++	int err;
++
++	if (!mt76_npu_device_active(mdev))
++		return;
++
++	/* Skip mailbox wait when a reset has already stopped the NPU. */
++	if (test_bit(MT76_MCU_RESET, &dev->mphy.state) ||
++	    dev->recovery.hw_full_reset)
++		return;
++
++	rcu_read_lock();
++	npu = rcu_dereference(mdev->mmio.npu);
++	if (npu) {
++		err = mt76_npu_send_msg(npu, band_idx,
++					WLAN_FUNC_SET_WAIT_DEL_STA, wcid_idx,
++					GFP_ATOMIC);
++		if (err && !dev->npu_del_sta_error) {
++			dev->npu_del_sta_error = true;
++			dev_dbg(mdev->dev,
++				"failed to notify the NPU of WCID %u removal: %d\n",
++				wcid_idx, err);
++		}
++	}
++	rcu_read_unlock();
++}
++
+ static int mt7992_npu_rxd_init(struct mt7996_dev *dev, struct airoha_npu *npu)
+ {
+ 	u32 val;

@@ -1,0 +1,22 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 12:52:00 +0800
+Subject: [PATCH] AP: lower unsolicited Link Measurement Report to debug
+
+Clients may send unsolicited RRM Link Measurement Reports with no matching
+outstanding request. Logging them at MSG_INFO floods the default syslog ring
+on chatty 5 GHz clients despite requiring no action; demote to MSG_EXCESSIVE.
+
+Origin: backport, archive/xr1710g-v1
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/src/ap/rrm.c
++++ b/src/ap/rrm.c
+@@ -367,7 +367,7 @@ static void hostapd_handle_link_mesr_report(struct hostapd_data *hapd,
+ 
+ 	if (!hapd->link_mesr_req_active ||
+ 	    (hapd->link_measurement_req_token != report->dialog_token)) {
+-		wpa_printf(MSG_INFO,
++		wpa_printf(MSG_EXCESSIVE,
+ 			   "Unexpected Link measurement report, token %u",
+ 			   report->dialog_token);
+ 		return;

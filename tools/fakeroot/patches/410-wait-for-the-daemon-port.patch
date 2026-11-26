@@ -1,0 +1,44 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Sun, 15 Nov 2026 12:00:00 +0800
+Subject: [PATCH] fakeroot: wait for faked TCP port before invoking child
+
+faked prints its TCP port before the forked daemon reaches accept(), causing
+the first client (e.g. apk mkpkg) to fail with "connect: Connection refused".
+Wait up to 2 s for the port to accept a connection using /dev/tcp under bash
+or python3 under POSIX shells such as dash.
+
+Origin: backport, archive/xr1710g-v1
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/scripts/fakeroot.in
++++ b/scripts/fakeroot.in
+@@ -149,6 +149,29 @@
+ FAKEROOTKEY=`echo $KEY_PID|cut -d: -f1`
+ PID=`echo $KEY_PID|cut -d: -f2`
+ 
++# Wait up to 2 s for faked to reach accept() using bash /dev/tcp or python3.
++if test -n "$FAKEROOTKEY"; then
++  if test -n "$BASH_VERSION"; then
++    i=0
++    while test $i -lt 200; do
++      (exec 3<>/dev/tcp/127.0.0.1/"$FAKEROOTKEY") 2>/dev/null && break
++      i=`expr $i + 1`
++      sleep 0.01 2>/dev/null
++    done
++  elif command -v python3 >/dev/null 2>&1; then
++    python3 -c 'import socket, sys, time
++deadline = time.time() + 2.0
++while True:
++    try:
++        socket.create_connection(("127.0.0.1", int(sys.argv[1])), 0.2).close()
++        sys.exit(0)
++    except OSError:
++        if time.time() >= deadline:
++            sys.exit(1)
++        time.sleep(0.005)' "$FAKEROOTKEY"
++  fi
++fi
++
+ if [ "$WAITINTRAP" -eq 0 ]; then
+   trap "kill -s @signal@ $PID" EXIT INT
+ else

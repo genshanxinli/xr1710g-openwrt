@@ -1,0 +1,68 @@
+From: Gilly <gilroyscott1970@gmail.com>
+Date: Thu, 16 Oct 2026 12:00:00 +0800
+Subject: [PATCH] wifi: mt76: mt7996: restart the NPU on a full chip reset
+
+mt7996_mac_full_reset()/mt7996_mac_restart() skip stopping/re-initing the NPU
+and run napi_disable() on unregistered NPU RRO/txfree queues (NULL ->dev).
+Mirror L1 SER: stop the NPU before reset, skip NPU queues in both NAPI loops,
+and re-run __mt7996_npu_hw_init() on restart.
+
+Origin: https://github.com/Gilly1970/Gemtek-W1700K-6.18
+Signed-off-by: Gilly <gilroyscott1970@gmail.com>
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+diff --git a/mt7996/mac.c b/mt7996/mac.c
+index 9074477..26c5c38 100644
+--- a/mt7996/mac.c
++++ b/mt7996/mac.c
+@@ -2211,6 +2211,13 @@ mt7996_mac_restart(struct mt7996_dev *dev)
+ 		    mt76_queue_is_wed_rro(&mdev->q_rx[i]))
+ 			continue;
+ 
++		if (mt76_npu_device_active(mdev) &&
++		    mt76_queue_is_wed_rro(&mdev->q_rx[i]))
++			continue;
++
++		if (mt76_queue_is_npu_txfree(&mdev->q_rx[i]))
++			continue;
++
+ 		if (mdev->q_rx[i].ndesc)
+ 			napi_disable(&dev->mt76.napi[i]);
+ 	}
+@@ -2227,6 +2234,13 @@ mt7996_mac_restart(struct mt7996_dev *dev)
+ 		    mt76_queue_is_wed_rro(&mdev->q_rx[i]))
+ 			continue;
+ 
++		if (mt76_npu_device_active(mdev) &&
++		    mt76_queue_is_wed_rro(&mdev->q_rx[i]))
++			continue;
++
++		if (mt76_queue_is_npu_txfree(&mdev->q_rx[i]))
++			continue;
++
+ 		if (mdev->q_rx[i].ndesc) {
+ 			napi_enable(&dev->mt76.napi[i]);
+ 			local_bh_disable();
+@@ -2280,6 +2294,13 @@ mt7996_mac_restart(struct mt7996_dev *dev)
+ 				     MT_INT_TX_RX_DONE_EXT);
+ 	}
+ 
++	/* Re-init NPU with recreated rings; fail restart on error so full reset retries. */
++	ret = __mt7996_npu_hw_init(dev);
++	if (ret) {
++		dev_err(mdev->dev, "NPU re-init after full reset failed: %d\n", ret);
++		goto out;
++	}
++
+ 	/* set the necessary init items */
+ 	ret = mt7996_mcu_set_eeprom(dev);
+ 	if (ret)
+@@ -2358,6 +2379,8 @@ mt7996_mac_full_reset(struct mt7996_dev *dev)
+ 
+ 	dev->recovery.hw_full_reset = true;
+ 
++	mt7996_npu_hw_stop(dev);
++
+ 	set_bit(MT76_RESTART, &dev->mphy.state);
+ 	set_bit(MT76_MCU_RESET, &dev->mphy.state);
+ 	wake_up(&dev->mt76.mcu.wait);

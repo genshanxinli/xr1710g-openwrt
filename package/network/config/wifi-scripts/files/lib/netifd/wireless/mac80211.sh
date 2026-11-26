@@ -159,7 +159,6 @@ mac80211_hostapd_setup_base() {
 	set_default noscan 0
 
 	[ "$noscan" -gt 0 ] && hostapd_noscan=1
-	[ "$tx_burst" = 0 ] && tx_burst=
 
 	chan_ofs=0
 	[ "$band" = "6g" ] && chan_ofs=1
@@ -319,6 +318,9 @@ mac80211_hostapd_setup_base() {
 	}
 	[ "$hwmode" = "a" ] || enable_ac=0
 	[ "$band" = "6g" ] && enable_ac=0
+
+	# 6 GHz clears enable_ac above; apply 2.0 BE TXOP burst default before tx_burst=0 check.
+	[ "$band" = "6g" ] && set_default tx_burst 2.0
 
 	if [ "$enable_ac" != "0" ]; then
 		json_get_vars \
@@ -542,6 +544,8 @@ mac80211_hostapd_setup_base() {
 			append base_cfg "eht_oper_centr_freq_seg0_idx=$eht_center_seg0" "$N"
 		}
 	fi
+
+	[ "$tx_burst" = 0 ] && tx_burst=
 
 	hostapd_prepare_device_config "$hostapd_conf_file" nl80211
 	cat >> "$hostapd_conf_file" <<EOF
@@ -1195,6 +1199,11 @@ drv_mac80211_setup() {
 
 	# convert channel to frequency
 	[ "$auto_channel" -gt 0 ] || freq="$(get_freq "$phy" "$channel" "$band")"
+
+	case "$country" in
+	[A-Za-z][A-Za-z]) ;;
+	*) country= ;;
+	esac
 
 	[ -n "$country" ] && {
 		iw reg get | grep -q "^country $country:" || {

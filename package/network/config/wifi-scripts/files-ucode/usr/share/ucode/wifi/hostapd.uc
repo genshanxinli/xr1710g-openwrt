@@ -17,8 +17,45 @@ const NL80211_EXT_FEATURE_RADAR_BACKGROUND = 60;
 let phy_features = {};
 let phy_capabilities = {};
 
+let wiphy_cache = {};
+let wireless_status_cache = null;
+
+function cached_wiphy_info(phy) {
+	wiphy_cache[phy] ??= wiphy_info(phy);
+	return wiphy_cache[phy];
+}
+
+function wireless_status() {
+	wireless_status_cache ??= global.ubus.call('network.wireless', 'status');
+	return wireless_status_cache;
+}
+
+/* Infer the highest unclaimed supported band when config omits band. */
+function infer_band(config) {
+	let info = cached_wiphy_info(config.phy);
+
+	if (!info)
+		return null;
+
+	let used = {};
+	let status = wireless_status();
+
+	for (let name, radio in status)
+		if (radio.config.band)
+			used[radio.config.band] = true;
+
+	for (let band in [ '6g', '5g', '2g', '60g' ])
+		if (wiphy_band(info, band) && !used[band])
+			return band;
+
+	return null;
+}
+
 /* make sure old style UCI and hwmode and newer band properties are correctly resolved */
 function set_device_defaults(config) {
+	if (!config.band)
+		config.band = infer_band(config);
+
 	/* validate the hw mode */
 	if (config.hw_mode in [ '11a', '11b', '11g', '11ad' ])
 		config.hw_mode = substr(config.hw_mode, 2);
@@ -67,15 +104,34 @@ function device_log_append(config) {
 
 /* setup country code */
 function device_country_code(config) {
-	let status = global.ubus.call('network.wireless', 'status');
+	let status = wireless_status();
+	let country, fallback;
 	for (let name, radio in status) {
-		if (!radio.config.country)
+		let cc = radio.config.country;
+
+		/* Reject non-ISO codes (e.g. '00') that make hostapd refuse the phy. */
+		if (!cc || !match(cc, /^[A-Za-z][A-Za-z]$/))
 			continue;
-		config.country_code = radio.config.country;
+
+		if (config.radio != null && radio.config.radio != null &&
+		    radio.config.radio == config.radio) {
+			country = cc;
+			break;
+		}
+
+		fallback ??= cc;
 	}
 
-	if (!exists(config, 'country_code'))
+	country ??= fallback;
+
+	if (country == null && config.country_code &&
+	    match(config.country_code, /^[A-Za-z][A-Za-z]$/))
+		country = config.country_code;
+
+	if (country == null)
 		return;
+
+	config.country_code = uc(country);
 
 	if (config.hw_mode != 'a')
 		delete config.ieee80211h;
@@ -304,14 +360,17 @@ function device_htmode_append(config) {
 		append_vars(config, [ 'op_class' ]);
 	}
 
+	/* 6 GHz clears ieee80211ac above; keep the 2.0 BE TXOP burst default on 5g/6g. */
+	if ((config.band == '5g' && config.ieee80211ac && config.hw_mode == 'a') ||
+	    config.band == '6g')
+		set_default(config, 'tx_queue_data2_burst', '2.0');
+
 	if (config.ieee80211ac && config.hw_mode == 'a') {
 		/* VHT capab */
 		if (config.vht_oper_chwidth < 2) {
 			config.vht160 = 0;
 			config.short_gi_160 = 0;
 		}
-
-		set_default(config, 'tx_queue_data2_burst', '2.0');
 
 		let vht_capab = phy_capabilities.vht_capa;
 
@@ -482,9 +541,7 @@ function device_extended_features(data, flag) {
 }
 
 function device_capabilities(config) {
-	let phy = config.phy;
-
-	phy = wiphy_info(phy);
+	let phy = cached_wiphy_info(config.phy);
 	let band = wiphy_band(phy, config.band);
 
 	phy_capabilities.ht_capa = band.ht_capa ?? 0;
@@ -509,11 +566,12 @@ function generate(config) {
 	if (!config)
 		die(`${config.path} is an unknown phy`);
 
+	/* Resolve band via infer_band() before device_capabilities() looks it up. */
+	set_device_defaults(config);
+
 	device_capabilities(config);
 
 	append('driver', 'nl80211');
-
-	set_device_defaults(config);
 
 	device_log_append(config);
 
