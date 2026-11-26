@@ -1,0 +1,71 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Tue, 10 Nov 2026 12:00:00 +0800
+Subject: [PATCH] net: airoha: refuse to offload flows behind a shaping qdisc
+
+The PPE driver hardcodes AIROHA_FOE_SHAPER_ID to 0x7f (unshaped), so
+offloaded flows bypass software rate-shaping qdiscs on the egress netdev.
+Return -EOPNOTSUPP in airoha_ppe_foe_entry_prepare() when the egress root
+qdisc is a non-offloaded shaping qdisc.
+
+Origin: archive/xr1710g-v1@e85677d284c0
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -398,19 +398,55 @@ static void airoha_ppe_foe_set_bridge_ad
+ 	br->src_mac_lo = get_unaligned_be32(eh->h_source + 2);
+ }
+ 
++/* Non-offloaded rate-shaping qdiscs that PPE shaper-id 0x7f would bypass. */
++static const char *const airoha_ppe_shaping_qdiscs[] = {
++	"tbf", "htb", "hfsc", "cake", "cake_mq", "netem", "mqprio", "cbs",
++};
++
++static bool airoha_ppe_netdev_is_shaped(struct net_device *netdev)
++{
++	struct Qdisc *qdisc;
++	bool shaped = false;
++	int i;
++
++	if (!netdev)
++		return false;
++
++	rcu_read_lock();
++	qdisc = rcu_dereference(netdev->qdisc);
++	if (qdisc && !(qdisc->flags & TCQ_F_OFFLOADED)) {
++		for (i = 0; i < ARRAY_SIZE(airoha_ppe_shaping_qdiscs); i++) {
++			if (!strcmp(qdisc->ops->id,
++				    airoha_ppe_shaping_qdiscs[i])) {
++				shaped = true;
++				break;
++			}
++		}
++	}
++	rcu_read_unlock();
++
++	return shaped;
++}
++
+ static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
+ 					struct airoha_foe_entry *hwe,
+ 					struct net_device *netdev, int type,
+ 					struct airoha_flow_data *data,
+ 					int l4proto, u8 dsfield, bool bridged)
+ {
+-	u32 qdata = FIELD_PREP(AIROHA_FOE_SHAPER_ID, 0x7f), ports_pad, val;
++	u32 qdata, ports_pad, val;
++	struct net_device *egress = netdev;
+ 	int wlan_etype = -EINVAL, dsa_port = airoha_get_dsa_port(&netdev);
+ 	struct airoha_foe_mac_info_common *l2;
+ 	u8 smac_id = 0xf;
+ 
+ 	memset(hwe, 0, sizeof(*hwe));
+ 
++	if (airoha_ppe_netdev_is_shaped(egress))
++		return -EOPNOTSUPP;
++
++	qdata = FIELD_PREP(AIROHA_FOE_SHAPER_ID, 0x7f);
++
+ 	val = FIELD_PREP(AIROHA_FOE_IB1_BIND_STATE, AIROHA_FOE_STATE_BIND) |
+ 	      FIELD_PREP(AIROHA_FOE_IB1_BIND_PACKET_TYPE, type) |
+ 	      FIELD_PREP(AIROHA_FOE_IB1_BIND_UDP, l4proto == IPPROTO_UDP) |

@@ -1,0 +1,35 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 09:00:00 +0800
+Subject: [PATCH] net: phy: realtek: report the TP port on the copper 10G PHYs
+
+genphy_c45_pma_read_abilities() does not set ETHTOOL_LINK_MODE_TP_BIT,
+causing ethtool to print empty "Supported ports: [ ]" on RTL826x copper
+PHYs. Set ETHTOOL_LINK_MODE_TP_BIT in rtl8261x_get_features() and
+rtl826x_get_features().
+
+Origin: archive/xr1710g-v1@e85677d284c0
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/net/phy/realtek/realtek_main.c
++++ b/drivers/net/phy/realtek/realtek_main.c
+@@ -525,6 +525,10 @@ static int rtl8261x_get_features(struct
+ 	ret = genphy_c45_pma_read_abilities(phydev);
+ 	if (ret)
+ 		return ret;
++
++	/* C45 PMA abilities omit medium; RTL8261x are copper TP PHYs. */
++	linkmode_set_bit(ETHTOOL_LINK_MODE_TP_BIT, phydev->supported);
++
+ 	/*
+ 	 * Supplement Multi-Gig speeds that may not be automatically detected
+ 	 * RTL8261X supports 2.5G/5G in addition to standard 10G
+@@ -4012,6 +4016,9 @@ static int rtl826x_get_features(struct p
+ 	if (ret)
+ 		return ret;
+ 
++	/* C45 PMA abilities omit medium; RTL826x are copper TP PHYs. */
++	linkmode_set_bit(ETHTOOL_LINK_MODE_TP_BIT, phydev->supported);
++
+ 	/* not support 10M modes */
+ 	linkmode_clear_bit(ETHTOOL_LINK_MODE_10baseT_Half_BIT,
+ 			   phydev->supported);

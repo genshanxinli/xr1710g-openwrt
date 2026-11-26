@@ -1,0 +1,30 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 18:00:00 +0800
+Subject: [PATCH] thermal/drivers/airoha: log when the EN7581 hot trip is reached
+
+en7581_thdev_ops omitted .hot, so crossing THERMAL_TRIP_HOT produced no
+kernel warning (issue #379). Implement en7581_thermal_hot() to log a
+dev_crit() message identifying the thermal zone.
+
+Origin: archive/xr1710g-v1@e85677d284c0
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/thermal/airoha_thermal.c
++++ b/drivers/thermal/airoha_thermal.c
+@@ -468,9 +468,16 @@ static int en7581_thermal_set_trips(stru
+ 	return 0;
+ }
+ 
++static void en7581_thermal_hot(struct thermal_zone_device *tz)
++{
++	dev_crit(thermal_zone_device(tz), "%s: hot trip temperature reached\n",
++		 thermal_zone_device_type(tz));
++}
++
+ static const struct thermal_zone_device_ops en7581_thdev_ops = {
+ 	.get_temp = en7581_thermal_get_temp,
+ 	.set_trips = en7581_thermal_set_trips,
++	.hot = en7581_thermal_hot,
+ };
+ 
+ static irqreturn_t en7581_thermal_irq(int irq, void *data)

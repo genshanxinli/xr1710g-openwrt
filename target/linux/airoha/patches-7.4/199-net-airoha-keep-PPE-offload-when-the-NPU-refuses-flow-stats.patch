@@ -1,0 +1,120 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 12:20:00 +0800
+Subject: [PATCH] net: airoha: keep PPE offload when the NPU refuses flow stats
+
+airoha_ppe_offload_setup() aborts PPE offload if NPU flow-stats setup fails
+or returns a zero SRAM stats address. Warn and continue without flow stats
+using ppe->foe_stats_enabled, and only enable PSE port 6 shared flow
+control when flow stats are active.
+
+Origin: archive/xr1710g-v1@e85677d284c0
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/net/ethernet/airoha/airoha_npu.c
++++ b/drivers/net/ethernet/airoha/airoha_npu.c
+@@ -450,6 +450,12 @@ static int airoha_npu_ppe_stats_setup(st
+ 	if (err)
+ 		goto out;
+ 
++	/* Zero stats address indicates NPU SRAM exhaustion. */
++	if (!ppe_data->stats_info.npu_stats_addr) {
++		err = -ENOSPC;
++		goto out;
++	}
++
+ 	npu->stats = devm_ioremap(npu->dev,
+ 				  ppe_data->stats_info.npu_stats_addr,
+ 				  size);
+--- a/drivers/net/ethernet/airoha/airoha_eth.h
++++ b/drivers/net/ethernet/airoha/airoha_eth.h
+@@ -647,6 +647,8 @@ struct airoha_ppe {
+ 
+ 	struct airoha_foe_stats *foe_stats;
+ 	dma_addr_t foe_stats_dma;
++	/* True when NPU accepted flow-stats allocation. */
++	bool foe_stats_enabled;
+ 
+ 	struct dentry *debugfs_dir;
+ };
+--- a/drivers/net/ethernet/airoha/airoha_regs.h
++++ b/drivers/net/ethernet/airoha/airoha_regs.h
+@@ -72,6 +72,9 @@
+ #define PSE_CFG_OQ_RSV_MASK		GENMASK(13, 0)
+ 
+ #define PSE_FQ_CFG			0x008c
++/* Port 6 (CDM3 -> NPU) shared-buffer flow-control disable bit. */
++#define PSE_FC_CFG			0x0098
++#define PSE_PORT6_SHARE_DIS		BIT(22)
+ #define PSE_FQ_LIMIT_MASK		GENMASK(14, 0)
+ 
+ #define REG_FE_PSE_BUF_SET		0x0090
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -144,6 +144,10 @@ static void airoha_ppe_hw_init(struct ai
+ 	sram_ppe_num_data_entries =
+ 		PPE_RAM_NUM_ENTRIES_SHIFT(sram_ppe_num_data_entries);
+ 
++	/* Enable port 6 shared flow control only while flow stats are active. */
++	if (sram_num_stats_entries > 0 && ppe->foe_stats_enabled)
++		airoha_fe_clear(eth, PSE_FC_CFG, PSE_PORT6_SHARE_DIS);
++
+ 	for (i = 0; i < eth->soc->num_ppe; i++) {
+ 		airoha_fe_wr(eth, REG_PPE_TB_BASE(i),
+ 			     ppe->foe_dma + sram_tb_size);
+@@ -622,6 +626,9 @@ static void airoha_ppe_foe_flow_stats_re
+ {
+ 	int i, ppe_num_stats_entries;
+ 
++	if (unlikely(!ppe->foe_stats_enabled))
++		return;
++
+ 	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
+ 	if (ppe_num_stats_entries < 0)
+ 		return;
+@@ -640,6 +647,9 @@ static void airoha_ppe_foe_flow_stats_up
+ 	int ppe_num_stats_entries;
+ 	u8 nbq;
+ 
++	if (unlikely(!ppe->foe_stats_enabled))
++		return;
++
+ 	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
+ 	if (ppe_num_stats_entries < 0)
+ 		return;
+@@ -1312,6 +1322,9 @@ void airoha_ppe_foe_entry_get_stats(stru
+ 	struct airoha_npu *npu;
+ 	u32 index;
+ 
++	if (unlikely(!ppe->foe_stats_enabled))
++		return;
++
+ 	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
+ 	if (ppe_num_stats_entries < 0)
+ 		return;
+@@ -1325,7 +1338,7 @@ void airoha_ppe_foe_entry_get_stats(stru
+ 	rcu_read_lock();
+ 
+ 	npu = rcu_dereference(eth->npu);
+-	if (npu) {
++	if (npu && npu->stats) {
+ 		u64 packets = ppe->foe_stats[index].packets;
+ 		u64 bytes = ppe->foe_stats[index].bytes;
+ 		struct airoha_foe_stats npu_stats;
+@@ -1457,8 +1470,15 @@ static int airoha_ppe_offload_setup(stru
+ 	if (ppe_num_stats_entries > 0) {
+ 		err = npu->ops.ppe_init_stats(npu, ppe->foe_stats_dma,
+ 					      ppe_num_stats_entries);
+-		if (err)
+-			goto error_npu_put;
++		if (err) {
++			dev_warn(eth->dev,
++				 "NPU refused flow stats (%d), continuing without counters\n",
++				 err);
++			ppe->foe_stats_enabled = false;
++			err = 0;
++		} else {
++			ppe->foe_stats_enabled = true;
++		}
+ 	}
+ 
+ 	airoha_ppe_hw_init(ppe);

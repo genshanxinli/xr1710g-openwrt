@@ -1,0 +1,30 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 12:05:00 +0800
+Subject: [PATCH] net: airoha: do not alias flow counters onto unrelated flows
+
+airoha_ppe_foe_get_flow_stats_index() subtracted PPE_STATS_NUM_ENTRIES for
+hashes >= ppe_num_stats_entries, aliasing DRAM/out-of-range hashes onto live
+SRAM flow counter slots. Return -ENOENT for hashes outside the counter block
+and map in-range hashes directly.
+
+Origin: archive/xr1710g-v1@e85677d284c0
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -629,8 +629,13 @@ static int airoha_ppe_foe_get_flow_stats
+ 	if (ppe_num_stats_entries < 0)
+ 		return ppe_num_stats_entries;
+ 
+-	*index = hash >= ppe_num_stats_entries ? hash - PPE_STATS_NUM_ENTRIES
+-					       : hash;
++	/* Map SRAM hashes directly to their counter slot; reject out-of-range
++	 * hashes instead of aliasing them onto unrelated counter slots.
++	 */
++	if (hash >= ppe_num_stats_entries)
++		return -ENOENT;
++
++	*index = hash;
+ 
+ 	return 0;
+ }

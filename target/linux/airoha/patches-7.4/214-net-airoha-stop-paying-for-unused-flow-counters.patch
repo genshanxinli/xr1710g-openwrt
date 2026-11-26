@@ -1,0 +1,115 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 12:10:00 +0800
+Subject: [PATCH] net: airoha: stop paying for flow counters the NPU never provides
+
+Avoid carving out half of PPE SRAM when the NPU refuses flow counters, and
+enable PPE_DRAM_TABLE_EN/PPE_DRAM_HASH1_EN with readback verification and
+bounds checking in airoha_ppe_foe_commit_entry() so DRAM hash slots are
+actually searched by hardware.
+
+Origin: archive/xr1710g-v1@e85677d284c0
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -35,7 +35,8 @@ static const struct rhashtable_params ai
+ 	.automatic_shrinking = true,
+ };
+ 
+-static int airoha_ppe_get_num_stats_entries(struct airoha_ppe *ppe)
++/* Max flow-stats slots per PPE for init buffer allocation. */
++static int airoha_ppe_stats_capable_entries(struct airoha_ppe *ppe)
+ {
+ 	if (!IS_ENABLED(CONFIG_NET_AIROHA_FLOW_STATS))
+ 		return -EOPNOTSUPP;
+@@ -46,9 +47,20 @@ static int airoha_ppe_get_num_stats_entr
+ 	return PPE_STATS_NUM_ENTRIES;
+ }
+ 
++/* Active SRAM flow-stats carve-out per PPE (0 when NPU refuses stats). */
++static int airoha_ppe_get_num_stats_entries(struct airoha_ppe *ppe)
++{
++	int num_stats = airoha_ppe_stats_capable_entries(ppe);
++
++	if (num_stats > 0 && !ppe->foe_stats_enabled)
++		return -EOPNOTSUPP;
++
++	return num_stats;
++}
++
+ static int airoha_ppe_get_total_num_stats_entries(struct airoha_ppe *ppe)
+ {
+-	int num_stats = airoha_ppe_get_num_stats_entries(ppe);
++	int num_stats = airoha_ppe_stats_capable_entries(ppe);
+ 
+ 	if (num_stats > 0) {
+ 		struct airoha_eth *eth = ppe->eth;
+@@ -154,7 +166,7 @@ void airoha_ppe_set_xmit_frame_size(stru
+ static void airoha_ppe_hw_init(struct airoha_ppe *ppe)
+ {
+ 	u32 sram_ppe_num_data_entries = airoha_ppe_get_sram_num_entries(ppe);
+-	u32 sram_num_entries;
++	u32 sram_num_entries, val;
+ 	u32 sram_tb_size, dram_num_entries;
+ 	struct airoha_eth *eth = ppe->eth;
+ 	int i, sram_num_stats_entries;
+@@ -190,6 +202,7 @@ static void airoha_ppe_hw_init(struct ai
+ 			      PPE_SRAM_TABLE_EN_MASK |
+ 			      PPE_SRAM_HASH1_EN_MASK |
+ 			      PPE_DRAM_TABLE_EN_MASK |
++			      PPE_DRAM_HASH1_EN_MASK |
+ 			      PPE_SRAM_HASH0_MODE_MASK |
+ 			      PPE_SRAM_HASH1_MODE_MASK |
+ 			      PPE_DRAM_HASH0_MODE_MASK |
+@@ -197,6 +210,8 @@ static void airoha_ppe_hw_init(struct ai
+ 			      FIELD_PREP(PPE_SRAM_TABLE_EN_MASK, 1) |
+ 			      FIELD_PREP(PPE_SRAM_HASH1_EN_MASK, 1) |
+ 			      FIELD_PREP(PPE_SRAM_HASH1_MODE_MASK, 1) |
++			      FIELD_PREP(PPE_DRAM_TABLE_EN_MASK, 1) |
++			      FIELD_PREP(PPE_DRAM_HASH1_EN_MASK, 1) |
+ 			      FIELD_PREP(PPE_DRAM_HASH1_MODE_MASK, 3));
+ 
+ 		airoha_fe_rmw(eth, REG_PPE_TB_CFG(i),
+@@ -212,6 +227,13 @@ static void airoha_ppe_hw_init(struct ai
+ 			      FIELD_PREP(PPE_DRAM_TB_NUM_ENTRY_MASK,
+ 					 dram_num_entries));
+ 
++		/* Verify hardware latched PPE_DRAM_TABLE_EN_MASK. */
++		val = airoha_fe_rr(eth, REG_PPE_TB_HASH_CFG(i));
++		if (!(val & PPE_DRAM_TABLE_EN_MASK))
++			dev_warn(eth->dev,
++				 "PPE%u: DRAM table did not come up, %u entries unreachable\n",
++				 i + 1, PPE_DRAM_NUM_ENTRIES);
++
+ 		airoha_fe_rmw(eth, REG_PPE_BIND_RATE(i),
+ 			      PPE_BIND_RATE_L2B_BIND_MASK |
+ 			      PPE_BIND_RATE_BIND_MASK,
+@@ -818,12 +840,19 @@ static int airoha_ppe_foe_commit_entry(s
+ 				       u32 hash, bool rx_wlan)
+ {
+ 	u32 sram_num_entries = airoha_ppe_get_total_sram_num_entries(ppe);
+-	struct airoha_foe_entry *hwe = ppe->foe + hash * sizeof(*hwe);
++	struct airoha_foe_entry *hwe;
+ 	u32 ts = airoha_ppe_get_timestamp(ppe);
+ 	struct airoha_eth *eth = ppe->eth;
+ 	struct airoha_npu *npu;
+ 	int err = 0;
+ 
++	/* Bounds-check before writing host buffer. */
++	if (hash >= airoha_ppe_get_total_num_entries(ppe))
++		return -EINVAL;
++
++	hwe = ppe->foe + hash * sizeof(*hwe);
++
++	/* Publish entry payload before state field (DRAM table reads buffer directly). */
+ 	memcpy(&hwe->d, &e->d, sizeof(*hwe) - sizeof(hwe->ib1));
+ 	wmb();
+ 
+@@ -1695,6 +1724,7 @@ int airoha_ppe_init(struct airoha_eth *e
+ 	if (!ppe->foe_check_time)
+ 		return -ENOMEM;
+ 
++	/* Flush full 8192/PPE SRAM before offload_setup() may shrink geometry. */
+ 	err = airoha_ppe_flush_sram_entries(ppe);
+ 	if (err)
+ 		return err;

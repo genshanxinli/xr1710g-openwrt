@@ -1,0 +1,171 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 12:10:00 +0800
+Subject: [PATCH] net: airoha: deepen the PSE reserve of GDM4
+
+GDM4 is a 10G port with only two PSE egress queues, leaving 16 KiB (~13 us
+at 10G) of guaranteed reserve under the stock 64-page per-queue setting.
+Deepen GDM4's per-queue PSE reserve to 4x stock, capped by remaining
+shared-pool headroom via airoha_pse_tune_port().
+
+Origin: archive/xr1710g-v1@e85677d284c0
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -323,21 +323,61 @@ static int airoha_fe_set_pse_oq_rsv(stru
+ 	return 0;
+ }
+ 
++static const u32 pse_port_num_queues[] = {
++	[FE_PSE_PORT_CDM1] = 6,
++	[FE_PSE_PORT_GDM1] = 6,
++	[FE_PSE_PORT_GDM2] = 32,
++	[FE_PSE_PORT_GDM3] = 6,
++	[FE_PSE_PORT_PPE1] = 4,
++	[FE_PSE_PORT_CDM2] = 6,
++	[FE_PSE_PORT_CDM3] = 8,
++	[FE_PSE_PORT_CDM4] = 10,
++	[FE_PSE_PORT_PPE2] = 4,
++	[FE_PSE_PORT_GDM4] = 2,
++	[FE_PSE_PORT_CDM5] = 2,
++};
++
++/* Per-queue PSE reserve (128B pages); GDM4 needs 4x for 2-queue 10G. */
++static const u32 pse_port_weight[] = {
++	[FE_PSE_PORT_CDM1] = PSE_QUEUE_RSV_PAGES,
++	[FE_PSE_PORT_GDM1] = PSE_QUEUE_RSV_PAGES,
++	[FE_PSE_PORT_GDM3] = PSE_QUEUE_RSV_PAGES,
++	[FE_PSE_PORT_PPE1] = PSE_QUEUE_RSV_PAGES,
++	[FE_PSE_PORT_CDM2] = PSE_QUEUE_RSV_PAGES,
++	[FE_PSE_PORT_CDM4] = PSE_QUEUE_RSV_PAGES,
++	[FE_PSE_PORT_PPE2] = PSE_QUEUE_RSV_PAGES,
++	[FE_PSE_PORT_GDM4] = PSE_QUEUE_RSV_PAGES * 4,
++	[FE_PSE_PORT_CDM5] = PSE_QUEUE_RSV_PAGES,
++};
++
++/* Cap extra per-queue PSE reserve against remaining shared-pool headroom. */
++static void airoha_pse_tune_port(struct airoha_eth *eth, u32 port,
++				 u32 weight_pages)
++{
++	u32 weight = weight_pages;
++	u32 q;
++
++	if (weight > PSE_QUEUE_RSV_PAGES) {
++		u32 fq_limit, all_rsv, extra;
++
++		fq_limit = airoha_fe_get(eth, PSE_FQ_CFG, PSE_FQ_LIMIT_MASK);
++		all_rsv = airoha_fe_get_pse_all_rsv(eth);
++		extra = 0;
++		if (fq_limit > all_rsv + 0x400)
++			extra = (fq_limit - all_rsv - 0x400) /
++				pse_port_num_queues[port];
++		if (extra > weight - PSE_QUEUE_RSV_PAGES)
++			extra = weight - PSE_QUEUE_RSV_PAGES;
++
++		weight = PSE_QUEUE_RSV_PAGES + extra;
++	}
++
++	for (q = 0; q < pse_port_num_queues[port]; q++)
++		airoha_fe_set_pse_oq_rsv(eth, port, q, weight);
++}
++
+ static void airoha_fe_pse_ports_init(struct airoha_eth *eth)
+ {
+-	const u32 pse_port_num_queues[] = {
+-		[FE_PSE_PORT_CDM1] = 6,
+-		[FE_PSE_PORT_GDM1] = 6,
+-		[FE_PSE_PORT_GDM2] = 32,
+-		[FE_PSE_PORT_GDM3] = 6,
+-		[FE_PSE_PORT_PPE1] = 4,
+-		[FE_PSE_PORT_CDM2] = 6,
+-		[FE_PSE_PORT_CDM3] = 8,
+-		[FE_PSE_PORT_CDM4] = 10,
+-		[FE_PSE_PORT_PPE2] = 4,
+-		[FE_PSE_PORT_GDM4] = 2,
+-		[FE_PSE_PORT_CDM5] = 2,
+-	};
+ 	int q;
+ 
+ 	if (airoha_ppe_is_enabled(eth, 1)) {
+@@ -352,59 +392,50 @@ static void airoha_fe_pse_ports_init(str
+ 	}
+ 
+ 	/* CDM1 */
+-	for (q = 0; q < pse_port_num_queues[FE_PSE_PORT_CDM1]; q++)
+-		airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_CDM1, q,
+-					 PSE_QUEUE_RSV_PAGES);
++	airoha_pse_tune_port(eth, FE_PSE_PORT_CDM1,
++			     pse_port_weight[FE_PSE_PORT_CDM1]);
+ 	/* GDM1 */
+-	for (q = 0; q < pse_port_num_queues[FE_PSE_PORT_GDM1]; q++)
+-		airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_GDM1, q,
+-					 PSE_QUEUE_RSV_PAGES);
++	airoha_pse_tune_port(eth, FE_PSE_PORT_GDM1,
++			     pse_port_weight[FE_PSE_PORT_GDM1]);
+ 	/* GDM2 */
+ 	for (q = 6; q < pse_port_num_queues[FE_PSE_PORT_GDM2]; q++)
+ 		airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_GDM2, q, 0);
+ 	/* GDM3 */
+-	for (q = 0; q < pse_port_num_queues[FE_PSE_PORT_GDM3]; q++)
+-		airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_GDM3, q,
+-					 PSE_QUEUE_RSV_PAGES);
++	airoha_pse_tune_port(eth, FE_PSE_PORT_GDM3,
++			     pse_port_weight[FE_PSE_PORT_GDM3]);
+ 	/* PPE1 */
+ 	for (q = 0; q < pse_port_num_queues[FE_PSE_PORT_PPE1]; q++) {
+-		if (q < pse_port_num_queues[FE_PSE_PORT_PPE1] / 2)
+-			airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_PPE1, q,
+-						 PSE_QUEUE_RSV_PAGES);
+-		else
+-			airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_PPE1, q, 0);
++		u32 weight = q < pse_port_num_queues[FE_PSE_PORT_PPE1] / 2 ?
++			     pse_port_weight[FE_PSE_PORT_PPE1] : 0;
++
++		airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_PPE1, q, weight);
+ 	}
+ 	/* CDM2 */
+-	for (q = 0; q < pse_port_num_queues[FE_PSE_PORT_CDM2]; q++)
+-		airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_CDM2, q,
+-					 PSE_QUEUE_RSV_PAGES);
++	airoha_pse_tune_port(eth, FE_PSE_PORT_CDM2,
++			     pse_port_weight[FE_PSE_PORT_CDM2]);
+ 	/* CDM3 */
+ 	for (q = 0; q < pse_port_num_queues[FE_PSE_PORT_CDM3] - 1; q++)
+ 		airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_CDM3, q, 0);
+ 	/* CDM4 */
+ 	for (q = 4; q < pse_port_num_queues[FE_PSE_PORT_CDM4]; q++)
+ 		airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_CDM4, q,
+-					 PSE_QUEUE_RSV_PAGES);
++					 pse_port_weight[FE_PSE_PORT_CDM4]);
+ 	if (airoha_ppe_is_enabled(eth, 1)) {
+ 		/* PPE2 */
+ 		for (q = 0; q < pse_port_num_queues[FE_PSE_PORT_PPE2]; q++) {
+-			if (q < pse_port_num_queues[FE_PSE_PORT_PPE2] / 2)
+-				airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_PPE2,
+-							 q,
+-							 PSE_QUEUE_RSV_PAGES);
+-			else
+-				airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_PPE2,
+-							 q, 0);
++			u32 weight = q < pse_port_num_queues[FE_PSE_PORT_PPE2] / 2 ?
++				     pse_port_weight[FE_PSE_PORT_PPE2] : 0;
++
++			airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_PPE2, q,
++						 weight);
+ 		}
+ 	}
+ 	/* GDM4 */
+-	for (q = 0; q < pse_port_num_queues[FE_PSE_PORT_GDM4]; q++)
+-		airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_GDM4, q,
+-					 PSE_QUEUE_RSV_PAGES);
++	airoha_pse_tune_port(eth, FE_PSE_PORT_GDM4,
++			     pse_port_weight[FE_PSE_PORT_GDM4]);
+ 	/* CDM5 */
+-	for (q = 0; q < pse_port_num_queues[FE_PSE_PORT_CDM5]; q++)
+-		airoha_fe_set_pse_oq_rsv(eth, FE_PSE_PORT_CDM5, q,
+-					 PSE_QUEUE_RSV_PAGES);
++	airoha_pse_tune_port(eth, FE_PSE_PORT_CDM5,
++			     pse_port_weight[FE_PSE_PORT_CDM5]);
+ }
+ 
+ static int airoha_fe_mc_vlan_clear(struct airoha_eth *eth)

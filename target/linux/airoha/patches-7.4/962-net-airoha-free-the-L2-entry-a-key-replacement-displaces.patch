@@ -1,0 +1,105 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 14:00:00 +0800
+Subject: [PATCH] net: airoha: tear down displaced L2 subflows on key replacement
+
+rhashtable_replace_fast() in airoha_ppe_foe_l2_flow_commit_entry() swaps
+the bridge rhash node without tearing down subflows anchored on the
+displaced entry, stranding them in PPE hardware. Tear down displaced L2
+subflows under ppe_lock while keeping the entry alive for destroy().
+
+Origin: archive/xr1710g-v1@e85677d284c0
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -911,20 +911,29 @@ static void airoha_ppe_foe_remove_flow(s
+ 	}
+ }
+ 
+-static void airoha_ppe_foe_remove_l2_flow(struct airoha_ppe *ppe,
+-					  struct airoha_flow_table_entry *e)
++static void
++airoha_ppe_foe_remove_l2_subflows(struct airoha_ppe *ppe,
++				  struct airoha_flow_table_entry *e)
+ {
+ 	struct hlist_head *head = &e->l2_flows;
+ 	struct hlist_node *n;
+ 
+ 	lockdep_assert_held(&ppe_lock);
+ 
+-	rhashtable_remove_fast(&ppe->l2_flows, &e->l2_node,
+-			       airoha_l2_flow_table_params);
+ 	hlist_for_each_entry_safe(e, n, head, l2_subflow_node)
+ 		airoha_ppe_foe_remove_flow(ppe, e);
+ }
+ 
++static void airoha_ppe_foe_remove_l2_flow(struct airoha_ppe *ppe,
++					  struct airoha_flow_table_entry *e)
++{
++	lockdep_assert_held(&ppe_lock);
++
++	rhashtable_remove_fast(&ppe->l2_flows, &e->l2_node,
++			       airoha_l2_flow_table_params);
++	airoha_ppe_foe_remove_l2_subflows(ppe, e);
++}
++
+ static void airoha_ppe_foe_flow_remove_entry(struct airoha_ppe *ppe,
+ 					     struct airoha_flow_table_entry *e)
+ {
+@@ -1137,31 +1146,42 @@ airoha_ppe_foe_l2_flow_commit_entry(stru
+ 				    struct airoha_flow_table_entry *e)
+ {
+ 	struct airoha_flow_table_entry *prev;
+-	bool refuse;
++	int err;
+ 
+ 	e->type = FLOW_TYPE_L2;
+ 
+ 	spin_lock_bh(&ppe_lock);
++
+ 	prev = rhashtable_lookup_fast(&ppe->l2_flows, &e->data.bridge,
+ 				      airoha_l2_flow_table_params);
+-	refuse = prev && airoha_ppe_foe_l2_claim(ppe, prev,
+-						 e->ingress_dev_idx);
+-	spin_unlock_bh(&ppe_lock);
+-
+-	if (refuse)
+-		return -EOPNOTSUPP;
++	if (prev && airoha_ppe_foe_l2_claim(ppe, prev, e->ingress_dev_idx)) {
++		err = -EOPNOTSUPP;
++		goto unlock;
++	}
+ 
+ 	prev = rhashtable_lookup_get_insert_fast(&ppe->l2_flows, &e->l2_node,
+ 						 airoha_l2_flow_table_params);
+-	if (!prev)
+-		return 0;
++	if (!prev) {
++		err = 0;
++		goto unlock;
++	}
+ 
+-	if (IS_ERR(prev))
+-		return PTR_ERR(prev);
++	if (IS_ERR(prev)) {
++		err = PTR_ERR(prev);
++		goto unlock;
++	}
++
++	err = rhashtable_replace_fast(&ppe->l2_flows, &prev->l2_node,
++				      &e->l2_node,
++				      airoha_l2_flow_table_params);
++	if (!err) {
++		/* Tear down stranded HW subflows; eth->flow_table still owns @prev until destroy(). */
++		airoha_ppe_foe_remove_l2_subflows(ppe, prev);
++	}
++unlock:
++	spin_unlock_bh(&ppe_lock);
+ 
+-	return rhashtable_replace_fast(&ppe->l2_flows, &prev->l2_node,
+-				       &e->l2_node,
+-				       airoha_l2_flow_table_params);
++	return err;
+ }
+ 
+ static int airoha_ppe_foe_flow_commit_entry(struct airoha_ppe *ppe,

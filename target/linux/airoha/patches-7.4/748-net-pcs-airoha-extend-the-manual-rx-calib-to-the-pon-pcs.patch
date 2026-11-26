@@ -1,0 +1,25 @@
+From: Gilly1970 <gilroyscott1970@gmail.com>
+Date: Tue, 16 Jun 2026 16:46:39 +1000
+Subject: [PATCH] net: pcs: airoha: extend the manual RX calibration to the PON PCS
+
+Patch 745 extended manual RX calibration on E2 silicon only to
+airoha,an7581-pcs-eth, leaving the PON PCS (WAN/gdm2 on XR1710G) on the
+non-retrying autocalibration path. Enable the same PDIDR check for
+airoha,an7581-pcs-pon.
+
+Origin: archive/xr1710g-v1@e85677d284c0
+Signed-off-by: Gilly1970 <gilroyscott1970@gmail.com>
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/net/pcs/airoha/pcs-airoha-common.c
++++ b/drivers/net/pcs/airoha/pcs-airoha-common.c
+@@ -1323,7 +1323,8 @@ static int airoha_pcs_probe(struct platf
+ 	 * manual rx calibration is needed. Extend the manual-calibration
+ 	 * threshold to include E2 silicon.
+ 	 */
+-	if (device_is_compatible(dev, "airoha,an7581-pcs-eth")) {
++	if (device_is_compatible(dev, "airoha,an7581-pcs-eth") ||
++	    device_is_compatible(dev, "airoha,an7581-pcs-pon")) {
+ 		u32 val;
+ 
+ 		ret = regmap_read(priv->scu, AIROHA_SCU_PDIDR, &val);

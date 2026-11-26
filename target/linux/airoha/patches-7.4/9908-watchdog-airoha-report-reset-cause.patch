@@ -1,0 +1,84 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 08:28:00 +0800
+Subject: [PATCH] watchdog: airoha: log the NP-SCU reset-cause bitmap
+
+airoha_wdt_probe() never inspected the NP-SCU PMC reset-cause register at
+0x080, leaving reboot causes unrecorded (issue #382). Read and log the raw
+PMC bitmap via an optional airoha,scu syscon phandle without clearing W1C
+bits, and document airoha,scu in the DT binding.
+
+Origin: archive/xr1710g-v1@e85677d284c0
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/watchdog/airoha_wdt.c
++++ b/drivers/watchdog/airoha_wdt.c
+@@ -21,6 +21,8 @@
+ #include <linux/platform_device.h>
+ #include <linux/watchdog.h>
+ #include <linux/stringify.h>
++#include <linux/mfd/syscon.h>
++#include <linux/regmap.h>
+ 
+ /* Base address of timer and watchdog registers */
+ #define TIMER_CTRL			0x0
+@@ -34,6 +36,11 @@
+ #define WDT_RELOAD			0x38
+ #define   WDT_RLD			BIT(0)
+ 
++/* NP-SCU PMC reset-cause bitmap (W1C; read-only). */
++#define AIROHA_SCU_PMC			0x080
++#define   AIROHA_SCU_PMC_WDG_RST_R	BIT(31)
++#define   AIROHA_SCU_PMC_SYS_RST_R	BIT(30)
++
+ /* Airoha watchdog structure description */
+ struct airoha_wdt_desc {
+ 	struct watchdog_device wdog_dev;
+@@ -131,6 +138,8 @@ static int airoha_wdt_probe(struct platf
+ 	struct watchdog_device *wdog_dev;
+ 	struct device *dev = &pdev->dev;
+ 	struct clk *bus_clk;
++	struct regmap *scu;
++	u32 pmc;
+ 	int ret;
+ 
+ 	airoha_wdt = devm_kzalloc_obj(dev, *airoha_wdt);
+@@ -163,6 +172,16 @@ static int airoha_wdt_probe(struct platf
+ 	wdog_dev->min_timeout = 1;
+ 	wdog_dev->parent = dev;
+ 
++	scu = syscon_regmap_lookup_by_phandle(dev->of_node, "airoha,scu");
++	if (IS_ERR(scu))
++		dev_info(dev, "no SCU reset-cause regmap: %ld\n", PTR_ERR(scu));
++	else if (regmap_read(scu, AIROHA_SCU_PMC, &pmc))
++		dev_warn(dev, "failed to read SCU PMC\n");
++	else
++		dev_info(dev, "SCU PMC=0x%08x WDG_RST_R=%u SYS_RST_R=%u\n",
++			 pmc, !!(pmc & AIROHA_SCU_PMC_WDG_RST_R),
++			 !!(pmc & AIROHA_SCU_PMC_SYS_RST_R));
++
+ 	watchdog_set_drvdata(wdog_dev, airoha_wdt);
+ 	watchdog_set_nowayout(wdog_dev, nowayout);
+ 	watchdog_stop_on_unregister(wdog_dev);
+--- a/Documentation/devicetree/bindings/watchdog/airoha,en7581-wdt.yaml
++++ b/Documentation/devicetree/bindings/watchdog/airoha,en7581-wdt.yaml
+@@ -30,6 +30,12 @@ properties:
+   clock-names:
+     const: bus
+ 
++  airoha,scu:
++    $ref: /schemas/types.yaml#/definitions/phandle
++    description:
++      Phandle to the NP-SCU syscon that holds the reset-cause status
++      register.
++
+ required:
+   - compatible
+   - reg
+@@ -45,6 +51,7 @@ examples:
+     watchdog@1fbf0100 {
+         compatible = "airoha,en7581-wdt";
+         reg = <0x1fbf0100 0x3c>;
++        airoha,scu = <&scuclk>;
+ 
+         clocks = <&scuclk EN7523_CLK_BUS>;
+         clock-names = "bus";

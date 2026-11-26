@@ -1,6 +1,18 @@
+From: fanboy <fanboy@openwrt.org>
+Date: Fri, 25 Sep 2026 20:11:11 -1000
+Subject: [PATCH] net: airoha: refuse HW programming on cross-ingress L2 collision
+
+Refuse PPE hardware programming when an L2 bridge key is seen from two
+different ingress interfaces within the dual-ingress collision window.
+Expose dual_window_ms (1000-60000 ms, default 10000 ms) as a runtime module
+parameter.
+
+Origin: archive/xr1710g-v1@e85677d284c0
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -536,6 +536,9 @@ struct airoha_flow_table_entry {
+@@ -537,6 +537,9 @@ struct airoha_flow_table_entry {
  
  	struct airoha_foe_stats64 stats;
  	enum airoha_flow_entry_type type;
@@ -12,15 +24,18 @@
  	unsigned long cookie;
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -9,6 +9,7 @@
+@@ -7,8 +7,10 @@
+ #include <linux/ip.h>
+ #include <linux/ipv6.h>
  #include <linux/of_platform.h>
++#include <linux/moduleparam.h>
  #include <linux/platform_device.h>
  #include <linux/rhashtable.h>
 +#include <net/dst_metadata.h>
  #include <net/ipv6.h>
  #include <net/pkt_cls.h>
  #include <net/route.h>
-@@ -910,6 +911,59 @@ airoha_ppe_foe_commit_subflow_entry(stru
+@@ -985,6 +987,99 @@ airoha_ppe_foe_commit_subflow_entry(stru
  	return 0;
  }
  
@@ -41,7 +56,46 @@
 +	return ndev ? ndev->ifindex : 0;
 +}
 +
-+#define AIROHA_L2_DUAL_WINDOW	msecs_to_jiffies(10000)
++#define AIROHA_L2_DUAL_WINDOW_MIN_MS	1000U
++#define AIROHA_L2_DUAL_WINDOW_MAX_MS	60000U
++#define AIROHA_L2_DUAL_WINDOW_DEFAULT_MS	10000U
++
++static unsigned int dual_window_ms = AIROHA_L2_DUAL_WINDOW_DEFAULT_MS;
++
++static int airoha_ppe_dual_window_ms_set(const char *val,
++					 const struct kernel_param *kp)
++{
++	unsigned int ms;
++	int err;
++
++	err = kstrtouint(val, 0, &ms);
++	if (err)
++		return err;
++
++	WRITE_ONCE(*(unsigned int *)kp->arg,
++		   clamp(ms, AIROHA_L2_DUAL_WINDOW_MIN_MS,
++			 AIROHA_L2_DUAL_WINDOW_MAX_MS));
++	return 0;
++}
++
++static const struct kernel_param_ops airoha_ppe_dual_window_ms_ops = {
++	.set = airoha_ppe_dual_window_ms_set,
++	.get = param_get_uint,
++};
++
++module_param_cb(dual_window_ms, &airoha_ppe_dual_window_ms_ops,
++		&dual_window_ms, 0644);
++MODULE_PARM_DESC(dual_window_ms,
++		 "Airoha PPE L2 dual-ingress window in milliseconds (1000-60000)");
++
++static unsigned long airoha_l2_dual_window(void)
++{
++	unsigned int ms = clamp(READ_ONCE(dual_window_ms),
++				AIROHA_L2_DUAL_WINDOW_MIN_MS,
++				AIROHA_L2_DUAL_WINDOW_MAX_MS);
++
++	return msecs_to_jiffies(ms);
++}
 +
 +static bool airoha_ppe_foe_l2_claim(struct airoha_ppe *ppe,
 +				    struct airoha_flow_table_entry *e,
@@ -50,16 +104,17 @@
 +	struct airoha_flow_table_entry *f;
 +	struct hlist_node *n;
 +	unsigned long now = jiffies;
++	unsigned long window = airoha_l2_dual_window();
 +	bool dual;
 +
 +	if (e->no_hw_since &&
-+	    time_after(now, e->no_hw_since + AIROHA_L2_DUAL_WINDOW))
++	    time_after(now, e->no_hw_since + window))
 +		e->no_hw_since = 0;
 +
 +	dual = e->no_hw_since ||
 +	       (ingress && e->ingress_dev_idx &&
 +		ingress != e->ingress_dev_idx &&
-+		time_before(now, e->ingress_stamp + AIROHA_L2_DUAL_WINDOW));
++		time_before(now, e->ingress_stamp + window));
 +	if (dual) {
 +		hlist_for_each_entry_safe(f, n, &e->l2_flows,
 +					  l2_subflow_node)
@@ -80,7 +135,7 @@
  static void airoha_ppe_foe_insert_entry(struct airoha_ppe *ppe,
  					struct sk_buff *skb,
  					u32 hash, bool rx_wlan)
-@@ -919,7 +973,7 @@ static void airoha_ppe_foe_insert_entry(
+@@ -994,7 +1089,7 @@ static void airoha_ppe_foe_insert_entry(
  	struct airoha_foe_entry *hwe;
  	bool commit_done = false;
  	struct hlist_node *n;
@@ -89,7 +144,7 @@
  
  	spin_lock_bh(&ppe_lock);
  
-@@ -956,7 +1010,7 @@ static void airoha_ppe_foe_insert_entry(
+@@ -1031,7 +1126,7 @@ static void airoha_ppe_foe_insert_entry(
  	airoha_ppe_foe_set_bridge_addrs(&br, eth_hdr(skb));
  	e = rhashtable_lookup_fast(&ppe->l2_flows, &br,
  				   airoha_l2_flow_table_params);
@@ -98,7 +153,7 @@
  		airoha_ppe_foe_commit_subflow_entry(ppe, e, hash, rx_wlan);
  unlock:
  	spin_unlock_bh(&ppe_lock);
-@@ -967,8 +1021,20 @@ airoha_ppe_foe_l2_flow_commit_entry(stru
+@@ -1042,8 +1137,20 @@ airoha_ppe_foe_l2_flow_commit_entry(stru
  				    struct airoha_flow_table_entry *e)
  {
  	struct airoha_flow_table_entry *prev;
@@ -119,7 +174,7 @@
  	prev = rhashtable_lookup_get_insert_fast(&ppe->l2_flows, &e->l2_node,
  						 airoha_l2_flow_table_params);
  	if (!prev)
-@@ -1104,6 +1170,7 @@ static int airoha_ppe_flow_offload_repla
+@@ -1179,6 +1286,7 @@ static int airoha_ppe_flow_offload_repla
  	struct airoha_flow_data data = {};
  	struct net_device *odev = NULL;
  	struct flow_action_entry *act;
@@ -127,7 +182,7 @@
  	u8 dsfield = 0, l4proto = 0;
  	struct airoha_foe_entry hwe;
  	int err, i, offload_type;
-@@ -1116,6 +1183,8 @@ static int airoha_ppe_flow_offload_repla
+@@ -1191,6 +1299,8 @@ static int airoha_ppe_flow_offload_repla
  	if (!flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_META))
  		return -EOPNOTSUPP;
  
@@ -136,7 +191,7 @@
  	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_CONTROL)) {
  		struct flow_match_control match;
  
-@@ -1283,6 +1352,8 @@ static int airoha_ppe_flow_offload_repla
+@@ -1370,6 +1480,8 @@ static int airoha_ppe_flow_offload_repla
  		return -ENOMEM;
  
  	e->cookie = f->cookie;

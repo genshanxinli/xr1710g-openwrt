@@ -1,0 +1,27 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 12:00:00 +0800
+Subject: [PATCH] net: airoha: refuse an HFWD ring the queue cannot hold
+
+airoha_qdma_init_hfwd_queues() writes num_desc into the 17-bit
+HW_FWD_DESC_NUM_MASK field without bounds checks, silently truncating
+oversized reserved-memory regions or accepting zero descriptors. Reject
+num_desc == 0 or num_desc > HW_FWD_DESC_NUM_MASK with -EINVAL.
+
+Origin: archive/xr1710g-v1@e85677d284c0
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -1575,6 +1575,12 @@ static int airoha_qdma_init_hfwd_queues(
+ 		 * reserved memory size and the payload buffer size
+ 		 */
+ 		num_desc = div_u64(rmem->size, buf_size);
++		if (!num_desc || num_desc > HW_FWD_DESC_NUM_MASK) {
++			dev_err(eth->dev,
++				"%s needs %d descriptors, only 1-%lu fit\n",
++				name, num_desc, HW_FWD_DESC_NUM_MASK);
++			return -EINVAL;
++		}
+ 	} else {
+ 		size = buf_size * num_desc;
+ 		if (!dmam_alloc_coherent(eth->dev, size, &dma_addr,

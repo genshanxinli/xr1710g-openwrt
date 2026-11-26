@@ -1,0 +1,30 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 12:00:00 +0800
+Subject: [PATCH] net: airoha: do not double count the tc-ets tx packets
+
+REG_CNTR_VAL((channel << 1) + 1) already counts total channel TX packets
+while REG_CNTR_VAL(channel << 1) counts the CPU-submitted subset, so
+summing both deltas double-counted CPU TX packets in tc class stats.
+Report only the fwd counter delta while advancing both baselines.
+
+Origin: archive/xr1710g-v1@e85677d284c0
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -3019,12 +3019,11 @@ static int airoha_qdma_get_tx_ets_stats(
+ 	cpu_tx_packets = airoha_qdma_rr(qdma, REG_CNTR_VAL(channel << 1));
+ 	fwd_tx_packets = airoha_qdma_rr(qdma,
+ 					REG_CNTR_VAL((channel << 1) + 1));
+-	tx_packets = (u32)(cpu_tx_packets -
+-			   dev->qos_stats[channel].cpu_tx_packets);
+-	tx_packets += (u32)(fwd_tx_packets -
+-			    dev->qos_stats[channel].fwd_tx_packets);
++	/* fwd counts total channel TX; cpu is its CPU-submitted subset. */
++	tx_packets = (u32)(fwd_tx_packets -
++			   dev->qos_stats[channel].fwd_tx_packets);
+ 
+ 	_bstats_update(opt->stats.bstats, 0, tx_packets);
+ 	dev->qos_stats[channel].cpu_tx_packets = cpu_tx_packets;
+ 	dev->qos_stats[channel].fwd_tx_packets = fwd_tx_packets;
+ 

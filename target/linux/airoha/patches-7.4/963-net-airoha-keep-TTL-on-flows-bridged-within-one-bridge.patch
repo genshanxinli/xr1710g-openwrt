@@ -1,0 +1,102 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Sun, 15 Nov 2026 04:20:00 +0800
+Subject: [PATCH] net: airoha: carry the nft L2-bridged signal to keep TTL on bridged flows
+
+Bridged flows enter inet flowtables via br_netfilter as IPv4/IPv6 tuples,
+causing the PPE to set BIND_TTL and decrement TTL on L2-switched frames.
+Propagate is_bridging as bridge_input to flow_cls_offload and clear
+AIROHA_FOE_IB1_BIND_TTL when set.
+
+Origin: archive/xr1710g-v1@e85677d284c0
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/include/net/netfilter/nf_flow_table.h
++++ b/include/net/netfilter/nf_flow_table.h
+@@ -155,6 +155,7 @@ struct flow_offload_tuple {
+ 					encap_num:2,
+ 					needs_gso_segment:1,
+ 					bridge_path:1,
++					bridge_input:1,
+ 					bridge_vlan:1,
+ 					port_vlans:2,
+ 					tun_num:2,
+@@ -244,6 +245,7 @@ struct nf_flow_route {
+ 			u8			h_dest[ETH_ALEN];
+ 			u8			needs_gso_segment:1,
+ 						bridge_path:1,
++						bridge_input:1,
+ 						bridge_vlan:1,
+ 						port_vlans:2;
+ 		} out;
+--- a/include/net/flow_offload.h
++++ b/include/net/flow_offload.h
+@@ -696,6 +696,7 @@ struct flow_cls_offload {
+ 	enum flow_cls_command command;
+ 	bool use_act_stats;
+ 	unsigned long cookie;
++	bool bridge_input;	/* flow is L2-switched, not routed */
+ 	struct flow_rule *rule;
+ 	struct flow_stats stats;
+ 	u32 classid;
+--- a/net/netfilter/nf_flow_table_path.c
++++ b/net/netfilter/nf_flow_table_path.c
+@@ -405,6 +405,9 @@ skip_l3:
+ 	nft_default_forward_path(route, this_dst, dir);
+ 	nft_default_forward_path(route, other_dst, !dir);
+ 
++	route->tuple[dir].out.bridge_input = is_bridging;
++	route->tuple[!dir].out.bridge_input = is_bridging;
++
+ 	if (route->tuple[dir].xmit_type	== FLOW_OFFLOAD_XMIT_NEIGH &&
+ 	    nft_dev_forward_path(pkt, is_bridging, route, ct, dir, dir, ft) < 0)
+ 		goto err_dst_release;
+--- a/net/netfilter/nf_flow_table_core.c
++++ b/net/netfilter/nf_flow_table_core.c
+@@ -140,6 +140,7 @@ static int flow_offload_fill_route(struc
+ 		       ETH_ALEN);
+ 		flow_tuple->out.ifidx = route->tuple[dir].out.ifindex;
+ 		flow_tuple->bridge_path = route->tuple[dir].out.bridge_path;
++		flow_tuple->bridge_input = route->tuple[dir].out.bridge_input;
+ 		flow_tuple->bridge_vlan = route->tuple[dir].out.bridge_vlan;
+ 		flow_tuple->port_vlans = route->tuple[dir].out.port_vlans;
+ 		break;
+--- a/net/netfilter/nf_flow_table_offload.c
++++ b/net/netfilter/nf_flow_table_offload.c
+@@ -919,6 +919,7 @@ static void nf_flow_offload_init(struct
+ 	cls_flow->common.extack = extack;
+ 	cls_flow->command = cmd;
+ 	cls_flow->cookie = (unsigned long)tuple;
++	cls_flow->bridge_input = tuple->bridge_input;
+ }
+ 
+ static int nf_flow_offload_tuple(struct nf_flowtable *flowtable,
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -402,7 +402,7 @@ static int airoha_ppe_foe_entry_prepare(
+ 					struct airoha_foe_entry *hwe,
+ 					struct net_device *netdev, int type,
+ 					struct airoha_flow_data *data,
+-					int l4proto, u8 dsfield)
++					int l4proto, u8 dsfield, bool bridged)
+ {
+ 	u32 qdata = FIELD_PREP(AIROHA_FOE_SHAPER_ID, 0x7f), ports_pad, val;
+ 	int wlan_etype = -EINVAL, dsa_port = airoha_get_dsa_port(&netdev);
+@@ -417,7 +417,7 @@ static int airoha_ppe_foe_entry_prepare(
+ 	      FIELD_PREP(AIROHA_FOE_IB1_BIND_VLAN_LAYER, data->vlan.num) |
+ 	      FIELD_PREP(AIROHA_FOE_IB1_BIND_VPM, data->vlan.num) |
+ 	      FIELD_PREP(AIROHA_FOE_IB1_BIND_PPPOE, data->pppoe.num);
+-	if (type != PPE_PKT_TYPE_BRIDGE)
++	if (type != PPE_PKT_TYPE_BRIDGE && !bridged)
+ 		val |= AIROHA_FOE_IB1_BIND_TTL;
+ 	hwe->ib1 = val;
+ 
+@@ -1415,7 +1415,8 @@ static int airoha_ppe_flow_offload_repla
+ 		return -EINVAL;
+ 
+ 	err = airoha_ppe_foe_entry_prepare(eth, &hwe, odev, offload_type,
+-					   &data, l4proto, dsfield);
++					   &data, l4proto, dsfield,
++					   f->bridge_input);
+ 	if (err)
+ 		return err;
+ 

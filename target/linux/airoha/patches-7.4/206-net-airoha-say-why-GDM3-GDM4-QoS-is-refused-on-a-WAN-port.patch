@@ -1,0 +1,33 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 12:00:00 +0800
+Subject: [PATCH] net: airoha: say why GDM3/GDM4 QoS is refused on a WAN port
+
+Distinguish an already-configured WAN QoS qdisc from GDM2 carrying the WAN
+role in airoha_enable_qos_for_gdm34() extack messages, because GDM3/GDM4 HW
+QoS structurally requires GDM2 loopback and cannot coexist with WAN on GDM2.
+
+Origin: archive/xr1710g-v1@e85677d284c0
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -3614,10 +3614,16 @@ static int airoha_enable_qos_for_gdm34(s
+ 
+ 	wan_dev = airoha_get_wan_gdm_dev(eth);
+ 	if (wan_dev) {
+-		if (test_bit(AIROHA_DEV_F_TX_QOS, &wan_dev->flags) ||
+-		    wan_dev->port->id == AIROHA_GDM2_IDX) {
++		if (test_bit(AIROHA_DEV_F_TX_QOS, &wan_dev->flags)) {
+ 			NL_SET_ERR_MSG_MOD(extack,
+-					   "QoS configured for WAN device");
++					   "QoS already configured for WAN device");
++			err = -EBUSY;
++			goto error_unlock;
++		}
++
++		if (wan_dev->port->id == AIROHA_GDM2_IDX) {
++			NL_SET_ERR_MSG_MOD(extack,
++					   "GDM2 carries the WAN port and is needed for the GDM3/GDM4 QoS loopback");
+ 			err = -EBUSY;
+ 			goto error_unlock;
+ 		}

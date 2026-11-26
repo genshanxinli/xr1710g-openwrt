@@ -1,0 +1,112 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 12:00:00 +0800
+Subject: [PATCH] net: airoha: keep LRO off shared QDMAs with balanced refcounting
+
+Hardware LRO merges all RX queues on a QDMA, so shared QDMAs cannot safely
+attribute merged frames to one port, while unpaired enable/disable calls
+across QDMA moves and open/stop could leak or underflow LRO state. Track
+per-QDMA lro_users gated by per-device AIROHA_DEV_F_LRO and block shared LRO.
+
+Origin: archive/xr1710g-v1@e85677d284c0
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -535,6 +535,16 @@ static bool airoha_fe_lro_is_enabled(str
+ 			     LRO_RXQ_EN_MASK);
+ }
+ 
++/* LRO merges all RX queues on a QDMA; only allow on unshared QDMAs. */
++static bool airoha_dev_lro_is_blocked(struct airoha_gdm_dev *dev)
++{
++	struct net_device *netdev = netdev_from_priv(dev);
++	struct airoha_qdma *qdma = airoha_qdma_deref(dev);
++
++	return qdma->users > 1 &&
++	       (qdma->lro_users || (netdev->features & NETIF_F_LRO));
++}
++
+ static void airoha_dev_lro_enable(struct airoha_gdm_dev *dev)
+ {
+ 	struct airoha_qdma *qdma = airoha_qdma_deref(dev);
+@@ -542,6 +552,11 @@ static void airoha_dev_lro_enable(struct
+ 	int qdma_id = qdma - &eth->qdma[0];
+ 	int i, lro_queue_index = 0;
+ 
++	if (test_and_set_bit(AIROHA_DEV_F_LRO, &dev->flags))
++		return;
++
++	qdma->lro_users++;
++
+ 	if (airoha_fe_lro_is_enabled(eth, qdma_id))
+ 		return;
+ 
+@@ -569,6 +584,15 @@ static void airoha_dev_lro_disable(struc
+ 	struct airoha_eth *eth = qdma->eth;
+ 	int qdma_id = qdma - &eth->qdma[0];
+ 
++	if (!test_and_clear_bit(AIROHA_DEV_F_LRO, &dev->flags))
++		return;
++
++	if (qdma->lro_users > 0)
++		qdma->lro_users--;
++
++	if (qdma->lro_users)
++		return;
++
+ 	if (!airoha_fe_lro_is_enabled(eth, qdma_id))
+ 		return;
+ 
+@@ -2177,20 +2201,12 @@ static int airoha_dev_open(struct net_de
+ 	struct airoha_gdm_port *port = dev->port;
+ 	u32 pse_port = FE_PSE_PORT_PPE1;
+ 	struct airoha_qdma *qdma;
+-	int qdma_id, err;
++	int err;
+ 
+-	/* LRO is configured on the QDMA and it is shared between all
+-	 * the devices using it. Refuse to open a second device on the
+-	 * same QDMA if LRO is enabled on any device sharing it or if
+-	 * this device has LRO enabled in its feature set.
+-	 */
+ 	qdma = airoha_qdma_deref(dev);
+-	qdma_id = qdma - &qdma->eth->qdma[0];
+ 
+-	if (qdma->users > 1 && (airoha_fe_lro_is_enabled(qdma->eth, qdma_id) ||
+-				(netdev->features & NETIF_F_LRO))) {
+-		netdev_warn(netdev, "required to disable LRO on QDMA%d\n",
+-			    qdma_id);
++	if (airoha_dev_lro_is_blocked(dev)) {
++		netdev_warn(netdev, "QDMA is shared, LRO cannot be used on it\n");
+ 		return -EBUSY;
+ 	}
+ 
+@@ -2430,7 +2446,7 @@ static void airoha_dev_set_qdma(struct a
+ 	}
+ 
+ 	airoha_update_netdev_features(dev);
+-	if (netdev->features & NETIF_F_LRO)
++	if (qdma->users == 1 && (netdev->features & NETIF_F_LRO))
+ 		airoha_dev_lro_enable(dev);
+ }
+ 
+--- a/drivers/net/ethernet/airoha/airoha_eth.h
++++ b/drivers/net/ethernet/airoha/airoha_eth.h
+@@ -576,6 +576,8 @@ struct airoha_qdma {
+ 	void __iomem *regs;
+ 
+ 	int users;
++	/* Per-device LRO refcount on this QDMA. */
++	int lro_users;
+ 
+ 	struct airoha_irq_bank irq_banks[AIROHA_MAX_NUM_IRQ_BANKS];
+ 
+@@ -590,6 +592,8 @@ struct airoha_qdma {
+ enum airoha_dev_flags {
+ 	AIROHA_DEV_F_WAN,
+ 	AIROHA_DEV_F_TX_QOS,
++	/* Device holds an LRO reference on its QDMA. */
++	AIROHA_DEV_F_LRO,
+ };
+ 
+ struct airoha_gdm_dev {

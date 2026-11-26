@@ -1,0 +1,23 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 10:00:00 +0800
+Subject: [PATCH] net: phy: mediatek: init LEDs state on AN7581
+
+an7581_phy_probe() omitted mtk_phy_leds_state_init(phydev), leaving
+priv->led_state uninitialized unlike mt7981_phy_probe() and
+mt7988_phy_probe() (issue #388). Call mtk_phy_leds_state_init(phydev) right
+after assigning phydev->priv.
+
+Origin: xr1710g-v2 (#388)
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/net/phy/mediatek/mtk-ge-soc.c
++++ b/drivers/net/phy/mediatek/mtk-ge-soc.c
+@@ -1443,6 +1443,8 @@ static int an7581_phy_probe(struct phy_d
+ 
+ 	phydev->priv = priv;
+ 
++	mtk_phy_leds_state_init(phydev);
++
+ 	return 0;
+ }
+ 

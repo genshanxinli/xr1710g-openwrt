@@ -1,0 +1,41 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 12:05:00 +0800
+Subject: [PATCH] net: airoha: reject mismatched QoS channel on HTB class modify
+
+Non-DSA GDM ports transmit on one fixed QoS channel (port->id), so an HTB
+classid mapped to a different channel installs silently without shaping
+traffic. Validate the channel in airoha_tc_htb_modify_queue(), covering
+both TC_HTB_LEAF_ALLOC_QUEUE and TC_HTB_NODE_MODIFY.
+
+Origin: archive/xr1710g-v1@e85677d284c0
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -3284,6 +3284,7 @@ static int airoha_qdma_set_tx_rate_limit
+ static int airoha_tc_htb_modify_queue(struct net_device *dev,
+ 				      struct tc_htb_qopt_offload *opt)
+ {
++	struct airoha_gdm_dev *gdm = netdev_priv(dev);
+ 	u32 channel = TC_H_MIN(opt->classid) % AIROHA_NUM_QOS_CHANNELS;
+ 	u32 rate = div_u64(opt->rate, 1000) << 3; /* kbps */
+ 	int err;
+@@ -3293,6 +3294,18 @@ static int airoha_tc_htb_modify_queue(st
+ 		return -EINVAL;
+ 	}
+ 
++	/* Non-DSA ports transmit on one fixed QoS channel (port->id). */
++	if (!netdev_uses_dsa(dev) && gdm->port &&
++	    channel != gdm->port->id % AIROHA_NUM_QOS_CHANNELS) {
++		NL_SET_ERR_MSG_FMT_MOD(opt->extack,
++				       "classid %x:%x maps to QoS channel %u, but %s uses channel %u",
++				       TC_H_MAJ(opt->classid) >> 16,
++				       TC_H_MIN(opt->classid), channel,
++				       netdev_name(dev),
++				       gdm->port->id % AIROHA_NUM_QOS_CHANNELS);
++		return -EINVAL;
++	}
++
+ 	err = airoha_qdma_set_tx_rate_limit(dev, channel, rate, opt->quantum);
+ 	if (err)
+ 		NL_SET_ERR_MSG_MOD(opt->extack,

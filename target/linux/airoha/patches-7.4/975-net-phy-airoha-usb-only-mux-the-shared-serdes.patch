@@ -1,0 +1,33 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Mon, 9 Nov 2026 16:50:00 +0800
+Subject: [PATCH] phy: airoha: usb: only program the SerDes mux for the shared port
+
+airoha_usb_phy_u3_set_mode() wrote SSTR.USB_PCIE_SEL unconditionally even
+for the dedicated USB1 SerDes, stealing the shared USB2/PCIe2 SerDes away
+from PCIe2 (6 GHz radio) whenever USB0 is enabled. Only program the mux
+for AIROHA_SCU_SERDES_USB2.
+
+Origin: archive/xr1710g-v1@e85677d284c0
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/phy/airoha/phy-airoha-usb.c
++++ b/drivers/phy/airoha/phy-airoha-usb.c
+@@ -418,10 +418,14 @@ static int airoha_usb_phy_u3_set_mode(st
+ {
+ 	u32 sel;
+ 
+-	/* Only USB2 supports PCIe mode */
+-	if (mode == PHY_MODE_PCIE &&
+-	    priv->serdes_port != AIROHA_SCU_SERDES_USB2)
+-		return -EINVAL;
++	/* Only USB2 shares its SerDes mux (SSTR.USB_PCIE_SEL) with PCIe2;
++	 * USB1 has a dedicated USB-only SerDes and must not touch the mux.
++	 */
++	if (priv->serdes_port != AIROHA_SCU_SERDES_USB2) {
++		if (mode == PHY_MODE_PCIE)
++			return -EINVAL;
++		return 0;
++	}
+ 
+ 	if (mode == PHY_MODE_PCIE)
+ 		sel = AIROHA_SCU_SSTR_USB_PCIE_SEL_PCIE;

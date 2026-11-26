@@ -1,0 +1,31 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 19:30:00 +0800
+Subject: [PATCH] net: airoha: pass the NAPI budget to napi_complete_done()
+
+airoha_qdma_rx_napi_poll() and airoha_qdma_tx_napi_poll() called bare
+napi_complete(), discarding processed work accounting needed by GRO and
+NAPI core. Switch both polls to napi_complete_done(napi, done).
+
+Origin: archive/xr1710g-v1@e85677d284c0
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -1064,7 +1064,7 @@ static int airoha_qdma_rx_napi_poll(stru
+ 		done += cur;
+ 	} while (cur && done < budget);
+ 
+-	if (done < budget && napi_complete(napi)) {
++	if (done < budget && napi_complete_done(napi, done)) {
+ 		struct airoha_qdma *qdma = q->qdma;
+ 		int i, qid = q - &qdma->q_rx[0];
+ 		int intr_reg = qid < RX_DONE_HIGH_OFFSET ? QDMA_INT_REG_IDX1
+@@ -1371,7 +1371,7 @@ unlock:
+ 				IRQ_CLEAR_LEN_MASK, (done & 0x7f));
+ 	}
+ 
+-	if (done < budget && napi_complete(napi))
++	if (done < budget && napi_complete_done(napi, done))
+ 		airoha_qdma_irq_enable(&qdma->irq_banks[0], QDMA_INT_REG_IDX0,
+ 				       TX_DONE_INT_MASK(id));
+ 

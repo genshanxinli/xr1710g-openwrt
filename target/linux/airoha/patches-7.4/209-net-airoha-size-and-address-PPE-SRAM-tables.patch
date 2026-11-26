@@ -1,0 +1,150 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 12:00:00 +0800
+Subject: [PATCH] net: airoha: size and address PPE SRAM tables for flow-stats carve-out
+
+When flow counters carve PPE_STATS_NUM_ENTRIES out of each PPE SRAM table,
+derive per-PPE usable entries centrally via airoha_ppe_get_sram_num_entries(),
+address PPE2 control registers relative to PPE2's table base, and fold hashes
+without runtime udiv via airoha_ppe_fold_hash().
+
+Origin: archive/xr1710g-v1@e85677d284c0
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -59,11 +59,35 @@ static int airoha_ppe_get_total_num_stat
+ 	return num_stats;
+ }
+ 
++/* Per-PPE usable SRAM entries (excluding flow-stats carve-out). */
++static u32 airoha_ppe_get_sram_num_entries(struct airoha_ppe *ppe)
++{
++	int num_stats = airoha_ppe_get_num_stats_entries(ppe);
++
++	if (num_stats > 0)
++		return PPE_SRAM_NUM_ENTRIES - num_stats;
++
++	return PPE_SRAM_NUM_ENTRIES;
++}
++
++/* Fold hash without runtime udiv for power-of-two and 3 * 8192 (24576) tables. */
++static u32 airoha_ppe_fold_hash(u32 hash, u32 num_entries)
++{
++	if (!(num_entries & (num_entries - 1)))
++		return hash & (num_entries - 1);
++
++	if (num_entries == 3 * PPE_SRAM_NUM_ENTRIES)
++		return ((hash >> 13) % 3) * PPE_SRAM_NUM_ENTRIES +
++		       (hash & (PPE_SRAM_NUM_ENTRIES - 1));
++
++	return hash % num_entries;
++}
++
+ static u32 airoha_ppe_get_total_sram_num_entries(struct airoha_ppe *ppe)
+ {
+ 	struct airoha_eth *eth = ppe->eth;
+ 
+-	return PPE_SRAM_NUM_ENTRIES * eth->soc->num_ppe;
++	return airoha_ppe_get_sram_num_entries(ppe) * eth->soc->num_ppe;
+ }
+ 
+ u32 airoha_ppe_get_total_num_entries(struct airoha_ppe *ppe)
+@@ -129,7 +153,8 @@ void airoha_ppe_set_xmit_frame_size(stru
+ 
+ static void airoha_ppe_hw_init(struct airoha_ppe *ppe)
+ {
+-	u32 sram_ppe_num_data_entries = PPE_SRAM_NUM_ENTRIES, sram_num_entries;
++	u32 sram_ppe_num_data_entries = airoha_ppe_get_sram_num_entries(ppe);
++	u32 sram_num_entries;
+ 	u32 sram_tb_size, dram_num_entries;
+ 	struct airoha_eth *eth = ppe->eth;
+ 	int i, sram_num_stats_entries;
+@@ -139,8 +164,6 @@ static void airoha_ppe_hw_init(struct ai
+ 	dram_num_entries = PPE_RAM_NUM_ENTRIES_SHIFT(PPE_DRAM_NUM_ENTRIES);
+ 
+ 	sram_num_stats_entries = airoha_ppe_get_num_stats_entries(ppe);
+-	if (sram_num_stats_entries > 0)
+-		sram_ppe_num_data_entries -= sram_num_stats_entries;
+ 	sram_ppe_num_data_entries =
+ 		PPE_RAM_NUM_ENTRIES_SHIFT(sram_ppe_num_data_entries);
+ 
+@@ -548,7 +571,7 @@ static u32 airoha_ppe_foe_get_entry_hash
+ 					 struct airoha_foe_entry *hwe)
+ {
+ 	int type = FIELD_GET(AIROHA_FOE_IB1_BIND_PACKET_TYPE, hwe->ib1);
+-	u32 ppe_hash_mask = airoha_ppe_get_total_num_entries(ppe) - 1;
++	u32 num_entries = airoha_ppe_get_total_num_entries(ppe);
+ 	u32 hash, hv1, hv2, hv3;
+ 
+ 	switch (type) {
+@@ -586,16 +609,15 @@ static u32 airoha_ppe_foe_get_entry_hash
+ 	case PPE_PKT_TYPE_IPV6_6RD:
+ 	default:
+ 		WARN_ON_ONCE(1);
+-		return ppe_hash_mask;
++		return 0;
+ 	}
+ 
+ 	hash = (hv1 & hv2) | ((~hv1) & hv3);
+ 	hash = (hash >> 24) | ((hash & 0xffffff) << 8);
+ 	hash ^= hv1 ^ hv2 ^ hv3;
+ 	hash ^= hash >> 16;
+-	hash &= ppe_hash_mask;
+ 
+-	return hash;
++	return airoha_ppe_fold_hash(hash, num_entries);
+ }
+ 
+ static int airoha_ppe_foe_get_flow_stats_index(struct airoha_ppe *ppe,
+@@ -704,13 +726,17 @@ airoha_ppe_foe_get_entry_locked(struct a
+ 
+ 	if (hash < sram_num_entries) {
+ 		u32 *hwe = ppe->foe + hash * sizeof(struct airoha_foe_entry);
+-		bool ppe2 = hash >= PPE_SRAM_NUM_ENTRIES;
++		u32 base = airoha_ppe_get_sram_num_entries(ppe);
++		bool ppe2 = hash >= base;
+ 		struct airoha_eth *eth = ppe->eth;
+ 		u32 val;
+ 		int i;
+ 
++		/* PPE_SRAM_CTRL_ENTRY_MASK indexes relative to the selected PPE. */
++		u32 entry = ppe2 ? hash - base : hash;
++
+ 		airoha_fe_wr(ppe->eth, REG_PPE_RAM_CTRL(ppe2),
+-			     FIELD_PREP(PPE_SRAM_CTRL_ENTRY_MASK, hash) |
++			     FIELD_PREP(PPE_SRAM_CTRL_ENTRY_MASK, entry) |
+ 			     PPE_SRAM_CTRL_REQ_MASK);
+ 		if (read_poll_timeout_atomic(airoha_fe_rr, val,
+ 					     val & PPE_SRAM_CTRL_ACK_MASK,
+@@ -759,10 +785,15 @@ static bool airoha_ppe_foe_compare_entry
+ static int airoha_ppe_foe_commit_sram_entry(struct airoha_ppe *ppe, u32 hash)
+ {
+ 	struct airoha_foe_entry *hwe = ppe->foe + hash * sizeof(*hwe);
+-	bool ppe2 = hash >= PPE_SRAM_NUM_ENTRIES;
++	u32 base = airoha_ppe_get_sram_num_entries(ppe);
++	bool ppe2 = hash >= base;
+ 	u32 *ptr = (u32 *)hwe, val;
+ 	int i;
+ 
++	/* PPE_SRAM_CTRL_ENTRY_MASK indexes relative to the selected PPE. */
++	if (ppe2)
++		hash -= base;
++
+ 	for (i = 0; i < sizeof(*hwe) / sizeof(*ptr); i++)
+ 		airoha_fe_wr(ppe->eth, REG_PPE_RAM_ENTRY(ppe2, i), ptr[i]);
+ 
+@@ -1524,11 +1555,11 @@ void airoha_ppe_check_skb(struct airoha_
+ 			  u16 hash, bool rx_wlan)
+ {
+ 	struct airoha_ppe *ppe = dev->priv;
+-	u32 ppe_hash_mask = airoha_ppe_get_total_num_entries(ppe) - 1;
++	u32 num_entries = airoha_ppe_get_total_num_entries(ppe);
+ 	u16 now, diff;
+ 
+-	if (hash > ppe_hash_mask)
+-		return;
++	if (hash >= num_entries)
++		hash = airoha_ppe_fold_hash(hash, num_entries);
+ 
+ 	now = (u16)jiffies;
+ 	diff = now - ppe->foe_check_time[hash];
