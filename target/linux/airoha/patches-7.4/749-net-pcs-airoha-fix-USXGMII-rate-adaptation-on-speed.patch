@@ -1,19 +1,24 @@
 From: Ryan Chen <rchen14b@gmail.com>
 Date: Fri, 06 Mar 2026 12:00:00 -0600
-Subject: [PATCH] net: pcs: airoha: fix USXGMII rate adaptation on speed changes
+Subject: [PATCH] net: pcs: airoha: fix USXGMII rate adaptation and flush RX on link-up
 
-USXGMII rate-adaptation programming in airoha_pcs_link_up() sat inside the
-non-inband branch, making it dead code for in-band USXGMII links and
-leaving stale rate adaptation after speed renegotiation. Run the USXGMII
-speed and RATE_UPDATE_MODE programming regardless of in-band mode.
+Run USXGMII speed/RATE_UPDATE_MODE programming in all negotiation modes,
+gate RATE_ADAPT_RX_EN and pulse XFI_MAC_LOGIC_RST while RXMPI/RXMBI stay
+stopped so in-flight frames are not sliced on link-up (#407), and avoid
+skipping BPI/BMI enable on unsupported USXGMII speeds.
 
-Origin: archive/xr1710g-v1@e85677d284c0
+Origin: archive/xr1710g-v1@e85677d284c0; xr1710g #407 RX flush fix
 Signed-off-by: Ryan Chen <rchen14b@gmail.com>
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/drivers/net/pcs/airoha/pcs-airoha-common.c
 +++ b/drivers/net/pcs/airoha/pcs-airoha-common.c
-@@ -749,63 +749,69 @@ static void airoha_pcs_link_up(struct ph
+@@ -745,67 +745,90 @@ static void airoha_pcs_link_up(struct ph
+ 	struct airoha_pcs_priv *priv = port->priv;
+ 	const struct airoha_pcs_match_data *data;
+ 	struct airoha_pcs_maps *maps;
++	bool gate_rx_rate_adp = false;
+ 
  	maps = &priv->maps[port->index];
  	data = priv->data;
  
@@ -32,46 +37,13 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 -					   AIROHA_PCS_HSGMII_RATE_ADAPT_RX_AFIFO_RD_THR,
 -					   FIELD_PREP(AIROHA_PCS_HSGMII_RATE_ADAPT_RX_AFIFO_WR_THR, 0xf) |
 -					   FIELD_PREP(AIROHA_PCS_HSGMII_RATE_ADAPT_RX_AFIFO_RD_THR, 0x5));
--		}
--	} else {
--		if (interface == PHY_INTERFACE_MODE_USXGMII ||
--		    interface == PHY_INTERFACE_MODE_10GBASER) {
--			u32 mode;
--			u32 rate_adapt;
--
--			switch (speed) {
--			case SPEED_10000:
--				rate_adapt = AIROHA_PCS_HSGMII_RATE_ADPT_FORCE_RATE_ADAPT_MODE_10000;
--				mode = AIROHA_PCS_USXGMII_MODE_10000;
--				break;
--			case SPEED_5000:
--				rate_adapt = AIROHA_PCS_HSGMII_RATE_ADPT_FORCE_RATE_ADAPT_MODE_5000;
--				mode = AIROHA_PCS_USXGMII_MODE_5000;
--				break;
--			case SPEED_2500:
--				rate_adapt = AIROHA_PCS_HSGMII_RATE_ADPT_FORCE_RATE_ADAPT_MODE_2500;
--				mode = AIROHA_PCS_USXGMII_MODE_2500;
--				break;
--			case SPEED_1000:
--				rate_adapt = AIROHA_PCS_HSGMII_RATE_ADPT_FORCE_RATE_ADAPT_MODE_1000;
--				mode = AIROHA_PCS_USXGMII_MODE_1000;
--				break;
--			case SPEED_100:
--				rate_adapt = AIROHA_PCS_HSGMII_RATE_ADPT_FORCE_RATE_ADAPT_MODE_100;
--				mode = AIROHA_PCS_USXGMII_MODE_100;
--				break;
--			}
--
--			/* Force USXGMII to selected speed */
--			regmap_update_bits(maps->usxgmii_pcs, AIROHA_PCS_USXGMII_PCS_AN_CONTROL_7,
--					   AIROHA_PCS_USXGMII_MODE, mode);
--
--			if (interface == PHY_INTERFACE_MODE_10GBASER)
--				regmap_update_bits(maps->hsgmii_rate_adp, AIROHA_PCS_HSGMII_RATE_ADAPT_CTRL_11,
--						   AIROHA_PCS_HSGMII_RATE_ADPT_FORCE_RATE_ADAPT_MODE_EN |
--						   AIROHA_PCS_HSGMII_RATE_ADPT_FORCE_RATE_ADAPT_MODE,
--						   AIROHA_PCS_HSGMII_RATE_ADPT_FORCE_RATE_ADAPT_MODE_EN |
--						   rate_adapt);
++	/* Hold XFI MAC MPI/MBI stopped while updating speed and flushing RX. */
++	regmap_set_bits(maps->pcs_mac, AIROHA_PCS_XFI_MAC_XFI_GIB_CFG,
++			AIROHA_PCS_XFI_RXMPI_STOP |
++			AIROHA_PCS_XFI_RXMBI_STOP |
++			AIROHA_PCS_XFI_TXMPI_STOP |
++			AIROHA_PCS_XFI_TXMBI_STOP);
++
 +	if (neg_mode == PHYLINK_PCS_NEG_INBAND_ENABLED &&
 +	    interface == PHY_INTERFACE_MODE_SGMII) {
 +		regmap_update_bits(maps->hsgmii_rate_adp,
@@ -91,8 +63,9 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +
 +	if (interface == PHY_INTERFACE_MODE_USXGMII ||
 +	    interface == PHY_INTERFACE_MODE_10GBASER) {
-+		u32 mode;
-+		u32 rate_adapt;
++		u32 mode = 0;
++		u32 rate_adapt = 0;
++		bool valid = true;
 +
 +		switch (speed) {
 +		case SPEED_10000:
@@ -116,25 +89,94 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +			mode = AIROHA_PCS_USXGMII_MODE_100;
 +			break;
 +		default:
-+			/* Not supported */
-+			return;
++			valid = false;
++			break;
  		}
+-	} else {
+-		if (interface == PHY_INTERFACE_MODE_USXGMII ||
+-		    interface == PHY_INTERFACE_MODE_10GBASER) {
+-			u32 mode;
+-			u32 rate_adapt;
  
-+		/* Force USXGMII to selected speed */
-+		regmap_update_bits(maps->usxgmii_pcs,
-+				   AIROHA_PCS_USXGMII_PCS_AN_CONTROL_7,
-+				   AIROHA_PCS_USXGMII_RATE_UPDATE_MODE |
-+				   AIROHA_PCS_USXGMII_MODE,
-+				   AIROHA_PCS_USXGMII_RATE_UPDATE_MODE | mode);
+-			switch (speed) {
+-			case SPEED_10000:
+-				rate_adapt = AIROHA_PCS_HSGMII_RATE_ADPT_FORCE_RATE_ADAPT_MODE_10000;
+-				mode = AIROHA_PCS_USXGMII_MODE_10000;
+-				break;
+-			case SPEED_5000:
+-				rate_adapt = AIROHA_PCS_HSGMII_RATE_ADPT_FORCE_RATE_ADAPT_MODE_5000;
+-				mode = AIROHA_PCS_USXGMII_MODE_5000;
+-				break;
+-			case SPEED_2500:
+-				rate_adapt = AIROHA_PCS_HSGMII_RATE_ADPT_FORCE_RATE_ADAPT_MODE_2500;
+-				mode = AIROHA_PCS_USXGMII_MODE_2500;
+-				break;
+-			case SPEED_1000:
+-				rate_adapt = AIROHA_PCS_HSGMII_RATE_ADPT_FORCE_RATE_ADAPT_MODE_1000;
+-				mode = AIROHA_PCS_USXGMII_MODE_1000;
+-				break;
+-			case SPEED_100:
+-				rate_adapt = AIROHA_PCS_HSGMII_RATE_ADPT_FORCE_RATE_ADAPT_MODE_100;
+-				mode = AIROHA_PCS_USXGMII_MODE_100;
+-				break;
+-			}
++		/* Gate RX rate adaptation until speed latches and XFI MAC resets. */
++		regmap_clear_bits(maps->hsgmii_rate_adp,
++				  AIROHA_PCS_HSGMII_RATE_ADAPT_CTRL_0,
++				  AIROHA_PCS_HSGMII_RATE_ADAPT_RX_EN);
++		gate_rx_rate_adp = true;
+ 
++		if (valid) {
+ 			/* Force USXGMII to selected speed */
+-			regmap_update_bits(maps->usxgmii_pcs, AIROHA_PCS_USXGMII_PCS_AN_CONTROL_7,
+-					   AIROHA_PCS_USXGMII_MODE, mode);
+-
+-			if (interface == PHY_INTERFACE_MODE_10GBASER)
+-				regmap_update_bits(maps->hsgmii_rate_adp, AIROHA_PCS_HSGMII_RATE_ADAPT_CTRL_11,
+-						   AIROHA_PCS_HSGMII_RATE_ADPT_FORCE_RATE_ADAPT_MODE_EN |
+-						   AIROHA_PCS_HSGMII_RATE_ADPT_FORCE_RATE_ADAPT_MODE,
+-						   AIROHA_PCS_HSGMII_RATE_ADPT_FORCE_RATE_ADAPT_MODE_EN |
+-						   rate_adapt);
++			regmap_update_bits(maps->usxgmii_pcs,
++					   AIROHA_PCS_USXGMII_PCS_AN_CONTROL_7,
++					   AIROHA_PCS_USXGMII_RATE_UPDATE_MODE |
++					   AIROHA_PCS_USXGMII_MODE,
++					   AIROHA_PCS_USXGMII_RATE_UPDATE_MODE | mode);
 +
-+		regmap_update_bits(maps->hsgmii_rate_adp, AIROHA_PCS_HSGMII_RATE_ADAPT_CTRL_11,
-+				   AIROHA_PCS_HSGMII_RATE_ADPT_FORCE_RATE_ADAPT_MODE_EN |
-+				   AIROHA_PCS_HSGMII_RATE_ADPT_FORCE_RATE_ADAPT_MODE,
-+				   AIROHA_PCS_HSGMII_RATE_ADPT_FORCE_RATE_ADAPT_MODE_EN |
-+				   rate_adapt);
++			regmap_update_bits(maps->hsgmii_rate_adp, AIROHA_PCS_HSGMII_RATE_ADAPT_CTRL_11,
++					   AIROHA_PCS_HSGMII_RATE_ADPT_FORCE_RATE_ADAPT_MODE_EN |
++					   AIROHA_PCS_HSGMII_RATE_ADPT_FORCE_RATE_ADAPT_MODE,
++					   AIROHA_PCS_HSGMII_RATE_ADPT_FORCE_RATE_ADAPT_MODE_EN |
++					   rate_adapt);
+ 		}
 +	}
-+
+ 
 +	if (neg_mode != PHYLINK_PCS_NEG_INBAND_ENABLED) {
  		if (interface == PHY_INTERFACE_MODE_SGMII ||
  		    interface == PHY_INTERFACE_MODE_1000BASEX) {
  			u32 force_speed;
+@@ -884,12 +907,24 @@ static void airoha_pcs_link_up(struct ph
+ 	if (data->link_up)
+ 		data->link_up(priv, port->index);
+ 
++	/* Reset XFI MAC logic/RX FIFO while MPI/MBI remain stopped. */
++	regmap_clear_bits(maps->pcs_mac, AIROHA_PCS_XFI_MAC_XFI_LOGIC_RST,
++			  AIROHA_PCS_XFI_MAC_LOGIC_RST);
++	regmap_set_bits(maps->pcs_mac, AIROHA_PCS_XFI_MAC_XFI_LOGIC_RST,
++			AIROHA_PCS_XFI_MAC_LOGIC_RST);
++	usleep_range(1000, 2000);
++
+ 	/* BPI BMI enable */
+ 	regmap_clear_bits(maps->pcs_mac, AIROHA_PCS_XFI_MAC_XFI_GIB_CFG,
+ 			  AIROHA_PCS_XFI_RXMPI_STOP |
+ 			  AIROHA_PCS_XFI_RXMBI_STOP |
+ 			  AIROHA_PCS_XFI_TXMPI_STOP |
+ 			  AIROHA_PCS_XFI_TXMBI_STOP);
++
++	if (gate_rx_rate_adp)
++		regmap_set_bits(maps->hsgmii_rate_adp,
++				AIROHA_PCS_HSGMII_RATE_ADAPT_CTRL_0,
++				AIROHA_PCS_HSGMII_RATE_ADAPT_RX_EN);
+ }
+ 
+ static void airoha_pcs_link_down(struct phylink_pcs *pcs)
