@@ -7,15 +7,17 @@ and run napi_disable() on unregistered NPU RRO/txfree queues (NULL ->dev).
 Mirror L1 SER: stop the NPU before reset, skip NPU queues in both NAPI loops,
 and re-run __mt7996_npu_hw_init() on restart.
 
+[xr1710g: refresh hunk context for mt76 acb7b1c8 so patch applies with fuzz=0]
+
 Origin: https://github.com/Gilly1970/Gemtek-W1700K-6.18
 Signed-off-by: Gilly <gilroyscott1970@gmail.com>
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 diff --git a/mt7996/mac.c b/mt7996/mac.c
-index 9074477..26c5c38 100644
+index dc2a745..a912cd1 100644
 --- a/mt7996/mac.c
 +++ b/mt7996/mac.c
-@@ -2211,6 +2211,13 @@ mt7996_mac_restart(struct mt7996_dev *dev)
+@@ -2260,6 +2260,13 @@ mt7996_mac_restart(struct mt7996_dev *dev)
  		    mt76_queue_is_wed_rro(&mdev->q_rx[i]))
  			continue;
  
@@ -29,7 +31,7 @@ index 9074477..26c5c38 100644
  		if (mdev->q_rx[i].ndesc)
  			napi_disable(&dev->mt76.napi[i]);
  	}
-@@ -2227,6 +2234,13 @@ mt7996_mac_restart(struct mt7996_dev *dev)
+@@ -2276,6 +2283,13 @@ mt7996_mac_restart(struct mt7996_dev *dev)
  		    mt76_queue_is_wed_rro(&mdev->q_rx[i]))
  			continue;
  
@@ -43,7 +45,7 @@ index 9074477..26c5c38 100644
  		if (mdev->q_rx[i].ndesc) {
  			napi_enable(&dev->mt76.napi[i]);
  			local_bh_disable();
-@@ -2280,6 +2294,13 @@ mt7996_mac_restart(struct mt7996_dev *dev)
+@@ -2329,6 +2343,13 @@ mt7996_mac_restart(struct mt7996_dev *dev)
  				     MT_INT_TX_RX_DONE_EXT);
  	}
  
@@ -57,7 +59,7 @@ index 9074477..26c5c38 100644
  	/* set the necessary init items */
  	ret = mt7996_mcu_set_eeprom(dev);
  	if (ret)
-@@ -2358,6 +2379,8 @@ mt7996_mac_full_reset(struct mt7996_dev *dev)
+@@ -2438,6 +2459,8 @@ mt7996_mac_full_reset(struct mt7996_dev *dev)
  
  	dev->recovery.hw_full_reset = true;
  

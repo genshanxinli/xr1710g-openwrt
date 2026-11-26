@@ -7,28 +7,30 @@ reconnecting station reusing that WCID to inherit stale forwarding state. Send
 WLAN_FUNC_SET_WAIT_DEL_STA from mt7996_mac_sta_remove_link() before destroying
 link state, skipping the mailbox when MT76_MCU_RESET or hw_full_reset is set.
 
+[xr1710g: refresh hunk context for mt76 acb7b1c8 so patch applies with fuzz=0]
+
 Origin: backport, archive/xr1710g-v1
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 diff --git a/mt7996/main.c b/mt7996/main.c
-index 0ad8a23..df32445 100644
+index d8bbef0..2767fb0 100644
 --- a/mt7996/main.c
 +++ b/mt7996/main.c
-@@ -1453,6 +1453,9 @@ void mt7996_mac_sta_remove_link(struct mt7996_dev *dev,
+@@ -1495,6 +1495,9 @@ void mt7996_mac_sta_remove_link(struct mt7996_dev *dev,
  	if (!msta_link)
  		return;
  
 +	/* Notify NPU before tearing down WTBL/BA/key state so reused WCIDs drop stale offload state. */
 +	mt7996_npu_del_sta(dev, msta_link->wcid.phy_idx, msta_link->wcid.idx);
 +
- 	spin_lock_bh(&dev->mt76.sta_poll_lock);
- 	if (!list_empty(&msta_link->wcid.poll_list))
- 		list_del_init(&msta_link->wcid.poll_list);
+ 	if (flush) {
+ 		rcu_assign_pointer(msta->link[link_id], NULL);
+ 		rcu_assign_pointer(dev->mt76.wcid[msta_link->wcid.idx], NULL);
 diff --git a/mt7996/mt7996.h b/mt7996/mt7996.h
-index 4a421d8..11eb239 100644
+index 6310dd1..5d1fd4a 100644
 --- a/mt7996/mt7996.h
 +++ b/mt7996/mt7996.h
-@@ -573,6 +573,7 @@ struct mt7996_dev {
+@@ -577,6 +577,7 @@ struct mt7996_dev {
  	} wed_rro;
  
  	dma_addr_t npu_txd_addr[2 * MT7996_NPU_TXD_SIZE];
@@ -36,7 +38,7 @@ index 4a421d8..11eb239 100644
  
  	bool ibf;
  	u8 fw_debug_wm;
-@@ -1077,6 +1078,7 @@ int __mt7996_npu_hw_init(struct mt7996_dev *dev);
+@@ -1085,6 +1086,7 @@ int __mt7996_npu_hw_init(struct mt7996_dev *dev);
  int mt7996_npu_hw_init(struct mt7996_dev *dev);
  int mt7996_npu_hw_stop(struct mt7996_dev *dev);
  int mt7996_npu_rx_queues_init(struct mt7996_dev *dev);
@@ -44,7 +46,7 @@ index 4a421d8..11eb239 100644
  #else
  static inline int __mt7996_npu_hw_init(struct mt7996_dev *dev)
  {
-@@ -1097,6 +1099,11 @@ static inline int mt7996_npu_rx_queues_init(struct mt7996_dev *dev)
+@@ -1105,6 +1107,11 @@ static inline int mt7996_npu_rx_queues_init(struct mt7996_dev *dev)
  {
  	return 0;
  }

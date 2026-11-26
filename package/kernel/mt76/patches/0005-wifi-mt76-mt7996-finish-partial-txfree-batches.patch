@@ -1,3 +1,5 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Thu, 16 Oct 2026 12:10:00 +0800
 Subject: [PATCH] wifi: mt76: mt7996: finish partial TX free batches
 
 A truncated TX completion batch can be discovered after valid tokens
@@ -6,16 +8,20 @@ free list, the TX unblock flag and the TX worker, leaking completed
 skbs and leaving transmissions stopped despite newly available tokens.
 
 Finish the valid prefix through the normal completion epilogue instead
-of warning and returning; the splat is a benign firmware artifact that
-kallsyms misattributes to unrelated symbols. Validate the fixed header
-and every whole info word, including the version 7 pair extension,
-before reading them, and linearize fragmented TXFREE skbs before
-parsing.
+of warning and returning; validate the fixed header and every whole info
+word, including the version 7 pair extension, before reading them, and
+linearize fragmented TXFREE skbs before parsing.
 
+[xr1710g: refresh hunk context for mt76 acb7b1c8 so patch applies with fuzz=0]
+
+Origin: local, xr1710g
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
+diff --git a/mt7996/mac.c b/mt7996/mac.c
+index cb27809..d755f77 100644
 --- a/mt7996/mac.c
 +++ b/mt7996/mac.c
-@@ -1262,11 +1262,16 @@
+@@ -1268,11 +1268,16 @@ mt7996_mac_tx_free(struct mt7996_dev *dev, void *data, int len)
  	struct mt76_wcid *wcid = NULL;
  	LIST_HEAD(free_list);
  	struct sk_buff *skb, *tmp;
@@ -33,7 +39,7 @@ parsing.
  	/* clean DMA queues and unmap buffers first */
  	mt76_queue_tx_cleanup(dev, dev->mphy.q_tx[MT_TXQ_PSD], false);
  	mt76_queue_tx_cleanup(dev, dev->mphy.q_tx[MT_TXQ_BE], false);
-@@ -1288,8 +1293,9 @@
+@@ -1294,8 +1299,9 @@ mt7996_mac_tx_free(struct mt7996_dev *dev, void *data, int len)
  		u32 msdu, info;
  		u8 i;
  
@@ -45,7 +51,7 @@ parsing.
  		/* 1'b1: new wcid pair.
  		 * 1'b0: msdu_id with the same 'wcid pair' as above.
  		 */
-@@ -1311,7 +1317,8 @@
+@@ -1317,7 +1323,8 @@ mt7996_mac_tx_free(struct mt7996_dev *dev, void *data, int len)
  				goto next;
  next:
  			/* ver 7 has a new DW with pair = 1, skip it */
@@ -55,7 +61,7 @@ parsing.
  			    (le32_to_cpu(*(cur_info + 1)) & MT_TXFREE_INFO_PAIR))
  				cur_info++;
  			continue;
-@@ -1591,7 +1598,8 @@
+@@ -1597,7 +1604,8 @@ void mt7996_queue_rx_skb(struct mt76_dev *mdev, enum mt76_rxq_id q,
  			break;
  		}
  

@@ -3,13 +3,15 @@ From: Peter Chiu <chui-hao.chiu@mediatek.com>
 Date: Mon, 13 Feb 2023 11:03:53 +0800
 Subject: [PATCH 15/32] hostapd: mtk: 6G band does not require DFS
 
+Origin: MediaTek SDK / OpenWrt-fanboy kernel74 (67304166e1)
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
  src/ap/dfs.c | 1 +
  1 file changed, 1 insertion(+)
 
 --- a/src/ap/dfs.c
 +++ b/src/ap/dfs.c
-@@ -1561,6 +1561,7 @@ int hostapd_is_dfs_required(struct hosta
+@@ -1619,6 +1619,7 @@ int hostapd_is_dfs_required(struct hosta
  	if ((!(iface->drv_flags & WPA_DRIVER_FLAGS_DFS_OFFLOAD) &&
  	     !iface->conf->ieee80211h) ||
  	    !iface->current_mode ||

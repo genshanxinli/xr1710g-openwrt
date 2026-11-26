@@ -11,14 +11,15 @@ Keep the mt7996 backoff layout private instead of resizing the shared mt76
 power-limit structure used by older connac chipsets. Continue to respect
 chan->max_reg_power when initializing channel power.
 
-OpenWrt note: mt76 2026.10.28 already carries upstream's version of the
+OpenWrt note: mt76 2026.11.25 already carries upstream's version of the
 UNI_TXPOWER control enum, struct tx_power_ctrl and
 mt7996_mcu_set_tx_power_ctrl, so those parts are dropped here to avoid
 duplicate definitions. Only UNI_TXPOWER_SHOW_INFO is added to mcu.h.
 
 [xr1710g: drop duplicate UNI_TXPOWER_SKU_POWER_LIMIT_CTRL call in mt7996_run(),
-fix OF device_node refcount leaks in eeprom.c/mcu.c, and split cck/ofdm
-skb_put_data() calls to satisfy FORTIFY_SOURCE]
+fix OF device_node refcount leaks in eeprom.c/mcu.c, split cck/ofdm
+skb_put_data() calls to satisfy FORTIFY_SOURCE, and preserve INT_MIN txpower
+handling from mt76 acb7b1c8]
 
 Origin: backport, archive/xr1710g-v1
 Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
@@ -47,7 +48,7 @@ index 254d252..169c90c 100644
  	mt76_apply_array_limit(dev, dest->path.cck, ARRAY_SIZE(dest->path.cck), val,
  			       target_power, txs_delta, &max_power, n_chains, MT76_SKU_BACKOFF);
 diff --git a/mt7996/init.c b/mt7996/init.c
-index 21840ce..e3cd418 100644
+index 3c63898..b9b0c32 100644
 --- a/mt7996/init.c
 +++ b/mt7996/init.c
 @@ -362,15 +362,23 @@ static void __mt7996_init_txpower(struct mt7996_phy *phy,
@@ -76,8 +77,8 @@ index 21840ce..e3cd418 100644
  							  target_power);
  		target_power += path_delta;
  		target_power = DIV_ROUND_UP(target_power, 2);
-@@ -379,6 +387,8 @@ static void __mt7996_init_txpower(struct mt7996_phy *phy,
- 		phy->txpower = max(phy->txpower, chan->max_power);
+@@ -378,6 +386,8 @@ static void __mt7996_init_txpower(struct mt7996_phy *phy,
+ 					target_power);
  		chan->orig_mpwr = target_power;
  	}
 +
@@ -85,7 +86,7 @@ index 21840ce..e3cd418 100644
  }
  
  void mt7996_init_txpower(struct mt7996_phy *phy)
-@@ -386,6 +396,8 @@ void mt7996_init_txpower(struct mt7996_phy *phy)
+@@ -385,6 +395,8 @@ void mt7996_init_txpower(struct mt7996_phy *phy)
  	if (!phy)
  		return;
  
@@ -95,7 +96,7 @@ index 21840ce..e3cd418 100644
  		__mt7996_init_txpower(phy, &phy->mt76->sband_2g.sband);
  	if (phy->mt76->cap.has_5ghz)
 diff --git a/mt7996/main.c b/mt7996/main.c
-index a5e75ed..a5d8204 100644
+index e7b1864..2bf9c9e 100644
 --- a/mt7996/main.c
 +++ b/mt7996/main.c
 @@ -39,6 +39,11 @@ int mt7996_run(struct mt7996_phy *phy)
@@ -111,7 +112,7 @@ index a5e75ed..a5d8204 100644
  
  	ieee80211_queue_delayed_work(dev->mphy.hw, &phy->mt76->mac_work,
 diff --git a/mt7996/mcu.c b/mt7996/mcu.c
-index a96cd2b..f256746 100644
+index f50b62e..c27e859 100644
 --- a/mt7996/mcu.c
 +++ b/mt7996/mcu.c
 @@ -5,6 +5,7 @@
@@ -375,7 +376,7 @@ index a96cd2b..f256746 100644
  static u8
  mt7996_mcu_get_sta_nss(u16 mcs_map)
  {
-@@ -6200,6 +6447,7 @@ int mt7996_mcu_set_tx_power_ctrl(struct mt7996_phy *phy, u8 power_ctrl_id, u8 da
+@@ -6334,6 +6581,7 @@ int mt7996_mcu_set_tx_power_ctrl(struct mt7996_phy *phy, u8 power_ctrl_id, u8 da
  int mt7996_mcu_set_txpower_sku(struct mt7996_phy *phy)
  {
  #define TX_POWER_LIMIT_TABLE_RATE	0
@@ -383,7 +384,7 @@ index a96cd2b..f256746 100644
  	struct mt7996_dev *dev = phy->dev;
  	struct mt76_phy *mphy = phy->mt76;
  	struct tx_power_limit_table_ctrl {
-@@ -6217,45 +6465,101 @@ int mt7996_mcu_set_txpower_sku(struct mt7996_phy *phy)
+@@ -6351,48 +6599,104 @@ int mt7996_mcu_set_txpower_sku(struct mt7996_phy *phy)
  		.power_limit_type = TX_POWER_LIMIT_TABLE_RATE,
  		.band_idx = phy->mt76->band_idx,
  	};
@@ -394,11 +395,16 @@ index a96cd2b..f256746 100644
 -	int i, tx_power;
 +	int i, ret, target_power, tx_power;
  
--	tx_power = mt76_get_power_bound(mphy, phy->txpower);
+-	tx_power = mphy->chandef.chan->max_power;
++	target_power = mphy->chandef.chan->max_power;
+ 	if (phy->txpower != INT_MIN)
+-		tx_power = min(tx_power, phy->txpower);
+-	tx_power = mt76_get_power_bound(mphy, tx_power);
 -	tx_power = mt76_get_rate_power_limits(mphy, mphy->chandef.chan,
 -					      &la, tx_power);
 -	mphy->txpower_cur = tx_power;
-+	target_power = mt76_get_power_bound(mphy, phy->txpower);
++		target_power = min(target_power, phy->txpower);
++	target_power = mt76_get_power_bound(mphy, target_power);
 +	tx_power = target_power;
 +	if (phy->sku_limit_en) {
 +		la = kzalloc(sizeof(*la), GFP_KERNEL);
@@ -504,10 +510,10 @@ index a96cd2b..f256746 100644
  
  int mt7996_mcu_cp_support(struct mt7996_dev *dev, u8 mode)
 diff --git a/mt7996/mcu.h b/mt7996/mcu.h
-index 3ec2d99..68fa96a 100644
+index 45771a7..04e623b 100644
 --- a/mt7996/mcu.h
 +++ b/mt7996/mcu.h
-@@ -1155,6 +1155,7 @@ enum {
+@@ -1160,6 +1160,7 @@ enum {
  	UNI_TXPOWER_BACKOFF_POWER_LIMIT_CTRL = 3,
  	UNI_TXPOWER_POWER_LIMIT_TABLE_CTRL = 4,
  	UNI_TXPOWER_ATE_MODE_CTRL = 6,
@@ -516,19 +522,19 @@ index 3ec2d99..68fa96a 100644
  
  enum {
 diff --git a/mt7996/mt7996.h b/mt7996/mt7996.h
-index a2be4d1..4a421d8 100644
+index d218b85..6310dd1 100644
 --- a/mt7996/mt7996.h
 +++ b/mt7996/mt7996.h
-@@ -472,6 +472,8 @@ struct mt7996_phy {
- 	bool counter_reset;
+@@ -476,6 +476,8 @@ struct mt7996_phy {
  	bool rdd_tx_paused;
  	bool offchan_bcn_stopped;
+ 	bool fw_offchannel;
 +	bool sku_limit_en;
 +	bool sku_path_en;
  };
  
  struct mt7996_dev {
-@@ -890,6 +892,8 @@ int mt7996_mcu_get_chan_mib_info(struct mt7996_phy *phy, bool chan_switch);
+@@ -896,6 +898,8 @@ int mt7996_mcu_get_chan_mib_info(struct mt7996_phy *phy, bool chan_switch);
  int mt7996_mcu_get_temperature(struct mt7996_phy *phy);
  int mt7996_mcu_set_thermal_throttling(struct mt7996_phy *phy, u8 state);
  int mt7996_mcu_set_thermal_protect(struct mt7996_phy *phy, bool enable);

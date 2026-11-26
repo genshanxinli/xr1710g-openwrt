@@ -20,6 +20,7 @@ in this configuration: CONFIG_WEXT_CORE and CPTCFG_CFG80211_WEXT are
 both unset, so backports wext-core.o and wext-compat.o/wext-sme.o are
 not built.
 
+Origin: local, Linux 7.4 compatibility (renumbered from 016 to avoid upstream 016 monitor refcount leak)
 Signed-off-by: fanboy <fanboy@openwrt.org>
 ---
  net/wireless/core.c | 4 ++++
@@ -27,7 +28,7 @@ Signed-off-by: fanboy <fanboy@openwrt.org>
 
 --- a/net/wireless/core.c
 +++ b/net/wireless/core.c
-@@ -1864,7 +1864,11 @@ static int cfg80211_netdev_notifier_call
+@@ -1869,7 +1869,11 @@ static int cfg80211_netdev_notifier_call
  		return NOTIFY_DONE;
  	}
  

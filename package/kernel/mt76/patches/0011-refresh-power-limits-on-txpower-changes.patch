@@ -14,14 +14,17 @@ changes so channel-only updates do not overwrite a BSS txpower limit.
 Also refresh the SKU table and channel information for BSS txpower changes,
 and report MCU failures instead of silently ignoring them.
 
-Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
----
- mt7996/main.c | 62 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++--
- 1 file changed, 60 insertions(+), 2 deletions(-)
+[xr1710g: refresh hunk context for mt76 acb7b1c8 so patch applies with fuzz=0]
 
+Origin: backport, archive/xr1710g-v1
+Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+diff --git a/mt7996/main.c b/mt7996/main.c
+index 2bf9c9e..d8bbef0 100644
 --- a/mt7996/main.c
 +++ b/mt7996/main.c
-@@ -764,7 +764,50 @@
+@@ -917,7 +917,50 @@ static int mt7996_set_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
  
  static int mt7996_config(struct ieee80211_hw *hw, int radio_idx, u32 changed)
  {
@@ -73,7 +76,7 @@ Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
  }
  
  static int
-@@ -1064,9 +1107,24 @@
+@@ -1239,9 +1282,24 @@ mt7996_link_info_changed(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
  		mt7996_update_mu_group(hw, link, info);
  
  	if (changed & BSS_CHANGED_TXPOWER &&

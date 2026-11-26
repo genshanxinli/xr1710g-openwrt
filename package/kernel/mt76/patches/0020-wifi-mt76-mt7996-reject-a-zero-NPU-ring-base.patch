@@ -1,0 +1,148 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 13:36:11 +0800
+Subject: [PATCH] wifi: mt76: mt7996: reject a zero NPU ring base
+
+NPU firmware can answer WLAN_FUNC_GET_WAIT_RXDESC_BASE with status 0 and a zero
+ring base. Guard missing queue regs, and on a zero base restore valid host
+q->desc_dma instead of programming 0x0 into an active WFDMA ring; return 0 on
+RX so other bands stay usable and return -EIO on TX.
+
+Origin: xr1710g_issue_triage_pipeline@3b8ef087f7
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/mt7996/npu.c
++++ b/mt7996/npu.c
+@@ -304,66 +304,61 @@ static int mt7992_npu_rxd_init(struct mt
+ 	return 0;
+ }
+ 
+-static int mt7996_npu_rxd_init(struct mt7996_dev *dev, struct airoha_npu *npu)
++static int mt7996_npu_set_rxd_base(struct mt7996_dev *dev,
++				   struct airoha_npu *npu, int ifindex,
++				   enum mt76_rxq_id qid, const char *name)
+ {
++	struct mt76_queue *q = &dev->mt76.q_rx[qid];
+ 	u32 val;
+ 	int err;
+ 
+-	err = mt76_npu_get_msg(npu, 0, WLAN_FUNC_GET_WAIT_RXDESC_BASE,
++	err = mt76_npu_get_msg(npu, ifindex, WLAN_FUNC_GET_WAIT_RXDESC_BASE,
+ 			       &val, GFP_KERNEL);
+ 	if (err) {
+ 		dev_warn(dev->mt76.dev,
+-			 "failed retrieving NPU wlan rx ring0 addr\n");
++			 "failed retrieving NPU %s addr\n", name);
+ 		return err;
+ 	}
+-	writel(val, &dev->mt76.q_rx[MT_RXQ_RRO_BAND0].regs->desc_base);
+-
+-	err = mt76_npu_get_msg(npu, 2, WLAN_FUNC_GET_WAIT_RXDESC_BASE,
+-			       &val, GFP_KERNEL);
+-	if (err) {
++	if (!q->regs) {
+ 		dev_warn(dev->mt76.dev,
+-			 "failed retrieving NPU wlan rx ring2 addr\n");
+-		return err;
++			 "missing queue regs for NPU %s\n", name);
++		return -ENODEV;
+ 	}
+-	writel(val, &dev->mt76.q_rx[MT_RXQ_RRO_BAND2].regs->desc_base);
+-
+-	/* msdu pg ring */
+-	err = mt76_npu_get_msg(npu, 10, WLAN_FUNC_GET_WAIT_RXDESC_BASE,
+-			       &val, GFP_KERNEL);
+-	if (err) {
++	if (!val) {
+ 		dev_warn(dev->mt76.dev,
+-			 "failed retrieving NPU wlan msdu pg ring addr\n");
+-		return err;
++			 "NPU returned a zero %s base\n", name);
++		/* Restore host DMA ring; never program 0x0 into an active ring */
++		if (q->desc_dma)
++			writel(q->desc_dma, &q->regs->desc_base);
++		return 0;
+ 	}
+-	writel(val, &dev->mt76.q_rx[MT_RXQ_MSDU_PAGE_BAND0].regs->desc_base);
+ 
+-	err = mt76_npu_get_msg(npu, 11, WLAN_FUNC_GET_WAIT_RXDESC_BASE,
+-			       &val, GFP_KERNEL);
+-	if (err) {
+-		dev_warn(dev->mt76.dev,
+-			 "failed retrieving NPU wlan msdu pg ring addr\n");
+-		return err;
+-	}
+-	writel(val, &dev->mt76.q_rx[MT_RXQ_MSDU_PAGE_BAND1].regs->desc_base);
++	writel(val, &q->regs->desc_base);
++	return 0;
++}
+ 
+-	err = mt76_npu_get_msg(npu, 12, WLAN_FUNC_GET_WAIT_RXDESC_BASE,
+-			       &val, GFP_KERNEL);
+-	if (err) {
+-		dev_warn(dev->mt76.dev,
+-			 "failed retrieving NPU wlan msdu pg ring addr\n");
+-		return err;
+-	}
+-	writel(val, &dev->mt76.q_rx[MT_RXQ_MSDU_PAGE_BAND2].regs->desc_base);
++static int mt7996_npu_rxd_init(struct mt7996_dev *dev, struct airoha_npu *npu)
++{
++	static const struct {
++		int ifindex;
++		enum mt76_rxq_id qid;
++		const char *name;
++	} rings[] = {
++		{ 0, MT_RXQ_RRO_BAND0, "wlan rx ring0" },
++		{ 2, MT_RXQ_RRO_BAND2, "wlan rx ring2" },
++		{ 10, MT_RXQ_MSDU_PAGE_BAND0, "wlan msdu pg ring10" },
++		{ 11, MT_RXQ_MSDU_PAGE_BAND1, "wlan msdu pg ring11" },
++		{ 12, MT_RXQ_MSDU_PAGE_BAND2, "wlan msdu pg ring12" },
++		{ 8, MT_RXQ_RRO_IND, "wlan ind_cmd ring8" },
++	};
++	int i, err;
+ 
+-	/* ind_cmd ring */
+-	err = mt76_npu_get_msg(npu, 8, WLAN_FUNC_GET_WAIT_RXDESC_BASE,
+-			       &val, GFP_KERNEL);
+-	if (err) {
+-		dev_warn(dev->mt76.dev,
+-			 "failed retrieving NPU wlan ind_cmd ring addr\n");
+-		return err;
++	for (i = 0; i < ARRAY_SIZE(rings); i++) {
++		err = mt7996_npu_set_rxd_base(dev, npu, rings[i].ifindex,
++					      rings[i].qid, rings[i].name);
++		if (err)
++			return err;
+ 	}
+-	writel(val, &dev->mt76.q_rx[MT_RXQ_RRO_IND].regs->desc_base);
+ 
+ 	return 0;
+ }
+@@ -381,6 +376,7 @@ static int mt7996_npu_txd_init(struct mt
+ 
+ 	for (i = 0; i < ARRAY_SIZE(band_list); i++) {
+ 		int err, band = band_list[i], phy_id;
++		struct mt76_queue *q;
+ 		u32 val;
+ 
+ 		err = mt76_npu_get_msg(npu, band + 5,
+@@ -394,7 +390,19 @@ static int mt7996_npu_txd_init(struct mt
+ 
+ 		phy_id = is_mt7996(&dev->mt76) ? band == MT_BAND0 ? 1 : 0
+ 					       : band;
+-		writel(val, &dev->mt76.phys[phy_id]->q_tx[0]->regs->desc_base);
++		q = dev->mt76.phys[phy_id] ? dev->mt76.phys[phy_id]->q_tx[0] : NULL;
++		if (!q || !q->regs)
++			return -ENODEV;
++		if (!val) {
++			dev_warn(dev->mt76.dev,
++				 "NPU returned a zero wlan tx ring base for band %d\n",
++				 band);
++			if (q->desc_dma)
++				writel(q->desc_dma, &q->regs->desc_base);
++			return -EIO;
++		}
++
++		writel(val, &q->regs->desc_base);
+ 
+ 		err = mt76_npu_send_msg(npu, band,
+ 					WLAN_FUNC_SET_WAIT_TX_BUF_SPACE_HW_BASE,

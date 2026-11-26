@@ -17,17 +17,17 @@ than MT7996_TOKEN_SKB_TIMEOUT, completing the skb so mac80211 releases
 the pending airtime. Frames tracked in wcid->pktid are left to the
 existing txs/timeout path.
 
-[xr1710g: reap all three phys' PSD/BE DMA rings before sweeping the IDR and
-throttle the sweep to 1 Hz on the primary phy]
+[xr1710g: reap all three phys' PSD/BE DMA rings before sweeping the IDR,
+throttle the sweep to 1 Hz on the primary phy, and refresh for mt76 acb7b1c8]
 
 Origin: backport, archive/xr1710g-v1
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 diff --git a/mt76.h b/mt76.h
-index 7866cca..83dd7ca 100644
+index bd3dead..884ee18 100644
 --- a/mt76.h
 +++ b/mt76.h
-@@ -2084,6 +2084,8 @@ static inline bool mt76_queue_is_npu_txfree(struct mt76_queue *q)
+@@ -2161,6 +2161,8 @@ static inline bool mt76_queue_is_npu_txfree(struct mt76_queue *q)
  
  struct mt76_txwi_cache *
  mt76_token_release(struct mt76_dev *dev, int token, bool *wake);
@@ -36,104 +36,11 @@ index 7866cca..83dd7ca 100644
  int mt76_token_consume(struct mt76_dev *dev, struct mt76_txwi_cache **ptxwi);
  void __mt76_set_tx_blocked(struct mt76_dev *dev, bool blocked);
  struct mt76_txwi_cache *mt76_rx_token_release(struct mt76_dev *dev, int token);
-diff --git a/tx.c b/tx.c
-index 4684043..5eabfff 100644
---- a/tx.c
-+++ b/tx.c
-@@ -129,6 +129,8 @@ mt76_tx_status_skb_add(struct mt76_dev *dev, struct mt76_wcid *wcid,
- 
- 	memset(cb, 0, sizeof(*cb));
- 
-+	cb->jiffies = jiffies;
-+
- 	if (!wcid)
- 		return MT_PACKET_ID_NO_ACK;
- 
-@@ -1056,6 +1058,59 @@ mt76_token_release(struct mt76_dev *dev, int token, bool *wake)
- }
- EXPORT_SYMBOL_GPL(mt76_token_release);
- 
-+bool mt76_tx_token_reclaim(struct mt76_dev *dev, struct list_head *list,
-+			   unsigned long timeout)
-+{
-+	struct mt76_txwi_cache *t;
-+	bool wake = false;
-+	int id;
-+
-+	spin_lock_bh(&dev->token_lock);
-+
-+	idr_for_each_entry(&dev->token, t, id) {
-+		struct sk_buff *skb = t->skb;
-+		struct mt76_tx_cb *cb;
-+
-+		if (!skb)
-+			continue;
-+
-+		cb = mt76_tx_skb_cb(skb);
-+		if (cb->pktid >= MT_PACKET_ID_FIRST)
-+			continue;
-+
-+		if (!cb->jiffies ||
-+		    time_is_after_jiffies(cb->jiffies + timeout))
-+			continue;
-+
-+		idr_remove(&dev->token, id);
-+		dev->token_count--;
-+
-+		if (t->qid == MT_TXQ_PSD) {
-+			struct mt76_phy *mphy = mt76_dev_phy(dev, t->phy_idx);
-+			if (atomic_dec_and_test(&mphy->mgmt_tx_pending))
-+				wake_up(&dev->tx_wait);
-+		}
-+
-+#ifdef CONFIG_NET_MEDIATEK_SOC_WED
-+		if (mtk_wed_device_active(&dev->mmio.wed) &&
-+		    id >= dev->mmio.wed.wlan.token_start &&
-+		    --dev->wed_token_count == 0)
-+			wake_up(&dev->tx_wait);
-+#endif
-+
-+		list_add_tail(&t->list, list);
-+	}
-+
-+	if (dev->token_count < dev->token_size - MT76_TOKEN_FREE_THR &&
-+	    dev->phy.q_tx[0]->blocked)
-+		wake = true;
-+
-+	spin_unlock_bh(&dev->token_lock);
-+
-+	return wake;
-+}
-+EXPORT_SYMBOL_GPL(mt76_tx_token_reclaim);
-+
- struct mt76_txwi_cache *
- mt76_rx_token_release(struct mt76_dev *dev, int token)
- {
-diff --git a/mt7996/mt7996.h b/mt7996/mt7996.h
-index d32a0a6..a2be4d1 100644
---- a/mt7996/mt7996.h
-+++ b/mt7996/mt7996.h
-@@ -20,6 +20,7 @@
- 					 mt7996_max_interface_num(dev))
- 
- #define MT7996_WATCHDOG_TIME		(HZ / 10)
-+#define MT7996_TOKEN_SKB_TIMEOUT	(5 * HZ)
- #define MT7996_RESET_TIMEOUT		(30 * HZ)
- 
- #define MT7996_TX_RING_SIZE		2048
-@@ -503,6 +504,7 @@ struct mt7996_dev {
- 	u16 chainmask;
- 	u8 chainshift[__MT_MAX_BAND];
- 	u32 hif_idx;
-+	u8 token_check_count;
- 
- 	struct work_struct init_work;
- 	struct work_struct rc_work;
 diff --git a/mt7996/mac.c b/mt7996/mac.c
-index b3d0ec5..9074477 100644
+index d755f77..dc2a745 100644
 --- a/mt7996/mac.c
 +++ b/mt7996/mac.c
-@@ -2872,14 +2872,60 @@ void mt7996_mac_sta_rc_work(struct work_struct *work)
+@@ -2982,14 +2982,60 @@ void mt7996_mac_sta_rc_work(struct work_struct *work)
  	mutex_unlock(&dev->mt76.mutex);
  }
  
@@ -194,7 +101,7 @@ index b3d0ec5..9074477 100644
  
  	mutex_lock(&mphy->dev->mutex);
  
-@@ -2902,6 +2948,9 @@ void mt7996_mac_work(struct work_struct *work)
+@@ -3012,6 +3058,9 @@ void mt7996_mac_work(struct work_struct *work)
  
  	mt76_beacon_mon_check(mphy);
  	mt76_tx_status_check(mphy->dev, false);
@@ -204,3 +111,96 @@ index b3d0ec5..9074477 100644
  
  	ieee80211_queue_delayed_work(mphy->hw, &mphy->mac_work,
  				     MT7996_WATCHDOG_TIME);
+diff --git a/mt7996/mt7996.h b/mt7996/mt7996.h
+index dddf06d..d218b85 100644
+--- a/mt7996/mt7996.h
++++ b/mt7996/mt7996.h
+@@ -20,6 +20,7 @@
+ 					 mt7996_max_interface_num(dev))
+ 
+ #define MT7996_WATCHDOG_TIME		(HZ / 10)
++#define MT7996_TOKEN_SKB_TIMEOUT	(5 * HZ)
+ #define MT7996_RESET_TIMEOUT		(30 * HZ)
+ #define MT7996_TSF_READ_TRIES		3
+ #define MT7996_TSF_READ_SPAN_US		1000
+@@ -507,6 +508,7 @@ struct mt7996_dev {
+ 	u16 chainmask;
+ 	u8 chainshift[__MT_MAX_BAND];
+ 	u32 hif_idx;
++	u8 token_check_count;
+ 
+ 	struct work_struct init_work;
+ 	struct work_struct rc_work;
+diff --git a/tx.c b/tx.c
+index 36d57ef..8ecaec5 100644
+--- a/tx.c
++++ b/tx.c
+@@ -129,6 +129,8 @@ mt76_tx_status_skb_add(struct mt76_dev *dev, struct mt76_wcid *wcid,
+ 
+ 	memset(cb, 0, sizeof(*cb));
+ 
++	cb->jiffies = jiffies;
++
+ 	if (!wcid)
+ 		return MT_PACKET_ID_NO_ACK;
+ 
+@@ -1107,6 +1109,59 @@ mt76_token_release(struct mt76_dev *dev, int token, bool *wake)
+ }
+ EXPORT_SYMBOL_GPL(mt76_token_release);
+ 
++bool mt76_tx_token_reclaim(struct mt76_dev *dev, struct list_head *list,
++			   unsigned long timeout)
++{
++	struct mt76_txwi_cache *t;
++	bool wake = false;
++	int id;
++
++	spin_lock_bh(&dev->token_lock);
++
++	idr_for_each_entry(&dev->token, t, id) {
++		struct sk_buff *skb = t->skb;
++		struct mt76_tx_cb *cb;
++
++		if (!skb)
++			continue;
++
++		cb = mt76_tx_skb_cb(skb);
++		if (cb->pktid >= MT_PACKET_ID_FIRST)
++			continue;
++
++		if (!cb->jiffies ||
++		    time_is_after_jiffies(cb->jiffies + timeout))
++			continue;
++
++		idr_remove(&dev->token, id);
++		dev->token_count--;
++
++		if (t->qid == MT_TXQ_PSD) {
++			struct mt76_phy *mphy = mt76_dev_phy(dev, t->phy_idx);
++			if (atomic_dec_and_test(&mphy->mgmt_tx_pending))
++				wake_up(&dev->tx_wait);
++		}
++
++#ifdef CONFIG_NET_MEDIATEK_SOC_WED
++		if (mtk_wed_device_active(&dev->mmio.wed) &&
++		    id >= dev->mmio.wed.wlan.token_start &&
++		    --dev->wed_token_count == 0)
++			wake_up(&dev->tx_wait);
++#endif
++
++		list_add_tail(&t->list, list);
++	}
++
++	if (dev->token_count < dev->token_size - MT76_TOKEN_FREE_THR &&
++	    dev->phy.q_tx[0]->blocked)
++		wake = true;
++
++	spin_unlock_bh(&dev->token_lock);
++
++	return wake;
++}
++EXPORT_SYMBOL_GPL(mt76_tx_token_reclaim);
++
+ struct mt76_txwi_cache *
+ mt76_rx_token_release(struct mt76_dev *dev, int token)
+ {

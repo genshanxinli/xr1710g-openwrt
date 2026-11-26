@@ -6,13 +6,13 @@ AN7581 watchdog. Read the kernel's maximum during initialization so
 early init and subsequent procd stages use a supported default. Leave
 explicit timeout requests and devices without sysfs limits unchanged.
 
+Origin: backport, xr1710g-openwrt@5d9f5fa3c2
 Signed-off-by: Vitaliy Sochnev <sochnev.v.74@gmail.com>
-
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
-
 --- a/watchdog.c
 +++ b/watchdog.c
-@@ -18,6 +18,7 @@
+@@ -19,6 +19,7 @@
  #include <sys/stat.h>
  #include <fcntl.h>
  
@@ -20,7 +20,7 @@ Signed-off-by: Vitaliy Sochnev <sochnev.v.74@gmail.com>
  #include <unistd.h>
  
  #include <libubox/uloop.h>
-@@ -87,8 +88,23 @@ static void watchdog_close(bool with_re
+@@ -87,6 +88,21 @@ static void watchdog_close(bool with_rel
  	wdt_fd = -1;
  }
  
@@ -42,12 +42,11 @@ Signed-off-by: Vitaliy Sochnev <sochnev.v.74@gmail.com>
  static int watchdog_set_drv_timeout(void)
  {
  	if (wdt_fd < 0)
- 		return -1;
- 
-@@ -202,5 +218,6 @@ void watchdog_init(int preinit)
+@@ -202,6 +218,7 @@ void watchdog_init(int preinit)
  		return;
  
  	LOG("- watchdog -\n");
 +	watchdog_limit_default_timeout();
  	watchdog_set_drv_timeout();
  	watchdog_timeout_cb(&wdt_timeout);
+ 
