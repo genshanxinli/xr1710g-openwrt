@@ -45,7 +45,16 @@ FWTOOL_SIGNATURE=$?
 
 fwtool_check_image "$1" >&2
 FWTOOL_DEVICE_MATCH=$?
-[ "$FWTOOL_DEVICE_MATCH" -ne 0 ] && notify_firmware_invalid
+case "$FWTOOL_DEVICE_MATCH" in
+0)
+	;;
+74)
+	notify_firmware_broken
+	;;
+*)
+	notify_firmware_invalid
+	;;
+esac
 
 json_set_namespace validate_firmware_image old_ns
 json_init

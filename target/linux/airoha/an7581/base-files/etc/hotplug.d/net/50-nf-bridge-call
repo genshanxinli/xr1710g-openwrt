@@ -1,0 +1,14 @@
+#!/bin/sh
+# Enable netfilter on br-lan only so bridged IP flows reach nft_flow_offload.
+
+[ "$ACTION" = "add" ] || exit 0
+[ "$DEVICENAME" = "br-lan" ] || exit 0
+
+SYS_NET="${NF_BR_SYS_NET:-/sys/class/net}"
+bridge="$SYS_NET/br-lan/bridge"
+[ -d "$bridge" ] || exit 0
+
+echo 1 > "$bridge/nf_call_iptables" 2>/dev/null
+echo 1 > "$bridge/nf_call_ip6tables" 2>/dev/null
+
+exit 0

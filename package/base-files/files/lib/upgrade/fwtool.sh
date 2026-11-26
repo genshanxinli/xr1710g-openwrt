@@ -31,15 +31,19 @@ fwtool_check_image() {
 
 	if ! fwtool -q -i /tmp/sysupgrade.meta "$1"; then
 		v "Image metadata not present"
-		[ "$REQUIRE_IMAGE_METADATA" = 1 -a "$FORCE" != 1 ] && {
+		[ "$REQUIRE_IMAGE_METADATA" = 1 ] && {
+			v "This board requires image metadata, so the compat version cannot be checked and -F cannot override this."
+			return 74
+		}
+		[ "$FORCE" != 1 ] && {
 			v "Use sysupgrade -F to override this check when downgrading or flashing to vendor firmware"
 		}
-		[ "$REQUIRE_IMAGE_METADATA" = 1 ] && return 1
 		return 0
 	fi
 
 	json_load "$(cat /tmp/sysupgrade.meta)" || {
 		v "Invalid image metadata"
+		[ "$REQUIRE_IMAGE_METADATA" = 1 ] && return 74
 		return 1
 	}
 	# Step 1. check if oem_name file exist and is not empty
@@ -58,7 +62,10 @@ fwtool_check_image() {
 	#  not knowing about compat-version)
 	local supported=supported_devices
 	[ "$imagecompat" != "1.0" ] && supported=new_supported_devices
-	json_select $supported || return 1
+	json_select $supported || {
+		[ "$REQUIRE_IMAGE_METADATA" = 1 ] && return 74
+		return 1
+	}
 
 	json_get_keys dev_keys
 	for k in $dev_keys; do
@@ -73,11 +80,12 @@ fwtool_check_image() {
 		# If in Step 1 the oem_file was found and valid, the $oem == "b3000" so
 		# [ ("$dev" == "b3000) == ("$oem" == "b3000") ] so firmware is valid oem
 		if [ "$dev" = "$device" ] || [ "$dev" = "$oem" ]; then
-			# major compat version -> no sysupgrade
+			# major compat version -> non-forceable (different flash layout)
 			if [ "${devicecompat%.*}" != "${imagecompat%.*}" ]; then
 				v "The device is supported, but this image is incompatible for sysupgrade based on the image version ($devicecompat->$imagecompat)."
 				[ -n "$compatmessage" ] && v "$compatmessage"
-				return 1
+				v "A different major compat version means a different flash layout, so -F cannot override this."
+				return 74
 			fi
 
 			# minor compat version -> sysupgrade with -n required

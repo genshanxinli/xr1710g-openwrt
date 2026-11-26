@@ -1,0 +1,87 @@
+#!/bin/sh /etc/rc.common
+
+# Report ramoops/pstore status and any surviving crash records at boot (read-only).
+START=15
+
+PSTORE_DIR="${PSTORE_REPORT_DIR:-/sys/fs/pstore}"
+IOMEM_FILE="${PSTORE_REPORT_IOMEM:-/proc/iomem}"
+MOUNTS_FILE="${PSTORE_REPORT_MOUNTS:-/proc/mounts}"
+RAMOOPS_PARAMS="${PSTORE_REPORT_RAMOOPS_PARAMS:-/sys/module/ramoops/parameters}"
+LOG_SOCK="${PSTORE_REPORT_LOG_SOCK:-/dev/log}"
+LOG_WAIT_MAX="${PSTORE_REPORT_LOG_WAIT:-2}"
+TAIL_BYTES="${PSTORE_REPORT_TAIL_BYTES:-2048}"
+TAIL_LINES="${PSTORE_REPORT_TAIL_LINES:-8}"
+
+read_param() {
+	[ -r "$RAMOOPS_PARAMS/$1" ] && tr -d '\r\n' < "$RAMOOPS_PARAMS/$1" 2>/dev/null
+}
+
+pstore_is_mounted() {
+	local dir="$PSTORE_DIR"
+
+	[ "$dir" != "/" ] && dir="${dir%/}"
+	[ -r "$MOUNTS_FILE" ] || return 1
+	awk -v dir="$dir" '$2 == dir && $3 == "pstore" { found = 1; exit } END { exit(found ? 0 : 1) }' \
+		"$MOUNTS_FILE" 2>/dev/null
+}
+
+boot() {
+	local iomem_status mem_addr mem_size console_size waited=0 found=0 f name size line
+
+	if [ -n "$LOG_SOCK" ] && [ "$LOG_WAIT_MAX" -gt 0 ] 2>/dev/null; then
+		while [ ! -S "$LOG_SOCK" ] && [ "$waited" -lt "$LOG_WAIT_MAX" ]; do
+			sleep 1
+			waited=$((waited + 1))
+		done
+	fi
+
+	if [ -r "$IOMEM_FILE" ] && grep -q '^86ff0000-' "$IOMEM_FILE" 2>/dev/null; then
+		iomem_status="present"
+	else
+		iomem_status="missing"
+	fi
+
+	mem_addr=$(read_param mem_address)
+	mem_size=$(read_param mem_size)
+	console_size=$(read_param console_size)
+
+	logger -t pstore \
+		"ramoops: iomem_86ff0000=$iomem_status mem_address=${mem_addr:-?} mem_size=${mem_size:-?} console_size=${console_size:-?}"
+
+	if [ ! -d "$PSTORE_DIR" ] || ! pstore_is_mounted; then
+		logger -t pstore "warning: $PSTORE_DIR not mounted as pstore filesystem"
+		return 0
+	fi
+
+	for f in "$PSTORE_DIR"/*; do
+		[ -f "$f" ] || continue
+		found=$((found + 1))
+		name="${f##*/}"
+		size=$(wc -c < "$f" 2>/dev/null | tr -d ' \t\r\n')
+		case "$name" in
+		*.enc.z|*.z|*.gz|*.xz|*.bz2|*.lz4|*.zst)
+			logger -t pstore "record: $name (${size:-0} bytes) [compressed, tail skipped]"
+			continue
+			;;
+		esac
+		logger -t pstore "record: $name (${size:-0} bytes)"
+		tail -c "$TAIL_BYTES" "$f" 2>/dev/null |
+			tr -cd '\011\012\040-\176' |
+			tail -n "$TAIL_LINES" |
+			cut -c 1-240 |
+			while IFS= read -r line || [ -n "$line" ]; do
+				[ -n "$line" ] && logger -t pstore "$name: $line"
+			done
+	done
+
+	if [ "$found" -eq 0 ]; then
+		logger -t pstore "clean boot: no surviving records in $PSTORE_DIR"
+	else
+		logger -t pstore "found $found surviving record(s) in $PSTORE_DIR"
+	fi
+	return 0
+}
+
+start() {
+	boot "$@"
+}

@@ -15,6 +15,12 @@ PKG_NAME:=base-files
 PKG_FLAGS:=nonshared
 PKG_RELEASE:=$(COMMITCOUNT)
 
+# Carry git +ahead count in package version so apk refreshes base-files across commits.
+REVHEAD:=$(firstword $(subst -, ,$(REVISION)))
+REVAHEAD:=$(word 2,$(subst +, ,$(REVHEAD)))
+REVHASH:=$(lastword $(subst -, ,$(REVISION)))
+BASE_FILES_PKG_VERSION:=$(PKG_RELEASE)$(if $(REVAHEAD),.$(REVAHEAD))~$(REVHASH)
+
 PKG_FILE_DEPENDS:=$(PLATFORM_DIR)/ $(GENERIC_PLATFORM_DIR)/base-files/
 PKG_BUILD_DEPENDS:=usign/host ucert/host
 PKG_LICENSE:=GPL-2.0
@@ -50,7 +56,7 @@ define Package/base-files
 	+ucode +ucode-mod-fs +ucode-mod-digest
   TITLE:=Base filesystem for OpenWrt
   URL:=https://openwrt.org/
-  VERSION:=$(PKG_RELEASE)~$(lastword $(subst -, ,$(REVISION)))
+  VERSION:=$(BASE_FILES_PKG_VERSION)
 endef
 
 define Package/base-files/conffiles
@@ -263,7 +269,7 @@ ifneq ($(CONFIG_USE_APK),)
 
 	rm -f $(1)/etc/uci-defaults/13_fix-group-user
 	rm -f $(1)/sbin/pkg_check
-	echo $(PKG_RELEASE)~$(lastword $(subst -, ,$(REVISION))) >$(STAGING_DIR)/base-files.version
+	echo $(BASE_FILES_PKG_VERSION) >$(STAGING_DIR)/base-files.version
 else
 	$(if $(CONFIG_CLEAN_IPKG),, \
 		mkdir -p $(1)/etc/opkg; \

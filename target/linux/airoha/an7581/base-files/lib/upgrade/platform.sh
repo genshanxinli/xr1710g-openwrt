@@ -1,4 +1,4 @@
-RAMFS_COPY_BIN='fitblk fit_check_sign tr mktemp'
+RAMFS_COPY_BIN='dumpimage fitblk fit_check_sign tr mktemp'
 
 REQUIRE_IMAGE_METADATA=1
 
@@ -137,15 +137,40 @@ platform_check_image() {
 	[ "$#" -gt 1 ] && return 1
 
 	case "$board" in
-	gemtek,xr1710g-ubi|\
+	nokia,xg-040g-md)
+		nand_do_platform_check "$board" "$1"
+		return $?
+		;;
 	nokia,xg-040g-md-ubi|\
 	quantum,q1000k-ubi)
 		fit_check_image "$1"
 		return $?
 		;;
-	nokia,xg-040g-md)
-		nand_do_platform_check "$board" "$1"
-		return $?
+	gemtek,xr1710g-ubi|\
+	gemtek,w1700k-ubi)
+		local devname desc
+
+		fit_check_image "$1" || return $?
+
+		command -v dumpimage >/dev/null || {
+			echo "dumpimage is missing, refusing to skip the FIT check."
+			return 74
+		}
+
+		devname="$(echo "$board" | tr ',' '_')"
+		desc="$(dumpimage -l "$1" 2>/dev/null | \
+			sed -n 's/^ *Description: .* OpenWrt \(.*\) device tree blob$/\1/p' | \
+			head -n 1)"
+		if [ "$desc" != "$devname" ]; then
+			if [ -n "$desc" ]; then
+				echo "Invalid image: built for '$desc', this device is '$devname'."
+			else
+				echo "Invalid image: missing or unrecognizable FIT FDT description (expected '$devname')."
+			fi
+			return 74
+		fi
+
+		return 0
 		;;
 	esac
 

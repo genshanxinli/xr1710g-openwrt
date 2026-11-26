@@ -1,0 +1,95 @@
+#!/bin/sh
+# Manage hardware LRO on the physical WAN (GDM2/QDMA1) netdev; resolves VLAN parents.
+
+[ "$ACTION" = ifup ] || [ "$ACTION" = ifupdate ] || [ "$ACTION" = ifdown ] || exit 0
+[ "$INTERFACE" = wan ] || exit 0
+
+command -v ethtool >/dev/null || {
+	logger -t wan-lro "ethtool not installed, leaving LRO alone on $INTERFACE"
+	exit 0
+}
+
+SYS_NET="${WAN_LRO_SYS_NET:-/sys/class/net}"
+
+resolve_phys_dev() {
+	local cur="$1" hop=0 lower count target
+
+	while [ "$hop" -lt 4 ]; do
+		count=0
+		target=""
+		for lower in "$SYS_NET/$cur"/lower_*; do
+			[ -e "$lower" ] || [ -L "$lower" ] || continue
+			count=$((count + 1))
+			target="${lower##*/lower_}"
+		done
+		if [ "$count" -eq 1 ] && [ -n "$target" ] && [ "$target" != "$cur" ]; then
+			cur="$target"
+			hop=$((hop + 1))
+			continue
+		fi
+		case "$cur" in
+		*.*)
+			target="${cur%.*}"
+			if [ -n "$target" ] && [ -d "$SYS_NET/$target" ]; then
+				cur="$target"
+				hop=$((hop + 1))
+				continue
+			fi
+			target="${cur%%.*}"
+			if [ -n "$target" ] && [ -d "$SYS_NET/$target" ]; then
+				cur="$target"
+				hop=$((hop + 1))
+				continue
+			fi
+			;;
+		esac
+		break
+	done
+	printf '%s\n' "$cur"
+}
+
+(
+	LOCK_DIR="${WAN_LRO_LOCK_DIR:-/var/lock}"
+	mkdir -p "$LOCK_DIR" 2>/dev/null
+	exec 9>"$LOCK_DIR/wan-lro.lock"
+	waits=0
+	while ! flock -n 9; do
+		[ "$waits" -lt 10 ] || {
+			logger -t wan-lro "another LRO change is in progress, giving up"
+			exit 0
+		}
+		waits=$((waits + 1))
+		sleep 1
+	done
+
+	DEV="$(ubus call network.interface.wan status 2>/dev/null | jsonfilter -e '@.device' 2>/dev/null)"
+	[ -n "$DEV" ] || DEV="${DEVICE:-}"
+	[ -n "$DEV" ] || DEV="$(uci -q get network.wan.device 2>/dev/null)"
+	[ -n "$DEV" ] || DEV="wan"
+	DEV="$(resolve_phys_dev "$DEV")"
+
+	STATE="$(ethtool -k "$DEV" 2>/dev/null)"
+	case "$STATE" in
+	*"large-receive-offload: off [fixed]"*)
+		logger -t wan-lro "refusing to touch $DEV: LRO is fixed off"
+		exit 0
+		;;
+	esac
+
+	case "$ACTION" in
+	ifup|ifupdate)
+		case "$STATE" in
+		*"large-receive-offload: on"*)
+			exit 0
+			;;
+		esac
+		ethtool -K "$DEV" rx-lro on >/dev/null 2>&1 &&
+			logger -t wan-lro "LRO enabled on $DEV"
+		;;
+	ifdown)
+		ethtool -K "$DEV" rx-lro off >/dev/null 2>&1
+		;;
+	esac
+)
+
+exit 0

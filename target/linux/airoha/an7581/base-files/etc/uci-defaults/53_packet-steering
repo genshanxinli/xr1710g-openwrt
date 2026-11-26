@@ -1,0 +1,19 @@
+#!/bin/sh
+# Spread RX packet steering across all CPUs (mode 2) on Gemtek AN7581 boards.
+
+. /lib/functions.sh
+
+case "$(board_name)" in
+gemtek,xr1710g-ubi|gemtek,w1700k-ubi)
+	cur=$(uci -q get network.@globals[0].packet_steering)
+	case "$cur" in
+	''|1) ;;
+	*) exit 0 ;;
+	esac
+
+	uci -q set network.@globals[0].packet_steering='2'
+	uci -q commit network
+	;;
+esac
+
+exit 0

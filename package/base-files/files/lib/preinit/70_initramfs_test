@@ -1,6 +1,11 @@
 # Copyright (C) 2006 OpenWrt.org
 # Copyright (C) 2010 Vertical Communications
 
+# Recover INITRAMFS=1 when bootloader starts /sbin/init directly (rdinit=/sbin/init).
+if [ -z "$INITRAMFS" ] && grep -q '^rootfs / rootfs ' /proc/mounts 2>/dev/null; then
+	export INITRAMFS=1
+fi
+
 initramfs_test() {
 	if [ -n "$INITRAMFS" ]; then
 		boot_run_hook initramfs

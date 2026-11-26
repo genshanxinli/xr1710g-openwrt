@@ -1,0 +1,18 @@
+#!/bin/sh
+# Raise syslog ring size from 128 KiB stock default to 512 KiB on XR1710G.
+
+. /lib/functions.sh
+
+case "$(board_name)" in
+gemtek,xr1710g-ubi) ;;
+*) exit 0 ;;
+esac
+
+cur=$(uci -q get system.@system[0].log_size)
+[ -n "$cur" ] || cur=128
+[ "$cur" = "128" ] || exit 0
+
+uci -q set system.@system[0].log_size='512'
+uci -q commit system
+
+exit 0

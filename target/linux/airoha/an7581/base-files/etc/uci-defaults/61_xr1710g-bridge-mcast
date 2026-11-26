@@ -1,0 +1,39 @@
+#!/bin/sh
+# Enable IGMP/MLD snooping on br-lan for XR1710G while preserving explicit user settings.
+
+. /lib/functions.sh
+
+case "$(board_name)" in
+gemtek,xr1710g-ubi) ;;
+*) exit 0 ;;
+esac
+
+snooping_file=/sys/class/net/br-lan/bridge/multicast_snooping
+
+find_br_lan_section() {
+	uci -q show network | sed -n "s/^network\.\([^.=']*\)\.name='br-lan'$/\1/p" | head -n 1
+}
+
+br_lan_section=$(find_br_lan_section)
+
+if [ -n "$br_lan_section" ]; then
+	cur=$(uci -q get "network.$br_lan_section.igmp_snooping")
+	[ -n "$cur" ] && exit 0
+	uci -q set "network.$br_lan_section.igmp_snooping='1'"
+else
+	uci -q batch <<-EOF
+		add network device
+		set network.@device[-1].name='br-lan'
+		set network.@device[-1].type='bridge'
+		set network.@device[-1].igmp_snooping='1'
+	EOF
+fi
+
+uci commit network
+
+if [ -e "$snooping_file" ]; then
+	[ "$(cat "$snooping_file" 2>/dev/null)" = 1 ] || \
+		echo 1 > "$snooping_file" 2>/dev/null
+fi
+
+exit 0

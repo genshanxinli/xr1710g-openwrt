@@ -1,23 +1,33 @@
 #!/bin/sh
+# Reload fw4 once br-lan membership settles at boot, plus one conditional DFS recheck.
 
 [ "$ACTION" = ifup ] || exit 0
 [ "$INTERFACE" = lan ] || exit 0
 
+BRIDGE="${BR_HW_BRIDGE:-br-lan}"
 SYS_NET="${BR_HW_SYS_NET:-/sys/class/net}"
 SETTLE_TIMEOUT="${BR_HW_SETTLE_TIMEOUT:-120}"
 SETTLE_INTERVAL="${BR_HW_SETTLE_INTERVAL:-5}"
 SETTLE_STABLE="${BR_HW_SETTLE_STABLE:-3}"
-RECHECK1="${BR_HW_RECHECK1_DELAY:-40}"
-RECHECK2="${BR_HW_RECHECK2_DELAY:-70}"
+LOCK_FILE="${BRIDGE_HW_OFFLOAD_LOCK:-/var/lock/bridge-hw-offload.lock}"
 
-mkdir -p /var/lock 2>/dev/null
+[ -d "${SYS_NET}/${BRIDGE}/bridge" ] || exit 0
+[ "${LOCK_FILE%/*}" != "$LOCK_FILE" ] && [ -n "${LOCK_FILE%/*}" ] && mkdir -p "${LOCK_FILE%/*}" 2>/dev/null
 
 (
-	exec 9>/var/lock/bridge-hw-offload.lock
-	flock -n 9 || exit 0
+	exec 9>"$LOCK_FILE"
+	waits=0
+	while ! flock -n 9; do
+		[ "$waits" -lt 10 ] || {
+			logger -t bridge-hw-offload "reload already in progress, giving up"
+			exit 0
+		}
+		waits=$((waits + 1))
+		sleep 1
+	done
 	seen=""; prev=""; stable=0; waited=0
 	while [ "$waited" -lt "$SETTLE_TIMEOUT" ]; do
-		cur=$(ls "${SYS_NET}/br-lan/brif" 2>/dev/null | sort | tr '\n' ' ')
+		cur=$(ls "${SYS_NET}/${BRIDGE}/brif" 2>/dev/null | sort | tr '\n' ' ')
 		[ -n "$cur" ] && seen=1
 		if [ -n "$cur" ] && [ "$cur" = "$prev" ]; then
 			stable=$((stable + 1))
@@ -33,9 +43,11 @@ mkdir -p /var/lock 2>/dev/null
 		exit 0
 	fi
 	/etc/init.d/firewall reload >/dev/null 2>&1
-	sleep "$RECHECK1"
-	/etc/init.d/firewall reload >/dev/null 2>&1
-	sleep "$RECHECK2"
+
+	sleep "${RECHECK_DELAY:-40}"
+	now=$(ls "${SYS_NET}/${BRIDGE}/brif" 2>/dev/null | sort | tr '\n' ' ')
+	[ "$now" = "$prev" ] && exit 0
+	logger -t bridge-hw-offload "bridge members changed, reloading again"
 	/etc/init.d/firewall reload >/dev/null 2>&1
 ) &
 

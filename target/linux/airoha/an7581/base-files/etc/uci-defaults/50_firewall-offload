@@ -1,0 +1,16 @@
+#!/bin/sh
+# Enable hardware flow offloading and IPv4 Full Cone NAT on Gemtek AN7581 boards.
+
+. /lib/functions.sh
+
+case "$(board_name)" in
+gemtek,xr1710g-ubi|gemtek,w1700k-ubi)
+	uci set firewall.@defaults[0].flow_offloading='1'
+	uci set firewall.@defaults[0].flow_offloading_hw='1'
+	uci set firewall.@defaults[0].fullcone='1'
+	uci set firewall.@defaults[0].fullcone6='0'
+	uci commit firewall
+	;;
+esac
+
+exit 0

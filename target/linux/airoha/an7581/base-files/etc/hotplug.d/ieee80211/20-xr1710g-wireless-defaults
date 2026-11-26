@@ -1,0 +1,90 @@
+#!/bin/sh
+# Apply one-time XR1710G MT7996 wireless defaults after 10-wifi-detect populates UCI.
+
+[ "$ACTION" = "add" ] || exit 0
+. /lib/functions.sh
+[ "$(board_name)" = "gemtek,xr1710g-ubi" ] || exit 0
+[ -s /etc/config/wireless ] || exit 0
+[ "$(uci -q get wireless.radio0._xr1710g_tuned)" = "1" ] && exit 0
+
+LOCK_FILE="${XR1710G_WIFI_LOCK:-/var/lock/xr1710g-wifi-defaults.lock}"
+[ "${LOCK_FILE%/*}" != "$LOCK_FILE" ] && mkdir -p "${LOCK_FILE%/*}" 2>/dev/null
+
+set_from() {
+	local sec="$1" opt="$2" val="$3" cur match=0 s
+	shift 3
+	cur="$(uci -q get "wireless.$sec.$opt")"
+	[ "$cur" = "$val" ] && return 0
+	[ -z "$cur" ] && match=1
+	for s in "$@"; do
+		[ "$cur" = "$s" ] && match=1
+	done
+	[ "$match" -eq 1 ] || return 0
+	uci -q set "wireless.$sec.$opt=$val"
+	changed=1
+}
+
+(
+	exec 9>"$LOCK_FILE"
+	waits=0
+	while ! flock -n 9; do
+		[ "$waits" -lt 15 ] || exit 0
+		waits=$((waits + 1))
+		sleep 1
+	done
+
+	[ "$(uci -q get wireless.radio0._xr1710g_tuned)" = "1" ] && exit 0
+	[ "$(uci -q get wireless.radio0.band)" = "2g" ] || exit 0
+	[ "$(uci -q get wireless.radio1.band)" = "5g" ] || exit 0
+	[ "$(uci -q get wireless.radio2.band)" = "6g" ] || exit 0
+
+	changed=0
+	set_from radio0 channel 6 1 auto
+	set_from radio0 he_mu_beamformer 0
+	set_from radio0 he_bss_color 37 128
+
+	if [ "$(uci -q get wireless.radio1.xr1710g_5g160)" = "1" ]; then
+		set_from radio1 channel 36 auto
+		case "$(uci -q get wireless.radio1.channel)" in
+		36|40|44|48|52|56|60|64)
+			case "$(uci -q get wireless.radio1.htmode)" in
+			EHT160|HE160|VHT160) ;;
+			*) uci -q set wireless.radio1.htmode=EHT160; changed=1 ;;
+			esac
+			;;
+		esac
+	else
+		set_from radio1 channel 149 36 auto
+		case "$(uci -q get wireless.radio1.channel)" in
+		149|153|157|161|165) set_from radio1 htmode EHT80 EHT160 ;;
+		esac
+	fi
+	set_from radio1 he_bss_color 38 128
+
+	set_from radio2 channel 37 auto 1
+	set_from radio2 htmode EHT320 EHT80
+	set_from radio2 he_bss_color 39 128
+
+	for r in radio0 radio1 radio2; do
+		uci -q get "wireless.default_$r" >/dev/null || continue
+		set_from "default_$r" disassoc_low_ack 0
+		set_from "default_$r" uapsd 0
+		set_from "default_$r" max_inactivity 86400
+		set_from "default_$r" ieee80211k 1
+		set_from "default_$r" bss_transition 1
+	done
+
+	c1="$(uci -q get wireless.radio1.country | tr 'a-z' 'A-Z')"
+	c2="$(uci -q get wireless.radio2.country | tr 'a-z' 'A-Z')"
+	case "$c1:$c2" in
+	[A-Z][A-Z]:[A-Z][A-Z])
+		[ "$c1" = "$c2" ] || logger -t xr1710g-wifi "radio1/radio2 country mismatch ($c1 vs $c2); MT7996 shares one regdomain"
+		;;
+	esac
+
+	uci -q set wireless.radio0._xr1710g_tuned='1'
+	uci -q commit wireless
+	[ "$changed" -eq 1 ] && ubus call network reload >/dev/null 2>&1
+)
+
+exit 0
