@@ -4,6 +4,9 @@
 BRIDGE="${BR_HW_BRIDGE:-br-lan}"
 SYS_NET="${BR_HW_SYS_NET:-/sys/class/net}"
 LOCK_FILE="${BRIDGE_HW_OFFLOAD_LOCK:-/var/lock/bridge-hw-offload.lock}"
+DIRTY_FILE="${LOCK_FILE}.dirty"
+DEBOUNCE="${BR_HW_DEBOUNCE:-3}"
+RELOAD_CMD="${BR_HW_RELOAD:-/etc/init.d/firewall reload}"
 
 case "$ACTION" in
 	add|remove) ;;
@@ -11,30 +14,33 @@ case "$ACTION" in
 esac
 [ -n "$DEVICENAME" ] || exit 0
 case "$DEVICENAME" in
-	lo|"$BRIDGE") exit 0 ;;
+	lo|"$BRIDGE"|pppoe-*|ppp[0-9]*|wan*|wg*|tun*|ifb*|tailscale*|veth*|docker*|dummy*|sit*|gre*) exit 0 ;;
 esac
 
 if [ -L "${SYS_NET}/${DEVICENAME}/master" ] || [ -e "${SYS_NET}/${DEVICENAME}/master" ]; then
 	master=$(readlink "${SYS_NET}/${DEVICENAME}/master" 2>/dev/null)
 	[ "${master##*/}" = "$BRIDGE" ] || exit 0
+elif [ "$ACTION" = "add" ]; then
+	exit 0
 fi
 
 [ "${LOCK_FILE%/*}" != "$LOCK_FILE" ] && [ -n "${LOCK_FILE%/*}" ] && mkdir -p "${LOCK_FILE%/*}" 2>/dev/null
 
+: > "$DIRTY_FILE"
+
 (
 	exec 9>"$LOCK_FILE"
-	waits=0
-	while ! flock -n 9; do
-		[ "$waits" -lt 200 ] || {
-			logger -t bridge-hw-offload "reload still running after 200 s, giving up"
-			exit 0
-		}
-		waits=$((waits + 1))
-		sleep 1
+	while :; do
+		flock -n 9 || exit 0
+		while [ -e "$DIRTY_FILE" ]; do
+			sleep "$DEBOUNCE"
+			rm -f "$DIRTY_FILE"
+			# shellcheck disable=SC2086
+			$RELOAD_CMD 9>&- >/dev/null 2>&1
+		done
+		flock -u 9
+		[ -e "$DIRTY_FILE" ] || exit 0
 	done
-	sleep 3
-	BR_HW_RELOAD="${BR_HW_RELOAD:-/etc/init.d/firewall reload}"
-	$BR_HW_RELOAD >/dev/null 2>&1
-) &
+) </dev/null >/dev/null 2>&1 &
 
 exit 0

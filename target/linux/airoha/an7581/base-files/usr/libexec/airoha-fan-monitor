@@ -1,0 +1,258 @@
+#!/bin/sh
+# NCT7802 fan curve supervisor and stall failsafe monitor.
+
+STOCK_TEMP="40000 50000 60000 70000 80000"
+STOCK_PWM="54 69 95 199"
+HWMON_ROOT="${AIROHA_FAN_HWMON_ROOT:-/sys/class/hwmon}"
+LUCI_FAN_INIT="/etc/init.d/fan"
+FAILSAFE_TEMP="${AIROHA_FAN_FAILSAFE_TEMP:-45000}"
+AUTO_HYST=3000
+MANUAL_ZERO_TEMP=65000
+FAILSAFE_SAMPLES="${AIROHA_FAN_FAILSAFE_SAMPLES:-5}"
+UNSTALL_SAMPLES="${AIROHA_FAN_UNSTALL_SAMPLES:-3}"
+FAILSAFE_INTERVAL="${AIROHA_FAN_FAILSAFE_INTERVAL:-10}"
+SUPERVISE_AFTER="${AIROHA_FAN_SUPERVISE_AFTER:-2}"
+ZERO_CONFIRM_READS="${AIROHA_FAN_ZERO_CONFIRM_READS:-2}"
+ZERO_CONFIRM_SLEEP="${AIROHA_FAN_ZERO_CONFIRM_SLEEP:-1}"
+RECOVER_COOLDOWN="${AIROHA_FAN_RECOVER_COOLDOWN:-$((FAILSAFE_SAMPLES + 2))}"
+MONITOR_MAX_SAMPLES="${AIROHA_FAN_MONITOR_MAX_SAMPLES:-}"
+SLEEP_PID=""
+
+log() { logger -t airoha_fan "$*"; }
+is_uint() { case "$1" in ''|0[0-9]*|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
+is_int() { case "$1" in -*) is_uint "${1#-}" ;; *) is_uint "$1" ;; esac; }
+read_hwmon() { [ -r "$1/$2" ] && tr -d ' \t\r\n' < "$1/$2" 2>/dev/null; }
+write_hwmon() { { printf '%s\n' "$3" > "$1/$2"; } 2>/dev/null; }
+
+sleep_interruptible() {
+	[ "${1:-0}" -gt 0 ] 2>/dev/null || return 0
+	sleep "$1" &
+	SLEEP_PID=$!
+	wait "$SLEEP_PID" 2>/dev/null || true
+	SLEEP_PID=""
+}
+
+on_signal() {
+	[ -n "$SLEEP_PID" ] && kill "$SLEEP_PID" 2>/dev/null || true
+	exit 0
+}
+
+find_nct7802() {
+	local hwmon
+	for hwmon in "$HWMON_ROOT"/hwmon*; do
+		if [ -f "$hwmon/name" ] && [ "$(tr -d ' \t\r\n' < "$hwmon/name" 2>/dev/null)" = "nct7802" ]; then
+			printf '%s\n' "$hwmon"; return 0
+		fi
+	done
+}
+
+read_pwm_state() {
+	local e p
+	e=$(read_hwmon "$1" pwm1_enable); p=$(read_hwmon "$1" pwm1)
+	is_uint "$e" || e=""
+	is_uint "$p" && [ "$p" -le 255 ] || p=""
+	enable="$e"; pwm="$p"
+}
+
+read_sample() {
+	temp=$(read_hwmon "$1" temp1_input)
+	read_pwm_state "$1"
+	is_int "$temp" && [ -n "$enable" ] && [ -n "$pwm" ]
+}
+
+read_tach() {
+	local hwmon="$1" skip="$2" tries=0 val
+	rpm=""
+	val=$(read_hwmon "$hwmon" fan1_input); is_uint "$val" || return 1
+	if [ "$val" = "0" ] && [ "$skip" = "0" ]; then
+		while [ "$tries" -lt "$ZERO_CONFIRM_READS" ]; do
+			tries=$((tries + 1))
+			sleep_interruptible "$ZERO_CONFIRM_SLEEP"
+			val=$(read_hwmon "$hwmon" fan1_input); is_uint "$val" || return 1
+			[ "$val" -gt 0 ] && break
+		done
+	fi
+	rpm="$val"
+}
+
+apply_stock_curve() {
+	local hwmon="$1" i=1 ok=1 t p
+	write_hwmon "$hwmon" pwm1_enable 1 || return 1
+	for t in $STOCK_TEMP; do
+		write_hwmon "$hwmon" "pwm1_auto_point${i}_temp" "$t" || ok=0
+		i=$((i + 1))
+	done
+	i=1
+	for p in $STOCK_PWM; do
+		write_hwmon "$hwmon" "pwm1_auto_point${i}_pwm" "$p" || ok=0
+		i=$((i + 1))
+	done
+	write_hwmon "$hwmon" pwm1_enable 2 || { write_hwmon "$hwmon" pwm1 255 || true; return 1; }
+	[ "$ok" -eq 1 ]
+}
+
+force_full_pwm() {
+	local hwmon="$1" label="$2" t="$3" f="$4" e="$5" p="$6" rb_en rb_pwm
+	write_hwmon "$hwmon" pwm1_enable 1 || true
+	write_hwmon "$hwmon" pwm1 255 || true
+	rb_en=$(read_hwmon "$hwmon" pwm1_enable); rb_pwm=$(read_hwmon "$hwmon" pwm1)
+	if [ "$rb_en" = "1" ] && [ "$rb_pwm" = "255" ]; then
+		log "temp1_input=$t fan1_input=${f:-?} pwm1_enable=${e:-?} pwm1=${p:-?} $label, forcing pwm1=255"
+		return 0
+	fi
+	log "temp1_input=$t fan1_input=${f:-?} pwm1_enable=${e:-?} pwm1=${p:-?} $label, force write did not land (pwm1_enable=${rb_en:-?} pwm1=${rb_pwm:-?}), will retry"
+	return 1
+}
+
+get_auto_threshold() {
+	local hwmon="$1" cur_mode="$2" cur="$3" i=1 t p cand
+	auto_thr="$FAILSAFE_TEMP"
+	if [ "$cur_mode" != "manual" ] && [ "$cur" -gt "$FAILSAFE_TEMP" ]; then
+		while [ "$i" -le 5 ]; do
+			t=$(read_hwmon "$hwmon" "pwm1_auto_point${i}_temp"); p=255
+			[ "$i" -lt 5 ] && p=$(read_hwmon "$hwmon" "pwm1_auto_point${i}_pwm")
+			if is_int "$t" && [ "$t" -ge 0 ] && { [ -z "$p" ] || { is_uint "$p" && [ "$p" -gt 0 ]; }; }; then
+				cand=$((t + AUTO_HYST))
+				[ "$cand" -gt "$auto_thr" ] && auto_thr="$cand"
+				break
+			fi
+			i=$((i + 1))
+		done
+	fi
+	[ "$MANUAL_ZERO_TEMP" -gt "$FAILSAFE_TEMP" ] && [ "$auto_thr" -gt "$MANUAL_ZERO_TEMP" ] && auto_thr="$MANUAL_ZERO_TEMP"
+}
+
+restore_fan_control() {
+	local hwmon="$1" reason="$2" t="$3" allow_manual="$4" rc=1 m="" ok=0
+	if [ -x "$LUCI_FAN_INIT" ]; then
+		rc=0
+		"$LUCI_FAN_INIT" reload </dev/null >/dev/null 2>&1 || rc=1
+		read_pwm_state "$hwmon"
+		if [ "$rc" -eq 0 ]; then
+			if [ "$enable" = "2" ]; then
+				if [ "$allow_manual" = "1" ] || [ "$pwm" != "0" ]; then
+					ok=1
+				elif is_int "$t"; then
+					get_auto_threshold "$hwmon" "auto" "$t"
+					[ "$t" -le "$auto_thr" ] && ok=1
+				fi
+			elif [ "$allow_manual" = "1" ] && [ "$enable" = "1" ] && [ -n "$pwm" ]; then
+				command -v uci >/dev/null 2>&1 && m=$(uci -q get fan.settings.mode 2>/dev/null)
+				[ "$m" = "manual" ] && ok=1
+			fi
+			if [ "$ok" -eq 1 ]; then
+				log "$LUCI_FAN_INIT reload restored fan control ($reason): pwm1_enable=$enable pwm1=${pwm:-?} temp1_input=$t"
+				return 0
+			fi
+		fi
+	fi
+	rc=0
+	apply_stock_curve "$hwmon" || rc=1
+	read_pwm_state "$hwmon"
+	if [ "$rc" -eq 0 ] && [ "$enable" = "2" ]; then
+		log "stock curve applied ($reason): pwm1_enable=$enable pwm1=${pwm:-?} temp1_input=$t"
+		return 0
+	fi
+	log "stock curve apply failed ($reason): rc=$rc pwm1_enable=${enable:-?} temp1_input=$t"
+	return 1
+}
+
+init_fan() {
+	local hwmon t f p e
+	hwmon=$(find_nct7802); [ -n "$hwmon" ] || return 0
+	t=$(read_hwmon "$hwmon" temp1_input); f=$(read_hwmon "$hwmon" fan1_input)
+	p=$(read_hwmon "$hwmon" pwm1); e=$(read_hwmon "$hwmon" pwm1_enable)
+	log "$hwmon: temp1_input=${t:-?} fan1_input=${f:-?} pwm1=${p:-?} pwm1_enable=${e:-?}"
+	[ -x "$LUCI_FAN_INIT" ] || apply_stock_curve "$hwmon" || log "initial stock curve apply failed on $hwmon"
+}
+
+step_hwmon() {
+	local hwmon="$1" temp rpm enable pwm mode="" auto_thr skip=0
+	if [ "$reported_missing" -eq 1 ]; then
+		reported_missing=0
+		[ "$late_bind_applied" -eq 0 ] && { late_bind_applied=1; healed=1; restore_fan_control "$hwmon" "late bind" "?" 1 || true; }
+	fi
+	read_sample "$hwmon" || return 0
+	if [ ! -r "$hwmon/fan1_input" ]; then
+		[ "$tach_missing" -eq 0 ] && { log "$hwmon/fan1_input unreadable, tach stall detection inactive"; tach_missing=1; }
+		rpm=""
+	else
+		tach_missing=0
+		[ "$enable" = "1" ] && [ "$pwm" = "0" ] && skip=1
+		read_tach "$hwmon" "$skip" || rpm=""
+		[ "$rpm" = "0" ] && [ "$skip" = "0" ] && [ "$ZERO_CONFIRM_READS" -gt 0 ] && [ "$ZERO_CONFIRM_SLEEP" -gt 0 ] && { read_sample "$hwmon" || return 0; }
+	fi
+
+	command -v uci >/dev/null 2>&1 && mode=$(uci -q get fan.settings.mode 2>/dev/null)
+	get_auto_threshold "$hwmon" "$mode" "$temp"
+	[ "$mode" = "manual" ] && [ "$enable" = "1" ] && [ "$pwm" = "255" ] || manual_forced=0
+
+	if [ "$forced" -eq 0 ] && [ "$manual_forced" -eq 0 ] && [ "$healed" -eq 0 ] && [ "$recover_cooldown" -eq 0 ] &&
+	   [ "$samples" -ge "$SUPERVISE_AFTER" ] && [ "$temp" -gt "$auto_thr" ] && [ "$mode" != "manual" ] &&
+	   { [ "$enable" != "2" ] || [ "$pwm" = "0" ]; }; then
+		healed=1; recover_cooldown="$RECOVER_COOLDOWN"
+		log "curve not in effect (pwm1_enable=$enable pwm1=$pwm temp1_input=$temp), recovering"
+		restore_fan_control "$hwmon" "curve recovery" "$temp" 0 || true
+	fi
+
+	if [ "$enable" = "1" ] && [ "$pwm" = "0" ]; then
+		if [ "$mode" = "manual" ]; then
+			if [ "$temp" -ge "$MANUAL_ZERO_TEMP" ] && force_full_pwm "$hwmon" "manual zero overtemp" "$temp" "$rpm" "$enable" "$pwm"; then
+				manual_forced=1; healed=1; zero=0; unstall=0; enable=1; pwm=255
+			fi
+		elif [ "$temp" -gt "$auto_thr" ] && [ "$samples" -ge "$SUPERVISE_AFTER" ] &&
+		     force_full_pwm "$hwmon" "manual zero" "$temp" "$rpm" "$enable" "$pwm"; then
+			forced=1; manual_forced=0; healed=1; zero=0; unstall=0; enable=1; pwm=255
+		fi
+	fi
+
+	[ "$healed" -eq 1 ] && { zero=0; return 0; }
+	[ "$manual_forced" -eq 0 ] && is_uint "$rpm" || return 0
+	if [ "$rpm" -eq 0 ]; then
+		unstall=0
+		if [ "$temp" -gt "$auto_thr" ] && ! { [ "$enable" = "1" ] && [ "$pwm" = "0" ]; }; then
+			zero=$((zero + 1))
+		else
+			zero=0
+		fi
+		if [ "$zero" -ge "$FAILSAFE_SAMPLES" ] && { [ "$forced" -eq 0 ] || [ "$enable" != "1" ] || [ "$pwm" != "255" ]; } &&
+		   force_full_pwm "$hwmon" "tach zero" "$temp" "0" "$enable" "$pwm"; then
+			zero=0; unstall=0; forced=1
+		fi
+		return 0
+	fi
+	zero=0
+	[ "$forced" -eq 1 ] || return 0
+	unstall=$((unstall + 1))
+	[ "$unstall" -ge "$UNSTALL_SAMPLES" ] || return 0
+	log "fan unstalled (fan1_input=$rpm temp1_input=$temp), restoring fan control"
+	if restore_fan_control "$hwmon" "unstall" "$temp" 1; then
+		forced=0; unstall=0; zero=0; healed=1
+	else
+		unstall=$((UNSTALL_SAMPLES - 1))
+	fi
+}
+
+monitor_fan() {
+	local hwmon samples=0 zero=0 unstall=0 forced=0 manual_forced=0
+	local recover_cooldown=0 reported_missing=0 late_bind_applied=0 tach_missing=0 healed
+	[ "$MONITOR_MAX_SAMPLES" = "0" ] && return 0
+	while :; do
+		samples=$((samples + 1)); healed=0
+		[ "$recover_cooldown" -gt 0 ] && recover_cooldown=$((recover_cooldown - 1))
+		hwmon=$(find_nct7802)
+		if [ -z "$hwmon" ]; then
+			[ "$reported_missing" -eq 0 ] && { log "nct7802 not found, leaving the fan unmanaged"; reported_missing=1; }
+		else
+			step_hwmon "$hwmon"
+		fi
+		[ -n "$MONITOR_MAX_SAMPLES" ] && [ "$samples" -ge "$MONITOR_MAX_SAMPLES" ] && return 0
+		[ "$FAILSAFE_INTERVAL" -gt 0 ] && sleep_interruptible "$FAILSAFE_INTERVAL"
+	done
+}
+
+trap on_signal TERM INT HUP
+case "${1:-}" in
+--init) init_fan ;;
+*) monitor_fan ;;
+esac

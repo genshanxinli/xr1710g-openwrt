@@ -1,16 +1,35 @@
 #!/bin/sh
-# Enable hardware flow offloading and IPv4 Full Cone NAT on Gemtek AN7581 boards.
+# Seed hardware flow offloading defaults and fw4 PPPoE flowtable include without clobbering user choices.
 
-. /lib/functions.sh
+# shellcheck disable=SC1090,SC1091
+. "${IPKG_INSTROOT:-}/lib/functions.sh"
+
+changed=0
+
+set_default() {
+	[ -z "$(uci -q get "firewall.@defaults[0].$1")" ] || return 0
+	uci set "firewall.@defaults[0].$1=$2"
+	changed=1
+}
 
 case "$(board_name)" in
 gemtek,xr1710g-ubi|gemtek,w1700k-ubi)
-	uci set firewall.@defaults[0].flow_offloading='1'
-	uci set firewall.@defaults[0].flow_offloading_hw='1'
-	uci set firewall.@defaults[0].fullcone='1'
-	uci set firewall.@defaults[0].fullcone6='0'
-	uci commit firewall
+	set_default flow_offloading 1
+	set_default flow_offloading_hw 1
+	set_default fullcone 0
+	set_default fullcone6 0
 	;;
 esac
+
+if [ -z "$(uci -q get firewall.pppoe_flowtable)" ]; then
+	uci set firewall.pppoe_flowtable='include'
+	uci set firewall.pppoe_flowtable.type='script'
+	uci set firewall.pppoe_flowtable.path='/etc/hotplug.d/firewall/54-pppoe-flowtable'
+	uci set firewall.pppoe_flowtable.fw4_compatible='1'
+	uci set firewall.pppoe_flowtable.enabled='1'
+	changed=1
+fi
+
+[ "$changed" = 1 ] && uci commit firewall
 
 exit 0

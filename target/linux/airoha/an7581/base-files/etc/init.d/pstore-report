@@ -1,19 +1,28 @@
 #!/bin/sh /etc/rc.common
+# shellcheck disable=SC2034
+# Report ramoops/pstore status, watchdog bootstatus, and surviving crash records (read-only).
 
-# Report ramoops/pstore status and any surviving crash records at boot (read-only).
 START=15
 
 PSTORE_DIR="${PSTORE_REPORT_DIR:-/sys/fs/pstore}"
 IOMEM_FILE="${PSTORE_REPORT_IOMEM:-/proc/iomem}"
 MOUNTS_FILE="${PSTORE_REPORT_MOUNTS:-/proc/mounts}"
-RAMOOPS_PARAMS="${PSTORE_REPORT_RAMOOPS_PARAMS:-/sys/module/ramoops/parameters}"
+RAMOOPS_DRIVER="${PSTORE_REPORT_RAMOOPS_DRIVER:-/sys/bus/platform/drivers/ramoops}"
+WDT_BOOTSTATUS="${PSTORE_REPORT_WDT_BOOTSTATUS:-/sys/class/watchdog/watchdog0/bootstatus}"
 LOG_SOCK="${PSTORE_REPORT_LOG_SOCK:-/dev/log}"
 LOG_WAIT_MAX="${PSTORE_REPORT_LOG_WAIT:-2}"
 TAIL_BYTES="${PSTORE_REPORT_TAIL_BYTES:-2048}"
 TAIL_LINES="${PSTORE_REPORT_TAIL_LINES:-8}"
 
-read_param() {
-	[ -r "$RAMOOPS_PARAMS/$1" ] && tr -d '\r\n' < "$RAMOOPS_PARAMS/$1" 2>/dev/null
+ramoops_is_bound() {
+	local dev
+
+	for dev in "$RAMOOPS_DRIVER"/*ramoops*; do
+		[ -e "$dev" ] && return 0
+	done
+	[ -r "$IOMEM_FILE" ] || return 1
+	awk '/^[ \t]+[0-9a-fA-F]+-[0-9a-fA-F]+[ \t]*:[ \t]*([^ \t]*\.)?(persistent_ram|ramoops)([ \t@:]|$)/ { found = 1; exit } END { exit(found ? 0 : 1) }' \
+		"$IOMEM_FILE" 2>/dev/null
 }
 
 pstore_is_mounted() {
@@ -26,7 +35,7 @@ pstore_is_mounted() {
 }
 
 boot() {
-	local iomem_status mem_addr mem_size console_size waited=0 found=0 f name size line
+	local ramoops_status wdt_status waited=0 found=0 f name size line
 
 	if [ -n "$LOG_SOCK" ] && [ "$LOG_WAIT_MAX" -gt 0 ] 2>/dev/null; then
 		while [ ! -S "$LOG_SOCK" ] && [ "$waited" -lt "$LOG_WAIT_MAX" ]; do
@@ -35,18 +44,17 @@ boot() {
 		done
 	fi
 
-	if [ -r "$IOMEM_FILE" ] && grep -q '^86ff0000-' "$IOMEM_FILE" 2>/dev/null; then
-		iomem_status="present"
+	if ramoops_is_bound; then
+		ramoops_status="bound"
 	else
-		iomem_status="missing"
+		ramoops_status="unbound"
 	fi
+	logger -t pstore "ramoops: driver=$ramoops_status"
 
-	mem_addr=$(read_param mem_address)
-	mem_size=$(read_param mem_size)
-	console_size=$(read_param console_size)
-
-	logger -t pstore \
-		"ramoops: iomem_86ff0000=$iomem_status mem_address=${mem_addr:-?} mem_size=${mem_size:-?} console_size=${console_size:-?}"
+	if [ -r "$WDT_BOOTSTATUS" ]; then
+		wdt_status=$(tr -d ' \t\r\n' < "$WDT_BOOTSTATUS" 2>/dev/null)
+		[ -n "$wdt_status" ] && logger -t pstore "watchdog0: bootstatus=$wdt_status"
+	fi
 
 	if [ ! -d "$PSTORE_DIR" ] || ! pstore_is_mounted; then
 		logger -t pstore "warning: $PSTORE_DIR not mounted as pstore filesystem"

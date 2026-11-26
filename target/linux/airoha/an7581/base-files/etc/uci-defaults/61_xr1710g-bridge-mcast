@@ -1,15 +1,17 @@
 #!/bin/sh
 # Enable IGMP/MLD snooping and multicast querier on br-lan for XR1710G.
 
-. /lib/functions.sh
+# shellcheck disable=SC1090,SC1091
+. "${IPKG_INSTROOT:-}/lib/functions.sh"
 
 case "$(board_name)" in
 gemtek,xr1710g-ubi) ;;
 *) exit 0 ;;
 esac
 
-snooping_file=/sys/class/net/br-lan/bridge/multicast_snooping
-querier_file=/sys/class/net/br-lan/bridge/multicast_querier
+SYS_NET="${BR_MCAST_SYS_NET:-/sys/class/net}"
+snooping_file="$SYS_NET/br-lan/bridge/multicast_snooping"
+querier_file="$SYS_NET/br-lan/bridge/multicast_querier"
 
 find_br_lan_section() {
 	uci -q show network | sed -n "s/^network\.\([^.=']*\)\.name='br-lan'$/\1/p" | head -n 1
@@ -26,10 +28,13 @@ if [ -n "$br_lan_section" ]; then
 	cur_querier=$(uci -q get "network.$br_lan_section.multicast_querier")
 
 	case "$cur" in
-	""|"'1'")
+	"")
 		uci -q set "network.$br_lan_section.igmp_snooping=1"
 		cur=1
 		changed=1
+		apply_snooping=1
+		;;
+	1)
 		apply_snooping=1
 		;;
 	*)
@@ -39,9 +44,12 @@ if [ -n "$br_lan_section" ]; then
 
 	if [ "$cur" = "1" ]; then
 		case "$cur_querier" in
-		""|"'1'")
+		"")
 			uci -q set "network.$br_lan_section.multicast_querier=1"
 			changed=1
+			apply_querier=1
+			;;
+		1)
 			apply_querier=1
 			;;
 		*)
@@ -49,8 +57,6 @@ if [ -n "$br_lan_section" ]; then
 			;;
 		esac
 	fi
-
-	[ "$changed" = 1 ] || exit 0
 else
 	logger -t bridge-mcast "br-lan has no device section, adding one"
 	uci -q batch <<-EOF
@@ -60,11 +66,12 @@ else
 		set network.@device[-1].igmp_snooping='1'
 		set network.@device[-1].multicast_querier='1'
 	EOF
+	changed=1
 	apply_snooping=1
 	apply_querier=1
 fi
 
-uci commit network
+[ "$changed" = 1 ] && uci commit network
 
 apply_sysfs() {
 	if [ -e "$1" ]; then
