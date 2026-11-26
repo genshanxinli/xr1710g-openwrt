@@ -19,7 +19,7 @@ _is_ubi_vol_dev() {
 migrate_gemtek_envsize() {
 	local idx dev envubi vol1 vol2 envdev envdev2
 
-	[ -e /etc/config/ubootenv ] || [ -s /etc/fw_env.config ] || return 0
+	[ -s /etc/config/ubootenv ] || [ -s /etc/fw_env.config ] || return 0
 
 	envdev=
 	envdev2=
@@ -35,7 +35,7 @@ migrate_gemtek_envsize() {
 		fi
 	fi
 
-	if [ -e /etc/config/ubootenv ]; then
+	if [ -s /etc/config/ubootenv ]; then
 		for idx in 0 1 2 3; do
 			dev=$(uci -q get "ubootenv.@ubootenv[$idx].dev")
 			[ -n "$dev" ] || continue
@@ -44,7 +44,10 @@ migrate_gemtek_envsize() {
 			else
 				_is_ubi_vol_dev "$dev" || continue
 			fi
-			[ "$(uci -q get "ubootenv.@ubootenv[$idx].envsize")" = "0x1f000" ] || continue
+			case "$(uci -q get "ubootenv.@ubootenv[$idx].envsize")" in
+			0[xX]1[fF]000) ;;
+			*) continue ;;
+			esac
 			uci -q set "ubootenv.@ubootenv[$idx].envsize=0x4000"
 			uci -q set "ubootenv.@ubootenv[$idx].secsize=0x1f000"
 			uci -q set "ubootenv.@ubootenv[$idx].numsec=1"
@@ -54,7 +57,7 @@ migrate_gemtek_envsize() {
 
 	[ -s /etc/fw_env.config ] || return 0
 	if awk -v d1="$envdev" -v d2="$envdev2" '
-		(d1 != "" && d2 != "" ? ($1 == d1 || $1 == d2) : ($1 ~ /^\/dev\/ubi[0-9]+_[0-9]+$/)) && $3 == "0x1f000" {
+		(d1 != "" && d2 != "" ? ($1 == d1 || $1 == d2) : ($1 ~ /^\/dev\/ubi[0-9]+_[0-9]+$/)) && $3 ~ /^0[xX]1[fF]000$/ {
 			print $1, $2, "0x4000", "0x1f000", "1"
 			next
 		}
@@ -79,11 +82,16 @@ gemtek,w1700k-ubi)
 	;;
 esac
 
-[ -e /etc/config/ubootenv ] && exit 0
+. /lib/uboot-envtools.sh
+
+if [ -s /etc/config/ubootenv ]; then
+	[ -s /etc/fw_env.config ] && exit 0
+	config_load ubootenv
+	config_foreach ubootenv_add_app_config
+	exit 0
+fi
 
 touch /etc/config/ubootenv
-
-. /lib/uboot-envtools.sh
 
 case "$board" in
 gemtek,xr1710g-ubi|\
@@ -99,7 +107,11 @@ nokia,xg-040g-md)
 	;;
 esac
 
-config_load ubootenv
-config_foreach ubootenv_add_app_config
+if [ -s /etc/config/ubootenv ]; then
+	config_load ubootenv
+	config_foreach ubootenv_add_app_config
+else
+	rm -f /etc/config/ubootenv
+fi
 
 exit 0

@@ -20,7 +20,10 @@ gemtek_factory_valid() {
 }
 
 gemtek_mac_bytes() {
-	printf "$(echo "$1" | sed 's/^/\\x/;s/:/\\x/g')"
+	local IFS=: b
+	for b in $1; do
+		printf '%b' "\\0$(printf '%03o' "0x$b")"
+	done
 }
 
 # The factory volume (MT7996 EEPROM and the MAC addresses) is built from the
@@ -112,7 +115,7 @@ gemtek_prepare_factory() {
 		printf '%s' "$fan" | dd of="$blob" bs=4096 seek=7 conv=notrunc 2>/dev/null &&
 		printf '%s' "$serial" | dd of="$blob" bs=4096 seek=8 conv=notrunc 2>/dev/null &&
 		[ "$(wc -c < "$blob")" -eq "$((0x10000))" ] &&
-		[ "$(hexdump -v -n 2 -e '2/1 "%02x"' "$blob")" = "9079" ]
+		gemtek_factory_valid "$blob"
 	}; then
 		v "factory: failed to build a complete image, not rebuilding"
 		rm -f "$eeprom_blob" "$blob"

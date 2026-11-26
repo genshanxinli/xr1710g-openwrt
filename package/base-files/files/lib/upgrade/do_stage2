@@ -10,12 +10,16 @@ if type 'platform_do_upgrade' >/dev/null 2>/dev/null; then
 else
 	default_do_upgrade "$IMAGE"
 fi
+upgrade_rc=$?
 
-if [ -n "$UPGRADE_BACKUP" ] && type 'platform_copy_config' >/dev/null 2>/dev/null; then
-	platform_copy_config
+if [ "$upgrade_rc" -eq 0 ]; then
+	if [ -n "$UPGRADE_BACKUP" ] && type 'platform_copy_config' >/dev/null 2>/dev/null; then
+		platform_copy_config
+	fi
+	v "Upgrade completed"
+else
+	v "Upgrade failed (rc=$upgrade_rc)"
 fi
-
-v "Upgrade completed"
 sleep 1
 
 v "Rebooting system..."

@@ -59,7 +59,9 @@ emmc_upgrade_fit() {
 	if [ "$EMMC_KERN_DEV" ]; then
 		export EMMC_KERNEL_BLOCKS=$(($(get_image "$fit_file" | fwtool -i /dev/null -T - | dd of="$EMMC_KERN_DEV" bs=512 2>&1 | grep "records out" | cut -d' ' -f1)))
 
-		[ -z "$UPGRADE_BACKUP" ] && dd if=/dev/zero of="$EMMC_KERN_DEV" bs=512 seek=$EMMC_KERNEL_BLOCKS count=8
+		if [ -z "$UPGRADE_BACKUP" ]; then
+			dd if=/dev/zero of="$EMMC_KERN_DEV" bs=512 seek=$EMMC_KERNEL_BLOCKS count=8
+		fi
 	fi
 }
 

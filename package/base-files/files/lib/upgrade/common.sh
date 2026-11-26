@@ -314,5 +314,5 @@ default_do_upgrade() {
 	else
 		get_image "$1" "$2" | mtd $MTD_ARGS write - "${PART_NAME:-image}"
 	fi
-	[ $? -ne 0 ] && exit 1
+	[ $? -eq 0 ] || exit 1
 }

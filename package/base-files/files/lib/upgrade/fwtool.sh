@@ -48,6 +48,7 @@ fwtool_check_image() {
 	}
 	# Step 1. check if oem_name file exist and is not empty
 	# If the above is true store the contents (b3000) in $oem value for later
+	local oem=""
 	[ -s /tmp/sysinfo/oem_name ] && oem="$(cat /tmp/sysinfo/oem_name)"
 	device="$(cat /tmp/sysinfo/board_name)"
 	devicecompat="$(uci -q get system.@system[0].compat_version)"
@@ -79,7 +80,7 @@ fwtool_check_image() {
 		# so we add the secondary check [ "$dev" = "$oem" ];
 		# If in Step 1 the oem_file was found and valid, the $oem == "b3000" so
 		# [ ("$dev" == "b3000) == ("$oem" == "b3000") ] so firmware is valid oem
-		if [ "$dev" = "$device" ] || [ "$dev" = "$oem" ]; then
+		if [ "$dev" = "$device" ] || { [ -n "$oem" ] && [ "$dev" = "$oem" ]; }; then
 			# major compat version -> non-forceable (different flash layout)
 			if [ "${devicecompat%.*}" != "${imagecompat%.*}" ]; then
 				v "The device is supported, but this image is incompatible for sysupgrade based on the image version ($devicecompat->$imagecompat)."
@@ -92,13 +93,13 @@ fwtool_check_image() {
 			# Step 3.
 			# here we must check if $dev == $oem to use this native compatability check
 			# so we add the check for [ "$dev" = "$oem" ]
-			if (([ "${devicecompat#.*}" != "${imagecompat#.*}" ] || [ "$dev" = "$oem" ])) && [ "$SAVE_CONFIG" = "1" ]; then
+			if { [ "${devicecompat#.*}" != "${imagecompat#.*}" ] || { [ -n "$oem" ] && [ "$dev" = "$oem" ]; }; } && [ "$SAVE_CONFIG" = "1" ]; then
 				# Step 4.
 				# here we have to gaurd against the default case, oem may exsist and default will pass 
 				# the original check [ "${devicecompat#.*}" != "${imagecompat#.*}" ] so we must
 				# explicitly check $dev == $oem, if it is we update(reuse) the $devicecompat and imagecompat
 				# variable to reflect the case - ( Openwrt -> OEM )
-				[ "$dev" = "$oem" ] && devicecompat="Openwrt " && imagecompat=" OEM"
+				[ -n "$oem" ] && [ "$dev" = "$oem" ] && devicecompat="Openwrt " && imagecompat=" OEM"
 				[ "$IGNORE_MINOR_COMPAT" = 1 ] && return 0
 				v "The device is supported, but the config is incompatible to the new image ($devicecompat->$imagecompat). Please upgrade without keeping config (sysupgrade -n)."
 				[ -n "$compatmessage" ] && v "$compatmessage"

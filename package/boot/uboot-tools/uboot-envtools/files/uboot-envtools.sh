@@ -69,11 +69,14 @@ ubootenv_add_ubi_default() {
 	local envsize="${1:-0x1f000}"
 	local secsize="${2:-0x1f000}"
 	local numsec="${3:-1}"
-	local envubi=$(nand_find_ubi ubi)
-	local envdev=/dev/$(nand_find_volume $envubi ubootenv)
-	local envdev2=/dev/$(nand_find_volume $envubi ubootenv2)
-	ubootenv_add_uci_config "$envdev" "0x0" "$envsize" "$secsize" "$numsec"
-	ubootenv_add_uci_config "$envdev2" "0x0" "$envsize" "$secsize" "$numsec"
+	local envubi vol1 vol2
+	envubi=$(nand_find_ubi ubi)
+	[ -n "$envubi" ] || return 0
+	vol1=$(nand_find_volume "$envubi" ubootenv)
+	vol2=$(nand_find_volume "$envubi" ubootenv2)
+	[ -n "$vol1" ] && [ -n "$vol2" ] || return 0
+	ubootenv_add_uci_config "/dev/$vol1" "0x0" "$envsize" "$secsize" "$numsec"
+	ubootenv_add_uci_config "/dev/$vol2" "0x0" "$envsize" "$secsize" "$numsec"
 }
 
 ubootenv_add_tmp_config() {
