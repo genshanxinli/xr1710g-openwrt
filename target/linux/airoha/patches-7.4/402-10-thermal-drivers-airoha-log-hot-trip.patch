@@ -11,7 +11,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/drivers/thermal/airoha_thermal.c
 +++ b/drivers/thermal/airoha_thermal.c
-@@ -468,9 +468,16 @@ static int en7581_thermal_set_trips(stru
+@@ -481,9 +481,16 @@ static int en7581_thermal_set_trips(stru
  	return 0;
  }
  

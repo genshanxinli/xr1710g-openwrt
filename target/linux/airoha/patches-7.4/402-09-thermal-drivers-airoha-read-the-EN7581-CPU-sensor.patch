@@ -3,9 +3,9 @@ Date: Sat, 31 Oct 2026 15:16:34 +0200
 Subject: [PATCH] thermal/drivers/airoha: Read the EN7581 CPU ADC
 
 EN7581 exposes a second CPU thermal ADC at SCU 0x2fc/0x308 calibrated via
-PTPSPARE1. Register it as sensor 1 when #thermal-sensor-cells is non-zero
-while keeping monitor/IRQ on the main ADC and falling back gracefully if
-CPU ADC setup fails.
+PTPSPARE1. Register it as sensor 1 when #thermal-sensor-cells is non-zero,
+serialize chip-SCU PLLRG_PROTECT (0x268) with airoha-cpu-pmdomain via
+airoha_chip_scu_pllrg_lock, and fall back gracefully if CPU ADC fails.
 
 Origin: archive/xr1710g-v1@e85677d284c0
 Signed-off-by: Vitaliy Sochnev <sochnev.v.74@gmail.com>
@@ -13,16 +13,31 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/drivers/thermal/airoha_thermal.c
 +++ b/drivers/thermal/airoha_thermal.c
-@@ -18,6 +18,8 @@
+@@ -10,6 +10,7 @@
+ #include <linux/of_address.h>
+ #include <linux/platform_device.h>
+ #include <linux/regmap.h>
++#include <linux/spinlock.h>
+ #include <linux/thermal.h>
+ 
+ /* SCU regs */
+@@ -18,6 +19,15 @@
  #define   EN7581_MUX_TADC			GENMASK(3, 1)
  #define EN7581_DOUT_TADC			0x2f8
  #define   EN7581_DOUT_TADC_MASK			GENMASK(15, 0)
 +#define EN7581_PWD_TADC_CPU			0x2fc
 +#define EN7581_DOUT_TADC_CPU			0x308
++
++/* Shared with airoha-cpu-pmdomain to serialize chip-SCU PLLRG_PROTECT (0x268). */
++#if IS_REACHABLE(CONFIG_AIROHA_CPU_PM_DOMAIN)
++extern spinlock_t airoha_chip_scu_pllrg_lock;
++#else
++static DEFINE_SPINLOCK(airoha_chip_scu_pllrg_lock);
++#endif
  
  #define AN7583_MUX_TADC				0x2a0
  #define   AN7583_LOAD_ADJ			GENMASK(3, 2)
-@@ -236,6 +238,13 @@ enum an7583_thermal_diode_mux {
+@@ -236,6 +246,13 @@ enum an7583_thermal_diode_mux {
  	AN7583_D1_TADC,
  };
  
@@ -36,7 +51,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  enum airoha_thermal_chip_scu_field {
  	AIROHA_THERMAL_DOUT_TADC,
  	AIROHA_THERMAL_MUX_SENSOR,
-@@ -264,6 +273,8 @@ struct airoha_thermal_priv {
+@@ -264,6 +281,8 @@ struct airoha_thermal_priv {
  	int init_temp;
  	int default_slope;
  	int default_offset;
@@ -45,7 +60,25 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  };
  
  struct airoha_thermal_soc_data {
-@@ -354,19 +365,53 @@ static void airoha_set_thermal_mux(struc
+@@ -325,8 +344,11 @@ static void airoha_set_thermal_mux(struc
+ 				   int tdac_idx, int sensor_idx)
+ {
+ 	int tries = AIROHA_THERMAL_MUX_TRIES;
++	unsigned long flags;
+ 	u32 pllrg;
+ 
++	spin_lock_irqsave(&airoha_chip_scu_pllrg_lock, flags);
++
+ 	/* Save PLLRG current value */
+ 	regmap_read(priv->chip_scu, EN7581_PLLRG_PROTECT, &pllrg);
+ 
+@@ -350,23 +372,59 @@ static void airoha_set_thermal_mux(struc
+ 	/* Restore PLLRG value on exit */
+ 	regmap_write(priv->chip_scu, EN7581_PLLRG_PROTECT, pllrg);
+ 
++	spin_unlock_irqrestore(&airoha_chip_scu_pllrg_lock, flags);
++
+ 	/* Sleep 10 ms for Thermal ADC to enable */
  	usleep_range(10 * USEC_PER_MSEC, 11 * USEC_PER_MSEC);
  }
  
@@ -101,7 +134,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  		min_value = min(value, min_value);
  		max_value = max(value, max_value);
  		avg_value += value;
-@@ -376,7 +421,8 @@ static int en7581_thermal_get_temp(struc
+@@ -376,7 +434,8 @@ static int en7581_thermal_get_temp(struc
  	avg_value -= (min_value + max_value);
  	avg_value /= AIROHA_MAX_SAMPLES - 2;
  
@@ -111,7 +144,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	return 0;
  }
  
-@@ -387,6 +433,10 @@ static int en7581_thermal_set_trips(stru
+@@ -387,6 +446,10 @@ static int en7581_thermal_set_trips(stru
  	struct airoha_thermal_priv *priv = zone->priv;
  	bool enable_monitor = false;
  
@@ -122,7 +155,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	if (high != INT_MAX) {
  		/* Validate high and clamp it a supported value */
  		high = clamp_t(int, high, RAW_TO_TEMP(priv, 0),
-@@ -484,6 +534,70 @@ static void en7581_thermal_setup_adc_val
+@@ -484,6 +547,76 @@ static void en7581_thermal_setup_adc_val
  	}
  }
  
@@ -130,13 +163,18 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +					struct airoha_thermal_priv *priv)
 +{
 +	int tries = AIROHA_THERMAL_MUX_TRIES;
++	unsigned long flags;
 +	u32 pllrg, sel, efuse, main;
 +	int cpu;
 +	int ret, restore_ret;
 +
++	spin_lock_irqsave(&airoha_chip_scu_pllrg_lock, flags);
++
 +	ret = regmap_read(priv->chip_scu, EN7581_PLLRG_PROTECT, &pllrg);
-+	if (ret)
++	if (ret) {
++		spin_unlock_irqrestore(&airoha_chip_scu_pllrg_lock, flags);
 +		return ret;
++	}
 +
 +	ret = regmap_write(priv->chip_scu, EN7581_PLLRG_PROTECT,
 +			   priv->pllrg_protect);
@@ -162,6 +200,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +
 +restore_protect:
 +	restore_ret = regmap_write(priv->chip_scu, EN7581_PLLRG_PROTECT, pllrg);
++	spin_unlock_irqrestore(&airoha_chip_scu_pllrg_lock, flags);
 +	if (ret)
 +		return ret;
 +	if (restore_ret)
@@ -193,7 +232,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  static void en7581_thermal_setup_monitor(struct airoha_thermal_priv *priv)
  {
  	/* Set measure mode */
-@@ -556,7 +670,8 @@ static int en7581_thermal_probe(struct p
+@@ -556,7 +689,8 @@ static int en7581_thermal_probe(struct p
  	struct device_node *chip_scu_np;
  	struct device *dev = &pdev->dev;
  	void __iomem *base;
@@ -203,7 +242,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
  	base = devm_platform_ioremap_resource(pdev, 0);
  	if (IS_ERR(base))
-@@ -572,8 +687,11 @@ static int en7581_thermal_probe(struct p
+@@ -572,8 +706,11 @@ static int en7581_thermal_probe(struct p
  		return -EINVAL;
  
  	priv->chip_scu = syscon_node_to_regmap(chip_scu_np);
@@ -217,7 +256,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
  	for (i = 0; i < AIROHA_THERMAL_FIELD_MAX; i++) {
  		struct regmap_field *field;
-@@ -592,11 +710,21 @@ static int en7581_thermal_probe(struct p
+@@ -592,11 +729,21 @@ static int en7581_thermal_probe(struct p
  		priv->chip_scu_fields[i] = field;
  	}
  
@@ -240,7 +279,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
  	return 0;
  }
-@@ -751,6 +879,9 @@ static int airoha_thermal_probe(struct p
+@@ -751,6 +898,9 @@ static int airoha_thermal_probe(struct p
  		struct airoha_thermal_zone *zone;
  		struct thermal_zone_device *tz;
  
@@ -250,7 +289,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  		zone = devm_kzalloc_obj(dev, *zone);
  		if (!zone)
  			return -ENOMEM;
-@@ -786,8 +917,15 @@ static const int an7583_zone_sensors[AN7
+@@ -786,8 +936,15 @@ static const int an7583_zone_sensors[AN7
  	AN7583_CPU_TEMP_SENSOR,
  };
  

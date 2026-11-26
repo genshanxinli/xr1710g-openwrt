@@ -3,9 +3,9 @@ Date: Fri, 25 Sep 2026 20:11:11 -1000
 Subject: [PATCH] net: airoha: refuse HW programming on cross-ingress L2 collision
 
 Refuse PPE hardware programming when an L2 bridge key is seen from two
-different ingress interfaces within the dual-ingress collision window.
-Expose dual_window_ms (1000-60000 ms, default 10000 ms) as a runtime module
-parameter.
+different ingress interfaces within dual_window_ms (1000-60000 ms, default
+10000 ms). Guard NULL skb->dev before dereferencing ndev->dsa_ptr in
+airoha_ppe_foe_ingress().
 
 Origin: archive/xr1710g-v1@e85677d284c0
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
@@ -35,7 +35,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  #include <net/ipv6.h>
  #include <net/pkt_cls.h>
  #include <net/route.h>
-@@ -985,6 +987,99 @@ airoha_ppe_foe_commit_subflow_entry(stru
+@@ -985,6 +987,105 @@ airoha_ppe_foe_commit_subflow_entry(stru
  	return 0;
  }
  
@@ -43,9 +43,15 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +{
 +	struct net_device *ndev = skb->dev;
 +#if IS_ENABLED(CONFIG_NET_DSA)
-+	struct metadata_dst *md_dst = skb_metadata_dst(skb);
++	struct metadata_dst *md_dst;
 +	struct dsa_port *udp;
++#endif
 +
++	if (!ndev)
++		return 0;
++
++#if IS_ENABLED(CONFIG_NET_DSA)
++	md_dst = skb_metadata_dst(skb);
 +	if (md_dst && md_dst->type == METADATA_HW_PORT_MUX && ndev->dsa_ptr) {
 +		udp = dsa_to_port(ndev->dsa_ptr->ds,
 +				  md_dst->u.port_info.port_id);
@@ -53,7 +59,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +			return udp->user->ifindex;
 +	}
 +#endif
-+	return ndev ? ndev->ifindex : 0;
++	return ndev->ifindex;
 +}
 +
 +#define AIROHA_L2_DUAL_WINDOW_MIN_MS	1000U
@@ -135,7 +141,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  static void airoha_ppe_foe_insert_entry(struct airoha_ppe *ppe,
  					struct sk_buff *skb,
  					u32 hash, bool rx_wlan)
-@@ -994,7 +1089,7 @@ static void airoha_ppe_foe_insert_entry(
+@@ -994,7 +1095,7 @@ static void airoha_ppe_foe_insert_entry(
  	struct airoha_foe_entry *hwe;
  	bool commit_done = false;
  	struct hlist_node *n;
@@ -144,7 +150,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
  	spin_lock_bh(&ppe_lock);
  
-@@ -1031,7 +1126,7 @@ static void airoha_ppe_foe_insert_entry(
+@@ -1031,7 +1132,7 @@ static void airoha_ppe_foe_insert_entry(
  	airoha_ppe_foe_set_bridge_addrs(&br, eth_hdr(skb));
  	e = rhashtable_lookup_fast(&ppe->l2_flows, &br,
  				   airoha_l2_flow_table_params);
@@ -153,7 +159,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  		airoha_ppe_foe_commit_subflow_entry(ppe, e, hash, rx_wlan);
  unlock:
  	spin_unlock_bh(&ppe_lock);
-@@ -1042,8 +1137,20 @@ airoha_ppe_foe_l2_flow_commit_entry(stru
+@@ -1042,8 +1143,20 @@ airoha_ppe_foe_l2_flow_commit_entry(stru
  				    struct airoha_flow_table_entry *e)
  {
  	struct airoha_flow_table_entry *prev;
@@ -174,7 +180,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	prev = rhashtable_lookup_get_insert_fast(&ppe->l2_flows, &e->l2_node,
  						 airoha_l2_flow_table_params);
  	if (!prev)
-@@ -1179,6 +1286,7 @@ static int airoha_ppe_flow_offload_repla
+@@ -1179,6 +1292,7 @@ static int airoha_ppe_flow_offload_repla
  	struct airoha_flow_data data = {};
  	struct net_device *odev = NULL;
  	struct flow_action_entry *act;
@@ -182,7 +188,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	u8 dsfield = 0, l4proto = 0;
  	struct airoha_foe_entry hwe;
  	int err, i, offload_type;
-@@ -1191,6 +1299,8 @@ static int airoha_ppe_flow_offload_repla
+@@ -1191,6 +1305,8 @@ static int airoha_ppe_flow_offload_repla
  	if (!flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_META))
  		return -EOPNOTSUPP;
  
@@ -191,7 +197,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_CONTROL)) {
  		struct flow_match_control match;
  
-@@ -1370,6 +1480,8 @@ static int airoha_ppe_flow_offload_repla
+@@ -1370,6 +1486,8 @@ static int airoha_ppe_flow_offload_repla
  		return -ENOMEM;
  
  	e->cookie = f->cookie;
