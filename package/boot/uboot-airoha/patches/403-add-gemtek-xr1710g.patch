@@ -1,26 +1,14 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Andrey Korshunov <razor1702@gmail.com>
 Subject: [PATCH] an7581: add uboot chainloader for Gemtek XR1710G
 
 Add the U-Boot UBI chainloader target for Gemtek XR1710G (AN7581, 2 GiB RAM,
 no MMC) with loadaddr=0x85000000, CONFIG_ENV_SIZE=0x4000, preboot reset-button
-TFTP recovery, and bootcmd=run boot_ubi falling back to TFTP recovery.
+TFTP recovery, manual-only ubi_format, and bootcmd=run boot_ubi.
 
 Origin: openwrt/openwrt#26296 (b8d878f0b6), xr1710g overrides from archive/xr1710g-v1@4b840202be
 Signed-off-by: Andrey Korshunov <razor1702@gmail.com>
-[xr1710g: set loadaddr=0x85000000, CONFIG_ENV_SIZE=0x4000, bootcmd=run boot_ubi, TFTP recovery]
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
- configs/an7581_xr1710g_defconfig                     | 107 ++++++++++++++++++++++++++++++++++++++++
- defenvs/an7581_xr1710g_env                           |  28 ++++++++++++++++++++++++++++
- dts/upstream/src/arm64/airoha/an7581-xr1710g-ubi.dts | 131 ++++++++++++++++++++++++++++++++++++++++
- arch/arm/dts/an7581-xr1710g-ubi-u-boot.dtsi          |   7 +++++++
- 4 files changed, 273 insertions(+)
- create mode 100644 configs/an7581_xr1710g_defconfig
- create mode 100644 defenvs/an7581_xr1710g_env
- create mode 100644 dts/upstream/src/arm64/airoha/an7581-xr1710g-ubi.dts
- create mode 100644 arch/arm/dts/an7581-xr1710g-ubi-u-boot.dtsi
-
 --- /dev/null
 +++ b/configs/an7581_xr1710g_defconfig
 @@ -0,0 +1,107 @@
@@ -133,7 +121,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +CONFIG_SHA512=y
 --- /dev/null
 +++ b/defenvs/an7581_xr1710g_env
-@@ -0,0 +1,28 @@
+@@ -0,0 +1,29 @@
 +loadaddr=0x85000000
 +initaddr=0x89000000
 +ipaddr=192.168.1.1
@@ -141,7 +129,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +bootfile=openwrt-airoha-an7581-gemtek_xr1710g-ubi-initramfs-recovery.itb
 +bootled_pwr=status:red
 +bootled_rec=status:blue
-+boot_ubi=run ubi_prepare ; run boot_production ; run boot_tftp_forever
++boot_ubi=run ubi_prepare && run boot_production ; run boot_tftp_forever
 +boot_production=led $bootled_pwr on ; run ubi_read_production && bootm $loadaddr#$bootconf ; led $bootled_pwr off
 +boot_tftp=tftpboot $initaddr $bootfile && bootm $initaddr#$bootconf
 +boot_tftp_forever=led $bootled_rec on ; while true ; do run boot_tftp ; sleep 1 ; done
@@ -158,9 +146,10 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +check_buttons=if button reset ; then run boot_tftp_forever ; fi
 +preboot=run check_buttons
 +ubi_read_production=ubi read $loadaddr fit && iminfo $loadaddr
-+ubi_prepare=ubi part ubi || run ubi_format ; run ubi_create_vols ; env exists _init_env && run _init_env
-+ubi_format=ubi detach ; mtd erase ubi && ubi part ubi ; reset
-+ubi_create_vols=ubi check ubootenv || ubi create ubootenv 0x1f000 dynamic ; ubi check ubootenv2 || ubi create ubootenv2 0x1f000 dynamic ; ubi check factory || ubi create factory 0x10000 static
++ubi_prepare=ubi part ubi && run ubi_create_vols && run ubi_init_env
++ubi_init_env=if env exists _init_env ; then run _init_env ; else true ; fi
++ubi_format=ubi detach ; mtd erase ubi && ubi part ubi && reset
++ubi_create_vols=ubi check ubootenv || ubi create ubootenv 0x1f000 dynamic ; ubi check ubootenv2 || ubi create ubootenv2 0x1f000 dynamic ; ubi check factory || ubi create factory 0x10000 static ; ubi check ubootenv && ubi check ubootenv2 && ubi check factory
 +_init_env=setenv _init_env ; saveenv ; saveenv
 --- /dev/null
 +++ b/dts/upstream/src/arm64/airoha/an7581-xr1710g-ubi.dts

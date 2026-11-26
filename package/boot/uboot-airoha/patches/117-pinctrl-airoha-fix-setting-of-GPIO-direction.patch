@@ -1,0 +1,38 @@
+From: Daniel Schwierzeck <daniel.schwierzeck@gmail.com>
+Subject: [PATCH] pinctrl: airoha: fix setting of GPIO direction
+
+GPIO_CTRL allocates two bits per GPIO with values 0x2 and 0x3 reserved.
+Patch 111 regressed airoha_gpio_set_direction() to a 1-bit mask, leaving
+the upper bit set when switching direction. Always clear both bits via
+GENMASK(offset + 1, offset) and set BIT(offset) for output.
+
+Origin: backport from Linux commit 2b99a9d8e8d9 ("pinctrl: airoha: fix setting of GPIO direction")
+Signed-off-by: Daniel Schwierzeck <daniel.schwierzeck@gmail.com>
+---
+--- a/drivers/pinctrl/airoha/pinctrl-airoha.c
++++ b/drivers/pinctrl/airoha/pinctrl-airoha.c
+@@ -190,7 +190,7 @@ static int airoha_gpio_set_direction(str
+ 				     unsigned int gpio, bool input)
+ {
+ 	u32 mask, index;
+-	int err;
++	int err, offset;
+ 
+ 	/* set output enable */
+ 	mask = BIT(gpio % AIROHA_PIN_BANK_SIZE);
+@@ -202,12 +202,13 @@ static int airoha_gpio_set_direction(str
+ 		return err;
+ 
+ 	/* set direction */
+-	mask = BIT(2 * (gpio % AIROHA_REG_GPIOCTRL_NUM_PIN));
++	offset = 2 * (gpio % AIROHA_REG_GPIOCTRL_NUM_PIN);
++	mask = GENMASK(offset + 1, offset); /* 2-bit GPIO_CTRL field; 0x2/0x3 reserved */
+ 	index = gpio / AIROHA_REG_GPIOCTRL_NUM_PIN;
+ 
+ 	return regmap_update_bits(pinctrl->regmap,
+ 				  pinctrl->gpio_regs->dir[index], mask,
+-				  !input ? mask : 0);
++				  !input ? BIT(offset) : 0);
+ }
+ 
+ /* pinmux callbacks */

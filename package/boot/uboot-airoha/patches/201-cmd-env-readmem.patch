@@ -1,6 +1,17 @@
+From: Mikhail Zhilkin <csharper2005@gmail.com>
+Subject: [PATCH] cmd: env: add readmem command
+
+Add `env readmem [-b] name address [size]` to store memory contents or a
+6-byte binary MAC address into a U-Boot environment variable. Require
+argc >= 4 to prevent NULL argv[3] dereference and validate both raw and
+hexdump byte lengths against CONFIG_SYS_CBSIZE.
+
+Origin: openwrt/openwrt#23569 (0d807a16b1), argc/bounds safety fixes local
+Signed-off-by: Mikhail Zhilkin <csharper2005@gmail.com>
+---
 --- a/cmd/Kconfig
 +++ b/cmd/Kconfig
-@@ -717,6 +717,12 @@ config CMD_ENV_EXISTS
+@@ -746,6 +746,12 @@ config CMD_ENV_EXISTS
  	  Check if a variable is defined in the environment for use in
  	  shell scripting.
  
@@ -33,7 +44,7 @@
 +	 *
 +	 * readmem [-b] name address [size]
 +	 */
-+	if (argc < 3)
++	if (argc < 4)
 +		return CMD_RET_USAGE;
 +
 +	local_args[0] = argv[0];
@@ -53,7 +64,7 @@
 +	if (bytes < 1)
 +		return 1;
 +
-+	if ((hexdump * 3) * bytes >= CONFIG_SYS_CBSIZE)
++	if ((hexdump ? bytes * 3 : bytes) >= CONFIG_SYS_CBSIZE)
 +		return 1;
 +
 +	buf = map_sysmem(addr, bytes);
