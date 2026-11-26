@@ -1,44 +1,28 @@
-From 7e7c098948cf877d8ebb7e7c17bfdc82a9764f3c Mon Sep 17 00:00:00 2001
 From: Daniel Golle <daniel@makrotopia.org>
-Date: Fri, 31 Jul 2026 19:13:06 +0100
-Subject: [PATCH] net: phy: realtek: reset RTL8261N USXGMII SerDes on link up
+Subject: net: phy: realtek: reset RTL8261N USXGMII SerDes on link up
 
-The USXGMII block of the RTL8261N does not always settle by itself once
-the media side link has been established. Where it does not, the link is
-dropped again shortly afterwards while autonegotiation on the media side
-keeps completing normally, so ethtool reports negotiated speed and duplex
-while the link stays down and nothing is logged.
+Poll the RTL8261N/RTL8261BE USXGMII SerDes link from a delayed work item
+guarded by phydev->lock and pulse SerDes reset until link settles. Restrict
+scheduling to USXGMII mode, check reset-release errors, and drain work with
+disable_delayed_work_sync() on suspend and teardown.
 
-The work-around was originally written by Bo-Cun Chen
-<bc-bocun.chen@mediatek.com> for the MediaTek SDK, which carries it as
-999-2799-net-ethernet-mtk_eth_soc-add-reseting-usxgmii-of-rtl.patch and
-applies it from mtk_mac_link_up() in the MT7988 ethernet driver. As the
-quirk is a property of the PHY rather than of the SoC it is handled here
-instead, so that the PHY also behaves on other hosts.
-
-The SDK busy-waits a flat second in the link-up path and then resets the
-block unconditionally. Poll the SerDes link status through the indirect
-register window instead and only pulse the reset while the link is down,
-from a delayed work so that the PHY state machine is never blocked.
-
-Hook it into both 10Gbps entries which share the base PHY ID. The parts
-this was observed on carry an RTL8261BE package marking while binding to
-the RTL8261N driver entry, the two being told apart solely by a vendor
-version register, so covering only one of them would be fragile.
-
+Origin: openwrt/generic/pending-7.4 (9d26c9d04e)
 Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
- drivers/net/phy/realtek/phy_patch_rtl826x.c |  6 +-
- drivers/net/phy/realtek/phy_patch_rtl826x.h |  4 +
- drivers/net/phy/realtek/realtek.h           |  4 +
- drivers/net/phy/realtek/realtek_main.c      | 83 +++++++++++++++++++++
- 4 files changed, 94 insertions(+), 3 deletions(-)
-
 --- a/drivers/net/phy/realtek/realtek.h
 +++ b/drivers/net/phy/realtek/realtek.h
-@@ -11,6 +11,10 @@
- struct rtl826x_priv {
+@@ -5,6 +5,7 @@
+ 
+ #include <linux/mutex.h>
+ #include <linux/phy.h>
++#include <linux/workqueue.h>
+ 
+ #include "phy_patch.h"
+ #include "phy_patch_rtl826x.h"
+@@ -13,6 +14,10 @@ struct rtl826x_priv {
  	struct rtlgen_phy_patch_db *patch;
+ 	struct mutex sds_lock;
  	bool enable_pma_low_power:1;
 +	struct phy_device *phydev;
 +	struct delayed_work sds_work;
@@ -67,7 +51,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  #define RTL826X_VEND1_PKG_MODEL			0x103
  #define   RTL826X_VEND1_PKG_MODEL_8251		0x8251
  #define   RTL826X_VEND1_PKG_MODEL_8254		0x8254
-@@ -3744,6 +3755,70 @@ static int rtl826x_patch_db_init(struct
+@@ -3758,6 +3769,87 @@ static int rtl826x_patch_db_init(struct
  		return rtl8264b_phy_patch_db_init(phydev);
  }
  
@@ -82,35 +66,52 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 +	struct rtl826x_priv *priv = container_of(to_delayed_work(work),
 +						 struct rtl826x_priv, sds_work);
 +	struct phy_device *phydev = priv->phydev;
-+	int val;
++	int val, ret;
++
++	mutex_lock(&phydev->lock);
++	if (phydev->state != PHY_RUNNING ||
++	    phydev->interface != PHY_INTERFACE_MODE_USXGMII)
++		goto out;
 +
 +	val = rtl826x_phy_patch_sds_get(phydev, RTL826X_SDS_PAGE_LINK,
 +					RTL826X_SDS_REG_LINK);
 +	if (val < 0)
-+		return;
++		goto out;
 +
 +	if (val & RTL826X_SDS_LINK_UP)
-+		return;
++		goto out;
 +
 +	if (++priv->sds_retries > RTL826X_SDS_MAX_RESETS) {
 +		phydev_warn(phydev, "SerDes link did not come up\n");
-+		return;
++		goto out;
 +	}
 +
-+	rtl826x_phy_patch_sds_set(phydev, RTL826X_SDS_PAGE_RESET,
-+				  RTL826X_SDS_REG_RESET, RTL826X_SDS_RESET_ASSERT);
-+	rtl826x_phy_patch_sds_set(phydev, RTL826X_SDS_PAGE_RESET,
-+				  RTL826X_SDS_REG_RESET, RTL826X_SDS_RESET_RELEASE);
++	ret = rtl826x_phy_patch_sds_set(phydev, RTL826X_SDS_PAGE_RESET,
++					RTL826X_SDS_REG_RESET,
++					RTL826X_SDS_RESET_ASSERT);
++	if (ret < 0)
++		phydev_warn(phydev, "SerDes reset assert failed: %d\n", ret);
 +
-+	schedule_delayed_work(&priv->sds_work,
-+			      msecs_to_jiffies(RTL826X_SDS_POLL_MS));
++	ret = rtl826x_phy_patch_sds_set(phydev, RTL826X_SDS_PAGE_RESET,
++					RTL826X_SDS_REG_RESET,
++					RTL826X_SDS_RESET_RELEASE);
++	if (ret < 0) {
++		phydev_err(phydev, "SerDes reset release failed: %d\n", ret);
++		goto out;
++	}
++
++	queue_delayed_work(system_dfl_wq, &priv->sds_work,
++			   msecs_to_jiffies(RTL826X_SDS_POLL_MS));
++out:
++	mutex_unlock(&phydev->lock);
 +}
 +
 +static void rtl826x_link_change_notify(struct phy_device *phydev)
 +{
 +	struct rtl826x_priv *priv = phydev->priv;
 +
-+	if (phydev->state != PHY_RUNNING) {
++	if (phydev->state != PHY_RUNNING ||
++	    phydev->interface != PHY_INTERFACE_MODE_USXGMII) {
 +		if (!priv->sds_work_disabled) {
 +			disable_delayed_work(&priv->sds_work);
 +			priv->sds_work_disabled = true;
@@ -132,15 +133,15 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 +{
 +	struct rtl826x_priv *priv = data;
 +
-+	cancel_delayed_work_sync(&priv->sds_work);
++	disable_delayed_work_sync(&priv->sds_work);
 +}
 +
  static int rtl826x_probe(struct phy_device *phydev)
  {
  	struct device *dev = &phydev->mdio.dev;
-@@ -3755,8 +3830,14 @@ static int rtl826x_probe(struct phy_devi
- 		return -ENOMEM;
+@@ -3770,8 +3862,14 @@ static int rtl826x_probe(struct phy_devi
  
+ 	mutex_init(&priv->sds_lock);
  	priv->enable_pma_low_power = device_property_read_bool(dev, "realtek,enable-pma-low-power");
 +	priv->phydev = phydev;
  	phydev->priv = priv;
@@ -153,7 +154,22 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	if (!priv->enable_pma_low_power)
  		phydev_warn(phydev, "PMA low-power suspend disabled\n");
  
-@@ -4607,6 +4688,7 @@ static struct phy_driver realtek_drvs[]
+@@ -3875,6 +3973,14 @@ static int rtl826x_suspend(struct phy_de
+ {
+ 	struct rtl826x_priv *priv = phydev->priv;
+ 
++	disable_delayed_work_sync(&priv->sds_work);
++	mutex_lock(&phydev->lock);
++	if (priv->sds_work_disabled)
++		enable_delayed_work(&priv->sds_work);
++	else
++		priv->sds_work_disabled = true;
++	mutex_unlock(&phydev->lock);
++
+ 	if (!priv->enable_pma_low_power)
+ 		return -EOPNOTSUPP;
+ 
+@@ -4624,6 +4730,7 @@ static struct phy_driver realtek_drvs[]
  	}, {
  		.name           = "RTL8261BE 10Gbps PHY",
  		.config_init    = rtl826x_config_init,
@@ -161,7 +177,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  		.probe          = rtl826x_probe,
  		.get_features   = rtl826x_get_features,
  		.suspend        = rtl826x_suspend,
-@@ -4624,6 +4706,7 @@ static struct phy_driver realtek_drvs[]
+@@ -4641,6 +4748,7 @@ static struct phy_driver realtek_drvs[]
  	}, {
  		.name           = "RTL8261N 10Gbps PHY",
  		.config_init    = rtl826x_config_init,
@@ -169,38 +185,3 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  		.probe          = rtl826x_probe,
  		.get_features   = rtl826x_get_features,
  		.suspend        = rtl826x_suspend,
---- a/drivers/net/phy/realtek/phy_patch_rtl826x.c
-+++ b/drivers/net/phy/realtek/phy_patch_rtl826x.c
-@@ -70,7 +70,7 @@ static int rtl826x_phy_patch_wait(struct
- 	return 0;
- }
- 
--static int rtl826x_phy_patch_sds_get(struct phy_device *phydev, u32 sds_page, u32 sds_reg)
-+int rtl826x_phy_patch_sds_get(struct phy_device *phydev, u32 sds_page, u32 sds_reg)
- {
- 	u32 sds_addr = 0x8000 + (sds_reg << 6) + sds_page;
- 	int ret;
-@@ -86,8 +86,8 @@ static int rtl826x_phy_patch_sds_get(str
- 	return phy_read_mmd(phydev, MDIO_MMD_VEND1, 0x142);
- }
- 
--static int rtl826x_phy_patch_sds_set(struct phy_device *phydev, u32 sds_page, u32 sds_reg,
--				     u32 data)
-+int rtl826x_phy_patch_sds_set(struct phy_device *phydev, u32 sds_page, u32 sds_reg,
-+			      u32 data)
- {
- 	u32 sds_addr = 0x8800 + (sds_reg << 6) + sds_page;
- 	int ret;
---- a/drivers/net/phy/realtek/phy_patch_rtl826x.h
-+++ b/drivers/net/phy/realtek/phy_patch_rtl826x.h
-@@ -5,6 +5,10 @@
- 
- #include <linux/phy.h>
- 
-+int rtl826x_phy_patch_sds_get(struct phy_device *phydev, u32 sds_page, u32 sds_reg);
-+int rtl826x_phy_patch_sds_set(struct phy_device *phydev, u32 sds_page, u32 sds_reg,
-+			      u32 data);
-+
- int rtl8261n_phy_patch_db_init(struct phy_device *phydev);
- int rtl8264b_phy_patch_db_init(struct phy_device *phydev);
- 

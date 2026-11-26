@@ -1,34 +1,15 @@
 From: Balázs Triszka <info@balika011.hu>
-Date: Sat, 18 Oct 2025 23:09:23 +0200
 Subject: net: phy: realtek: add 5G and 10G PHY support
 
-The functionality was extracted from the realtek-phy driver and ported to
-the upstream Linux realtek PHY driver.
-
-These PHY chips need a sequence of register writes for initialization.
-These are provided as firmware files which are interpreted/applied by a
-new register patch engine.
-
-The files which need to be provided are depending on the PHY:
-
-* rtl8261n.bin
- - RTL8251L 5Gbps PHY
- - RTL8261BE 10Gbps PHY
- - RTL8261N 10Gbps PHY
-* rtl8264b.bin
- - RTL8254B 5Gbps PHY
- - RTL8264 10Gbps PHY
- - RTL8264B 10Gbps PHY
-
-Deassert PHY reset before reading RTL826X_VEND1_PKG_MODEL during driver
-matching so a prior failed probe leaving reset asserted cannot break
-package identification.
+Add RTL8251L/RTL8254B/RTL8261BE/RTL8261N/RTL8264/RTL8264B PHY support with
+firmware patch engine, sds_lock around VEND1 0x141..0x143 indirect accesses,
+bitfield validation/masking, locked WoL multicast hashing, C22 VEND2 address
+conversion, and fallback-only reset deassert in rtl826x_read_pkg_model().
 
 Origin: archive/xr1710g-v1@e85677d284c0
 Signed-off-by: Balázs Triszka <info@balika011.hu>
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
-
 --- a/drivers/net/phy/realtek/Makefile
 +++ b/drivers/net/phy/realtek/Makefile
 @@ -1,4 +1,6 @@
@@ -123,7 +104,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +#endif
 --- /dev/null
 +++ b/drivers/net/phy/realtek/phy_patch_rtl826x.c
-@@ -0,0 +1,287 @@
+@@ -0,0 +1,330 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
 +#include "phy_patch_rtl826x.h"
@@ -138,6 +119,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +#include <linux/ktime.h>
 +#include <linux/mdio.h>
 +#include <linux/module.h>
++#include <linux/mutex.h>
 +#include <linux/overflow.h>
 +#include <linux/phy.h>
 +#include <linux/slab.h>
@@ -153,7 +135,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +static u16 rtl826x_mmd_convert(u16 page, u16 addr)
 +{
 +	if (addr < 16)
-+		return 0xA400 + (page * 2);
++		return 0xA400 + (addr * 2);
 +
 +	if (addr < 24)
 +		return (16 * page) + ((addr - 16) * 2);
@@ -196,7 +178,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	return 0;
 +}
 +
-+static int rtl826x_phy_patch_sds_get(struct phy_device *phydev, u32 sds_page, u32 sds_reg)
++static int __rtl826x_phy_patch_sds_get(struct phy_device *phydev, u32 sds_page, u32 sds_reg)
 +{
 +	u32 sds_addr = 0x8000 + (sds_reg << 6) + sds_page;
 +	int ret;
@@ -212,8 +194,8 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	return phy_read_mmd(phydev, MDIO_MMD_VEND1, 0x142);
 +}
 +
-+static int rtl826x_phy_patch_sds_set(struct phy_device *phydev, u32 sds_page, u32 sds_reg,
-+				     u32 data)
++static int __rtl826x_phy_patch_sds_set(struct phy_device *phydev, u32 sds_page, u32 sds_reg,
++				       u32 data)
 +{
 +	u32 sds_addr = 0x8800 + (sds_reg << 6) + sds_page;
 +	int ret;
@@ -229,18 +211,50 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	return rtl826x_phy_patch_wait(phydev, MDIO_MMD_VEND1, 0x143, 0, BIT(15), true);
 +}
 +
++int rtl826x_phy_patch_sds_get(struct phy_device *phydev, u32 sds_page, u32 sds_reg)
++{
++	struct rtl826x_priv *priv = phydev->priv;
++	int ret;
++
++	mutex_lock(&priv->sds_lock);
++	ret = __rtl826x_phy_patch_sds_get(phydev, sds_page, sds_reg);
++	mutex_unlock(&priv->sds_lock);
++
++	return ret;
++}
++
++int rtl826x_phy_patch_sds_set(struct phy_device *phydev, u32 sds_page, u32 sds_reg,
++			      u32 data)
++{
++	struct rtl826x_priv *priv = phydev->priv;
++	int ret;
++
++	mutex_lock(&priv->sds_lock);
++	ret = __rtl826x_phy_patch_sds_set(phydev, sds_page, sds_reg, data);
++	mutex_unlock(&priv->sds_lock);
++
++	return ret;
++}
++
 +static int rtl826x_phy_patch_sds_modify(struct phy_device *phydev, u32 sds_page, u32 sds_reg,
 +					u32 mask, u32 data)
 +{
++	struct rtl826x_priv *priv = phydev->priv;
 +	int ret = 0;
 +
++	mutex_lock(&priv->sds_lock);
 +	if (mask != GENMASK(15, 0)) {
-+		ret = rtl826x_phy_patch_sds_get(phydev, sds_page, sds_reg);
++		ret = __rtl826x_phy_patch_sds_get(phydev, sds_page, sds_reg);
 +		if (ret < 0)
-+			return ret;
++			goto out;
 +	}
 +
-+	return rtl826x_phy_patch_sds_set(phydev, sds_page, sds_reg, (ret & ~mask) | data);
++	ret = __rtl826x_phy_patch_sds_set(phydev, sds_page, sds_reg,
++					  (ret & ~mask) | (data & mask));
++out:
++	mutex_unlock(&priv->sds_lock);
++
++	return ret;
 +}
 +
 +static int rtl826x_phy_patch_op(struct phy_device *phydev, const struct rtlgen_hwpatch *patch)
@@ -249,6 +263,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	u16 pagemmd = le16_to_cpu(patch->pagemmd);
 +	u16 addr = le16_to_cpu(patch->addr);
 +	u16 data = le16_to_cpu(patch->data);
++	u16 masked_data = ((u32)data << patch->lsb) & mask;
 +	bool wait_equal;
 +	int ret = 0;
 +	int val;
@@ -264,12 +279,12 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +		reg = rtl826x_mmd_convert(pagemmd, addr);
 +		if (mask != GENMASK(15, 0)) {
 +			ret = phy_modify_mmd(phydev, MDIO_MMD_VEND2, reg, mask,
-+					     data << patch->lsb);
++					     masked_data);
 +			if (ret < 0)
 +				return ret;
 +		} else {
 +			ret = phy_write_mmd(phydev, MDIO_MMD_VEND2, reg,
-+					    data << patch->lsb);
++					    masked_data);
 +			if (ret < 0)
 +				return ret;
 +		}
@@ -280,7 +295,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +		wait_equal = patch->patch_op == RTK_PATCH_OP_PHY_WAIT;
 +		reg = rtl826x_mmd_convert(pagemmd, addr);
 +		ret = rtl826x_phy_patch_wait(phydev, MDIO_MMD_VEND2, reg,
-+					     data << patch->lsb, mask, wait_equal);
++					     masked_data, mask, wait_equal);
 +		if (ret < 0)
 +			return ret;
 +		break;
@@ -288,12 +303,12 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	case RTK_PATCH_OP_PHYOCP:
 +		if (mask != GENMASK(15, 0)) {
 +			ret = phy_modify_mmd(phydev, MDIO_MMD_VEND2, addr, mask,
-+					     data << patch->lsb);
++					     masked_data);
 +			if (ret < 0)
 +				return ret;
 +		} else {
 +			ret = phy_write_mmd(phydev, MDIO_MMD_VEND2, addr,
-+					    data << patch->lsb);
++					    masked_data);
 +			if (ret < 0)
 +				return ret;
 +		}
@@ -320,11 +335,11 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +		reg = (pagemmd * 8) + (addr - 16);
 +		if (mask != GENMASK(15, 0)) {
 +			ret = phy_modify_mmd(phydev, MDIO_MMD_VEND1, reg, mask,
-+					     data << patch->lsb);
++					     masked_data);
 +			if (ret < 0)
 +				return ret;
 +		} else {
-+			ret = phy_write_mmd(phydev, MDIO_MMD_VEND1, reg, data << patch->lsb);
++			ret = phy_write_mmd(phydev, MDIO_MMD_VEND1, reg, masked_data);
 +			if (ret < 0)
 +				return ret;
 +		}
@@ -332,7 +347,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +
 +	case RTK_PATCH_OP_PSDS0:
 +		ret = rtl826x_phy_patch_sds_modify(phydev, pagemmd, addr,
-+						   mask, data << patch->lsb);
++						   mask, masked_data);
 +		if (ret < 0)
 +			return ret;
 +		break;
@@ -356,7 +371,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	struct rtlgen_phy_patch_db *patch_db;
 +	struct rtlgen_hwpatch *patches;
 +	const struct firmware *fw;
-+	size_t count;
++	size_t count, i;
 +	int ret;
 +
 +	ret = request_firmware_direct(&fw, fw_name, dev);
@@ -379,6 +394,15 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +
 +	patches = (struct rtlgen_hwpatch *)fw->data;
 +	count = fw->size / sizeof(*patches);
++
++	for (i = 0; i < count; i++) {
++		if (patches[i].msb > 15 || patches[i].lsb > patches[i].msb) {
++			phydev_err(phydev, "Invalid bit range [%u, %u] in %s entry %zu\n",
++				   patches[i].msb, patches[i].lsb, fw_name, i);
++			ret = -EINVAL;
++			goto out;
++		}
++	}
 +
 +	patch_db = devm_kzalloc(dev, struct_size(patch_db, conf, count), GFP_KERNEL);
 +	if (!patch_db) {
@@ -413,7 +437,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +MODULE_FIRMWARE("rtl8264b.bin");
 --- /dev/null
 +++ b/drivers/net/phy/realtek/phy_patch_rtl826x.h
-@@ -0,0 +1,11 @@
+@@ -0,0 +1,15 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +
 +#ifndef __PHY_PATCH_RTL826X_H__
@@ -421,14 +445,21 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +
 +#include <linux/phy.h>
 +
++int rtl826x_phy_patch_sds_get(struct phy_device *phydev, u32 sds_page, u32 sds_reg);
++int rtl826x_phy_patch_sds_set(struct phy_device *phydev, u32 sds_page, u32 sds_reg,
++			      u32 data);
++
 +int rtl8261n_phy_patch_db_init(struct phy_device *phydev);
 +int rtl8264b_phy_patch_db_init(struct phy_device *phydev);
 +
 +#endif
 --- a/drivers/net/phy/realtek/realtek.h
 +++ b/drivers/net/phy/realtek/realtek.h
-@@ -5,6 +5,14 @@
+@@ -3,8 +3,18 @@
+ #ifndef REALTEK_H
+ #define REALTEK_H
  
++#include <linux/mutex.h>
  #include <linux/phy.h>
  
 +#include "phy_patch.h"
@@ -436,6 +467,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +
 +struct rtl826x_priv {
 +	struct rtlgen_phy_patch_db *patch;
++	struct mutex sds_lock;
 +	bool enable_pma_low_power:1;
 +};
 +
@@ -481,15 +513,19 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  MODULE_DESCRIPTION("Realtek PHY driver");
  MODULE_AUTHOR("Johnson Leung");
  MODULE_LICENSE("GPL");
-@@ -3338,6 +3361,135 @@ static int rtl8251b_c45_match_phy_device
+@@ -3338,6 +3361,139 @@ static int rtl8251b_c45_match_phy_device
  	return rtlgen_is_c45_match(phydev, RTL_8251B, true);
  }
  
 +static int rtl826x_read_pkg_model(struct phy_device *phydev)
 +{
-+	/* A failed probe may have asserted reset. Release it before
-+	 * reading the package identification registers.
-+	 */
++	int data;
++
++	data = phy_read_mmd(phydev, MDIO_MMD_VEND1, RTL826X_VEND1_PKG_MODEL);
++	if (data > 0 && data != 0xffff)
++		return data;
++
++	/* Fallback if a prior failed probe left reset asserted. */
 +	phy_device_reset(phydev, 0);
 +
 +	return phy_read_mmd(phydev, MDIO_MMD_VEND1, RTL826X_VEND1_PKG_MODEL);
@@ -617,7 +653,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  static int rtlgen_resume(struct phy_device *phydev)
  {
  	int ret = genphy_resume(phydev);
-@@ -3588,6 +3740,485 @@ static int rtl8365mb_read_status(struct
+@@ -3588,6 +3744,488 @@ static int rtl8365mb_read_status(struct
  	return genphy_read_status(phydev);
  }
  
@@ -645,6 +681,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	if (!priv)
 +		return -ENOMEM;
 +
++	mutex_init(&priv->sds_lock);
 +	priv->enable_pma_low_power = device_property_read_bool(dev, "realtek,enable-pma-low-power");
 +	phydev->priv = priv;
 +
@@ -898,7 +935,9 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +		return ret;
 +
 +	/* clear status */
-+	phy_write_mmd(phydev, MDIO_MMD_VEND1, 0x2DC, 0xFF);
++	ret = phy_write_mmd(phydev, MDIO_MMD_VEND1, 0x2DC, 0xFF);
++	if (ret < 0)
++		return ret;
 +
 +	return phy_modify_mmd(phydev, MDIO_MMD_VEND1, 0xE1, BIT(0),
 +			      phydev->interrupts == PHY_INTERRUPT_ENABLED);
@@ -937,11 +976,15 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	if (irq_status & RTL826X_VND2_INER_PME) {
 +		phydev_dbg(phydev, "RTK_PHY_INTR_WOL\n");
 +
-+		if (phy_clear_bits_mmd(phydev, MDIO_MMD_VEND2, 0xD8A2, BIT(15)) < 0)
++		if (phy_clear_bits_mmd(phydev, MDIO_MMD_VEND2, 0xD8A2, BIT(15)) < 0) {
++			phy_error(phydev);
 +			return IRQ_NONE;
++		}
 +
-+		if (phy_set_bits_mmd(phydev, MDIO_MMD_VEND2, 0xD8A2, BIT(15)) < 0)
++		if (phy_set_bits_mmd(phydev, MDIO_MMD_VEND2, 0xD8A2, BIT(15)) < 0) {
++			phy_error(phydev);
 +			return IRQ_NONE;
++		}
 +	}
 +
 +	return IRQ_HANDLED;
@@ -983,24 +1026,20 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	}
 +
 +	if (wol->wolopts & WAKE_MCAST) {
++		u16 mc_hash[4] = {};
++
++		netif_addr_lock_bh(ndev);
++		netdev_for_each_mc_addr(ha, ndev) {
++			offset = crc32_be(~0, ha->addr, 6) >> 26;
++			mc_hash[offset >> 4] |= BIT(offset & 0xF);
++		}
++		netif_addr_unlock_bh(ndev);
++
 +		for (idx = 0; idx < ARRAY_SIZE(cfg_reg); idx++) {
-+			ret = phy_write_mmd(phydev, MDIO_MMD_VEND2, cfg_reg[idx], 0);
++			ret = phy_write_mmd(phydev, MDIO_MMD_VEND2, cfg_reg[idx],
++					    mc_hash[idx]);
 +			if (ret < 0)
 +				return ret;
-+		}
-+
-+		if (!netdev_mc_empty(ndev)) {
-+			netdev_for_each_mc_addr(ha, ndev) {
-+				phydev_dbg(phydev, "mac: %pM\n", ha->addr);
-+
-+				offset = crc32_be(~0, ha->addr, 6) >> 26;
-+				idx = offset >> 4;
-+
-+				ret = phy_set_bits_mmd(phydev, MDIO_MMD_VEND2, cfg_reg[idx],
-+						       BIT(offset & 0xF));
-+				if (ret < 0)
-+					return ret;
-+			}
 +		}
 +	}
 +
@@ -1103,7 +1142,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  static struct phy_driver realtek_drvs[] = {
  	{
  		PHY_ID_MATCH_EXACT(0x00008201),
-@@ -3949,6 +4580,108 @@ static struct phy_driver realtek_drvs[]
+@@ -3949,6 +4587,108 @@ static struct phy_driver realtek_drvs[]
  		.led_hw_control_get	= rtl8261x_led_hw_control_get,
  		.led_hw_control_set	= rtl8261x_led_hw_control_set,
  		.led_polarity_set	= rtl8261x_led_polarity_set,
