@@ -2,34 +2,18 @@ From: Yanghan Ye <yyh94306@gmail.com>
 Date: Wed, 24 Jun 2026 20:19:12 +0800
 Subject: [PATCH] wifi: mt76: mt7996: enable firmware txpower limit controls
 
-mt7996 firmware does not apply uploaded SKU and backoff power tables unless
-the corresponding UNI_CMD(TXPOWER) controls are enabled. Enable the SKU and
-backoff controls in the normal run path and upload the mt7996 backoff table
-using the firmware table layout used by the MediaTek SDK.
-
-Keep the mt7996 backoff layout private instead of resizing the shared mt76
-power-limit structure used by older connac chipsets. Continue to respect
-chan->max_reg_power when initializing channel power.
-
-OpenWrt note: mt76 2026.11.25 already carries upstream's version of the
-UNI_TXPOWER control enum, struct tx_power_ctrl and
-mt7996_mcu_set_tx_power_ctrl, so those parts are dropped here to avoid
-duplicate definitions. Only UNI_TXPOWER_SHOW_INFO is added to mcu.h.
-
-[xr1710g: drop duplicate UNI_TXPOWER_SKU_POWER_LIMIT_CTRL call in mt7996_run(),
-fix OF device_node refcount leaks in eeprom.c/mcu.c, split cck/ofdm
-skb_put_data() calls to satisfy FORTIFY_SOURCE, and preserve INT_MIN txpower
-handling from mt76 acb7b1c8]
+Enable mt7996 UNI_CMD(TXPOWER) backoff controls and upload the mt7996 path
+backoff table while fixing OF node refcount leaks and FORTIFY skb puts.
+Guard NULL chandef.chan and nss == 0, and clamp int path-limit arithmetic
+to [-127, 127] so 127 + nss_delta cannot wrap negative.
 
 Origin: backport, archive/xr1710g-v1
 Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
-diff --git a/eeprom.c b/eeprom.c
-index 254d252..169c90c 100644
 --- a/eeprom.c
 +++ b/eeprom.c
-@@ -516,6 +516,17 @@ s8 mt76_get_rate_power_limits(struct mt76_phy *phy,
+@@ -516,6 +516,17 @@ s8 mt76_get_rate_power_limits(struct mt7
  				     ARRAY_SIZE(dest->ru), val, len, target_power,
  				     txs_delta, &max_power, n_chains, MT76_SKU_RATE);
  
@@ -47,11 +31,9 @@ index 254d252..169c90c 100644
  	val = mt76_get_of_array_s8(np, "paths-cck", &len, ARRAY_SIZE(dest->path.cck));
  	mt76_apply_array_limit(dev, dest->path.cck, ARRAY_SIZE(dest->path.cck), val,
  			       target_power, txs_delta, &max_power, n_chains, MT76_SKU_BACKOFF);
-diff --git a/mt7996/init.c b/mt7996/init.c
-index 3c63898..b9b0c32 100644
 --- a/mt7996/init.c
 +++ b/mt7996/init.c
-@@ -362,15 +362,23 @@ static void __mt7996_init_txpower(struct mt7996_phy *phy,
+@@ -362,15 +362,23 @@ static void __mt7996_init_txpower(struct
  	int i, n_chains = hweight16(phy->mt76->chainmask);
  	int path_delta = mt76_tx_power_path_delta(n_chains);
  	int pwr_delta = mt7996_eeprom_get_power_delta(dev, sband->band);
@@ -77,7 +59,7 @@ index 3c63898..b9b0c32 100644
  							  target_power);
  		target_power += path_delta;
  		target_power = DIV_ROUND_UP(target_power, 2);
-@@ -378,6 +386,8 @@ static void __mt7996_init_txpower(struct mt7996_phy *phy,
+@@ -378,6 +386,8 @@ static void __mt7996_init_txpower(struct
  					target_power);
  		chan->orig_mpwr = target_power;
  	}
@@ -86,7 +68,7 @@ index 3c63898..b9b0c32 100644
  }
  
  void mt7996_init_txpower(struct mt7996_phy *phy)
-@@ -385,6 +395,8 @@ void mt7996_init_txpower(struct mt7996_phy *phy)
+@@ -385,6 +395,8 @@ void mt7996_init_txpower(struct mt7996_p
  	if (!phy)
  		return;
  
@@ -95,8 +77,6 @@ index 3c63898..b9b0c32 100644
  	if (phy->mt76->cap.has_2ghz)
  		__mt7996_init_txpower(phy, &phy->mt76->sband_2g.sband);
  	if (phy->mt76->cap.has_5ghz)
-diff --git a/mt7996/main.c b/mt7996/main.c
-index e7b1864..2bf9c9e 100644
 --- a/mt7996/main.c
 +++ b/mt7996/main.c
 @@ -39,6 +39,11 @@ int mt7996_run(struct mt7996_phy *phy)
@@ -111,8 +91,6 @@ index e7b1864..2bf9c9e 100644
  	set_bit(MT76_STATE_RUNNING, &phy->mt76->state);
  
  	ieee80211_queue_delayed_work(dev->mphy.hw, &phy->mt76->mac_work,
-diff --git a/mt7996/mcu.c b/mt7996/mcu.c
-index f50b62e..c27e859 100644
 --- a/mt7996/mcu.c
 +++ b/mt7996/mcu.c
 @@ -5,6 +5,7 @@
@@ -123,7 +101,7 @@ index f50b62e..c27e859 100644
  #include "mt7996.h"
  #include "mcu.h"
  #include "mac.h"
-@@ -108,6 +109,252 @@ static bool sr_scene_detect = true;
+@@ -108,6 +109,253 @@ static bool sr_scene_detect = true;
  module_param(sr_scene_detect, bool, 0644);
  MODULE_PARM_DESC(sr_scene_detect, "Enable firmware scene detection algorithm");
  
@@ -142,11 +120,7 @@ index f50b62e..c27e859 100644
 +#define MT7996_SKU_RATE_HE_LEN		84
 +#define MT7996_SKU_RATE_EHT_LEN		256
 +
-+/*
-+ * MTK SDK / UNI_CMD(TXPOWER) POWER_LIMIT_TABLE rate/backoff layout for mt7996.
-+ * Keep the backoff table private because older mt76 chipsets use a smaller
-+ * connac2 path ABI.
-+ */
++/* mt7996 UNI_CMD(TXPOWER) backoff ABI layout (differs from connac2). */
 +struct mt7996_power_path_limits {
 +	s8 cck[MT7996_SKU_PATH_CCK_LEN];
 +	s8 ofdm[MT7996_SKU_PATH_OFDM_LEN];
@@ -188,6 +162,9 @@ index f50b62e..c27e859 100644
 +	const __be32 *val;
 +	size_t len;
 +
++	if (!nss)
++		return 0;
++
 +	val = mt7996_of_get_array(np, "txs-delta", &len, nss);
 +	if (!val)
 +		return 0;
@@ -222,9 +199,11 @@ index f50b62e..c27e859 100644
 +		int backoff_n_chains = mt7996_backoff_n_chains(backoff_chain_idx);
 +		s8 backoff_delta = mt76_tx_power_path_delta(backoff_n_chains);
 +		s8 delta = mt76_tx_power_path_delta(n_chains);
++		int target = clamp_t(int, (int)target_power + delta - backoff_delta,
++				     -127, 127);
++		int limit = clamp_t(int, (int)data[i] + nss_delta, -127, 127);
 +
-+		pwr[i] = min_t(s8, target_power + delta - backoff_delta,
-+			       data[i] + nss_delta);
++		pwr[i] = min_t(s8, target, limit);
 +	}
 +}
 +
@@ -376,7 +355,7 @@ index f50b62e..c27e859 100644
  static u8
  mt7996_mcu_get_sta_nss(u16 mcs_map)
  {
-@@ -6334,6 +6581,7 @@ int mt7996_mcu_set_tx_power_ctrl(struct mt7996_phy *phy, u8 power_ctrl_id, u8 da
+@@ -6334,6 +6582,7 @@ int mt7996_mcu_set_tx_power_ctrl(struct
  int mt7996_mcu_set_txpower_sku(struct mt7996_phy *phy)
  {
  #define TX_POWER_LIMIT_TABLE_RATE	0
@@ -384,16 +363,19 @@ index f50b62e..c27e859 100644
  	struct mt7996_dev *dev = phy->dev;
  	struct mt76_phy *mphy = phy->mt76;
  	struct tx_power_limit_table_ctrl {
-@@ -6351,48 +6599,104 @@ int mt7996_mcu_set_txpower_sku(struct mt7996_phy *phy)
+@@ -6351,48 +6600,102 @@ int mt7996_mcu_set_txpower_sku(struct mt
  		.power_limit_type = TX_POWER_LIMIT_TABLE_RATE,
  		.band_idx = phy->mt76->band_idx,
  	};
 -	struct mt76_power_limits la = {};
-+	struct mt7996_power_path_limits *path;
++	struct mt7996_power_path_limits *path = NULL;
 +	struct mt76_power_limits *la;
  	struct sk_buff *skb;
 -	int i, tx_power;
-+	int i, ret, target_power, tx_power;
++	int i, ret = -ENOMEM, target_power, tx_power;
++
++	if (!mphy->chandef.chan)
++		return 0;
  
 -	tx_power = mphy->chandef.chan->max_power;
 +	target_power = mphy->chandef.chan->max_power;
@@ -423,7 +405,7 @@ index f50b62e..c27e859 100644
  				 sizeof(req) + MT7996_SKU_PATH_NUM);
  	if (!skb)
 -		return -ENOMEM;
-+		goto err_nomem;
++		goto out;
  
  	skb_put_data(skb, &req, sizeof(req));
  	/* cck and ofdm */
@@ -461,23 +443,24 @@ index f50b62e..c27e859 100644
 -				     MCU_WM_UNI_CMD(TXPOWER), true);
 +	ret = mt76_mcu_skb_send_msg(&dev->mt76, skb,
 +				    MCU_WM_UNI_CMD(TXPOWER), true);
-+	if (ret)
-+		goto out;
-+
-+	if (!phy->sku_path_en)
++	if (ret || !phy->sku_path_en)
 +		goto out;
 +
 +	path = kzalloc(sizeof(*path), GFP_KERNEL);
-+	if (!path)
-+		goto err_nomem;
++	if (!path) {
++		ret = -ENOMEM;
++		goto out;
++	}
 +
 +	mt7996_get_power_path_limits(mphy, mphy->chandef.chan, path,
 +				     target_power);
 +
 +	skb = mt76_mcu_msg_alloc(&dev->mt76, NULL,
 +				 sizeof(req) + MT7996_SKU_PATH_NUM);
-+	if (!skb)
-+		goto err_nomem_path;
++	if (!skb) {
++		ret = -ENOMEM;
++		goto out;
++	}
 +
 +	req.power_limit_type = TX_POWER_LIMIT_TABLE_PATH;
 +
@@ -496,33 +479,13 @@ index f50b62e..c27e859 100644
 +
 +	ret = mt76_mcu_skb_send_msg(&dev->mt76, skb,
 +				    MCU_WM_UNI_CMD(TXPOWER), true);
-+	kfree(path);
-+	goto out;
-+
-+err_nomem_path:
-+	kfree(path);
-+err_nomem:
-+	ret = -ENOMEM;
 +out:
++	kfree(path);
 +	kfree(la);
 +	return ret;
  }
  
  int mt7996_mcu_cp_support(struct mt7996_dev *dev, u8 mode)
-diff --git a/mt7996/mcu.h b/mt7996/mcu.h
-index 45771a7..04e623b 100644
---- a/mt7996/mcu.h
-+++ b/mt7996/mcu.h
-@@ -1160,6 +1160,7 @@ enum {
- 	UNI_TXPOWER_BACKOFF_POWER_LIMIT_CTRL = 3,
- 	UNI_TXPOWER_POWER_LIMIT_TABLE_CTRL = 4,
- 	UNI_TXPOWER_ATE_MODE_CTRL = 6,
-+	UNI_TXPOWER_SHOW_INFO = 7,
- };
- 
- enum {
-diff --git a/mt7996/mt7996.h b/mt7996/mt7996.h
-index d218b85..6310dd1 100644
 --- a/mt7996/mt7996.h
 +++ b/mt7996/mt7996.h
 @@ -476,6 +476,8 @@ struct mt7996_phy {
@@ -534,7 +497,7 @@ index d218b85..6310dd1 100644
  };
  
  struct mt7996_dev {
-@@ -896,6 +898,8 @@ int mt7996_mcu_get_chan_mib_info(struct mt7996_phy *phy, bool chan_switch);
+@@ -896,6 +898,8 @@ int mt7996_mcu_get_chan_mib_info(struct
  int mt7996_mcu_get_temperature(struct mt7996_phy *phy);
  int mt7996_mcu_set_thermal_throttling(struct mt7996_phy *phy, u8 state);
  int mt7996_mcu_set_thermal_protect(struct mt7996_phy *phy, bool enable);

@@ -1,31 +1,41 @@
-From d07c2f82155d9c929703346006070fca42103563 Mon Sep 17 00:00:00 2001
 From: Yanghan Ye <yyh94306@gmail.com>
 Date: Wed, 24 Jun 2026 20:19:12 +0800
 Subject: [PATCH] wifi: mt76: mt7996: refresh power limits on txpower changes
 
-mt7996_config() currently ignores mac80211 configuration changes. As a
-result, user txpower updates may change the cfg80211 visible power level
-without refreshing the firmware SKU table used by mt7996.
-
-Refresh the SKU table when mac80211 reports power or channel changes. Only
-copy hw->conf.power_level into the cached PHY txpower on global power
-changes so channel-only updates do not overwrite a BSS txpower limit.
-
-Also refresh the SKU table and channel information for BSS txpower changes,
-and report MCU failures instead of silently ignoring them.
-
-[xr1710g: refresh hunk context for mt76 acb7b1c8 so patch applies with fuzz=0]
+Refresh firmware SKU and channel power info when mac80211 reports txpower or
+channel updates. Always cache phy->txpower, but gate MCU calls on
+MT76_STATE_RUNNING and a non-NULL chandef.chan so disabled/unstarted bands
+neither dereference NULL nor emit spurious MCU commands.
 
 Origin: backport, archive/xr1710g-v1
 Signed-off-by: Yanghan Ye <yyh94306@gmail.com>
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
-diff --git a/mt7996/main.c b/mt7996/main.c
-index 2bf9c9e..d8bbef0 100644
 --- a/mt7996/main.c
 +++ b/mt7996/main.c
-@@ -917,7 +917,50 @@ static int mt7996_set_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
+@@ -915,9 +915,60 @@ static int mt7996_set_key(struct ieee802
+ 	return err;
+ }
  
++static int mt7996_config_txpower(struct mt7996_phy *phy, int power_level,
++				 u32 changed)
++{
++	int ret;
++
++	if (changed & IEEE80211_CONF_CHANGE_POWER)
++		phy->txpower = power_level;
++
++	if (!test_bit(MT76_STATE_RUNNING, &phy->mt76->state) ||
++	    !phy->mt76->chandef.chan)
++		return 0;
++
++	ret = mt7996_mcu_set_txpower_sku(phy);
++	if (!ret && (changed & IEEE80211_CONF_CHANGE_POWER))
++		ret = mt7996_mcu_set_chan_info(phy, UNI_CHANNEL_SWITCH);
++
++	return ret;
++}
++
  static int mt7996_config(struct ieee80211_hw *hw, int radio_idx, u32 changed)
  {
 -	return 0;
@@ -46,24 +56,13 @@ index 2bf9c9e..d8bbef0 100644
 +		}
 +
 +		phy = dev->radio_phy[radio_idx];
-+		if (phy) {
-+			if (changed & IEEE80211_CONF_CHANGE_POWER)
-+				phy->txpower = hw->conf.power_level;
-+
-+			ret = mt7996_mcu_set_txpower_sku(phy);
-+			if (!ret && (changed & IEEE80211_CONF_CHANGE_POWER))
-+				ret = mt7996_mcu_set_chan_info(phy,
-+							       UNI_CHANNEL_SWITCH);
-+		}
++		if (phy)
++			ret = mt7996_config_txpower(phy, hw->conf.power_level,
++						    changed);
 +	} else {
 +		mt7996_for_each_phy(dev, phy) {
-+			if (changed & IEEE80211_CONF_CHANGE_POWER)
-+				phy->txpower = hw->conf.power_level;
-+
-+			ret = mt7996_mcu_set_txpower_sku(phy);
-+			if (!ret && (changed & IEEE80211_CONF_CHANGE_POWER))
-+				ret = mt7996_mcu_set_chan_info(phy,
-+							       UNI_CHANNEL_SWITCH);
++			ret = mt7996_config_txpower(phy, hw->conf.power_level,
++						    changed);
 +			if (ret)
 +				break;
 +		}
@@ -76,29 +75,33 @@ index 2bf9c9e..d8bbef0 100644
  }
  
  static int
-@@ -1239,9 +1282,24 @@ mt7996_link_info_changed(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+@@ -1239,9 +1290,28 @@ mt7996_link_info_changed(struct ieee8021
  		mt7996_update_mu_group(hw, link, info);
  
  	if (changed & BSS_CHANGED_TXPOWER &&
 +	    info->txpower != INT_MIN &&
  	    info->txpower != phy->txpower) {
-+		int ret;
-+
  		phy->txpower = info->txpower;
 -		mt7996_mcu_set_txpower_sku(phy);
-+		ret = mt7996_mcu_set_txpower_sku(phy);
-+		if (ret) {
-+			dev_err_ratelimited(dev->mt76.dev,
-+					    "failed to update txpower SKU: %d\n",
-+					    ret);
-+			goto out;
-+		}
 +
-+		ret = mt7996_mcu_set_chan_info(phy, UNI_CHANNEL_SWITCH);
-+		if (ret)
-+			dev_err_ratelimited(dev->mt76.dev,
-+					    "failed to update txpower channel info: %d\n",
-+					    ret);
++		if (test_bit(MT76_STATE_RUNNING, &phy->mt76->state) &&
++		    phy->mt76->chandef.chan) {
++			int ret;
++
++			ret = mt7996_mcu_set_txpower_sku(phy);
++			if (ret) {
++				dev_err_ratelimited(dev->mt76.dev,
++						    "failed to update txpower SKU: %d\n",
++						    ret);
++				goto out;
++			}
++
++			ret = mt7996_mcu_set_chan_info(phy, UNI_CHANNEL_SWITCH);
++			if (ret)
++				dev_err_ratelimited(dev->mt76.dev,
++						    "failed to update txpower channel info: %d\n",
++						    ret);
++		}
  	}
  
  out:

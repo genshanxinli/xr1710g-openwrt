@@ -2,32 +2,41 @@ From: fanboy <fanboy@openwrt.org>
 Date: Wed, 19 Aug 2026 15:54:54 +0000
 Subject: [PATCH] wifi: mt76: reclaim tokens whose txfree completion was lost
 
-Tokens of frames without per-mpdu status tracking (NO_ACK broadcast/
-multicast data) are only released by the txfree event. If that event
-is lost, the token, the skb and its pending AQL airtime leak forever:
-mt76_tx_status_check() only sweeps wcid->pktid, which never sees
-NO_ACK frames. On MT7996 the leaked airtime accumulates until mac80211
-gates all broadcast/multicast TXQs at the AQL multicast limit,
-silently killing broadcast/multicast traffic on all bands until
-reboot.
-
-Fix this by stamping the queue time on every skb and reclaiming from
-mt7996_mac_work tokens whose non-pktid skb has been pending for more
-than MT7996_TOKEN_SKB_TIMEOUT, completing the skb so mac80211 releases
-the pending airtime. Frames tracked in wcid->pktid are left to the
-existing txs/timeout path.
-
-[xr1710g: reap all three phys' PSD/BE DMA rings before sweeping the IDR,
-throttle the sweep to 1 Hz on the primary phy, and refresh for mt76 acb7b1c8]
+Reclaim timed-out non-pktid tokens from mt7996_mac_work() on the primary
+running PHY under local_bh_disable() so lost NO_ACK txfree events do not
+leak AQL airtime or deadlock dev->lock. Bail out on reset and track atomic
+txq_gen/txwi_gen across DMA/NPU enqueue and reap to prevent UAF/ABA races.
 
 Origin: backport, archive/xr1710g-v1
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
-diff --git a/mt76.h b/mt76.h
-index bd3dead..884ee18 100644
 --- a/mt76.h
 +++ b/mt76.h
-@@ -2161,6 +2161,8 @@ static inline bool mt76_queue_is_npu_txfree(struct mt76_queue *q)
+@@ -228,6 +228,7 @@ struct mt76_queue_entry {
+ 	dma_addr_t dma_addr[2];
+ 	u16 dma_len[2];
+ 	u16 wcid;
++	u32 txwi_gen;
+ 	bool skip_buf0:1;
+ 	bool skip_buf1:1;
+ 	bool done:1;
+@@ -469,6 +470,7 @@ struct mt76_txwi_cache {
+ 
+ 	u8 qid;
+ 	u8 phy_idx;
++	atomic_t txq_gen;
+ };
+ 
+ struct mt76_rx_tid {
+@@ -1009,6 +1011,7 @@ struct mt76_dev {
+ 
+ 	spinlock_t token_lock;
+ 	struct idr token;
++	atomic_t txwi_seq;
+ 	u16 wed_token_count;
+ 	u16 token_count;
+ 	u16 token_start;
+@@ -2161,6 +2164,8 @@ static inline bool mt76_queue_is_npu_txf
  
  struct mt76_txwi_cache *
  mt76_token_release(struct mt76_dev *dev, int token, bool *wake);
@@ -36,12 +45,10 @@ index bd3dead..884ee18 100644
  int mt76_token_consume(struct mt76_dev *dev, struct mt76_txwi_cache **ptxwi);
  void __mt76_set_tx_blocked(struct mt76_dev *dev, bool blocked);
  struct mt76_txwi_cache *mt76_rx_token_release(struct mt76_dev *dev, int token);
-diff --git a/mt7996/mac.c b/mt7996/mac.c
-index d755f77..dc2a745 100644
 --- a/mt7996/mac.c
 +++ b/mt7996/mac.c
-@@ -2982,14 +2982,60 @@ void mt7996_mac_sta_rc_work(struct work_struct *work)
- 	mutex_unlock(&dev->mt76.mutex);
+@@ -2995,14 +2995,67 @@ static bool mt7996_is_primary_running_ph
+ 	return phy == &dev->phy;
  }
  
 +static void
@@ -54,6 +61,10 @@ index d755f77..dc2a745 100644
 +	struct mt76_phy *p;
 +	bool wake;
 +	int i;
++
++	if (test_bit(MT76_RESET, &dev->mphy.state) ||
++	    test_bit(MT76_MCU_RESET, &dev->mphy.state))
++		return;
 +
 +	/* Reap completed DMA descriptors before freeing tokens to avoid double-freeing txwi. */
 +	mt76_queue_tx_cleanup(dev, dev->mphy.q_tx[MT_TXQ_PSD], false);
@@ -72,10 +83,12 @@ index d755f77..dc2a745 100644
 +	if (list_empty(&txwi_list))
 +		return;
 +
++	local_bh_disable();
 +	list_for_each_entry_safe(t, tmp, &txwi_list, list) {
 +		list_del_init(&t->list);
 +		mt7996_txwi_free(dev, t, NULL, NULL, &free_list);
 +	}
++	local_bh_enable();
 +
 +	if (wake)
 +		mt76_set_tx_blocked(&dev->mt76, false);
@@ -93,6 +106,7 @@ index d755f77..dc2a745 100644
 +	struct mt7996_dev *dev;
  	struct mt7996_phy *phy;
  	struct mt76_phy *mphy;
++	bool run_token_check;
  
  	mphy = (struct mt76_phy *)container_of(work, struct mt76_phy,
  					       mac_work.work);
@@ -101,18 +115,22 @@ index d755f77..dc2a745 100644
  
  	mutex_lock(&mphy->dev->mutex);
  
-@@ -3012,6 +3058,9 @@ void mt7996_mac_work(struct work_struct *work)
+@@ -3023,10 +3076,15 @@ void mt7996_mac_work(struct work_struct
+ 		}
+ 	}
+ 
++	run_token_check = mt7996_is_primary_running_phy(phy) &&
++			  !(dev->token_check_count++ % 10);
++
+ 	mutex_unlock(&mphy->dev->mutex);
  
  	mt76_beacon_mon_check(mphy);
  	mt76_tx_status_check(mphy->dev, false);
-+	/* Run the full IDR sweep once per second on the primary phy only. */
-+	if (phy == &dev->phy && !(dev->token_check_count++ % 10))
++	if (run_token_check)
 +		mt7996_mac_token_check(dev);
  
  	ieee80211_queue_delayed_work(mphy->hw, &mphy->mac_work,
  				     MT7996_WATCHDOG_TIME);
-diff --git a/mt7996/mt7996.h b/mt7996/mt7996.h
-index dddf06d..d218b85 100644
 --- a/mt7996/mt7996.h
 +++ b/mt7996/mt7996.h
 @@ -20,6 +20,7 @@
@@ -131,11 +149,9 @@ index dddf06d..d218b85 100644
  
  	struct work_struct init_work;
  	struct work_struct rc_work;
-diff --git a/tx.c b/tx.c
-index 36d57ef..8ecaec5 100644
 --- a/tx.c
 +++ b/tx.c
-@@ -129,6 +129,8 @@ mt76_tx_status_skb_add(struct mt76_dev *dev, struct mt76_wcid *wcid,
+@@ -129,6 +129,8 @@ mt76_tx_status_skb_add(struct mt76_dev *
  
  	memset(cb, 0, sizeof(*cb));
  
@@ -144,7 +160,7 @@ index 36d57ef..8ecaec5 100644
  	if (!wcid)
  		return MT_PACKET_ID_NO_ACK;
  
-@@ -1107,6 +1109,59 @@ mt76_token_release(struct mt76_dev *dev, int token, bool *wake)
+@@ -1107,6 +1109,59 @@ mt76_token_release(struct mt76_dev *dev,
  }
  EXPORT_SYMBOL_GPL(mt76_token_release);
  
@@ -161,7 +177,7 @@ index 36d57ef..8ecaec5 100644
 +		struct sk_buff *skb = t->skb;
 +		struct mt76_tx_cb *cb;
 +
-+		if (!skb)
++		if (!skb || atomic_read_acquire(&t->txq_gen))
 +			continue;
 +
 +		cb = mt76_tx_skb_cb(skb);
@@ -204,3 +220,90 @@ index 36d57ef..8ecaec5 100644
  struct mt76_txwi_cache *
  mt76_rx_token_release(struct mt76_dev *dev, int token)
  {
+--- a/dma.c
++++ b/dma.c
+@@ -108,6 +108,7 @@ mt76_put_txwi(struct mt76_dev *dev, stru
+ 	if (!t)
+ 		return;
+ 
++	atomic_set(&t->txq_gen, 0);
+ 	spin_lock(&dev->lock);
+ 	list_add(&t->list, &dev->txwi_cache);
+ 	spin_unlock(&dev->lock);
+@@ -322,7 +323,7 @@ done:
+ static int
+ mt76_dma_add_buf(struct mt76_dev *dev, struct mt76_queue *q,
+ 		 struct mt76_queue_buf *buf, int nbufs, u32 info,
+-		 struct sk_buff *skb, void *txwi)
++		 struct sk_buff *skb, struct mt76_txwi_cache *txwi)
+ {
+ 	struct mt76_queue_entry *entry;
+ 	struct mt76_desc *desc;
+@@ -382,6 +383,7 @@ mt76_dma_add_buf(struct mt76_dev *dev, s
+ 	}
+ 
+ 	q->entry[idx].txwi = txwi;
++	q->entry[idx].txwi_gen = txwi ? atomic_read(&txwi->txq_gen) : 0;
+ 	q->entry[idx].skb = skb;
+ 	q->entry[idx].wcid = 0xffff;
+ 
+@@ -440,6 +442,9 @@ mt76_dma_tx_cleanup(struct mt76_dev *dev
+ 		mt76_queue_tx_complete(dev, q, &entry);
+ 
+ 		if (entry.txwi) {
++			if (entry.txwi_gen)
++				atomic_cmpxchg(&entry.txwi->txq_gen,
++					       entry.txwi_gen, 0);
+ 			if (!(dev->drv->drv_flags & MT_DRV_TXWI_NO_FREE))
+ 				mt76_put_txwi(dev, entry.txwi);
+ 		}
+@@ -665,6 +670,11 @@ error:
+ 	return -ENOMEM;
+ }
+ 
++static inline u32 mt76_txwi_next_gen(struct mt76_dev *dev)
++{
++	return (u32)atomic_add_return(2, &dev->txwi_seq) | 1U;
++}
++
+ static int
+ mt76_dma_tx_queue_skb(struct mt76_phy *phy, struct mt76_queue *q,
+ 		      enum mt76_txq_id qid, struct sk_buff *skb,
+@@ -682,6 +692,7 @@ mt76_dma_tx_queue_skb(struct mt76_phy *p
+ 	struct mt76_txwi_cache *t;
+ 	struct sk_buff *iter;
+ 	dma_addr_t addr;
++	u32 gen;
+ 	u8 *txwi;
+ 
+ 	if (test_bit(MT76_RESET, &phy->state))
+@@ -732,6 +743,8 @@ mt76_dma_tx_queue_skb(struct mt76_phy *p
+ 		goto unmap;
+ 	}
+ 
++	gen = mt76_txwi_next_gen(dev);
++	atomic_set_release(&t->txq_gen, gen);
+ 	dma_sync_single_for_cpu(dev->dma_dev, t->dma_addr, dev->drv->txwi_size,
+ 				DMA_TO_DEVICE);
+ 	ret = dev->drv->tx_prepare_skb(dev, txwi, qid, wcid, sta, &tx_info);
+--- a/npu.c
++++ b/npu.c
+@@ -221,6 +221,8 @@ int mt76_npu_dma_add_buf(struct mt76_phy
+ {
+ 	u16 txwi_len = min_t(u16, phy->dev->drv->txwi_size, NPU_TXWI_LEN);
+ 	struct airoha_npu_tx_dma_desc *desc = (void *)q->desc;
++	struct mt76_txwi_cache *t =
++		(struct mt76_txwi_cache *)((u8 *)txwi_ptr + phy->dev->drv->txwi_size);
+ 	int ret;
+ 
+ 	/* TODO: Take into account unlinear skbs */
+@@ -233,7 +235,8 @@ int mt76_npu_dma_add_buf(struct mt76_phy
+ 	ret = q->head;
+ 	q->entry[q->head].skip_buf0 = true;
+ 	q->entry[q->head].skip_buf1 = true;
+-	q->entry[q->head].txwi = NULL;
++	q->entry[q->head].txwi = t;
++	q->entry[q->head].txwi_gen = atomic_read(&t->txq_gen);
+ 	q->entry[q->head].skb = NULL;
+ 	q->entry[q->head].wcid = 0xffff;
+ 
