@@ -1,108 +1,63 @@
-![OpenWrt logo](include/logo.png)
+# OpenWrt for Gemtek XR1710G
 
-OpenWrt Project is a Linux operating system targeting embedded devices. Instead
-of trying to create a single, static firmware, OpenWrt provides a fully
-writable filesystem with package management. This frees you from the
-application selection and configuration provided by the vendor and allows you
-to customize the device through the use of packages to suit any application.
-For developers, OpenWrt is the framework to build an application without having
-to build a complete firmware around it; for users this means the ability for
-full customization, to use the device in ways never envisioned.
+Minimal, rebase-friendly OpenWrt (Linux 7.4) firmware tree for the **Gemtek / Brightspeed XR1710G** Wi-Fi 7 gateway (`gemtek,xr1710g-ubi`).
+Shares the Airoha AN7581 platform with the W1700K, but has distinct 10G PHYs, switch-driven 1G LEDs, and factory bootloader — **never flash W1700K images**.
 
-Sunshine!
+## Hardware Specs
 
-## Download
+| Component | Specification |
+| --- | --- |
+| SoC | Airoha AN7581 (4x Cortex-A53, 1.2 GHz max OPP) |
+| Memory / Flash | 2 GiB DDR4 / 512 MiB SPI-NAND (`mtd0` `vendor`, `mtd1` `chainloader`, `mtd2` `ubi`, `mtd3` `reserved_bmt`) |
+| Wired Ethernet | 2x 10G (`wan` + `lan2`, Realtek RTL8261BE), 2x 1G (`lan3` + `lan4`, internal switch, MT7530 PHY LEDs) |
+| Wireless | MediaTek MT7996 tri-band Wi-Fi 7 (2.4 / 5 / 6 GHz) + Airoha NPU hardware offload |
+| Thermal / Boot | Nuvoton NCT7802 hwmon; U-Boot `CONFIG_ENV_SIZE=0x4000`, `loadaddr=0x85000000`, `compat_version 2.0` |
 
-Built firmware images are available for many architectures and come with a
-package selection to be used as WiFi home router. To quickly find a factory
-image usable to migrate from a vendor stock firmware to OpenWrt, try the
-*Firmware Selector*.
+## Build & Verification
 
-* [OpenWrt Firmware Selector](https://firmware-selector.openwrt.org/)
+Build from a **pure-ASCII path** (e.g. `/xr/xr1710g`; non-ASCII paths break host `meson`).
 
-If your device is supported, please follow the **Info** link to see install
-instructions or consult the support resources listed below.
-
-##
-
-An advanced user may require additional or specific package. (Toolchain, SDK, ...) For everything else than simple firmware download, try the wiki download page:
-
-* [OpenWrt Wiki Download](https://openwrt.org/downloads)
-
-## Development
-
-To build your own firmware you need a GNU/Linux, BSD or macOS system (case
-sensitive filesystem required). Cygwin is unsupported because of the lack of a
-case sensitive file system.
-
-### Requirements
-
-You need the following tools to compile OpenWrt, the package names vary between
-distributions. A complete list with distribution specific packages is found in
-the [Build System Setup](https://openwrt.org/docs/guide-developer/build-system/install-buildsystem)
-documentation.
-
-```
-binutils bzip2 diff find flex gawk gcc-6+ getopt grep install libc-dev libz-dev
-make4.1+ perl python3.8+ rsync subversion unzip which
+```sh
+./scripts/feeds update -a && ./scripts/feeds install -a
+./scripts/build-preflight.sh
+./scripts/build-preflight.sh --patch-queue [dl/linux-7.4*.tar.gz]
+python3 scripts/check-uboot-ubi.py
+make menuconfig   # Target: Airoha -> AN7581 -> Gemtek XR1710G (UBI)
+make -j$(nproc)
+python3 scripts/check-image-artifacts.py bin/targets/airoha/an7581
 ```
 
-### Quickstart
+Build outputs in `bin/targets/airoha/an7581/`:
+- `openwrt-airoha-an7581-gemtek_xr1710g-ubi-squashfs-sysupgrade.itb` — sysupgrade image
+- `openwrt-airoha-an7581-gemtek_xr1710g-ubi-initramfs-recovery.itb` — RAM-resident TFTP recovery image
+- `openwrt-airoha-an7581-gemtek_xr1710g-ubi-chainload-uboot.itb` — OpenWrt chainloader FIT
 
-1. Run `./scripts/feeds update -a` to obtain all the latest package definitions
-   defined in feeds.conf / feeds.conf.default
+## Safe Flashing & Recovery
 
-2. Run `./scripts/feeds install -a` to install symlinks for all obtained
-   packages into package/feeds/
+**Non-negotiable flash rules:**
+- **Never use `sysupgrade -F`** (`scripts/flash-gate.sh` unconditionally refuses `-F`/`--force`).
+- **Never write to `mtd0` (`vendor`), `mtd1` (`chainloader`), or `mtd3` (`reserved_bmt`)** — keep them strictly read-only.
+- **Require `compat_version 2.0`** on both device and image (never flash a `2.0` image onto a `1.x` partition layout or cross-flash W1700K).
 
-3. Run `make menuconfig` to select your preferred configuration for the
-   toolchain, target system & firmware packages.
+### Live Upgrade (`flash-gate.sh`)
 
-4. Run `make` to build your firmware. This will download all sources, build the
-   cross-compile toolchain and then cross-compile the GNU/Linux kernel & all chosen
-   applications for your target system.
+Copy `scripts/flash-gate.sh`, the sysupgrade `.itb`, and `sha256sums` to `/tmp/` on the router:
 
-### Related Repositories
+```sh
+# 1. Read-only layout, UBI, and mtd0/mtd1 readability probe (writes nothing)
+sh /tmp/flash-gate.sh --probe
 
-The main repository uses multiple sub-repositories to manage packages of
-different categories. All packages are installed via the OpenWrt package
-manager called `opkg`. If you're looking to develop the web interface or port
-packages to OpenWrt, please find the fitting repository below.
+# 2. Verify image FIT magic, sha256sums, FWx0 trailer, board, compat 2.0, and sysupgrade -T
+sh /tmp/flash-gate.sh --check-only -i /tmp/openwrt-airoha-an7581-gemtek_xr1710g-ubi-squashfs-sysupgrade.itb
 
-* [LuCI Web Interface](https://github.com/openwrt/luci): Modern and modular
-  interface to control the device via a web browser.
+# 3. Run full gate + verified mtd0/mtd1 header backup, then execute plain sysupgrade
+sh /tmp/flash-gate.sh --run -i /tmp/openwrt-airoha-an7581-gemtek_xr1710g-ubi-squashfs-sysupgrade.itb
+```
 
-* [OpenWrt Packages](https://github.com/openwrt/packages): Community repository
-  of ported packages.
+### TFTP / Initramfs Recovery
 
-* [OpenWrt Routing](https://github.com/openwrt/routing): Packages specifically
-  focused on (mesh) routing.
+The XR1710G UBI layout has no flash `recovery` volume; recovery boots `initramfs-recovery.itb` into RAM over TFTP.
 
-* [OpenWrt Video](https://github.com/openwrt/video): Packages specifically
-  focused on display servers and clients (Xorg and Wayland).
-
-## Support Information
-
-For a list of supported devices see the [OpenWrt Hardware Database](https://openwrt.org/supported_devices)
-
-### Documentation
-
-* [Quick Start Guide](https://openwrt.org/docs/guide-quick-start/start)
-* [User Guide](https://openwrt.org/docs/guide-user/start)
-* [Developer Documentation](https://openwrt.org/docs/guide-developer/start)
-* [Technical Reference](https://openwrt.org/docs/techref/start)
-
-### Support Community
-
-* [Forum](https://forum.openwrt.org): For usage, projects, discussions and hardware advise.
-* [Support Chat](https://webchat.oftc.net/#openwrt): Channel `#openwrt` on **oftc.net**.
-
-### Developer Community
-
-* [Bug Reports](https://bugs.openwrt.org): Report bugs in OpenWrt
-* [Dev Mailing List](https://lists.openwrt.org/mailman/listinfo/openwrt-devel): Send patches
-* [Dev Chat](https://webchat.oftc.net/#openwrt-devel): Channel `#openwrt-devel` on **oftc.net**.
-
-## License
-
-OpenWrt is licensed under GPL-2.0
+1. Configure your host Ethernet interface to `192.168.1.254/24` (U-Boot `serverip`) and serve `openwrt-airoha-an7581-gemtek_xr1710g-ubi-initramfs-recovery.itb` over TFTP.
+2. Power on the router and hold the **reset** button once the chainloader starts (~15 s after power-on; do not hold at power-on or the boot ROM enters UART download mode), or pick **Boot system via TFTP** from the U-Boot serial menu (`115200 8N1`).
+3. Once initramfs boots on `192.168.1.1`, copy `sysupgrade.itb` + `sha256sums` + `flash-gate.sh` to `/tmp/` and upgrade with `sh /tmp/flash-gate.sh --run -i /tmp/...-squashfs-sysupgrade.itb` (plain `sysupgrade`, never `-F`).

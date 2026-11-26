@@ -1,0 +1,40 @@
+name: XR1710G Safety Gates
+
+on:
+  pull_request:
+    branches:
+      - xr1710g-v2
+      - xr1710g
+  push:
+    branches:
+      - xr1710g-v2
+      - xr1710g
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    name: Preflight, patch-queue, and U-Boot/UBI gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Run build preflight (ASCII path, syntax, BusyBox ash lint, repo hygiene)
+        run: ./scripts/build-preflight.sh
+
+      - name: Run patch-queue prefix and header gate
+        run: ./scripts/build-preflight.sh --patch-queue
+
+      - name: Run U-Boot / UBI / envtools / KASLR gate
+        run: python3 scripts/check-uboot-ubi.py
