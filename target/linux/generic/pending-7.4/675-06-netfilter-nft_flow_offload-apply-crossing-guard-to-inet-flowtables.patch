@@ -2,19 +2,19 @@ From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 Date: Wed, 21 Oct 2026 12:00:00 +0800
 Subject: [PATCH] netfilter: nft_flow_offload: apply the crossing guard to inet flowtables
 
-Bridged frames reinjected by br_netfilter also hit inet flowtables, which
-previously skipped bridge crossing tracking and offloaded double-crossing
-flows anyway. Track real nf_bridge ingress/egress ports and enable the
-crossing GC hook for inet/ip/ipv6 flowtables as well.
+Track real nf_bridge ingress/egress ports across inet/ip/ipv6 flowtables and
+enable crossing GC so bridged and mixed bridged-then-routed double-crossings
+are detected and torn down, while allowing pre-confirmed routed WAN<->LAN
+flows (rec == NULL, non-bridged) to offload after fw4 reload.
 
 Origin: archive/xr1710g-v1@e85677d284c0
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/net/netfilter/nft_flow_offload.c
 +++ b/net/netfilter/nft_flow_offload.c
-@@ -50,6 +50,18 @@ static void flow_offload_ct_tcp(struct n
+@@ -49,6 +49,18 @@ static void flow_offload_ct_tcp(struct n
+ 	spin_unlock_bh(&ct->lock);
  }
- 
  
 +/* Real bridge ingress port (nft_in() is the bridge device after br_netfilter). */
 +static int nft_flow_offload_bridge_iif(const struct nft_pktinfo *pkt)
@@ -31,20 +31,22 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  /* Egress bridge port if bridged; 0 for routed frames. */
  static int nft_flow_offload_bridge_oif(const struct nft_pktinfo *pkt)
  {
-@@ -64,8 +76,8 @@ static int nft_flow_offload_bridge_oif(c
+@@ -62,6 +74,12 @@ static int nft_flow_offload_bridge_oif(c
+ 	       nft_out(pkt)->ifindex : 0;
  }
  
- /* Record the ports of each crossing of a bridged connection, see struct
-- * nf_conn_brxing. Runs for every packet that reaches the bridge forward
-- * chain, i.e. every packet not handled by the fast path.
-+ * nf_conn_brxing. Runs for every packet that reaches a flowtable rule, i.e.
-+ * every packet not handled by the fast path.
-  */
++static bool nft_flow_offload_is_bridged(const struct nft_pktinfo *pkt)
++{
++	return nft_pf(pkt) == NFPROTO_BRIDGE ||
++	       nft_flow_offload_bridge_oif(pkt) != 0;
++}
++
  static void nft_flow_offload_bridge_record(const struct nft_pktinfo *pkt,
  					   struct nf_flowtable *flowtable,
-@@ -79,10 +91,12 @@ static void nft_flow_offload_bridge_reco
- 	struct nf_conn_brxing *rec;
- 	int iif, oif, old;
+ 					   struct nf_conn *ct,
+@@ -77,10 +95,12 @@ static void nft_flow_offload_bridge_reco
+ 	if (nf_ct_is_template(ct))
+ 		return;
  
 -	if ((proto != IPPROTO_TCP && proto != IPPROTO_UDP) || !nft_in(pkt))
 +	if (proto != IPPROTO_TCP && proto != IPPROTO_UDP)
@@ -57,15 +59,40 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	oif = nft_flow_offload_bridge_oif(pkt);
  	rec = nf_conn_brxing_find(ct);
  	if (!rec) {
-@@ -159,7 +173,6 @@ static void nft_flow_offload_eval(const
+@@ -121,7 +141,7 @@ static void nft_flow_offload_bridge_reco
+ 				 &flowtable->gc_work, 0);
+ }
+ 
+-static bool nft_flow_offload_bridge_ok(const struct nf_conn *ct)
++static bool nft_flow_offload_bridge_ok(const struct nf_conn *ct, bool bridged)
+ {
+ 	const struct nf_conn_brxing *rec = nf_conn_brxing_find(ct);
+ 	u8 proto = ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple.dst.protonum;
+@@ -129,7 +149,13 @@ static bool nft_flow_offload_bridge_ok(c
+ 	if (proto != IPPROTO_TCP && proto != IPPROTO_UDP)
+ 		return true;
+ 
+-	if (!rec || READ_ONCE(rec->multi))
++	if (rec && READ_ONCE(rec->multi))
++		return false;
++
++	if (!bridged)
++		return true;
++
++	if (!rec)
+ 		return false;
+ 
+ 	if (proto == IPPROTO_UDP &&
+@@ -145,7 +171,7 @@ static void nft_flow_offload_eval(const
  {
  	struct nft_flow_offload *priv = nft_expr_priv(expr);
  	struct nf_flowtable *flowtable = &priv->flowtable->data;
 -	bool routing = flowtable->type->family != NFPROTO_BRIDGE;
++	bool bridged = nft_flow_offload_is_bridged(pkt);
  	struct tcphdr _tcph, *tcph = NULL;
  	struct nf_flow_route route = {};
  	enum ip_conntrack_info ctinfo;
-@@ -175,8 +188,7 @@ static void nft_flow_offload_eval(const
+@@ -161,8 +187,7 @@ static void nft_flow_offload_eval(const
  	if (!ct)
  		goto out;
  
@@ -75,29 +102,18 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
  	switch (ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple.dst.protonum) {
  	case IPPROTO_TCP:
-@@ -212,7 +224,7 @@ static void nft_flow_offload_eval(const
+@@ -198,7 +223,7 @@ static void nft_flow_offload_eval(const
  	if (!nf_ct_is_confirmed(ct))
  		goto out;
  
 -	if (!routing && !nft_flow_offload_bridge_ok(ct))
-+	if (!nft_flow_offload_bridge_ok(ct))
++	if (!nft_flow_offload_bridge_ok(ct, bridged))
  		goto out;
  
  	if (test_and_set_bit(IPS_OFFLOAD_BIT, &ct->status))
 --- a/net/netfilter/nf_flow_table_inet.c
 +++ b/net/netfilter/nf_flow_table_inet.c
-@@ -77,8 +77,8 @@ static struct nf_flowtable_type flowtabl
- };
- 
- 
--/* Tear down a bridge flow once its connection turned out to cross the
-- * bridge more than once, see struct nf_conn_brxing.
-+/* Tear down a flow once its connection turned out to cross the bridge
-+ * more than once, see struct nf_conn_brxing.
-  */
- static bool nf_flow_bridge_gc(const struct flow_offload *flow)
- {
-@@ -113,6 +113,9 @@ static int __init nf_flow_inet_module_in
+@@ -109,6 +109,9 @@ static int __init nf_flow_inet_module_in
  {
  	flowtable_bridge = flowtable_inet; flowtable_bridge.family = NFPROTO_BRIDGE;
  	flowtable_bridge.gc = nf_flow_bridge_gc;

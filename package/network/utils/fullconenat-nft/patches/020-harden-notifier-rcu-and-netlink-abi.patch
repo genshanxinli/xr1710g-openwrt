@@ -2,19 +2,17 @@ From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 Date: Thu, 26 Nov 2026 11:25:00 +0800
 Subject: [PATCH] fullconenat-nft: harden notifier ownership, RCU teardown and netlink ABI
 
-Align enum nft_fullcone_attributes with libnftnl/nftables (FLAGS=1,
-REG_PROTO_MIN=2, REG_PROTO_MAX=3) and parse tb[] before nf_ct_netns_get().
-Check nf_ct_netns_get() error before refcounting, guard notifier registration/
-unregistration against clobbering other notifiers, and synchronize_rcu() before wq teardown.
+Align nft_fullcone_attributes with libnftnl/nftables and reject non-init_net
+rules with -EOPNOTSUPP so global notifier state cannot dangle across netns.
+Validate attributes before nf_ct_netns_get(), verify notifier ownership before
+register/unregister, and synchronize_rcu() before workqueue teardown.
 
 Origin: local, Gemtek XR1710G
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
-diff --git a/src/nf_nat_fullcone.h b/src/nf_nat_fullcone.h
-index 289ce5c..9282253 100644
 --- a/src/nf_nat_fullcone.h
 +++ b/src/nf_nat_fullcone.h
-@@ -45,15 +45,15 @@ static inline void nf_ct_netns_put(struct net *net, u8 nfproto)
+@@ -45,15 +45,15 @@ static inline void nf_ct_netns_put(struc
  /**
   * enum nft_fullcone_attributes - nf_tables fullcone expression netlink attributes
   *
@@ -32,19 +30,18 @@ index 289ce5c..9282253 100644
  	__NFTA_FULLCONE_MAX
  };
  #define NFTA_FULLCONE_MAX		(__NFTA_FULLCONE_MAX - 1)
-diff --git a/src/nft_ext_fullcone.c b/src/nft_ext_fullcone.c
-index def862e..6e18de3 100644
 --- a/src/nft_ext_fullcone.c
 +++ b/src/nft_ext_fullcone.c
-@@ -22,6 +22,7 @@
+@@ -22,6 +22,8 @@
  #include <net/netfilter/nf_tables.h>
  #include <net/netfilter/nf_nat.h>
  
 +#include <linux/rcupdate.h>
++#include <net/net_namespace.h>
  #include <linux/workqueue.h>
  
  #include "nf_nat_fullcone.h"
-@@ -59,7 +60,11 @@ struct nft_fullcone {
+@@ -59,7 +61,11 @@ struct nft_fullcone {
  };
  
  static const struct nla_policy nft_fullcone_policy[NFTA_FULLCONE_MAX + 1] = {
@@ -56,7 +53,7 @@ index def862e..6e18de3 100644
  	[NFTA_FULLCONE_REG_PROTO_MIN] = {.type = NLA_U32 },
  	[NFTA_FULLCONE_REG_PROTO_MAX] = {.type = NLA_U32 },
  };
-@@ -140,10 +145,37 @@ static int nft_fullcone_validate(const struct nft_ctx *ctx, const struct nft_exp
+@@ -140,10 +146,40 @@ static int nft_fullcone_validate(const s
  
  static int nft_fullcone_init(const struct nft_ctx *ctx, const struct nft_expr *expr, const struct nlattr *const tb[])
  {
@@ -66,6 +63,9 @@ index def862e..6e18de3 100644
 +#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0) || defined(CONFIG_NF_CONNTRACK_CHAIN_EVENTS)
  	int register_ct_notifier_ret = 0;
 +#endif
++
++	if (!net_eq(ctx->net, &init_net))
++		return -EOPNOTSUPP;
 +
 +	if (tb[NFTA_FULLCONE_FLAGS])
 +		priv->flags = ntohl(nla_get_be32(tb[NFTA_FULLCONE_FLAGS]));
@@ -94,7 +94,7 @@ index def862e..6e18de3 100644
  
  	mutex_lock(&nf_ct_net_event_lock);
  
-@@ -162,26 +194,31 @@ static int nft_fullcone_init(const struct nft_ctx *ctx, const struct nft_expr *e
+@@ -162,26 +198,31 @@ static int nft_fullcone_init(const struc
  #endif
  
  #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0) && !defined(CONFIG_NF_CONNTRACK_CHAIN_EVENTS)
@@ -132,7 +132,7 @@ index def862e..6e18de3 100644
  }
  
  #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 2, 0)
-@@ -254,14 +291,17 @@ static void nft_fullcone_common_destory(const struct nft_ctx *ctx)
+@@ -254,14 +295,17 @@ static void nft_fullcone_common_destory(
  	if (module_refer_count == 0) {
  		if (ct_event_notifier_registered) {
  #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0) && !defined(CONFIG_NF_CONNTRACK_CHAIN_EVENTS)
@@ -152,7 +152,7 @@ index def862e..6e18de3 100644
  		}
  	}
  
-@@ -447,6 +487,7 @@ static void __exit nft_fullcone_module_exit(void)
+@@ -447,6 +491,7 @@ static void __exit nft_fullcone_module_e
  	nft_fullcone_module_exit_ipv6();
  	nft_fullcone_module_exit_inet();
  	nft_unregister_expr(&nft_fullcone_ipv4_type);

@@ -3,17 +3,42 @@ Date: Thu, 26 Nov 2026 11:00:00 +0800
 Subject: [PATCH] firewall4: add opt-in fullcone NAT support
 
 Add opt-in defaults.fullcone/fullcone6 support using nft_fullcone with gated
-runtime probing and masquerade fallback. Honor zone masq_src/masq_dest filters
-on srcnat rules, accept fullcone in parse_target, and keep auto_helper scoped
-to !(zone.masq || zone.masq6) without bridge fw4 flowtable (#397).
+runtime probing, masquerade fallback, and zone masq_src/masq_dest filters.
+Gate dstnat and forward rules on dedicated zone.dflags.fullcone so input_*
+stays scoped strictly to real zone.dflags.dnat redirects.
 
-Origin: backport, archive/xr1710g-v1; xr1710g_issue_triage_pipeline@3b8ef087f7; xr1710g_upstream_sync_patch@f2ebe69dd8
+Origin: https://github.com/fullcone-nat-nftables/nft-fullcone; local XR1710G
 Refs: #397
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/root/usr/share/firewall4/templates/ruleset.uc
 +++ b/root/usr/share/firewall4/templates/ruleset.uc
-@@ -333,6 +333,12 @@ table inet fw4 {
+@@ -248,7 +248,7 @@ table inet fw4 {
+ {%  for (let rule in fw4.rules(`forward_${zone.name}`)): %}
+ 		{%+ include("rule.uc", { fw4, zone, rule }) %}
+ {%  endfor %}
+-{%  if (zone.dflags.dnat): %}
++{%  if (zone.dflags.dnat || zone.dflags.fullcone): %}
+ 		ct status dnat accept comment "!fw4: Accept port forwards"
+ {%  endif %}
+ {%  fw4.includes('chain-append', `forward_${zone.name}`) %}
+@@ -301,7 +301,7 @@ table inet fw4 {
+ 		{%+ include("redirect.uc", { fw4, zone: null, redirect }) %}
+ {% endfor %}
+ {% for (let zone in fw4.zones()): %}
+-{%  if (zone.dflags.dnat || zone.dflags.npt): %}
++{%  if (zone.dflags.dnat || zone.dflags.npt || zone.dflags.fullcone): %}
+ {%   for (let rule in zone.match_rules): %}
+ 		{%+ include("zone-jump.uc", { fw4, zone, rule, direction: "dstnat" }) %}
+ {%   endfor %}
+@@ -327,12 +327,18 @@ table inet fw4 {
+ 	}
+ 
+ {% for (let zone in fw4.zones()): %}
+-{%  if (zone.dflags.dnat || zone.dflags.npt): %}
++{%  if (zone.dflags.dnat || zone.dflags.npt || zone.dflags.fullcone): %}
+ 	chain dstnat_{{ zone.name }} {
+ {%   fw4.includes('chain-prepend', `dstnat_${zone.name}`) %}
  {%   for (let redirect in fw4.redirects(`dstnat_${zone.name}`)): %}
  		{%+ include("redirect.uc", { fw4, zone, redirect }) %}
  {%   endfor %}
@@ -89,15 +114,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  function nft_try_hw_offload(devices) {
  	let nft_test = `
  		add table inet fw4-hw-offload-test;
-@@ -1632,6 +1647,7 @@ return {
- 			"dnat",
- 			"snat",
- 			"masquerade",
-+			"fullcone",
- 			"npt",
- 			"accept",
- 			"reject",
-@@ -2122,6 +2138,8 @@ return {
+@@ -2122,6 +2137,8 @@ return {
  		}
  
  		let defs = this.parse_options(data, {
@@ -106,7 +123,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  			input: [ "policy", "drop" ],
  			output: [ "policy", "drop" ],
  			forward: [ "policy", "drop" ],
-@@ -2156,6 +2174,12 @@ return {
+@@ -2156,6 +2173,12 @@ return {
  
  		delete defs.syn_flood;
  
@@ -119,7 +136,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  		this.state.defaults = defs;
  	},
  
-@@ -2406,8 +2430,17 @@ return {
+@@ -2406,8 +2429,17 @@ return {
  		zone.related_physdevs = related_physdevs;
  		zone.related_l3devs = related_l3devs;
  
@@ -127,13 +144,13 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +		if (zone.masq) {
  			zone.dflags.snat = true;
 +			if (this.state.defaults?.fullcone)
-+				zone.dflags.dnat = true;
++				zone.dflags.fullcone = true;
 +		}
 +
 +		if (zone.masq6) {
 +			zone.dflags.snat = true;
 +			if (this.state.defaults?.fullcone6)
-+				zone.dflags.dnat = true;
++				zone.dflags.fullcone = true;
 +		}
  
  		if ((zone.auto_helper && !(zone.masq || zone.masq6)) || length(zone.helper)) {

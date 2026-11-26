@@ -1,3 +1,15 @@
+From: fanboy <fanboy@openwrt.org>
+Subject: netfilter: bridge: conntrack VLAN and PPPoE encapsulation support
+
+Add single-tag VLAN and PPPoE encapsulation handling to bridge conntrack.
+Pull PPPOE_SES_HLEN from skb->data, keep skb->data at the IP header across
+nf_conntrack_in() via skb_pull_rcsum()/skb_push_rcsum() with network_header
+reset on NF_ACCEPT/notrack, and restore ETH_P_8021Q on inner-VLAN refrag.
+
+Origin: openwrt/generic/pending-7.4 (aff99a3246)
+Signed-off-by: Jihong Min <hurryman2212@gmail.com>
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
 --- a/include/linux/netfilter_bridge.h
 +++ b/include/linux/netfilter_bridge.h
 @@ -10,6 +10,12 @@ struct nf_bridge_frag_data {
@@ -26,7 +38,7 @@
  #include <linux/netfilter_ipv4.h>
  
  #include "../br_private.h"
-@@ -240,59 +244,118 @@ static int nf_ct_br_ipv6_check(const str
+@@ -240,59 +244,127 @@ static int nf_ct_br_ipv6_check(const str
  	return 0;
  }
  
@@ -54,10 +66,10 @@
 +	} else if (*proto == htons(ETH_P_PPP_SES)) {
 +		struct pppoe_hdr *phdr;
 +
-+		if (!pskb_may_pull(skb, skb_mac_offset(skb) + ETH_HLEN + PPPOE_SES_HLEN))
++		if (!pskb_may_pull(skb, PPPOE_SES_HLEN))
 +			return -1;
 +
-+		phdr = (struct pppoe_hdr *)(skb_mac_header(skb) + ETH_HLEN);
++		phdr = (struct pppoe_hdr *)skb->data;
 +		data->pppoe_proto = *(__be16 *)(phdr + 1);
 +		data->pppoe_sid = phdr->sid;
 +		*proto = data->pppoe_proto == htons(PPP_IP) ? htons(ETH_P_IP) : data->pppoe_proto == htons(PPP_IPV6) ? htons(ETH_P_IPV6) : *proto;
@@ -92,8 +104,10 @@
 +		goto notrack;
 +	}
 +
-+	__skb_pull(skb, offset);
-+	skb_reset_network_header(skb);
++	if (offset) {
++		skb_pull_rcsum(skb, offset);
++		skb_reset_network_header(skb);
++	}
 +
 +	switch (inner_proto) {
  	case htons(ETH_P_IP):
@@ -145,18 +159,26 @@
  	if (ret != NF_ACCEPT)
  		return ret;
  
-+	__skb_push(skb, offset);
- 	return nf_conntrack_in(skb, &bridge_state);
+-	return nf_conntrack_in(skb, &bridge_state);
++	ret = nf_conntrack_in(skb, &bridge_state);
++	if (offset && ret == NF_ACCEPT) {
++		skb_push_rcsum(skb, offset);
++		skb_reset_network_header(skb);
++	}
++	return ret;
 +
 +notrack:
-+	__skb_push(skb, offset);
++	if (offset) {
++		skb_push_rcsum(skb, offset);
++		skb_reset_network_header(skb);
++	}
 +	nf_reset_ct(skb);
 +	nf_ct_set(skb, NULL, IP_CT_UNTRACKED);
 +	return NF_ACCEPT;
  }
  
  static unsigned int nf_ct_bridge_in(void *priv, struct sk_buff *skb,
-@@ -345,37 +408,68 @@ nf_ct_bridge_refrag(struct sk_buff *skb,
+@@ -345,37 +417,69 @@ nf_ct_bridge_refrag(struct sk_buff *skb,
  				  struct sk_buff *))
  {
  	struct nf_bridge_frag_data data;
@@ -216,6 +238,7 @@
 +		vhdr = (struct vlan_hdr *)skb->data;
 +		vhdr->h_vlan_TCI = htons(data->inner_vlan_tci);
 +		vhdr->h_vlan_encapsulated_proto = data->inner_vlan_proto;
++		skb->protocol = htons(ETH_P_8021Q);
 +	}
 +
 +	if (data->pppoe_present) {
