@@ -6,7 +6,56 @@ USE_PROCD=1
 
 DAEMON=/usr/libexec/npu-jitter-daemon
 PIDFILE=/var/run/npu-jitter.pid
-RUN_DIR=/var/run/flowsense
+RUN_DIR="${FLOWSENSE_RUN_DIR:-/var/run/flowsense}"
+
+valid_target() {
+	case "$1" in
+		''|auto|0.0.0.0|-*|*[!a-zA-Z0-9.:_-]*) return 1 ;;
+		*) return 0 ;;
+	esac
+}
+
+resolve_target() {
+	local t dev status expr
+
+	t=$(uci -q get npu-monitor.jitter.target || uci -q get npu-monitor.@jitter[0].target)
+	valid_target "$t" && { printf '%s\n' "$t"; return 0; }
+
+	t=""; dev=""
+	IFS=' ' read -r t dev <<EOF
+$(ip -4 route show 2>/dev/null | awk '$1 == "default" {
+	v = "-"; d = "-"
+	for (i = 2; i < NF; i++) {
+		if ($i == "via" && v == "-") v = $(i + 1)
+		else if ($i == "dev" && d == "-") d = $(i + 1)
+	}
+	print v, d; exit
+}')
+EOF
+	[ "$t" = "-" ] && t=""
+	[ "$dev" = "-" ] && dev=""
+	valid_target "$t" && { printf '%s\n' "$t"; return 0; }
+
+	if [ -n "$dev" ]; then
+		t=$(ip -4 addr show dev "$dev" 2>/dev/null | awk '$1 == "inet" {
+			for (i = 2; i < NF; i++)
+				if ($i == "peer") { p = $(i + 1); sub(/\/.*/, "", p); print p; exit }
+		}')
+		valid_target "$t" && { printf '%s\n' "$t"; return 0; }
+	fi
+
+	if command -v ubus >/dev/null 2>&1 && command -v jsonfilter >/dev/null 2>&1; then
+		status=$(ubus call network.interface.wan status 2>/dev/null)
+		if [ -n "$status" ]; then
+			for expr in '@["ipv4-address"][0].ptpaddress' '@.route[@.target="0.0.0.0" && @.mask=0].nexthop'; do
+				t=$(printf '%s\n' "$status" | jsonfilter -e "$expr" 2>/dev/null | head -n 1)
+				valid_target "$t" && { printf '%s\n' "$t"; return 0; }
+			done
+		fi
+	fi
+
+	printf '%s\n' "1.1.1.1"
+}
 
 start_service() {
 	local enabled target
@@ -15,11 +64,7 @@ start_service() {
 		  uci -q get npu-monitor.@jitter[0].enabled || echo 0)
 	[ "$enabled" = "1" ] || return 0
 
-	target=$(uci -q get npu-monitor.jitter.target || \
-		 uci -q get npu-monitor.@jitter[0].target)
-	[ -n "$target" ] || \
-		target=$(ip -4 route show default 2>/dev/null | awk '/via/ {print $3; exit}')
-	[ -n "$target" ] || target="1.1.1.1"
+	target=$(resolve_target)
 
 	procd_open_instance
 	procd_set_param command "$DAEMON" "$target"
@@ -31,7 +76,8 @@ start_service() {
 }
 
 service_stopped() {
-	rm -f "$RUN_DIR/npu-jitter.json" "$RUN_DIR"/npu-jitter.*
+	[ ! -L "$RUN_DIR" ] && [ -d "$RUN_DIR" ] && \
+		rm -f "$RUN_DIR/npu-jitter.json" "$RUN_DIR"/npu-jitter.*
 }
 
 reload_service() {
@@ -41,4 +87,5 @@ reload_service() {
 
 service_triggers() {
 	procd_add_reload_trigger "npu-monitor"
+	procd_add_interface_trigger "interface.*" "wan" /etc/init.d/npu-jitter reload
 }

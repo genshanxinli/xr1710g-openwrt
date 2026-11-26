@@ -4,7 +4,7 @@
 
 'use strict';
 
-import { readfile, open, popen, glob, lsdir, stat, chmod, mkdir, unlink, rename } from 'fs';
+import { readfile, open, popen, glob, lsdir, stat, lstat, chmod, mkdir, unlink, rename } from 'fs';
 import { cursor } from 'uci';
 import { connect } from 'ubus';
 import * as nl from 'nl80211';
@@ -75,17 +75,28 @@ function hexval(s) {
 }
 
 function ensure_state_dir() {
-	let st = stat(STATE_DIR);
-	if (st?.type == 'directory')
+	let st = lstat(STATE_DIR);
+	if (st?.type == 'directory') {
+		if (st.uid != null && st.uid != 0)
+			return false;
+		chmod(STATE_DIR, 0700);
 		return true;
+	}
 	if (st != null)
 		return false;
 	mkdir(STATE_DIR, 0700);
-	st = stat(STATE_DIR);
-	if (st?.type != 'directory')
+	st = lstat(STATE_DIR);
+	if (st?.type != 'directory' || (st.uid != null && st.uid != 0))
 		return false;
 	chmod(STATE_DIR, 0700);
 	return true;
+}
+
+function read_jitter() {
+	const raw = readfile(JITTER_FILE);
+	if (!raw)
+		return null;
+	try { return json(raw); } catch (e) { return null; }
 }
 
 function state_write(name, content) {
@@ -103,26 +114,6 @@ function state_write(name, content) {
 	rename(tmp, target);
 }
 
-// Batch register reads into a single devmem invocation.
-function devmem_many(addrs) {
-	const parts = [];
-	for (let a in addrs) {
-		if (type(a) == 'int')
-			push(parts, sprintf('devmem 0x%x', a));
-	}
-	if (!length(parts))
-		return [];
-	const p = popen(join('; ', parts));
-	if (!p)
-		return [];
-	const out = p.read('all');
-	p.close();
-	const vals = [];
-	for (let line in split(trim(out ?? ''), '\n'))
-		push(vals, hexval(line));
-	return vals;
-}
-
 function count_hex_lines(path) {
 	let n = 0;
 	for (let line in slurp_lines(path))
@@ -131,24 +122,62 @@ function count_hex_lines(path) {
 	return n;
 }
 
+function freq_to_band(freq) {
+	if (freq >= 5925) return 2;
+	if (freq >= 5000) return 1;
+	if (freq > 0) return 0;
+	return null;
+}
+
+function valid_ifname(dev) {
+	return (type(dev) == 'string' &&
+		length(dev) > 0 && length(dev) <= 15 &&
+		dev != '.' && dev != '..' &&
+		match(dev, /^[a-zA-Z0-9._-]+$/) != null &&
+		stat(`/sys/class/net/${dev}`)?.type == 'directory');
+}
+
 // AP interfaces from netlink, with the band index encoded in phyN.<band>-...
 function ap_interfaces() {
 	const res = nl.request(nl.const.NL80211_CMD_GET_INTERFACE, nl.const.NLM_F_DUMP) ?? [];
 	const out = [];
 	for (let i in res) {
-		if (!i.ifname)
+		if (!valid_ifname(i.ifname))
 			continue;
 		if (i.iftype != null && i.iftype != nl.const.NL80211_IFTYPE_AP)
 			continue;
+		const mld = (index(i.ifname, '-mld') >= 0) ||
+			(type(i.mlo_links) == 'array' && length(i.mlo_links) > 0);
 		const m = match(i.ifname, /^[^.]+\.([0-9]+)-/);
 		let band = m ? +m[1] : null;
-		if (band == null) {
-			const freq = i.wiphy_freq ?? 0;
-			if (freq >= 5925) band = 2;
-			else if (freq >= 5000) band = 1;
-			else if (freq > 0) band = 0;
+		if (band == null)
+			band = freq_to_band(i.wiphy_freq ?? 0);
+		const mask = i.vif_radio_mask ?? 0;
+		if (band == null && !mld && mask > 0) {
+			for (let b = 0; b < 3; b++)
+				if (mask == (1 << b)) { band = b; break; }
 		}
-		push(out, { ifname: i.ifname, band, mld: (index(i.ifname, '-mld') >= 0) });
+		const active_bands = [];
+		if (mld) {
+			if (type(i.mlo_links) == 'array') {
+				for (let lk in i.mlo_links) {
+					const lb = freq_to_band(lk?.wiphy_freq ?? 0) ?? lk?.link_id ?? lk?.mlo_link_id;
+					if (lb != null && lb >= 0 && lb < 3 && index(active_bands, lb) < 0)
+						push(active_bands, lb);
+				}
+			}
+			if (!length(active_bands) && mask > 0) {
+				for (let b = 0; b < 3; b++)
+					if (mask & (1 << b))
+						push(active_bands, b);
+			}
+		} else if (band != null && band >= 0 && band < 3) {
+			push(active_bands, band);
+		}
+		const up = (read_str(`/sys/class/net/${i.ifname}/operstate`, '') == 'up') ||
+			(i.wiphy_freq ?? 0) > 0 ||
+			(mld && length(active_bands) > 0);
+		push(out, { ifname: i.ifname, band, mld, active_bands, up });
 	}
 	return out;
 }
@@ -157,15 +186,15 @@ function stations(ifname) {
 	return nl.request(nl.const.NL80211_CMD_GET_STATION, nl.const.NLM_F_DUMP, { dev: ifname }) ?? [];
 }
 
-
-// dmesg only grows; the NPU reservations are printed once at boot
 let npu_regions_cache;
 function npu_memory_regions() {
 	if (npu_regions_cache != null)
 		return npu_regions_cache;
 	const p = popen('dmesg');
-	if (!p)
-		return [];
+	if (!p) {
+		npu_regions_cache = [];
+		return npu_regions_cache;
+	}
 	const out = p.read('all') ?? '';
 	p.close();
 	const regions = [];
@@ -186,9 +215,8 @@ function npu_memory_regions() {
 			size: size ? size[1] : ''
 		});
 	}
-	if (length(regions))
-		npu_regions_cache = regions;
-	return regions;
+	npu_regions_cache = regions;
+	return npu_regions_cache;
 }
 
 function valid_fw_relpath(rel) {
@@ -277,17 +305,44 @@ function npu_version() {
 	return npu_version_cache;
 }
 
-function valid_ifname(dev) {
-	return (type(dev) == 'string' &&
-		length(dev) > 0 && length(dev) <= 15 &&
-		dev != '.' && dev != '..' &&
-		match(dev, /^[a-zA-Z0-9._-]+$/) != null &&
-		stat(`/sys/class/net/${dev}`)?.type == 'directory');
+function hw_offload_enabled(uci) {
+	return uci.get('firewall', '@defaults[0]', 'flow_offloading') == '1' &&
+	       uci.get('firewall', '@defaults[0]', 'flow_offloading_hw') == '1';
 }
 
-function wan_device() {
-	const dev = ubus_call('network.interface.wan', 'status')?.l3_device;
-	return valid_ifname(dev) ? dev : null;
+function detect_device_mode(uci, wan) {
+	if (uci.get('dhcp', 'lan', 'ignore') == '1')
+		return { mode: 'ap', reason: 'dhcp_disabled' };
+	const wan_ip = wan?.['ipv4-address']?.[0]?.address;
+	if (wan?.up !== true || !wan_ip)
+		return { mode: 'ap', reason: 'no_wan' };
+	return { mode: 'router', reason: '' };
+}
+
+function wan_phys_device(wan) {
+	wan = wan ?? ubus_call('network.interface.wan', 'status');
+	if (!wan)
+		return null;
+	if (valid_ifname(wan.device))
+		return wan.device;
+	if (valid_ifname(wan.l3_device))
+		return wan.l3_device;
+	return null;
+}
+
+function wan_l3_device(wan) {
+	wan = wan ?? ubus_call('network.interface.wan', 'status');
+	if (!wan)
+		return null;
+	if (valid_ifname(wan.l3_device))
+		return wan.l3_device;
+	if (valid_ifname(wan.device))
+		return wan.device;
+	return null;
+}
+
+function is_virtual_ifname(dev) {
+	return match(dev ?? '', /^(pppoe-|ppp|tun|tap|wg|vti|gre|sit|ip6tnl)/) != null;
 }
 
 function iface_stat(dev, name) {
@@ -468,8 +523,34 @@ function fw_tx_bytes_by_band() {
 	return tx;
 }
 
+function proc_stat_cpu_pct() {
+	const raw = readfile('/proc/stat');
+	if (!raw)
+		return 0;
+	const line = split(raw, '\n')[0];
+	if (!line || index(line, 'cpu ') != 0)
+		return 0;
+	const f = split(trim(line), /\s+/);
+	if (length(f) < 8)
+		return 0;
+	let total = 0;
+	for (let i = 1; i <= 7; i++)
+		total += num(f[i], 0);
+	const idle = num(f[4], 0) + num(f[5], 0);
+	let pct = 0;
+	const prev = state_read('npu-cpu-stat.prev');
+	if (prev && length(prev) >= 2) {
+		const dt = total - prev[0];
+		const di = idle - prev[1];
+		if (dt > 0 && di >= 0 && di <= dt)
+			pct = int((dt - di) * 100 / dt);
+	}
+	state_write('npu-cpu-stat.prev', `${total} ${idle}`);
+	return pct;
+}
+
 function tx_stats_by_band() {
-	const per = [ 0, 0, 0 ], txok = [ 0, 0, 0 ];
+	const per = [ 0, 0, 0 ], txok = [ 0, 0, 0 ], txatt = [ 0, 0, 0 ];
 	let band = -1;
 	for (let line in slurp_lines(`${PHY_DBG}/mt76/tx_stats`)) {
 		let m = match(line, /Phy band ([0-9]+)/);
@@ -477,8 +558,12 @@ function tx_stats_by_band() {
 		if (band < 0 || band > 2)
 			continue;
 		if ((m = match(line, /Tx PER:\s+([0-9.]+)/))) per[band] = int(+m[1]);
+		else if ((m = match(line, /Tx attempts:\s+([0-9]+)/))) txatt[band] = +m[1];
 		else if ((m = match(line, /Tx success:\s+([0-9]+)/))) txok[band] = +m[1];
 	}
+	for (let b = 0; b < 3; b++)
+		if (txatt[b] == 0)
+			per[b] = 0;
 	return { per, txok };
 }
 
@@ -500,16 +585,10 @@ const methods = {
 				if (match(e, /^cpu[0-9]+$/))
 					cpu_count++;
 
-			// PLL registers expose the real (possibly overclocked) frequency
-			let pll_freq = 0;
-			const regs = devmem_many([ 0x1fa202b4, 0x1fa202b8 ]);
-			if (length(regs) == 2) {
-				const pcw_int = (regs[0] >> 24) & 0x7F;
-				const posdiv = (regs[1] >> 4) & 7;
-				pll_freq = posdiv ? (pcw_int * 50 / (1 << posdiv)) : (pcw_int * 50);
-			}
-
 			const cpufreq = '/sys/devices/system/cpu/cpufreq/policy0';
+			const cpu_cur_freq = read_num(`${cpufreq}/scaling_cur_freq`, 0);
+			const cpu_hw_freq = read_num(`${cpufreq}/cpuinfo_cur_freq`, 0);
+			const cur_khz = cpu_cur_freq || cpu_hw_freq;
 			return {
 				npu_version: npu_version(),
 				npu_loaded: (npu_device != ''),
@@ -519,15 +598,15 @@ const methods = {
 				offload_bound: count_hex_lines(PPE_BIND),
 				offload_total: count_hex_lines(PPE_ENTRIES),
 				memory_regions: npu_memory_regions(),
-				cpu_cur_freq: read_num(`${cpufreq}/scaling_cur_freq`, 0),
-				cpu_hw_freq: read_num(`${cpufreq}/cpuinfo_cur_freq`, 0),
+				cpu_cur_freq,
+				cpu_hw_freq,
 				cpu_governor: read_str(`${cpufreq}/scaling_governor`, 'unknown'),
 				cpu_avail_governors: read_line_raw(`${cpufreq}/scaling_available_governors`, ''),
 				cpu_min_freq: read_num(`${cpufreq}/scaling_min_freq`, 0),
 				cpu_max_freq: read_num(`${cpufreq}/scaling_max_freq`, 0),
 				cpu_avail_freqs: read_line_raw(`${cpufreq}/scaling_available_frequencies`, ''),
 				cpu_count,
-				pll_freq_mhz: int(pll_freq)
+				pll_freq_mhz: cur_khz > 0 ? int((cur_khz + 500) / 1000) : 0
 			};
 		}
 	},
@@ -641,58 +720,19 @@ const methods = {
 
 	getFrameEngine: {
 		call: function() {
-			const addrs = [];
-			for (let i = 0; i < 10; i++) push(addrs, 0x1fb50150 + i * 4);   // PSE queue
-			for (let i = 0; i < 10; i++) push(addrs, 0x1fb50120 + i * 4);   // PSE drops
-			push(addrs, 0x1fb50104);                                        // shared buffer
-			for (let base in [ 0x1fb50600, 0x1fb51600, 0x1fb52600 ])        // GDM1/2/4
-				for (let off in [ 0x04, 0x08, 0x48, 0x4c ])
-					push(addrs, base + off);
-			for (let base in [ 0x1fb50580, 0x1fb51580 ])                    // CDM1/2
-				for (let off in [ 0x00, 0x10, 0x14, 0x20, 0x24 ])
-					push(addrs, base + off);
-
-			const v = devmem_many(addrs);
-			if (length(v) != length(addrs))
-				return { error: 'devmem not available' };
-
-			const pse_ports = [];
-			for (let i = 0; i < 10; i++)
-				push(pse_ports, {
-					port: i,
-					iq: (v[i] >> 16) & 0xFFFF,
-					oq: v[i] & 0xFFFF,
-					drops: v[10 + i]
-				});
-
-			const psb = v[20];
-			let n = 21;
-			const gdm = [];
-			for (let g = 0; g < 3; g++, n += 4)
-				push(gdm, { tx: v[n], tx_drop: v[n + 1], rx: v[n + 2], rx_drop: v[n + 3] });
-			const cdm = [];
-			for (let c = 0; c < 2; c++, n += 5)
-				push(cdm, {
-					tx: v[n], rx_cpu: v[n + 1], rx_hwf: v[n + 2],
-					rx_cpu_drop: v[n + 3], rx_hwf_drop: v[n + 4]
-				});
-
 			return {
-				pse_ports,
-				pse_used: (psb >> 16) & 0xFFFF,
-				pse_free: psb & 0x7FFF,
-				gdm1: gdm[0], gdm2: gdm[1], gdm4: gdm[2],
-				cdm1: cdm[0], cdm2: cdm[1]
+				supported: false,
+				reason: 'kernel_mmio_unavailable',
+				pse_ports: [],
+				pse_used: 0,
+				pse_free: 0
 			};
 		}
 	},
 
 	getFlowOffload: {
 		call: function() {
-			const uci = cursor();
-			const fo = uci.get('firewall', '@defaults[0]', 'flow_offloading');
-			const foh = uci.get('firewall', '@defaults[0]', 'flow_offloading_hw');
-			return { enabled: (fo == '1' && foh == '1') ? 1 : 0 };
+			return { enabled: hw_offload_enabled(cursor()) ? 1 : 0 };
 		}
 	},
 
@@ -711,25 +751,16 @@ const methods = {
 				uci.delete('firewall', '@defaults[0]', 'flow_offloading');
 				uci.delete('firewall', '@defaults[0]', 'flow_offloading_hw');
 			}
-			uci.commit('firewall');
+			if (!uci.commit('firewall'))
+				return { error: 'failed to commit firewall config' };
 			ubus_call('service', 'event', { type: 'config.change', data: { package: 'firewall' } });
-			system('/etc/init.d/firewall reload >/dev/null 2>&1 &');
 			return { result: 'ok', enabled };
 		}
 	},
 
 	getDeviceMode: {
 		call: function() {
-			const uci = cursor();
-			if (uci.get('dhcp', 'lan', 'ignore') == '1')
-				return { mode: 'ap', reason: 'dhcp_disabled' };
-
-			const wan = ubus_call('network.interface.wan', 'status');
-			const wan_ip = wan?.['ipv4-address']?.[0]?.address;
-			if (wan?.up !== true || !wan_ip)
-				return { mode: 'ap', reason: 'no_wan' };
-
-			return { mode: 'router', reason: '' };
+			return detect_device_mode(cursor(), ubus_call('network.interface.wan', 'status'));
 		}
 	},
 
@@ -738,8 +769,7 @@ const methods = {
 			const wan = ubus_call('network.interface.wan', 'status');
 			if (!wan)
 				return { available: false };
-			const raw_dev = wan.l3_device ?? '';
-			const dev = valid_ifname(raw_dev) ? raw_dev : '';
+			const dev = wan_phys_device(wan) ?? '';
 			return {
 				available: true,
 				up: wan.up === true,
@@ -757,13 +787,13 @@ const methods = {
 
 	getJitterResult: {
 		call: function() {
-			const data = readfile(JITTER_FILE);
-			if (data) {
-				try { return json(data); } catch (e) { }
-			}
+			const j = read_jitter();
+			if (j)
+				return j;
+			const target = cursor().get('npu-monitor', 'jitter', 'target') ?? '';
 			return {
 				jitter: 0, last_ping: 0, samples: 0,
-				target: '1.1.1.1', reachable: false, available: false
+				target, reachable: false, available: false
 			};
 		}
 	},
@@ -777,7 +807,7 @@ const methods = {
 			const acc = [];
 			for (let b = 0; b < 3; b++)
 				push(acc, {
-					stations: 0, tx_packets: 0, tx_retries: 0, tx_failed: 0,
+					active: false, stations: 0, tx_packets: 0, tx_retries: 0, tx_failed: 0,
 					sum_phy: 0, phy_n: 0, sum_sig: 0, sig_n: 0, min_sig: 0,
 					tx_bytes: 0, rx_bytes: 0, tx_dur: 0, rx_dur: 0,
 					sum_txrate: 0, txrate_n: 0, sum_rxrate: 0, rxrate_n: 0,
@@ -809,7 +839,13 @@ const methods = {
 			};
 
 			let mlo = false;
+			const sta_macs = [ [], [], [] ];
 			for (let ifc in ifaces) {
+				if (ifc.up) {
+					for (let ab in ifc.active_bands ?? [])
+						if (ab >= 0 && ab < 3)
+							acc[ab].active = true;
+				}
 				const base = `${PHY_DBG}/netdev:${ifc.ifname}/stations`;
 				if (ifc.mld) {
 					mlo = true;
@@ -821,6 +857,7 @@ const methods = {
 						for (let b = 0; b < 3; b++) {
 							if (stat(`${dir}/link-${b}`)?.type != 'directory')
 								continue;
+							push(sta_macs[b], mac);
 							if (by_mac[mac])
 								add_station(acc[b], by_mac[mac], false);
 							acc[b].rxfrag += read_num(`${dir}/link-${b}/rx_fragments`, 0);
@@ -831,8 +868,10 @@ const methods = {
 				if (ifc.band == null || ifc.band > 2)
 					continue;
 				const a = acc[ifc.band];
-				for (let s in stations(ifc.ifname))
+				for (let s in stations(ifc.ifname)) {
+					if (s.mac) push(sta_macs[ifc.band], lc(s.mac));
 					add_station(a, s.sta_info, true);
+				}
 				for (let dir in glob(`${base}/*`) ?? [])
 					a.rxfrag += read_num(`${dir}/rx_fragments`, 0);
 			}
@@ -917,7 +956,6 @@ const methods = {
 
 			const bnd_per_band = [ 0, 0, 0 ];
 			if (stat(PPE_BIND)?.type == 'file') {
-				const sm = station_macs_by_band();
 				for (let line in slurp_lines(PPE_BIND)) {
 					if (!match(line, /^[0-9a-fA-F]+ BND /))
 						continue;
@@ -925,7 +963,7 @@ const methods = {
 					if (!m)
 						continue;
 					for (let b = 0; b < 3; b++)
-						if (mac_in(sm.bands[b], m[1]))
+						if (mac_in(sta_macs[b], m[1]))
 							bnd_per_band[b]++;
 				}
 			}
@@ -968,10 +1006,11 @@ const methods = {
 			const bands = [];
 			for (let b = 0; b < 3; b++) {
 				const a = acc[b];
-				if (!a.stations)
+				if (!a.stations && !a.active)
 					continue;
 				push(bands, {
 					band: b,
+					active: a.active,
 					stations: a.stations,
 					tx_packets: a.tx_packets,
 					tx_retries: a.tx_retries,
@@ -1015,31 +1054,14 @@ const methods = {
 	getNpuBypass: {
 		call: function() {
 			const uci = cursor();
-			const hw_offload = (uci.get('firewall', '@defaults[0]', 'flow_offloading_hw') == '1');
+			const hw_offload = hw_offload_enabled(uci);
+			const offload_bound = count_hex_lines(PPE_BIND);
 
-			// Count non-header non-empty lines.
-			let offload_bound = 0;
-			const bind_lines = slurp_lines(PPE_BIND);
-			if (length(bind_lines)) {
-				offload_bound = length(bind_lines);
-				if (bind_lines[length(bind_lines) - 1] == '')
-					offload_bound--;
-				if (length(bind_lines[0]) && !match(bind_lines[0], /^[0-9]/))
-					offload_bound--;
-				if (offload_bound < 0)
-					offload_bound = 0;
-			}
+			const j = read_jitter();
+			const cpu_pct = (j?.cpu_pct != null) ? num(j.cpu_pct, 0) : proc_stat_cpu_pct();
 
-			let cpu_pct = 0;
-			const jit = readfile(JITTER_FILE);
-			if (jit) {
-				const m = match(jit, /"cpu_pct":([0-9]+)/);
-				if (m) cpu_pct = +m[1];
-			}
-
-			// WAN TX delta, router mode only
 			let wan_mbps = 0;
-			const dev = wan_device();
+			const dev = wan_phys_device();
 			if (dev) {
 				const cur_tx = iface_stat(dev, 'tx_bytes');
 				const now = time();
@@ -1067,19 +1089,23 @@ const methods = {
 	getConflictAlerts: {
 		call: function() {
 			const uci = cursor();
-			const hw_offload = (uci.get('firewall', '@defaults[0]', 'flow_offloading_hw') == '1');
+			const hw_offload = hw_offload_enabled(uci);
+			const wan = ubus_call('network.interface.wan', 'status');
+			const mode = detect_device_mode(uci, wan).mode;
+			const phys_dev = wan_phys_device(wan);
+			const l3_dev = wan_l3_device(wan);
 			const alerts = [];
-			const dev = wan_device();
 
 			let cake_on_wan = false;
-			if (valid_ifname(dev)) {
+			if (phys_dev || l3_dev) {
 				const p = popen('tc qdisc show 2>/dev/null');
 				if (p) {
 					const out = p.read('all') ?? '';
 					p.close();
 					for (let line in split(out, '\n')) {
 						const f = split(trim(line), /\s+/);
-						if (length(f) >= 5 && f[0] == 'qdisc' && f[1] == 'cake' && f[3] == 'dev' && f[4] == dev) {
+						if (length(f) >= 5 && f[0] == 'qdisc' && f[1] == 'cake' && f[3] == 'dev' &&
+						    (f[4] == phys_dev || f[4] == l3_dev)) {
 							cake_on_wan = true;
 							break;
 						}
@@ -1092,21 +1118,63 @@ const methods = {
 					message: 'NPU HW offload is bypassing CAKE SQM. Offloaded flows skip bufferbloat management — latency protection is inactive under load.'
 				});
 
-			const rx_errors = dev ? iface_stat(dev, 'rx_errors') : 0;
-			if (rx_errors > 0)
-				push(alerts, {
-					id: 'physical_bottleneck', severity: 'error', title: 'Physical Bottleneck',
-					message: `Hardware errors detected on WAN (${rx_errors} rx_errors). Check WAN cable or SFP. Latency stats may be misleading.`
-				});
-
-			if (hw_offload) {
-				const jit = readfile(JITTER_FILE);
-				const m = jit ? match(jit, /"last_ping":([0-9.]+)/) : null;
-				if (m && +m[1] > 60)
+			if (phys_dev) {
+				const rx_errors = iface_stat(phys_dev, 'rx_errors');
+				const tx_errors = iface_stat(phys_dev, 'tx_errors');
+				let rx_delta = 0, tx_delta = 0;
+				const prev_raw = readfile(`${STATE_DIR}/npu-wan-alert-err.prev`);
+				if (prev_raw) {
+					const pf = split(trim(prev_raw), /\s+/);
+					if (length(pf) >= 3 && pf[0] == phys_dev) {
+						const prev_rx = num(pf[1], 0), prev_tx = num(pf[2], 0);
+						if (rx_errors >= prev_rx) rx_delta = rx_errors - prev_rx;
+						if (tx_errors >= prev_tx) tx_delta = tx_errors - prev_tx;
+					}
+				}
+				state_write('npu-wan-alert-err.prev', `${phys_dev} ${rx_errors} ${tx_errors}`);
+				if (rx_delta > 0 || tx_delta > 0) {
+					const hint = is_virtual_ifname(phys_dev) ? 'Check WAN link.' : 'Check WAN cable/link.';
 					push(alerts, {
-						id: 'npu_bypass_latency', severity: 'warning', title: 'NPU Bypass Detected',
-						message: `HW offload is enabled but ISP latency is high (${m[1]}ms). Latency management may be skipped by hardware acceleration.`
+						id: 'physical_bottleneck', severity: 'error', title: 'Physical Bottleneck',
+						message: `Active errors on WAN (${phys_dev}): +${rx_delta} RX / +${tx_delta} TX (total ${rx_errors}/${tx_errors}). ${hint}`
 					});
+				}
+			}
+
+			const offload_bound = count_hex_lines(PPE_BIND);
+			if (hw_offload && mode == 'router' && offload_bound > 0) {
+				const j = read_jitter();
+				if (j && j.available === true && j.reachable === true) {
+					const samples = num(j.samples, 0);
+					const jitter = num(j.jitter, 0);
+					const target = j.target || 'gateway';
+					let delta = null;
+					if (j.rtt_delta != null)
+						delta = num(j.rtt_delta, 0);
+					else if (j.avg_ping != null && j.baseline_ping != null)
+						delta = num(j.avg_ping, 0) - num(j.baseline_ping, 0);
+					if (delta != null && delta < 0)
+						delta = 0;
+
+					const baseline = j.baseline_ping != null ? num(j.baseline_ping, 0) : null;
+					const inflated = (delta != null && samples >= 3 && delta >= 40);
+					const jitter_sustained = (delta != null)
+						? (samples >= 5 && jitter >= 25 && delta >= 15)
+						: (samples >= 5 && jitter >= 30);
+
+					if (inflated)
+						push(alerts, {
+							id: 'npu_bypass_latency', severity: 'warning', title: 'Latency Inflation Under Offload',
+							message: `RTT inflated by +${sprintf('%.1f', delta)}ms` +
+								(baseline != null ? ` over ${sprintf('%.1f', baseline)}ms baseline` : '') +
+								` (jitter ${sprintf('%.1f', jitter)}ms to ${target}) with ${offload_bound} HW-offloaded flows.`
+						});
+					else if (jitter_sustained)
+						push(alerts, {
+							id: 'npu_bypass_latency', severity: 'warning', title: 'Latency Inflation Under Offload',
+							message: `Sustained latency jitter (${sprintf('%.1f', jitter)}ms to ${target}) with ${offload_bound} HW-offloaded flows.`
+						});
+				}
 			}
 
 			return { alert_count: length(alerts), alerts };

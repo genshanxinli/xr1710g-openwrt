@@ -3,7 +3,7 @@
 
 TARGET="${1:-1.1.1.1}"
 case "$TARGET" in
-	''|-*|*[!a-zA-Z0-9.:_-]*) TARGET="1.1.1.1" ;;
+	''|auto|0.0.0.0|-*|*[!a-zA-Z0-9.:_-]*) TARGET="1.1.1.1" ;;
 esac
 
 RUN_DIR="${FLOWSENSE_RUN_DIR:-/var/run/flowsense}"
@@ -35,6 +35,7 @@ trap cleanup TERM INT
 ping_values=""
 count=0
 cpu_prev=""
+baseline_rtt=""
 
 while true; do
 	cpu_now=$(awk '/^cpu /{print $2,$3,$4,$5,$6,$7,$8; exit}' /proc/stat 2>/dev/null)
@@ -44,14 +45,19 @@ while true; do
 			split(a, p, " "); split(b, c, " ")
 			pt = p[1]+p[2]+p[3]+p[4]+p[5]+p[6]+p[7]
 			ct = c[1]+c[2]+c[3]+c[4]+c[5]+c[6]+c[7]
-			dt = ct - pt; di = c[4] - p[4]
-			if (dt > 0) printf "%d", int((dt - di) * 100 / dt)
+			dt = ct - pt; di = (c[4] + c[5]) - (p[4] + p[5])
+			if (dt > 0 && di >= 0 && di <= dt) printf "%d", int((dt - di) * 100 / dt)
 			else print 0
 		}')
 	fi
 	cpu_prev="$cpu_now"
 
-	rtt=$(ping -c 1 -W 1 "$TARGET" 2>/dev/null | awk -F'/' '/min.*avg/{printf "%.2f", $5}')
+	rtt=$(ping -c 1 -W 1 "$TARGET" 2>/dev/null | awk '/min\/avg/{
+		sub(/.*= */, "")
+		split($0, a, "/")
+		if (a[2] ~ /^[0-9]+(\.[0-9]+)?$/) printf "%.2f", a[2]
+		exit
+	}')
 
 	if [ -n "$rtt" ]; then
 		ping_values="$ping_values $rtt"
@@ -59,28 +65,48 @@ while true; do
 
 		if [ "$count" -gt "$WINDOW" ]; then
 			ping_values=$(printf '%s\n' "$ping_values" | awk -v w="$WINDOW" '{
-				for (i = NF - w + 1; i <= NF; i++) printf $i " "
+				for (i = NF - w + 1; i <= NF; i++) printf "%s ", $i
 			}')
 			count=$WINDOW
 		fi
 
-		result=$(printf '%s\n' "$ping_values" | awk -v c="$count" -v cpu="$cpu_pct" -v target="$TARGET" '{
+		baseline_rtt=$(awk -v b="$baseline_rtt" -v r="$rtt" 'BEGIN {
+			r += 0
+			if (b == "" || r < b + 0) printf "%.2f", r
+			else printf "%.2f", (b + 0) + (r - (b + 0)) * 0.005
+		}')
+
+		result=$(printf '%s\n' "$ping_values" | awk -v c="$count" -v cpu="$cpu_pct" -v target="$TARGET" -v base="$baseline_rtt" '{
 			n = NF
 			sum = 0
-			for (i = 1; i <= n; i++) sum += $i
+			for (i = 1; i <= n; i++) {
+				v[i] = $i + 0
+				s[i] = v[i]
+				sum += v[i]
+			}
 			avg = sum / n
 			dev = 0
-			for (i = 1; i <= n; i++) dev += ($i > avg ? $i - avg : avg - $i)
+			for (i = 1; i <= n; i++) dev += (v[i] > avg ? v[i] - avg : avg - v[i])
 			jitter = dev / n
-			last = $n
-			printf "{\"jitter\":%.2f,\"last_ping\":%.2f,\"samples\":%d,\"target\":\"%s\",\"reachable\":true,\"available\":true,\"cpu_pct\":%d}", \
-				jitter, last, c, target, cpu
+			for (i = 2; i <= n; i++) {
+				key = s[i]; j = i - 1
+				while (j >= 1 && s[j] > key) { s[j + 1] = s[j]; j-- }
+				s[j + 1] = key
+			}
+			mid = int(n / 2)
+			med = (n % 2 == 1) ? s[mid + 1] : (s[mid] + s[mid + 1]) / 2
+			delta = med - (base + 0)
+			if (delta < 0) delta = 0
+			last = v[n]
+			printf "{\"jitter\":%.2f,\"last_ping\":%.2f,\"avg_ping\":%.2f,\"baseline_ping\":%.2f,\"rtt_delta\":%.2f,\"samples\":%d,\"target\":\"%s\",\"reachable\":true,\"available\":true,\"cpu_pct\":%d}", \
+				jitter, last, avg, base + 0, delta, c, target, cpu
 		}')
 
 		write_result "$result"
 	else
-		result=$(printf '{"jitter":0,"last_ping":0,"samples":%d,"target":"%s","reachable":false,"available":true,"cpu_pct":%d}' \
-			"$count" "$TARGET" "$cpu_pct")
+		base_out="${baseline_rtt:-0}"
+		result=$(printf '{"jitter":0,"last_ping":0,"avg_ping":0,"baseline_ping":%s,"rtt_delta":0,"samples":%d,"target":"%s","reachable":false,"available":true,"cpu_pct":%d}' \
+			"$base_out" "$count" "$TARGET" "$cpu_pct")
 		write_result "$result"
 	fi
 

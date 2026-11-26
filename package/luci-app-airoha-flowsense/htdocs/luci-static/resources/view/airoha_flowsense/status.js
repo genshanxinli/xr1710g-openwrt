@@ -7,6 +7,7 @@
 var _prevPseDrops    = null;
 var _prevCdmHwfDrops = null;
 var _prevBridgeDrops = null;
+var _prevWanErrors   = null;
 var _prevPpeBnd      = null;
 var _prevBandBnd     = [null, null, null];
 var _prevEthBytes    = {};
@@ -398,17 +399,18 @@ function hwBufferState(fe, ppe) {
 	fe = fe || {}; ppe = ppe || {};
 
 	var ports = Array.isArray(fe.pse_ports) ? fe.pse_ports : [];
-	var pseDrops = 0;
-	ports.forEach(function(p) { pseDrops += (p.drops || 0); });
+	var feSupported = fe.supported !== false && (ports.length > 0 || !!fe.cdm1 || !!fe.cdm2);
+	var pseDrops = 0, cdmHwfDrops = 0, pseDelta = 0, cdmHwfDelta = 0;
+	if (feSupported) {
+		ports.forEach(function(p) { pseDrops += (p.drops || 0); });
+		cdmHwfDrops = ((fe.cdm1||{}).rx_hwf_drop||0) + ((fe.cdm2||{}).rx_hwf_drop||0);
+		pseDelta    = (_prevPseDrops    !== null && pseDrops    >= _prevPseDrops)    ? (pseDrops    - _prevPseDrops)    : 0;
+		cdmHwfDelta = (_prevCdmHwfDrops !== null && cdmHwfDrops >= _prevCdmHwfDrops) ? (cdmHwfDrops - _prevCdmHwfDrops) : 0;
+		_prevPseDrops    = pseDrops;
+		_prevCdmHwfDrops = cdmHwfDrops;
+	}
 
-	var cdmHwfDrops = ((fe.cdm1||{}).rx_hwf_drop||0) + ((fe.cdm2||{}).rx_hwf_drop||0);
-
-	var pseDelta    = (_prevPseDrops    !== null && pseDrops    >= _prevPseDrops)    ? (pseDrops    - _prevPseDrops)    : 0;
-	var cdmHwfDelta = (_prevCdmHwfDrops !== null && cdmHwfDrops >= _prevCdmHwfDrops) ? (cdmHwfDrops - _prevCdmHwfDrops) : 0;
-	_prevPseDrops    = pseDrops;
-	_prevCdmHwfDrops = cdmHwfDrops;
-
-	var activeDrop = cdmHwfDelta > 0 || pseDelta > 200;
+	var activeDrop = feSupported && (cdmHwfDelta > 0 || pseDelta > 200);
 
 	var ppeBound = (ppe.bnd || {}).total || 0;
 	var ppeUnb   = (ppe.unb || {}).total || 0;
@@ -417,6 +419,7 @@ function hwBufferState(fe, ppe) {
 
 	var color = activeDrop ? '#f5a623' : '#00cc44';
 	return {
+		feSupported: feSupported,
 		pseDrops: pseDrops, cdmHwfDrops: cdmHwfDrops, pseDelta: pseDelta, cdmHwfDelta: cdmHwfDelta,
 		activeDrop: activeDrop,
 		ppeBound: ppeBound, ppeTotal: ppeTotal, ppePct: ppePct,
@@ -434,14 +437,24 @@ function compassState(bypass, hwBuf, jitter, wan, wifi, mode) {
 	var wanMbps   = bypass.wan_mbps || 0;
 	var latMs     = jitter.last_ping || 0;
 
-	var errCount = 0;
+	var errCount = 0, errDelta = 0, rxErrDelta = 0, txErrDelta = 0;
 	var eastAlarm = false;
 	var worstSignal = 0;
 	var wbDelta = [];
 	if (mode === 'router') {
-		errCount = (wan.rx_errors||0) + (wan.tx_errors||0);
-		eastAlarm = errCount > 0;
+		var rxTot = wan.rx_errors || 0;
+		var txTot = wan.tx_errors || 0;
+		var dev = wan.device || '';
+		errCount = rxTot + txTot;
+		if (_prevWanErrors !== null && _prevWanErrors.dev === dev) {
+			if (rxTot >= _prevWanErrors.rx) rxErrDelta = rxTot - _prevWanErrors.rx;
+			if (txTot >= _prevWanErrors.tx) txErrDelta = txTot - _prevWanErrors.tx;
+			errDelta = rxErrDelta + txErrDelta;
+		}
+		_prevWanErrors = { dev: dev, rx: rxTot, tx: txTot };
+		eastAlarm = errDelta > 0;
 	} else {
+		_prevWanErrors = null;
 		(wifi.bands||[]).filter(function(b){ return (b.stations||0) > 0; }).forEach(function(b) {
 			var sig = b.min_signal || 0;
 			wbDelta.push({ band: b.band, stations: b.stations, signal: sig, avg_signal: b.avg_signal || 0 });
@@ -462,7 +475,7 @@ function compassState(bypass, hwBuf, jitter, wan, wifi, mode) {
 	return {
 		npuActive:npuActive, hwEnabled:hwEnabled, cpuPct:cpuPct, wanMbps:wanMbps,
 		hwBuf:hwBuf, mode:mode,
-		latMs:latMs, errCount:errCount, eastAlarm:eastAlarm,
+		latMs:latMs, errCount:errCount, errDelta:errDelta, rxErrDelta:rxErrDelta, txErrDelta:txErrDelta, eastAlarm:eastAlarm,
 		wbDelta:wbDelta, worstSignal:worstSignal,
 		latColor:latencyColor(latMs),
 		eastColor: eastColor
@@ -966,8 +979,12 @@ function renderCompassCards(cs, jitter, wan, bridge, mode) {
 
 	var eastVal, eastSub;
 	if (mode === 'router') {
-		eastVal = cs.eastAlarm ? cs.errCount+' ERROR'+(cs.errCount>1?'S':'') : 'CLEAN';
-		eastSub = 'RX errors: '+(wan.rx_errors||0)+'  TX errors: '+(wan.tx_errors||0);
+		eastVal = cs.eastAlarm ? '+'+cs.errDelta+' ERROR'+(cs.errDelta>1?'S':'') : 'CLEAN';
+		eastSub = cs.eastAlarm
+			? 'RX Δ: +'+cs.rxErrDelta+' ('+(wan.rx_errors||0)+')  TX Δ: +'+cs.txErrDelta+' ('+(wan.tx_errors||0)+')'
+			: (cs.errCount > 0
+				? 'Δ: 0  |  Total RX: '+(wan.rx_errors||0)+'  TX: '+(wan.tx_errors||0)
+				: 'RX errors: 0  TX errors: 0');
 	} else {
 		var ws = cs.worstSignal;
 		eastVal = cs.wbDelta.length === 0 ? 'NO CLIENTS'
@@ -985,11 +1002,15 @@ function renderCompassCards(cs, jitter, wan, bridge, mode) {
 	var hb = cs.hwBuf || {};
 	var southVal   = hb.activeDrop ? 'DROPPING' : 'HEALTHY';
 	var southColor = hb.color || '#00cc44';
-	var southSub   = 'PSE Δ: '+hb.pseDelta+' CDM Δ: '+hb.cdmHwfDelta+' | PPE: '+hb.ppePct+'% BND ('+hb.ppeBound+'/'+hb.ppeTotal+')';
+	var southSub   = hb.feSupported
+		? 'PSE Δ: '+hb.pseDelta+' CDM Δ: '+hb.cdmHwfDelta+' | PPE: '+hb.ppePct+'% BND ('+hb.ppeBound+'/'+hb.ppeTotal+')'
+		: 'PPE: '+hb.ppePct+'% BND ('+hb.ppeBound+'/'+hb.ppeTotal+')  |  FE MMIO: N/A';
 
 	var latVal   = cs.latMs > 0 ? cs.latMs.toFixed(1)+'ms' : (jitter.available===false ? 'N/A' : '---');
 	var latColor = cs.latColor;
-	var latSub   = 'Jitter: '+(jitter.jitter||0).toFixed(1)+'ms  |  '+(jitter.samples||0)+' samples  |  '+(jitter.target||'1.1.1.1');
+	var latSub   = jitter.available === false
+		? 'Jitter monitor disabled'
+		: 'Jitter: '+(jitter.jitter||0).toFixed(1)+'ms  |  '+(jitter.samples||0)+' samples  |  '+(jitter.target||'auto');
 
 	function card(title, val, color, sub) {
 		return E('div', { 'class': 'compass-card' }, [
@@ -1033,9 +1054,13 @@ function updateCompassCards(cs, jitter, wan, bridge, mode) {
 			:'CPU: '+cs.cpuPct+'%  |  WAN: '+cs.wanMbps+' Mbps');
 
 	if (mode === 'router') {
-		setCard(divs[1], cs.eastAlarm?cs.errCount+' ERROR'+(cs.errCount>1?'S':''):'CLEAN',
+		setCard(divs[1], cs.eastAlarm?'+'+cs.errDelta+' ERROR'+(cs.errDelta>1?'S':''):'CLEAN',
 			cs.eastColor,
-			'RX errors: '+(wan.rx_errors||0)+'  TX errors: '+(wan.tx_errors||0));
+			cs.eastAlarm
+				? 'RX Δ: +'+cs.rxErrDelta+' ('+(wan.rx_errors||0)+')  TX Δ: +'+cs.txErrDelta+' ('+(wan.tx_errors||0)+')'
+				: (cs.errCount > 0
+					? 'Δ: 0  |  Total RX: '+(wan.rx_errors||0)+'  TX: '+(wan.tx_errors||0)
+					: 'RX errors: 0  TX errors: 0'));
 	} else {
 		var ws2 = cs.worstSignal;
 		var bnames2 = ['2.4G','5G','6G'];
@@ -1053,13 +1078,17 @@ function updateCompassCards(cs, jitter, wan, bridge, mode) {
 
 	var latVal = cs.latMs > 0 ? cs.latMs.toFixed(1)+'ms' : (jitter.available===false?'N/A':'---');
 	setCard(divs[2], latVal, cs.latColor,
-		'Jitter: '+(jitter.jitter||0).toFixed(1)+'ms  |  '+(jitter.samples||0)+' samples  |  '+(jitter.target||'1.1.1.1'));
+		jitter.available === false
+			? 'Jitter monitor disabled'
+			: 'Jitter: '+(jitter.jitter||0).toFixed(1)+'ms  |  '+(jitter.samples||0)+' samples  |  '+(jitter.target||'auto'));
 
 	var hb = cs.hwBuf || {};
 	setCard(divs[3],
 		hb.activeDrop?'DROPPING':'HEALTHY',
 		hb.color||'#00cc44',
-		'PSE Δ: '+hb.pseDelta+' CDM Δ: '+hb.cdmHwfDelta+' | PPE: '+hb.ppePct+'% BND ('+hb.ppeBound+'/'+hb.ppeTotal+')');
+		hb.feSupported
+			? 'PSE Δ: '+hb.pseDelta+' CDM Δ: '+hb.cdmHwfDelta+' | PPE: '+hb.ppePct+'% BND ('+hb.ppeBound+'/'+hb.ppeTotal+')'
+			: 'PPE: '+hb.ppePct+'% BND ('+hb.ppeBound+'/'+hb.ppeTotal+')  |  FE MMIO: N/A');
 }
 
 return view.extend({
