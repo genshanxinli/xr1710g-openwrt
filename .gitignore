@@ -37,3 +37,4 @@ git-src
 .sccache
 .vscode*
 __pycache__/
+/.scratch/

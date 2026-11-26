@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-only
-# Pre-build gate: ASCII TOPDIR, shell/python syntax, BusyBox ash lint, repo hygiene, and --patch-queue.
+# Pre-build gate: ASCII TOPDIR, shell/python syntax, BusyBox ash lint, LuCI ACL, repo hygiene, and --patch-queue.
 set -u
 
 TOPDIR=${TOPDIR:-$PWD}
@@ -92,12 +92,13 @@ ash_lint_file() {
 
 check_scripts() {
 	list="$WORK/scripts.list"; : > "$list"
-	if [ -d "$TOPDIR/target/linux/airoha/an7581/base-files" ]; then
-		find "$TOPDIR/target/linux/airoha/an7581/base-files" -type f | sort | while read -r f; do
-			case "$f" in *.conf|*.json|*.txt|*/etc/sysctl.d/*|*/etc/config/*) continue ;; esac
+	for bd in "$TOPDIR/target/linux/airoha/base-files" "$TOPDIR/target/linux/airoha/an7581/base-files"; do
+		[ -d "$bd" ] || continue
+		find "$bd" -type f | sort | while read -r f; do
+			case "$f" in *.conf|*.json|*.txt|*/etc/sysctl.d/*|*/etc/config/*|*/etc/tx-debug.sh) continue ;; esac
 			printf '%s\n' "$f" >> "$list"
 		done
-	fi
+	done
 	for f in \
 		"$TOPDIR/package/base-files/files/lib/upgrade/fwtool.sh" \
 		"$TOPDIR/package/base-files/files/usr/libexec/validate_firmware_image" \
@@ -107,11 +108,11 @@ check_scripts() {
 		"$TOPDIR/scripts/flash-gate.sh" "$TOPDIR/scripts/build-preflight.sh"; do
 		[ -f "$f" ] && printf '%s\n' "$f" >> "$list"
 	done
-	for d in "$TOPDIR"/package/luci-app-airoha-*; do
+	for d in "$TOPDIR"/package/luci-app-*; do
 		[ -d "$d" ] || continue
 		find "$d" -type f | sort | while read -r f; do
 			case "$f" in *.sh) printf '%s\n' "$f" >> "$list"; continue ;; esac
-			case "$(head -n 1 "$f" 2>/dev/null || true)" in '#!'*sh*|'#!'*bash*) printf '%s\n' "$f" >> "$list" ;; esac
+			case "$(head -n 1 "$f" 2>/dev/null || true)" in '#!'*sh*) printf '%s\n' "$f" >> "$list" ;; esac
 		done
 	done
 
@@ -135,21 +136,57 @@ check_scripts() {
 }
 
 check_hygiene() {
-	[ ! -e "$TOPDIR/docs" ] || fail "forbidden docs/ path exists"
-	[ ! -e "$TOPDIR/.github/upstream" ] || fail "forbidden .github/upstream/ path exists"
-	for md in "$TOPDIR"/*.md; do
-		[ -f "$md" ] || continue
-		case "${md##*/}" in README.md|SECURITY.md) ;; *) fail "forbidden extra root markdown: ${md##*/}" ;; esac
-	done
-	for sub in scripts target/linux/airoha package/boot/uboot-airoha; do
-		[ -d "$TOPDIR/$sub" ] || continue
-		bad=$(find "$TOPDIR/$sub" -name '*.md' 2>/dev/null)
-		[ -z "$bad" ] || fail "forbidden markdown under $sub: $bad"
-	done
-	ok "repository hygiene verified"
+	hyg_before=$FAILS
+	if [ -e "$TOPDIR/.git" ] && git -C "$TOPDIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+		git -C "$TOPDIR" -c core.quotepath=false ls-files --cached --others --exclude-standard > "$WORK/hygiene.files"
+	else
+		( cd "$TOPDIR" && find . \( -path './.git' -o -path './build_dir' -o -path './staging_dir' -o -path './dl' -o -path './bin' -o -path './tmp' -o -path './logs' -o -path './feeds' \) -prune -o -print 2>/dev/null ) |
+			sed '/^\.$/d; s|^\./||' > "$WORK/hygiene.files"
+	fi
+	while IFS= read -r p; do
+		case "$p" in
+		docs|docs/*|.github/upstream|.github/upstream/*|.scratch|.scratch/*|AGENTS.md|serial|serial/*|bench-*|pppoe-4path*)
+			fail "forbidden path: $p" ;;
+		scripts/wireless|scripts/wireless/*|scripts/claims.yaml|scripts/claims-verify.py|scripts/check-claims.py|scripts/bench-*|scripts/pppoe-4path*|scripts/serial|scripts/serial/*)
+			fail "forbidden path: $p" ;;
+		target/linux/*/patches-7.3|target/linux/*/patches-7.3/*|target/linux/*/config-7.3|target/linux/*/config-7.3/*)
+			fail "forbidden path: $p" ;;
+		scripts/*.md|target/linux/airoha/*.md|package/boot/uboot-airoha/*.md)
+			fail "forbidden path: $p" ;;
+		*/*|README.md|SECURITY.md) ;;
+		*.md) fail "forbidden path: $p" ;;
+		esac
+	done < "$WORK/hygiene.files"
+	if acl_out=$(python3 - "$TOPDIR" 2>&1 <<'PY'
+import glob, json, os, sys
+top, bad = sys.argv[1], []
+def walk(o):
+    if isinstance(o, dict): return [x for kv in o.items() for c in kv for x in walk(c)]
+    if isinstance(o, list): return [x for v in o for x in walk(v)]
+    return [o] if isinstance(o, str) else []
+files = sorted(glob.glob(os.path.join(top, "package/luci-app-*/root/usr/share/rpcd/acl.d/*.json")))
+if not files:
+    print("no LuCI ACL files found"); sys.exit(1)
+for p in files:
+    rel = os.path.relpath(p, top)
+    try:
+        with open(p, encoding="utf-8") as f: toks = walk(json.load(f))
+    except Exception as e: bad.append(f"{rel}: invalid JSON ({e})"); continue
+    hits = [t for t in ("/bin/sh", "/dev/mem") if any(t in s for s in toks)] + (["exec"] if "exec" in toks else [])
+    if hits: bad.append(f"{rel}: forbidden {', '.join(hits)}")
+if bad: print("; ".join(bad)); sys.exit(1)
+print(len(files))
+PY
+	); then
+		ok "checked $acl_out LuCI ACL file(s)"
+	else
+		fail "LuCI ACL security: $acl_out"
+	fi
+	[ "$FAILS" -eq "$hyg_before" ] && ok "repository hygiene verified"
 }
 
 check_patch_queue() {
+	pq_fails=$FAILS
 	for d in target/linux/airoha/patches-7.4 package/kernel/mt76/patches; do
 		[ -d "$TOPDIR/$d" ] || continue
 		dups=$(find "$TOPDIR/$d" -maxdepth 1 -name '*.patch' -exec basename {} \; |
@@ -164,11 +201,23 @@ check_patch_queue() {
 	done
 
 	if git -C "$TOPDIR" rev-parse --verify -q "$PATCH_BASE_REF" >/dev/null 2>&1; then
-		pdirs='target/linux/airoha/patches-7.4 target/linux/generic/backport-7.4 target/linux/generic/pending-7.4 target/linux/generic/hack-7.4 package/kernel/mt76/patches package/boot/uboot-airoha/patches'
-		{ git -C "$TOPDIR" diff --name-only --diff-filter=AM "$PATCH_BASE_REF"..HEAD -- $pdirs
-		  git -C "$TOPDIR" diff --cached --name-only --diff-filter=AM -- $pdirs
-		  git -C "$TOPDIR" diff --name-only --diff-filter=AM -- $pdirs
-		  git -C "$TOPDIR" ls-files --others --exclude-standard -- $pdirs; } | sort -u > "$WORK/changed_patches"
+		set -- \
+			target/linux/airoha/patches-7.4 \
+			target/linux/generic/backport-7.4 \
+			target/linux/generic/pending-7.4 \
+			target/linux/generic/hack-7.4 \
+			package/kernel/mt76/patches \
+			package/boot/uboot-airoha/patches \
+			package/network/services/hostapd/patches \
+			package/kernel/mac80211/patches \
+			package/network/config/firewall4/patches \
+			package/network/utils/fullconenat-nft/patches \
+			package/system/procd/patches \
+			tools/fakeroot/patches
+		{ git -C "$TOPDIR" diff --name-only --diff-filter=AM "$PATCH_BASE_REF"..HEAD -- "$@"
+		  git -C "$TOPDIR" diff --cached --name-only --diff-filter=AM -- "$@"
+		  git -C "$TOPDIR" diff --name-only --diff-filter=AM -- "$@"
+		  git -C "$TOPDIR" ls-files --others --exclude-standard -- "$@"; } | sort -u > "$WORK/changed_patches"
 		while read -r rel; do
 			[ -f "$TOPDIR/$rel" ] || continue
 			case "$rel" in *.patch) ;; *) continue ;; esac
@@ -177,7 +226,7 @@ check_patch_queue() {
 			[ ! -s "$WORK/hdr.miss" ] || fail "$rel missing header(s): $(tr '\n' ' ' < "$WORK/hdr.miss")"
 		done < "$WORK/changed_patches"
 	fi
-	ok "patch-queue prefixes and headers verified"
+	[ "$FAILS" -eq "$pq_fails" ] && ok "patch-queue prefixes and headers verified"
 
 	src="${TARBALL:-${LINUX_TARBALL:-}}"; ksuf=''
 	if [ -z "$src" ]; then

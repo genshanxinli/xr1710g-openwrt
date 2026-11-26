@@ -136,11 +136,11 @@ extract_meta() {
 		cat "$WORK/meta.json"; return 0
 	fi
 	[ "$RUN" = 0 ] || return 1
-	tail -c 8192 "$1" 2>/dev/null | tr -d '\000'
+	tail -c 8192 "$1" 2>/dev/null | LC_ALL=C tr -cd '\011\012\015\040-\176'
 }
 
 extract_json_list() {
-	printf '%s' "$1" | grep -ao "\"$2\"[ 	]*:[ 	]*\[[^]]*\]" | head -n 1 |
+	printf '%s' "$1" | grep -o "\"$2\"[ 	]*:[ 	]*\[[^]]*\]" | head -n 1 |
 		sed 's/^[^[]*\[//; s/\]$//; s/"[ 	]*,[ 	]*"/\
 /g' | sed 's/^[ 	]*"//; s/"[ 	]*$//; s/ - .*$//; s/^[ 	]*//; s/[ 	]*$//' | sed '/^$/d'
 }
@@ -212,7 +212,7 @@ if [ "$PROBE" = 0 ]; then
 		fi
 	fi
 	case "$DEVICE_COMPAT" in ''|*[!0-9.]*|.*|*.|*.*.*) die "$EXIT_COMPAT" "invalid device compat_version '$DEVICE_COMPAT'" ;; esac
-	IMG_COMPAT=$(printf '%s' "$META_FLAT" | grep -ao '"compat_version"[ 	]*:[ 	]*"[^"]*"' | head -n 1 | sed 's/^[^:]*:[ 	]*"//; s/"$//')
+	IMG_COMPAT=$(printf '%s' "$META_FLAT" | grep -o '"compat_version"[ 	]*:[ 	]*"[^"]*"' | head -n 1 | sed 's/^[^:]*:[ 	]*"//; s/"$//')
 	case "$IMG_COMPAT" in ''|*[!0-9.]*|.*|*.|*.*.*) row image.compat '2.x' "${IMG_COMPAT:-missing}" FAIL; die "$EXIT_COMPAT" "missing/invalid image compat_version" ;; esac
 	if [ "${DEVICE_COMPAT%%.*}" != '2' ] || [ "${IMG_COMPAT%%.*}" != '2' ]; then
 		row image.compat 'dev=2.x img=2.x' "dev=$DEVICE_COMPAT img=$IMG_COMPAT" FAIL

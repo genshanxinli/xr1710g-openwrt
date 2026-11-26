@@ -10,7 +10,7 @@ Shares the Airoha AN7581 platform with the W1700K, but has distinct 10G PHYs, sw
 | SoC | Airoha AN7581 (4x Cortex-A53, 1.2 GHz max OPP) |
 | Memory / Flash | 2 GiB DDR4 / 512 MiB SPI-NAND (`mtd0` `vendor`, `mtd1` `chainloader`, `mtd2` `ubi`, `mtd3` `reserved_bmt`) |
 | Wired Ethernet | 2x 10G (`wan` + `lan2`, Realtek RTL8261BE), 2x 1G (`lan3` + `lan4`, internal switch, MT7530 PHY LEDs) |
-| Wireless | MediaTek MT7996 tri-band Wi-Fi 7 (2.4 / 5 / 6 GHz) + Airoha NPU hardware offload |
+| Wireless | MediaTek MT7996 tri-band Wi-Fi 7 (2.4 / 5 / 6 GHz, mt76) + Airoha NPU hardware offload |
 | Thermal / Boot | Nuvoton NCT7802 hwmon; U-Boot `CONFIG_ENV_SIZE=0x4000`, `loadaddr=0x85000000`, `compat_version 2.0` |
 
 ## Build & Verification
@@ -20,12 +20,14 @@ Build from a **pure-ASCII path** (e.g. `/xr/xr1710g`; non-ASCII paths break host
 ```sh
 ./scripts/feeds update -a && ./scripts/feeds install -a
 ./scripts/build-preflight.sh
-./scripts/build-preflight.sh --patch-queue [dl/linux-7.4*.tar.gz]
+./scripts/build-preflight.sh --patch-queue [dl/linux-7.4*.tar.*]
 python3 scripts/check-uboot-ubi.py
 make menuconfig   # Target: Airoha -> AN7581 -> Gemtek XR1710G (UBI)
 make -j$(nproc)
 python3 scripts/check-image-artifacts.py bin/targets/airoha/an7581
 ```
+
+Safety gates: `build-preflight.sh` (ASCII path, BusyBox ash lint, LuCI RPCD ACL, repo hygiene, `fuzz=0` patch queue), `check-uboot-ubi.py` (U-Boot/UBI/env `0x4000`/KASLR), `check-image-artifacts.py` (FIT/FWx0/`sha256sums`/manifest), and `flash-gate.sh` (live pre-flash guard).
 
 Build outputs in `bin/targets/airoha/an7581/`:
 - `openwrt-airoha-an7581-gemtek_xr1710g-ubi-squashfs-sysupgrade.itb` — sysupgrade image

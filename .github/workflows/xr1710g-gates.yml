@@ -3,10 +3,12 @@ name: XR1710G Safety Gates
 on:
   pull_request:
     branches:
+      - xr1710g-refactor-merged
       - xr1710g-v2
       - xr1710g
   push:
     branches:
+      - xr1710g-refactor-merged
       - xr1710g-v2
       - xr1710g
   workflow_dispatch:
