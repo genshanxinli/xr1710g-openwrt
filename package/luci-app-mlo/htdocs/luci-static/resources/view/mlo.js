@@ -74,16 +74,33 @@ function radioMap(radios) {
 	return out;
 }
 
+function textNode(value) {
+	return document.createTextNode(value == null ? '' : String(value));
+}
+
+function safeContent(value) {
+	if (Array.isArray(value))
+		return value.map(safeContent);
+
+	if (value && typeof(value) == 'object' && typeof(value.nodeType) == 'number')
+		return value;
+
+	if (value === null || value === undefined || value === false)
+		return null;
+
+	return textNode(value);
+}
+
 function renderBadge(label, background, foreground) {
 	return E('span', {
 		'style': 'display:inline-block;margin:0 .35em .35em 0;padding:.15em .55em;border-radius:999px;background:%s;color:%s;font-size:12px;line-height:1.3;white-space:nowrap;'.format(background, foreground || '#fff')
-	}, [ label ]);
+	}, [ textNode(label) ]);
 }
 
 function renderMetaLine(label, value) {
 	return E('div', { 'style': 'margin:.15em 0;' }, [
-		E('strong', { 'style': 'margin-right:.35em;' }, [ label ]),
-		value
+		E('strong', { 'style': 'margin-right:.35em;' }, [ textNode(label) ]),
+		safeContent(value)
 	]);
 }
 
@@ -96,12 +113,24 @@ function renderJoinedValues(values, mapper) {
 
 	for (let i = 0; i < values.length; i++) {
 		if (i > 0)
-			out.push(', ');
+			out.push(textNode(', '));
 
-		out.push(mapper(values[i], i));
+		out.push(safeContent(mapper(values[i], i)));
 	}
 
 	return out;
+}
+
+function findSectionNode(root, attr, sectionId) {
+	if (!root || sectionId == null)
+		return null;
+
+	let sid = String(sectionId);
+	for (let node of root.querySelectorAll('[%s]'.format(attr)))
+		if (node.getAttribute(attr) === sid)
+			return node;
+
+	return null;
 }
 
 function replaceNode(oldNode, newNode) {
@@ -267,15 +296,15 @@ function renderMetric(label, value) {
 	return E('div', {
 		'style': 'flex:1 1 10em;min-width:10em;padding:.85em 1em;border:1px solid #d7d7d7;border-radius:10px;background:#fafafa;'
 	}, [
-		E('div', { 'style': 'font-size:12px;color:#666;margin-bottom:.25em;' }, [ label ]),
-		E('div', { 'style': 'font-size:22px;font-weight:600;line-height:1.2;' }, [ value ])
+		E('div', { 'style': 'font-size:12px;color:#666;margin-bottom:.25em;' }, [ textNode(label) ]),
+		E('div', { 'style': 'font-size:22px;font-weight:600;line-height:1.2;' }, [ safeContent(value) ])
 	]);
 }
 
 function renderSummaryBox(runtime, summary, addApMlo, addStaMlo, refreshStatus) {
 	let warningList = summary.warnings.length
 		? E('ul', { 'style': 'margin:.75em 0 0 1.2em;' },
-			summary.warnings.map(w => E('li', { 'style': 'margin:.25em 0;' }, [ w ])))
+			summary.warnings.map(w => E('li', { 'style': 'margin:.25em 0;' }, [ textNode(w) ])))
 		: E('div', { 'style': 'margin-top:.75em;color:#2f6f3e;' },
 			_('Runtime detection looks healthy. Auto-generated MLD names appear as <code>ap-mldX</code> or <code>sta-mldX</code>.'));
 
@@ -283,7 +312,7 @@ function renderSummaryBox(runtime, summary, addApMlo, addStaMlo, refreshStatus) 
 			'class': 'cbi-section',
 			'data-mlo-summary-box': '1'
 		}, [
-			E('h3', _('MLO Overview')),
+			E('h3', [ textNode(_('MLO Overview')) ]),
 			E('div', {
 				'style': 'display:flex;gap:.75em;flex-wrap:wrap;margin:.5em 0 1em 0;'
 			}, [
@@ -301,21 +330,21 @@ function renderSummaryBox(runtime, summary, addApMlo, addStaMlo, refreshStatus) 
 					ev.preventDefault();
 					return addApMlo();
 				}
-			}, _('Quick Add AP MLO')),
+			}, [ textNode(_('Quick Add AP MLO')) ]),
 			E('button', {
 				'class': 'cbi-button',
 				'click': function(ev) {
 					ev.preventDefault();
 					return addStaMlo();
 				}
-			}, _('Quick Add STA MLO')),
+			}, [ textNode(_('Quick Add STA MLO')) ]),
 			E('button', {
 				'class': 'cbi-button',
 				'click': function(ev) {
 					ev.preventDefault();
 					return refreshStatus();
 				}
-			}, _('Refresh Runtime Status'))
+			}, [ textNode(_('Refresh Runtime Status')) ])
 		]),
 		warningList
 	]);
@@ -328,13 +357,13 @@ function renderSectionOverview(section_id, radiosByName) {
 	let issues = [];
 
 	if (cfg.mlo == '1' && devices.length < 2)
-		issues.push(E('div', { 'style': 'color:#b94a48;margin-top:.25em;' }, _('Needs at least two radios')));
+		issues.push(E('div', { 'style': 'color:#b94a48;margin-top:.25em;' }, [ textNode(_('Needs at least two radios')) ]));
 
 	if (cfg.mlo == '1' && cfg.mode == 'ap' && ![ 'sae', 'sae-mixed', 'owe' ].includes(cfg.encryption))
-		issues.push(E('div', { 'style': 'color:#8a6d3b;margin-top:.25em;' }, _('AP MLO is usually paired with WPA3-SAE or OWE')));
+		issues.push(E('div', { 'style': 'color:#8a6d3b;margin-top:.25em;' }, [ textNode(_('AP MLO is usually paired with WPA3-SAE or OWE')) ]));
 
 	if (cfg.mlo == '1' && cfg.ifname && cfg.ifname.indexOf('mld') < 0)
-		issues.push(E('div', { 'style': 'color:#8a6d3b;margin-top:.25em;' }, _('Custom ifname overrides the default ap-mldX / sta-mldX naming')));
+		issues.push(E('div', { 'style': 'color:#8a6d3b;margin-top:.25em;' }, [ textNode(_('Custom ifname overrides the default ap-mldX / sta-mldX naming')) ]));
 
 		return E('div', {
 			'data-mlo-overview-section': section_id,
@@ -345,12 +374,12 @@ function renderSectionOverview(section_id, radiosByName) {
 			renderBadge((cfg.mode || 'ap').toUpperCase(), '#495057'),
 			renderBadge(cfg.disabled == '1' ? _('Disabled') : _('Enabled'), cfg.disabled == '1' ? '#b94a48' : '#2f6f3e')
 			]),
-			renderMetaLine(_('SSID'), cfg.ssid || E('em', _('unset'))),
+			renderMetaLine(_('SSID'), cfg.ssid || E('em', [ textNode(_('unset')) ])),
 			renderMetaLine(_('Radios'), devices.length
 				? renderJoinedValues(devices, dev => radiosByName[dev] ? radioLabel(radiosByName[dev]) : dev)
-				: E('em', _('none'))),
-			renderMetaLine(_('Networks'), networks.length ? networks.join(', ') : E('em', _('none'))),
-			renderMetaLine(_('Security'), cfg.encryption || E('em', _('unset'))),
+				: E('em', [ textNode(_('none')) ])),
+			renderMetaLine(_('Networks'), networks.length ? networks.join(', ') : E('em', [ textNode(_('none')) ])),
+			renderMetaLine(_('Security'), cfg.encryption || E('em', [ textNode(_('unset')) ])),
 			issues
 	]);
 }
@@ -365,7 +394,7 @@ function renderRuntimeCell(section_id, runtime) {
 			'style': 'min-width:15em;'
 		}, [
 			renderBadge(_('Disabled'), '#b94a48'),
-			E('div', { 'style': 'margin-top:.25em;color:#666;' }, _('Section is disabled in UCI'))
+			E('div', { 'style': 'margin-top:.25em;color:#666;' }, [ textNode(_('Section is disabled in UCI')) ])
 		]);
 	}
 
@@ -375,9 +404,9 @@ function renderRuntimeCell(section_id, runtime) {
 			'style': 'min-width:15em;'
 		}, [
 			renderBadge(_('No runtime state'), '#6c757d'),
-			E('div', { 'style': 'margin-top:.25em;color:#666;' }, _('No active interface was reported yet')),
+			E('div', { 'style': 'margin-top:.25em;color:#666;' }, [ textNode(_('No active interface was reported yet')) ]),
 			cfg.mlo == '1'
-				? E('div', { 'style': 'margin-top:.25em;color:#8a6d3b;' }, _('Save & Apply, then verify driver support if this persists'))
+				? E('div', { 'style': 'margin-top:.25em;color:#8a6d3b;' }, [ textNode(_('Save & Apply, then verify driver support if this persists')) ])
 				: null
 		]);
 	}
@@ -390,7 +419,7 @@ function renderRuntimeCell(section_id, runtime) {
 			renderBadge(state.up ? _('Active') : _('Present'), state.up ? '#2f6f3e' : '#6c757d'),
 			state.mldDetected ? renderBadge(_('MLD runtime'), '#2d6cdf') : null
 		])),
-		renderMetaLine(_('ifname'), state.ifnames.length ? state.ifnames.join(', ') : E('em', _('unknown'))),
+		renderMetaLine(_('ifname'), state.ifnames.length ? state.ifnames.join(', ') : E('em', [ textNode(_('unknown')) ])),
 		renderMetaLine(_('Runtime radios'), state.radios.join(', ')),
 		renderMetaLine(_('Stations'), String(state.stations))
 	]);
@@ -418,21 +447,55 @@ return view.extend({
 		let quickAdd;
 		let refreshRuntime;
 
-		m = new form.Map('wireless', _('Wi-Fi MLO'));
-		m.chain('network');
+		let pendingAddedSection = null;
+		let modalSaving = false;
 
-		s = m.section(form.GridSection, 'wifi-iface', _('Wireless Interfaces'));
+		function clearPendingAdded() {
+			pendingAddedSection = null;
+			if (s)
+				delete s.addedSection;
+		}
+
+		const MloGridSection = form.GridSection.extend({
+			handleModalSave: function() {
+				let self = this;
+				let args = arguments;
+
+				modalSaving = true;
+				return Promise.resolve().then(function() {
+					return self.super('handleModalSave', args);
+				}).then(function(res) {
+					clearPendingAdded();
+					modalSaving = false;
+					return res;
+				}, function(err) {
+					modalSaving = false;
+					throw err;
+				});
+			},
+
+			handleModalCancel: function(modalMap, ev, isSaving) {
+				let sid = pendingAddedSection;
+
+				if (sid != null) {
+					clearPendingAdded();
+					if (!isSaving && !modalSaving)
+						uci.remove('wireless', sid);
+				}
+
+				return this.super('handleModalCancel', arguments);
+			}
+		});
+
+		m = new form.Map('wireless', _('Wi-Fi MLO'));
+
+		s = m.section(MloGridSection, 'wifi-iface', _('Wireless Interfaces'));
 		s.anonymous = true;
 		s.addremove = true;
 		s.sortable = true;
 		s.nodescriptions = true;
 		s.addbtntitle = _('Add MLO-ready interface');
 		s.modaltitle = _('Edit wireless interface');
-		s.sectiontitle = function(section_id) {
-			return optionValue(section_id, 'ssid') ||
-				optionValue(section_id, 'ifname') ||
-				section_id;
-		};
 
 		quickAdd = function(mode) {
 			let selectedRadios = radios.slice(0, 2).map(r => r['.name']);
@@ -440,8 +503,14 @@ return view.extend({
 			let defaultNetworks = [];
 
 			if (selectedRadios.length < 2) {
-				ui.addNotification(null, E('p', _('At least two configured radios are required before an MLO interface can be created.')));
+				ui.addNotification(null, E('p', [ textNode(_('At least two configured radios are required before an MLO interface can be created.')) ]));
 				return Promise.resolve();
+			}
+
+			if (pendingAddedSection != null) {
+				let staleSid = pendingAddedSection;
+				clearPendingAdded();
+				uci.remove('wireless', staleSid);
 			}
 
 			if (mode == 'ap') {
@@ -471,7 +540,18 @@ return view.extend({
 			if (mode == 'ap')
 				uci.set('wireless', sid, 'ssid', 'OpenWrt-MLO');
 
-			return s.renderMoreOptionsModal(sid);
+			pendingAddedSection = sid;
+			s.addedSection = sid;
+
+			return Promise.resolve().then(function() {
+				return s.renderMoreOptionsModal(sid);
+			}).catch(function(err) {
+				if (pendingAddedSection === sid) {
+					clearPendingAdded();
+					uci.remove('wireless', sid);
+				}
+				throw err;
+			});
 		};
 
 		s.handleAdd = function(ev) {
@@ -645,8 +725,8 @@ return view.extend({
 					replaceNode(summaryNode, nextSummaryNode);
 
 					uci.sections('wireless', 'wifi-iface').forEach(function(section) {
-						let overviewNode = nodes.querySelector('[data-mlo-overview-section="%s"]'.format(section['.name']));
-						let rowNode = nodes.querySelector('[data-mlo-runtime-section="%s"]'.format(section['.name']));
+						let overviewNode = findSectionNode(nodes, 'data-mlo-overview-section', section['.name']);
+						let rowNode = findSectionNode(nodes, 'data-mlo-runtime-section', section['.name']);
 
 						if (overviewNode)
 							replaceNode(overviewNode, renderSectionOverview(section['.name'], radiosByName));

@@ -23,42 +23,65 @@ find_nct7802() {
 	done
 }
 
-curve_has_points() {
+write_sysfs() {
+	local path="$1" val="$2"
+	if ! { printf '%s\n' "$val" > "$path"; } 2>/dev/null; then
+		logger -t fan "failed to write '${val}' to ${path}"
+		return 1
+	fi
+	return 0
+}
+
+restore_fan_failsafe() {
+	write_sysfs "${HWMON}/pwm1_enable" 2 || write_sysfs "${HWMON}/pwm1" 255 || true
+}
+
+load_curve() {
 	local preset="$1"
-	local i temp pwm
+	local i temp pwm prev_temp=""
+
+	CURVE_T1=""; CURVE_T2=""; CURVE_T3=""; CURVE_T4=""; CURVE_T5=""
+	CURVE_P1=""; CURVE_P2=""; CURVE_P3=""; CURVE_P4=""
 
 	[ -n "$preset" ] || return 1
 
 	for i in 1 2 3 4 5; do
 		temp=$(uci -q get "fan.${preset}.point${i}_temp")
-		is_uint "$temp" && [ "$temp" -ge 0 ] 2>/dev/null || return 1
+		is_uint "$temp" && [ "$temp" -le 100 ] 2>/dev/null || return 1
+
+		if [ -n "$prev_temp" ] && [ "$temp" -lt "$prev_temp" ]; then
+			return 1
+		fi
+		prev_temp="$temp"
 
 		if [ "$i" -lt 5 ]; then
 			pwm=$(uci -q get "fan.${preset}.point${i}_pwm")
-			is_uint "$pwm" && [ "$pwm" -ge 0 ] 2>/dev/null && [ "$pwm" -le 255 ] 2>/dev/null || return 1
+			is_uint "$pwm" && [ "$pwm" -le 255 ] 2>/dev/null || return 1
 		fi
+
+		case "$i" in
+			1) CURVE_T1="$temp"; CURVE_P1="$pwm" ;;
+			2) CURVE_T2="$temp"; CURVE_P2="$pwm" ;;
+			3) CURVE_T3="$temp"; CURVE_P3="$pwm" ;;
+			4) CURVE_T4="$temp"; CURVE_P4="$pwm" ;;
+			5) CURVE_T5="$temp" ;;
+		esac
 	done
 
 	return 0
 }
 
-apply_curve() {
-	local preset="$1"
-	local i temp pwm
-
-	# point5_pwm is read-only (fixed at 255).
-	for i in 1 2 3 4 5; do
-		temp=$(uci -q get "fan.${preset}.point${i}_temp")
-		pwm=$(uci -q get "fan.${preset}.point${i}_pwm")
-
-		if is_uint "$temp"; then
-			echo $((temp * 1000)) > "${HWMON}/pwm1_auto_point${i}_temp" 2>/dev/null
-		fi
-
-		if is_uint "$pwm" && [ "$i" -lt 5 ]; then
-			echo "$pwm" > "${HWMON}/pwm1_auto_point${i}_pwm" 2>/dev/null
-		fi
-	done
+apply_loaded_curve() {
+	# point5_pwm is hardware-fixed at 255 on NCT7802.
+	write_sysfs "${HWMON}/pwm1_auto_point1_temp" "$((CURVE_T1 * 1000))" &&
+	write_sysfs "${HWMON}/pwm1_auto_point1_pwm" "$CURVE_P1" &&
+	write_sysfs "${HWMON}/pwm1_auto_point2_temp" "$((CURVE_T2 * 1000))" &&
+	write_sysfs "${HWMON}/pwm1_auto_point2_pwm" "$CURVE_P2" &&
+	write_sysfs "${HWMON}/pwm1_auto_point3_temp" "$((CURVE_T3 * 1000))" &&
+	write_sysfs "${HWMON}/pwm1_auto_point3_pwm" "$CURVE_P3" &&
+	write_sysfs "${HWMON}/pwm1_auto_point4_temp" "$((CURVE_T4 * 1000))" &&
+	write_sysfs "${HWMON}/pwm1_auto_point4_pwm" "$CURVE_P4" &&
+	write_sysfs "${HWMON}/pwm1_auto_point5_temp" "$((CURVE_T5 * 1000))"
 }
 
 apply_settings() {
@@ -82,28 +105,38 @@ apply_settings() {
 
 	case "$mode" in
 		manual)
-			if ! is_uint "$manual_pwm" || ! [ "$manual_pwm" -ge 0 ] 2>/dev/null || ! [ "$manual_pwm" -le 255 ] 2>/dev/null; then
+			if ! is_uint "$manual_pwm" || ! [ "$manual_pwm" -le 255 ] 2>/dev/null; then
 				logger -t fan "invalid manual_pwm '${manual_pwm:-<empty>}', refusing to switch to manual"
 				return 1
 			fi
-			echo 1 > "${HWMON}/pwm1_enable" 2>/dev/null
-			echo "$manual_pwm" > "${HWMON}/pwm1" 2>/dev/null
+			write_sysfs "${HWMON}/pwm1_enable" 1 || return 1
+			if ! write_sysfs "${HWMON}/pwm1" "$manual_pwm"; then
+				restore_fan_failsafe
+				return 1
+			fi
 			;;
 		auto|*)
 			mode="${mode:-auto}"
-			if ! curve_has_points "$preset"; then
-				logger -t fan "curve preset '${preset:-<empty>}' has incomplete points, refusing to switch to auto"
+			if ! load_curve "$preset"; then
+				logger -t fan "curve preset '${preset:-<empty>}' has invalid or non-monotonic points, refusing to switch to auto"
 				return 1
 			fi
-			echo 1 > "${HWMON}/pwm1_enable" 2>/dev/null
-			apply_curve "$preset"
-			echo 2 > "${HWMON}/pwm1_enable" 2>/dev/null
+			write_sysfs "${HWMON}/pwm1_enable" 1 || return 1
+			if ! apply_loaded_curve; then
+				restore_fan_failsafe
+				return 1
+			fi
+			if ! write_sysfs "${HWMON}/pwm1_enable" 2; then
+				write_sysfs "${HWMON}/pwm1" 255
+				return 1
+			fi
 			;;
 	esac
 
 	pwm_rb=$(cat "${HWMON}/pwm1" 2>/dev/null)
 	enable_rb=$(cat "${HWMON}/pwm1_enable" 2>/dev/null)
 	logger -t fan "applied mode=${mode} preset=${preset:-none} pwm1=${pwm_rb:-?} pwm1_enable=${enable_rb:-?}"
+	return 0
 }
 
 start_service() {

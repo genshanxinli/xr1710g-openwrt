@@ -151,6 +151,43 @@ get_status() {
 		"$uci_mode" "$uci_preset" "$uci_manual_pwm"
 }
 
+in_range() {
+	is_uint "$1" && [ "$1" -le "$2" ] 2>/dev/null
+}
+
+reload_fan() {
+	/etc/init.d/fan reload >/dev/null 2>&1
+}
+
+restore_uci_key() {
+	local key="$1" prev="$2"
+	if [ -n "$prev" ]; then
+		uci -q set "${key}=${prev}" >/dev/null 2>&1 || true
+	else
+		uci -q delete "$key" >/dev/null 2>&1 || true
+	fi
+}
+
+commit_and_reload() {
+	local key="$1" val="$2" label="$3" prev
+	prev=$(uci -q get "$key")
+
+	if ! uci set "${key}=${val}" || ! uci commit fan; then
+		uci -q revert fan >/dev/null 2>&1 || true
+		printf '{"success":false,"error":"Failed to save %s"}\n' "$label"
+		return
+	fi
+
+	if ! reload_fan; then
+		restore_uci_key "$key" "$prev"
+		uci -q commit fan >/dev/null 2>&1 || true
+		printf '{"success":false,"error":"Failed to apply %s"}\n' "$label"
+		return
+	fi
+
+	echo '{"success":true}'
+}
+
 get_curve() {
 	local preset="$1" points="[" first=1 i temp pwm
 	[ -z "$preset" ] && preset="balanced"
@@ -165,7 +202,11 @@ get_curve() {
 
 	for i in 1 2 3 4 5; do
 		temp=$(safe_uint "$(uci -q get "fan.${preset}.point${i}_temp")" 0)
-		pwm=$(safe_uint "$(uci -q get "fan.${preset}.point${i}_pwm")" 0)
+		if [ "$i" -eq 5 ]; then
+			pwm=255
+		else
+			pwm=$(safe_uint "$(uci -q get "fan.${preset}.point${i}_pwm")" 0)
+		fi
 
 		[ "$first" -eq 0 ] && points="${points},"
 		first=0
@@ -187,7 +228,11 @@ get_all_curves() {
 		pfirst=1
 		for i in 1 2 3 4 5; do
 			temp=$(safe_uint "$(uci -q get "fan.${preset}.point${i}_temp")" 0)
-			pwm=$(safe_uint "$(uci -q get "fan.${preset}.point${i}_pwm")" 0)
+			if [ "$i" -eq 5 ]; then
+				pwm=255
+			else
+				pwm=$(safe_uint "$(uci -q get "fan.${preset}.point${i}_pwm")" 0)
+			fi
 
 			[ "$pfirst" -eq 0 ] && points="${points},"
 			pfirst=0
@@ -203,43 +248,24 @@ get_all_curves() {
 }
 
 set_mode() {
-	local mode="$1"
-
-	case "$mode" in
-		manual|auto)
-			uci set "fan.settings.mode=$mode"
-			uci commit fan
-			/etc/init.d/fan reload
-			echo '{"success":true}'
-			;;
-		*)
-			echo '{"success":false,"error":"Invalid mode"}'
-			;;
+	case "$1" in
+		manual|auto) commit_and_reload "fan.settings.mode" "$1" "fan mode" ;;
+		*) echo '{"success":false,"error":"Invalid mode"}' ;;
 	esac
 }
 
 set_manual_pwm() {
-	local pwm="$1"
-
-	if is_uint "$pwm" && [ "$pwm" -ge 0 ] 2>/dev/null && [ "$pwm" -le 255 ] 2>/dev/null; then
-		uci set "fan.settings.manual_pwm=$pwm"
-		uci commit fan
-		/etc/init.d/fan reload
-		echo '{"success":true}'
+	if in_range "$1" 255; then
+		commit_and_reload "fan.settings.manual_pwm" "$1" "manual PWM"
 	else
 		echo '{"success":false,"error":"Invalid PWM value (0-255)"}'
 	fi
 }
 
 set_preset() {
-	local preset="$1"
-
-	case "$preset" in
+	case "$1" in
 		quiet|balanced|performance|custom)
-			uci set "fan.settings.curve_preset=$preset"
-			uci commit fan
-			/etc/init.d/fan reload
-			echo '{"success":true}'
+			commit_and_reload "fan.settings.curve_preset" "$1" "curve preset"
 			;;
 		*)
 			echo '{"success":false,"error":"Invalid preset"}'
@@ -248,61 +274,104 @@ set_preset() {
 }
 
 set_custom_curve() {
-	local json i idx temp pwm prev_temp="" valid=0
+	local json i idx temp pwm old_t old_p prev_temp="" valid=0 prev_preset
+	local nt1="" nt2="" nt3="" nt4="" nt5="" np1="" np2="" np3="" np4=""
+	local ot1="" ot2="" ot3="" ot4="" ot5="" op1="" op2="" op3="" op4="" op5=""
 	read -r json
 
-	if command -v jsonfilter >/dev/null 2>&1; then
-		for i in 1 2 3 4 5; do
-			idx=$((i - 1))
-			temp=$(printf '%s\n' "$json" | jsonfilter -e "@.points[${idx}].temp" 2>/dev/null)
-			pwm=$(printf '%s\n' "$json" | jsonfilter -e "@.points[${idx}].pwm" 2>/dev/null)
+	if ! command -v jsonfilter >/dev/null 2>&1; then
+		echo '{"success":false,"error":"jsonfilter not available"}'
+		return
+	fi
 
-			if [ -z "$temp" ] && [ -z "$pwm" ]; then
-				temp=$(uci -q get "fan.custom.point${i}_temp")
-				is_uint "$temp" || continue
-			else
-				if ! is_uint "$temp" || ! [ "$temp" -ge 0 ] 2>/dev/null || ! [ "$temp" -le 100 ] 2>/dev/null ||
-				   ! is_uint "$pwm" || ! [ "$pwm" -ge 0 ] 2>/dev/null || ! [ "$pwm" -le 255 ] 2>/dev/null; then
-					echo '{"success":false,"error":"Invalid curve point values"}'
-					return
-				fi
-				valid=$((valid + 1))
-			fi
+	for i in 1 2 3 4 5; do
+		idx=$((i - 1))
+		old_t=$(uci -q get "fan.custom.point${i}_temp")
+		old_p=$(uci -q get "fan.custom.point${i}_pwm")
+		temp=$(printf '%s\n' "$json" | jsonfilter -e "@.points[${idx}].temp" 2>/dev/null)
+		pwm=$(printf '%s\n' "$json" | jsonfilter -e "@.points[${idx}].pwm" 2>/dev/null)
 
-			if [ -n "$prev_temp" ] && [ "$temp" -lt "$prev_temp" ]; then
-				echo '{"success":false,"error":"Curve temperatures must be non-decreasing"}'
+		if [ -z "$temp" ] && [ -z "$pwm" ]; then
+			temp="$old_t"
+			pwm="$old_p"
+			if ! in_range "$temp" 100 || { [ "$i" -lt 5 ] && ! in_range "$pwm" 255; }; then
+				echo '{"success":false,"error":"Incomplete or invalid curve points"}'
 				return
 			fi
-			prev_temp="$temp"
-		done
-
-		if [ "$valid" -eq 0 ]; then
-			echo '{"success":false,"error":"No valid curve points"}'
-			return
+		else
+			if ! in_range "$temp" 100; then
+				echo '{"success":false,"error":"Invalid curve point values"}'
+				return
+			fi
+			if [ "$i" -eq 5 ]; then
+				# point5_pwm is hardware-fixed at 255 on NCT7802.
+				if [ -n "$pwm" ] && [ "$pwm" != "255" ]; then
+					echo '{"success":false,"error":"Point 5 PWM is hardware-fixed at 255"}'
+					return
+				fi
+			elif ! in_range "$pwm" 255; then
+				echo '{"success":false,"error":"Invalid curve point values"}'
+				return
+			fi
+			valid=$((valid + 1))
 		fi
 
-		for i in 1 2 3 4 5; do
-			idx=$((i - 1))
-			temp=$(printf '%s\n' "$json" | jsonfilter -e "@.points[${idx}].temp" 2>/dev/null)
-			pwm=$(printf '%s\n' "$json" | jsonfilter -e "@.points[${idx}].pwm" 2>/dev/null)
+		if [ -n "$prev_temp" ] && [ "$temp" -lt "$prev_temp" ]; then
+			echo '{"success":false,"error":"Curve temperatures must be non-decreasing"}'
+			return
+		fi
+		prev_temp="$temp"
 
-			if [ -n "$temp" ] && [ -n "$pwm" ]; then
-				uci set "fan.custom.point${i}_temp=$temp"
-				uci set "fan.custom.point${i}_pwm=$pwm"
-			fi
-		done
-		uci set "fan.settings.curve_preset=custom"
-		uci commit fan
-		/etc/init.d/fan reload
-		echo '{"success":true}'
-	else
-		echo '{"success":false,"error":"jsonfilter not available"}'
+		case "$i" in
+			1) nt1="$temp"; np1="$pwm"; ot1="$old_t"; op1="$old_p" ;;
+			2) nt2="$temp"; np2="$pwm"; ot2="$old_t"; op2="$old_p" ;;
+			3) nt3="$temp"; np3="$pwm"; ot3="$old_t"; op3="$old_p" ;;
+			4) nt4="$temp"; np4="$pwm"; ot4="$old_t"; op4="$old_p" ;;
+			5) nt5="$temp"; ot5="$old_t"; op5="$old_p" ;;
+		esac
+	done
+
+	if [ "$valid" -eq 0 ]; then
+		echo '{"success":false,"error":"No valid curve points"}'
+		return
 	fi
+
+	prev_preset=$(uci -q get "fan.settings.curve_preset")
+
+	if ! uci set "fan.custom.point1_temp=$nt1" || ! uci set "fan.custom.point1_pwm=$np1" ||
+	   ! uci set "fan.custom.point2_temp=$nt2" || ! uci set "fan.custom.point2_pwm=$np2" ||
+	   ! uci set "fan.custom.point3_temp=$nt3" || ! uci set "fan.custom.point3_pwm=$np3" ||
+	   ! uci set "fan.custom.point4_temp=$nt4" || ! uci set "fan.custom.point4_pwm=$np4" ||
+	   ! uci set "fan.custom.point5_temp=$nt5" || ! uci set "fan.custom.point5_pwm=255" ||
+	   ! uci set "fan.settings.curve_preset=custom" || ! uci commit fan; then
+		uci -q revert fan >/dev/null 2>&1 || true
+		echo '{"success":false,"error":"Failed to save custom curve"}'
+		return
+	fi
+
+	if ! reload_fan; then
+		restore_uci_key "fan.custom.point1_temp" "$ot1"
+		restore_uci_key "fan.custom.point1_pwm" "$op1"
+		restore_uci_key "fan.custom.point2_temp" "$ot2"
+		restore_uci_key "fan.custom.point2_pwm" "$op2"
+		restore_uci_key "fan.custom.point3_temp" "$ot3"
+		restore_uci_key "fan.custom.point3_pwm" "$op3"
+		restore_uci_key "fan.custom.point4_temp" "$ot4"
+		restore_uci_key "fan.custom.point4_pwm" "$op4"
+		restore_uci_key "fan.custom.point5_temp" "$ot5"
+		restore_uci_key "fan.custom.point5_pwm" "$op5"
+		restore_uci_key "fan.settings.curve_preset" "$prev_preset"
+		uci -q commit fan >/dev/null 2>&1 || true
+		echo '{"success":false,"error":"Failed to apply custom curve"}'
+		return
+	fi
+
+	echo '{"success":true}'
 }
 
 case "$1" in
 	list)
-		echo '{"getStatus":{},"getCurve":{"preset":"str"},"getAllCurves":{},"setMode":{"mode":"str"},"setManualPwm":{"pwm":"int"},"setPreset":{"preset":"str"},"setCustomCurve":{"points":"array"}}'
+		echo '{"getStatus":{},"getCurve":{"preset":"str"},"getAllCurves":{},"setMode":{"mode":"str"},"setManualPwm":{"pwm":0},"setPreset":{"preset":"str"},"setCustomCurve":{"points":[]}}'
 		;;
 	call)
 		case "$2" in
