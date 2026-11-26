@@ -1,0 +1,162 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 11:25:00 +0800
+Subject: [PATCH] fullconenat-nft: harden notifier ownership, RCU teardown and netlink ABI
+
+Align enum nft_fullcone_attributes with libnftnl/nftables (FLAGS=1,
+REG_PROTO_MIN=2, REG_PROTO_MAX=3) and parse tb[] before nf_ct_netns_get().
+Check nf_ct_netns_get() error before refcounting, guard notifier registration/
+unregistration against clobbering other notifiers, and synchronize_rcu() before wq teardown.
+
+Origin: local, Gemtek XR1710G
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+diff --git a/src/nf_nat_fullcone.h b/src/nf_nat_fullcone.h
+index 289ce5c..9282253 100644
+--- a/src/nf_nat_fullcone.h
++++ b/src/nf_nat_fullcone.h
+@@ -45,15 +45,15 @@ static inline void nf_ct_netns_put(struct net *net, u8 nfproto)
+ /**
+  * enum nft_fullcone_attributes - nf_tables fullcone expression netlink attributes
+  *
++ * @NFTA_FULLCONE_FLAGS: NAT flags (see NF_NAT_RANGE_* in linux/netfilter/nf_nat.h) (NLA_U32)
+  * @NFTA_FULLCONE_REG_PROTO_MIN: source register of proto range start (NLA_U32: nft_registers)
+  * @NFTA_FULLCONE_REG_PROTO_MAX: source register of proto range end (NLA_U32: nft_registers)
+- * @NFTA_FULLCONE_FLAGS: NAT flags (see NF_NAT_RANGE_* in linux/netfilter/nf_nat.h) (NLA_U32)
+  */
+ enum nft_fullcone_attributes {
+ 	NFTA_FULLCONE_UNSPEC,
++	NFTA_FULLCONE_FLAGS,
+ 	NFTA_FULLCONE_REG_PROTO_MIN,
+ 	NFTA_FULLCONE_REG_PROTO_MAX,
+-	NFTA_FULLCONE_FLAGS,
+ 	__NFTA_FULLCONE_MAX
+ };
+ #define NFTA_FULLCONE_MAX		(__NFTA_FULLCONE_MAX - 1)
+diff --git a/src/nft_ext_fullcone.c b/src/nft_ext_fullcone.c
+index def862e..6e18de3 100644
+--- a/src/nft_ext_fullcone.c
++++ b/src/nft_ext_fullcone.c
+@@ -22,6 +22,7 @@
+ #include <net/netfilter/nf_tables.h>
+ #include <net/netfilter/nf_nat.h>
+ 
++#include <linux/rcupdate.h>
+ #include <linux/workqueue.h>
+ 
+ #include "nf_nat_fullcone.h"
+@@ -59,7 +60,11 @@ struct nft_fullcone {
+ };
+ 
+ static const struct nla_policy nft_fullcone_policy[NFTA_FULLCONE_MAX + 1] = {
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 2, 0)
++	[NFTA_FULLCONE_FLAGS] = NLA_POLICY_MASK(NLA_BE32, NF_NAT_RANGE_MASK),
++#else
+ 	[NFTA_FULLCONE_FLAGS] = {.type = NLA_U32 },
++#endif
+ 	[NFTA_FULLCONE_REG_PROTO_MIN] = {.type = NLA_U32 },
+ 	[NFTA_FULLCONE_REG_PROTO_MAX] = {.type = NLA_U32 },
+ };
+@@ -140,10 +145,37 @@ static int nft_fullcone_validate(const struct nft_ctx *ctx, const struct nft_exp
+ 
+ static int nft_fullcone_init(const struct nft_ctx *ctx, const struct nft_expr *expr, const struct nlattr *const tb[])
+ {
++	u32 plen = sizeof_field(struct nf_nat_range, min_proto.all);
++	struct nft_fullcone *priv = nft_expr_priv(expr);
+ 	int err;
++#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0) || defined(CONFIG_NF_CONNTRACK_CHAIN_EVENTS)
+ 	int register_ct_notifier_ret = 0;
++#endif
++
++	if (tb[NFTA_FULLCONE_FLAGS])
++		priv->flags = ntohl(nla_get_be32(tb[NFTA_FULLCONE_FLAGS]));
++
++	if (tb[NFTA_FULLCONE_REG_PROTO_MIN]) {
++		err = nft_parse_register_load(ctx, tb[NFTA_FULLCONE_REG_PROTO_MIN],
++					      &priv->sreg_proto_min, plen);
++		if (err < 0)
++			return err;
++
++		if (tb[NFTA_FULLCONE_REG_PROTO_MAX]) {
++			err = nft_parse_register_load(ctx, tb[NFTA_FULLCONE_REG_PROTO_MAX],
++						      &priv->sreg_proto_max, plen);
++			if (err < 0)
++				return err;
++		} else {
++			priv->sreg_proto_max = priv->sreg_proto_min;
++		}
++	} else if (tb[NFTA_FULLCONE_REG_PROTO_MAX]) {
++		return -EINVAL;
++	}
+ 
+ 	err = nf_ct_netns_get(ctx->net, ctx->family);
++	if (err < 0)
++		return err;
+ 
+ 	mutex_lock(&nf_ct_net_event_lock);
+ 
+@@ -162,26 +194,31 @@ static int nft_fullcone_init(const struct nft_ctx *ctx, const struct nft_expr *e
+ #endif
+ 
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0) && !defined(CONFIG_NF_CONNTRACK_CHAIN_EVENTS)
+-		if (!READ_ONCE(ctx->net->ct.nf_conntrack_event_cb)) {
++		if (!rcu_access_pointer(ctx->net->ct.nf_conntrack_event_cb)) {
+ 			nf_conntrack_register_notifier(ctx->net, &ct_event_notifier);
++			if (rcu_access_pointer(ctx->net->ct.nf_conntrack_event_cb) == &ct_event_notifier) {
++				ct_event_notifier_registered = 1;
++				pr_debug("nft_fullcone_init(): ct_event_notifier registered\n");
++			} else {
++				pr_warn("failed to register a conntrack notifier. Disable active GC for mappings.\n");
++			}
++		} else {
++			pr_warn("conntrack notifier already registered. Disable active GC for mappings.\n");
+ 		}
+ #else
+ 		register_ct_notifier_ret = nf_conntrack_register_notifier(ctx->net, &ct_event_notifier);
+-#endif
+-
+ 		if (register_ct_notifier_ret) {
+-			/* non-zero means failure */
+ 			pr_warn("failed to register a conntrack notifier. Disable active GC for mappings.\n");
+ 		} else {
+ 			ct_event_notifier_registered = 1;
+ 			pr_debug("nft_fullcone_init(): ct_event_notifier registered\n");
+ 		}
+-
++#endif
+ 	}
+ 
+ 	mutex_unlock(&nf_ct_net_event_lock);
+ 
+-	return err;
++	return 0;
+ }
+ 
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 2, 0)
+@@ -254,14 +291,17 @@ static void nft_fullcone_common_destory(const struct nft_ctx *ctx)
+ 	if (module_refer_count == 0) {
+ 		if (ct_event_notifier_registered) {
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0) && !defined(CONFIG_NF_CONNTRACK_CHAIN_EVENTS)
+-			nf_conntrack_unregister_notifier(ctx->net);
++			if (rcu_access_pointer(ctx->net->ct.nf_conntrack_event_cb) == &ct_event_notifier) {
++				nf_conntrack_unregister_notifier(ctx->net);
++				synchronize_rcu();
++			}
+ #else
+ 			nf_conntrack_unregister_notifier(ctx->net, &ct_event_notifier);
++			synchronize_rcu();
+ #endif
+ 			ct_event_notifier_registered = 0;
+ 
+ 			pr_debug("nft_fullcone_common_destory(): ct_event_notifier unregistered\n");
+-
+ 		}
+ 	}
+ 
+@@ -447,6 +487,7 @@ static void __exit nft_fullcone_module_exit(void)
+ 	nft_fullcone_module_exit_ipv6();
+ 	nft_fullcone_module_exit_inet();
+ 	nft_unregister_expr(&nft_fullcone_ipv4_type);
++	synchronize_rcu();
+ 
+ 	if (wq) {
+ 		cancel_delayed_work_sync(&gc_worker_wk);

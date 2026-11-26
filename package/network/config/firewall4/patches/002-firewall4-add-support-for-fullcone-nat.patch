@@ -1,0 +1,138 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 11:00:00 +0800
+Subject: [PATCH] firewall4: add opt-in fullcone NAT support
+
+Add opt-in defaults.fullcone/fullcone6 support using nft_fullcone with gated
+runtime probing and masquerade fallback. Honor zone masq_src/masq_dest filters
+on srcnat rules and keep auto_helper scoped to !(zone.masq || zone.masq6) (#397).
+
+Origin: backport, archive/xr1710g-v1
+Refs: #397
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+diff --git a/root/usr/share/firewall4/templates/ruleset.uc b/root/usr/share/firewall4/templates/ruleset.uc
+index f07f877..6682740 100644
+--- a/root/usr/share/firewall4/templates/ruleset.uc
++++ b/root/usr/share/firewall4/templates/ruleset.uc
+@@ -333,6 +333,12 @@ table inet fw4 {
+ {%   for (let redirect in fw4.redirects(`dstnat_${zone.name}`)): %}
+ 		{%+ include("redirect.uc", { fw4, zone, redirect }) %}
+ {%   endfor %}
++{%   if (zone.masq && fw4.default_option("fullcone")): %}
++		{%+ include("zone-fullcone.uc", { fw4, zone, family: 4, direction: "dstnat", saddrs: null, daddrs: null }) %}
++{%   endif %}
++{%   if (zone.masq6 && fw4.default_option("fullcone6")): %}
++		{%+ include("zone-fullcone.uc", { fw4, zone, family: 6, direction: "dstnat", saddrs: null, daddrs: null }) %}
++{%   endif %}
+ {%   fw4.includes('chain-append', `dstnat_${zone.name}`) %}
+ 	}
+ 
+@@ -346,14 +352,22 @@ table inet fw4 {
+ {%   if (zone.masq): %}
+ {%    for (let saddrs in zone.masq4_src_subnets): %}
+ {%     for (let daddrs in zone.masq4_dest_subnets): %}
++{%      if (fw4.default_option("fullcone")): %}
++		{%+ include("zone-fullcone.uc", { fw4, zone, family: 4, direction: "srcnat", saddrs, daddrs }) %}
++{%      else %}
+ 		{%+ include("zone-masq.uc", { fw4, zone, family: 4, saddrs, daddrs }) %}
++{%      endif %}
+ {%     endfor %}
+ {%    endfor %}
+ {%   endif %}
+ {%   if (zone.masq6): %}
+ {%    for (let saddrs in zone.masq6_src_subnets): %}
+ {%     for (let daddrs in zone.masq6_dest_subnets): %}
++{%      if (fw4.default_option("fullcone6")): %}
++		{%+ include("zone-fullcone.uc", { fw4, zone, family: 6, direction: "srcnat", saddrs, daddrs }) %}
++{%      else %}
+ 		{%+ include("zone-masq.uc", { fw4, zone, family: 6, saddrs, daddrs }) %}
++{%      endif %}
+ {%     endfor %}
+ {%    endfor %}
+ {%   endif %}
+diff --git a/root/usr/share/firewall4/templates/zone-fullcone.uc b/root/usr/share/firewall4/templates/zone-fullcone.uc
+new file mode 100644
+index 0000000..d0c138c
+--- /dev/null
++++ b/root/usr/share/firewall4/templates/zone-fullcone.uc
+@@ -0,0 +1,13 @@
++meta nfproto {{ fw4.nfproto(family) }} {%+ if (saddrs && saddrs[0]): -%}
++	{{ fw4.ipproto(family) }} saddr {{ fw4.set(map(saddrs[0], fw4.cidr)) }} {%+ endif -%}
++{%+ if (saddrs && saddrs[1]): -%}
++	{{ fw4.ipproto(family) }} saddr != {{ fw4.set(map(saddrs[1], fw4.cidr)) }} {%+ endif -%}
++{%+ for (let a in (saddrs ? saddrs[2] : [])): -%}
++	{{ fw4.ipproto(family) }} saddr & {{ a.mask }} {{ a.invert ? '!=' : '==' }} {{ a.addr }} {%+ endfor -%}
++{%+ if (daddrs && daddrs[0]): -%}
++	{{ fw4.ipproto(family) }} daddr {{ fw4.set(map(daddrs[0], fw4.cidr)) }} {%+ endif -%}
++{%+ if (daddrs && daddrs[1]): -%}
++	{{ fw4.ipproto(family) }} daddr != {{ fw4.set(map(daddrs[1], fw4.cidr)) }} {%+ endif -%}
++{%+ for (let a in (daddrs ? daddrs[2] : [])): -%}
++	{{ fw4.ipproto(family) }} daddr & {{ a.mask }} {{ a.invert ? '!=' : '==' }} {{ a.addr }} {%+ endfor -%}
++fullcone comment "!fw4: Handle {{ zone.name }} {{ fw4.nfproto(family, true) }} fullcone NAT {{ direction }} traffic"
+diff --git a/root/usr/share/ucode/fw4.uc b/root/usr/share/ucode/fw4.uc
+index 87d77f8..065bcf0 100644
+--- a/root/usr/share/ucode/fw4.uc
++++ b/root/usr/share/ucode/fw4.uc
+@@ -527,6 +527,21 @@ function nft_json_command(...args) {
+ 	return info || [];
+ }
+ 
++function nft_try_fullcone() {
++	let nft_test =
++		'add table inet fw4-fullcone-test; ' +
++		'add chain inet fw4-fullcone-test dstnat { ' +
++			'type nat hook prerouting priority -100; policy accept; ' +
++			'fullcone; ' +
++		'}; ' +
++		'add chain inet fw4-fullcone-test srcnat { ' +
++			'type nat hook postrouting priority -100; policy accept; ' +
++			'fullcone; ' +
++		'}; ';
++	let cmd = sprintf("/usr/sbin/nft -c '%s' 2>/dev/null", replace(nft_test, "'", "'\\''"));
++	return system(cmd) == 0;
++}
++
+ function nft_try_hw_offload(devices) {
+ 	let nft_test = `
+ 		add table inet fw4-hw-offload-test;
+@@ -2142,6 +2157,8 @@ return {
+ 		}
+ 
+ 		let defs = this.parse_options(data, {
++			fullcone: [ "bool", "0" ],
++			fullcone6: [ "bool", "0" ],
+ 			input: [ "policy", "drop" ],
+ 			output: [ "policy", "drop" ],
+ 			forward: [ "policy", "drop" ],
+@@ -2176,6 +2193,12 @@ return {
+ 
+ 		delete defs.syn_flood;
+ 
++		if ((defs.fullcone || defs.fullcone6) && !nft_try_fullcone()) {
++			this.warn("fullcone requested but the nft expression is unavailable, falling back to masquerade");
++			defs.fullcone = false;
++			defs.fullcone6 = false;
++		}
++
+ 		this.state.defaults = defs;
+ 	},
+ 
+@@ -2426,8 +2449,17 @@ return {
+ 		zone.related_physdevs = related_physdevs;
+ 		zone.related_l3devs = related_l3devs;
+ 
+-		if (zone.masq || zone.masq6)
++		if (zone.masq) {
+ 			zone.dflags.snat = true;
++			if (this.state.defaults?.fullcone)
++				zone.dflags.dnat = true;
++		}
++
++		if (zone.masq6) {
++			zone.dflags.snat = true;
++			if (this.state.defaults?.fullcone6)
++				zone.dflags.dnat = true;
++		}
+ 
+ 		if ((zone.auto_helper && !(zone.masq || zone.masq6)) || length(zone.helper)) {
+ 			zone.dflags.helper = false;

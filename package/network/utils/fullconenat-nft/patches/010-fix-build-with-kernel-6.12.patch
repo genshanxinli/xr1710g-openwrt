@@ -1,0 +1,29 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 20:05:43 +0800
+Subject: [PATCH] fullconenat-nft: drop removed validate data parameter on Linux 6.6.113+/6.12+
+
+Linux 6.12 (backported to 6.6.113) removed the unused third parameter
+(const struct nft_data **data) from struct nft_expr_ops.validate(). Guard the
+nft_fullcone_validate() signature with LINUX_VERSION_CODE so the module builds
+against current kernels.
+
+Origin: backport, archive/xr1710g-v1
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+diff --git a/src/nft_ext_fullcone.c b/src/nft_ext_fullcone.c
+index 96d1feb..def862e 100644
+--- a/src/nft_ext_fullcone.c
++++ b/src/nft_ext_fullcone.c
+@@ -121,7 +121,12 @@ static int exp_event_cb(unsigned int events, const struct nf_exp_event *item)
+ }
+ #endif
+ 
++#if ((LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 113)) && (LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0))) || \
++	(LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0))
++static int nft_fullcone_validate(const struct nft_ctx *ctx, const struct nft_expr *expr)
++#else
+ static int nft_fullcone_validate(const struct nft_ctx *ctx, const struct nft_expr *expr, const struct nft_data **data)
++#endif
+ {
+ 	int err;
+ 
