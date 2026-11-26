@@ -1,0 +1,54 @@
+From 14b6830335eb6d70dec7a235094d66c22d38eb07 Mon Sep 17 00:00:00 2001
+From: Gabor Juhos <j4g8y7@gmail.com>
+Date: Thu, 19 Nov 2026 08:57:42 +0100
+Subject: [PATCH] mtd: spinand: set request type explicitly in
+ spinand_{is,mark}bad() functions
+
+Commit 701981cab016 ("mtd: nand: Add a NAND page I/O request type")
+added a 'type' member to the 'nand_page_io_req' structure and updated
+the request iterators to utilize that, but the spinand_{is,mark}bad()
+functions were not updated by the commit. However in both of these
+functions the new member is implicitly inititalized to zero which
+corresponds to NAND_PAGE_READ. This is correct for the spinand_isbad()
+function since that uses a read request to get the bad block marker
+bytes, but the spinand_markbad() function does a write request so it
+should set the request type to NAND_PAGE_WRITE.
+
+Change the spinand_markbad() function to set the request type to the
+correct NAND_PAGE_WRITE value. For consistency, also update the
+spinand_isbad() function to set the request type to NAND_PAGE_READ
+explicitly.
+
+Cc: stable@vger.kernel.org
+Fixes: 701981cab016 ("mtd: nand: Add a NAND page I/O request type")
+Reported-by: Sashiko <sashiko-bot@kernel.org>
+Link: https://sashiko.dev/#/log/192383 # See "**Investigating `req->type` in NAND Write Operations**"
+Origin: https://git.kernel.org/pub/scm/linux/kernel/git/mtd/linux.git/commit/?id=14b6830335eb6d70dec7a235094d66c22d38eb07
+Signed-off-by: Gabor Juhos <j4g8y7@gmail.com>
+Signed-off-by: Miquel Raynal <miquel.raynal@bootlin.com>
+---
+ drivers/mtd/nand/spi/core.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/drivers/mtd/nand/spi/core.c b/drivers/mtd/nand/spi/core.c
+index 21c1b98d104ac..e883745299a4e 100644
+--- a/drivers/mtd/nand/spi/core.c
++++ b/drivers/mtd/nand/spi/core.c
+@@ -1105,6 +1105,7 @@ static bool spinand_isbad(struct nand_device *nand, const struct nand_pos *pos)
+ 	struct spinand_device *spinand = nand_to_spinand(nand);
+ 	u8 marker[2] = { };
+ 	struct nand_page_io_req req = {
++		.type = NAND_PAGE_READ,
+ 		.pos = *pos,
+ 		.ooblen = sizeof(marker),
+ 		.ooboffs = 0,
+@@ -1148,6 +1149,7 @@ static int spinand_markbad(struct nand_device *nand, const struct nand_pos *pos)
+ 	struct spinand_device *spinand = nand_to_spinand(nand);
+ 	u8 marker[2] = { };
+ 	struct nand_page_io_req req = {
++		.type = NAND_PAGE_WRITE,
+ 		.pos = *pos,
+ 		.ooboffs = 0,
+ 		.ooblen = sizeof(marker),
+-- 
+cgit 1.3.1-korg

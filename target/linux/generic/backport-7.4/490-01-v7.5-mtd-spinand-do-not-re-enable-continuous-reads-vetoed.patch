@@ -1,0 +1,126 @@
+From 09c1dd5c119276c43b381fd9cea36a9fea07da93 Mon Sep 17 00:00:00 2001
+From: Frieder Schrempf <frieder.schrempf@kontron.de>
+Date: Wed, 14 Oct 2026 08:45:26 +0200
+Subject: [PATCH] mtd: spinand: Do not re-enable continuous reads vetoed during
+ variant selection
+
+spinand_match_and_init() tries to disable continuous reads by clearing
+cont_read_possible when the fastest continuous read variant is slower
+than the fastest read from cache variant, or when no SSDR/ODTR continuous
+read variant is supported by the controller. However, at that point
+cont_read_possible has not been set yet, and spinand_cont_read_init(),
+which runs later during spinand_init(), unconditionally sets it to true
+for any chip implementing ->set_cont_read().
+
+As a result, continuous reads end up being used while
+op_templates->cont_read_cache is NULL. spinand_create_dirmap() then does
+not provide a secondary template and spinand_read_from_cache_op() falls
+back to the regular read from cache operation while the chip is in
+continuous read mode. On Winbond chips, which do not expect the column
+address in this mode, this misaligns the data returned.
+
+The SSDR and ODTR variants are evaluated independently and the bus
+interface is only selected later on, so the decision cannot be taken in
+spinand_match_and_init(). For example, a quad-only W25N01JW attached to
+an octal DTR capable controller has no ODTR continuous read variant, but
+ends up using SSDR, where continuous reads work fine.
+
+Instead of clearing cont_read_possible, leave the continuous read
+template of the affected bus interface empty and remember whether the
+chip relies on dedicated continuous read operations. In
+spinand_cont_read_init(), which runs once the bus interface is known,
+only enable continuous reads for such chips if a continuous read
+template is available for the bus interface in use.
+
+Fixes: 6eb7c193e751 ("mtd: spinand: Use secondary ops for continuous reads")
+Assisted-by: LLM
+Origin: https://git.kernel.org/pub/scm/linux/kernel/git/mtd/linux.git/commit/?id=09c1dd5c119276c43b381fd9cea36a9fea07da93
+Signed-off-by: Frieder Schrempf <frieder.schrempf@kontron.de>
+Signed-off-by: Miquel Raynal <miquel.raynal@bootlin.com>
+---
+ drivers/mtd/nand/spi/core.c | 23 +++++++++++++----------
+ include/linux/mtd/spinand.h |  4 ++++
+ 2 files changed, 17 insertions(+), 10 deletions(-)
+
+diff --git a/drivers/mtd/nand/spi/core.c b/drivers/mtd/nand/spi/core.c
+index 22756832eacf8..21c1b98d104ac 100644
+--- a/drivers/mtd/nand/spi/core.c
++++ b/drivers/mtd/nand/spi/core.c
+@@ -993,9 +993,16 @@ static void spinand_cont_read_init(struct spinand_device *spinand)
+ 		 */
+ 		spinand_cont_read_enable(spinand, false);
+ 
++		/*
++		 * Chips needing dedicated continuous read operations can only
++		 * use continuous reads if such an operation was selected for
++		 * the bus interface in use.
++		 */
+ 		if ((engine_type == NAND_ECC_ENGINE_TYPE_ON_DIE ||
+ 		     engine_type == NAND_ECC_ENGINE_TYPE_NONE) &&
+-		    !spi_mem_controller_is_capable(ctlr, no_cs_assertion))
++		    !spi_mem_controller_is_capable(ctlr, no_cs_assertion) &&
++		    (!spinand->needs_cont_read_op ||
++		     spinand->op_templates->cont_read_cache))
+ 			spinand->cont_read_possible = true;
+ 	}
+ }
+@@ -1654,6 +1661,7 @@ int spinand_match_and_init(struct spinand_device *spinand,
+ 		spinand->read_retries = table[i].read_retries;
+ 		spinand->set_read_retry = table[i].set_read_retry;
+ 		spinand->set_randomizer = table[i].set_randomizer;
++		spinand->needs_cont_read_op = !!info->op_variants.cont_read_cache;
+ 
+ 		/* I/O variants selection with single-spi SDR commands */
+ 
+@@ -1701,12 +1709,10 @@ int spinand_match_and_init(struct spinand_device *spinand,
+ 				    (read_op->addr.dtr && !op->addr.dtr) ||
+ 				    read_op->data.buswidth > op->data.buswidth ||
+ 				    (read_op->data.dtr && !op->data.dtr))
+-					spinand->cont_read_possible = false;
+-				else
+-					spinand->ssdr_op_templates.cont_read_cache = op;
+-			} else {
+-				spinand->cont_read_possible = false;
++					op = NULL;
+ 			}
++
++			spinand->ssdr_op_templates.cont_read_cache = op;
+ 		}
+ 
+ 		/* I/O variants selection with octo-spi DDR commands (optional) */
+@@ -1734,10 +1740,7 @@ int spinand_match_and_init(struct spinand_device *spinand,
+ 		if (info->op_variants.cont_read_cache) {
+ 			op = spinand_select_op_variant(spinand, ODTR,
+ 						       info->op_variants.cont_read_cache);
+-			if (op)
+-				spinand->odtr_op_templates.cont_read_cache = op;
+-			else
+-				spinand->cont_read_possible = false;
++			spinand->odtr_op_templates.cont_read_cache = op;
+ 		}
+ 
+ 		return 0;
+diff --git a/include/linux/mtd/spinand.h b/include/linux/mtd/spinand.h
+index d7c99fcfb85ef..a51829a8cdead 100644
+--- a/include/linux/mtd/spinand.h
++++ b/include/linux/mtd/spinand.h
+@@ -773,6 +773,9 @@ struct spinand_mem_ops {
+  *		suitable to use or not in general with this chip/configuration.
+  *		A per-transfer check must of course be done to ensure it is
+  *		actually relevant to enable this feature.
++ * @needs_cont_read_op: The chip needs dedicated continuous read from cache
++ *			operations, which must then be available for the bus
++ *			interface in use
+  * @set_cont_read: Enable/disable the continuous read feature
+  * @priv: manufacturer private data
+  * @fact_otp: SPI NAND factory OTP info.
+@@ -811,6 +814,7 @@ struct spinand_device {
+ 	int (*configure_chip)(struct spinand_device *spinand,
+ 			      enum spinand_bus_interface iface);
+ 	bool cont_read_possible;
++	bool needs_cont_read_op;
+ 	int (*set_cont_read)(struct spinand_device *spinand,
+ 			     bool enable);
+ 	int (*set_randomizer)(struct spinand_device *spinand,
+-- 
+cgit 1.3.1-korg

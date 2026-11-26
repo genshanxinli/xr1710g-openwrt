@@ -31,7 +31,9 @@ Link: https://patchwork.kernel.org/project/linux-mediatek/patch/20260806072601.1
 Link: https://patchwork.kernel.org/project/linux-mediatek/patch/20260807064058.1117747-1-pawlik.dan@gmail.com/
 Assisted-by: Cursor:composer-2
 Signed-off-by: Daniel Pawlik <pawlik.dan@gmail.com>
-
+[xr1710g: latch REG_CR_MBQ0_CTRL(3) before ringing REG_CR_MBQ0_CTRL(2) doorbell]
+Origin: https://github.com/openwrt/openwrt/pull/26812; xr1710g_upstream_sync_patch@625e20a062
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_npu.c
 +++ b/drivers/net/ethernet/airoha/airoha_npu.c
@@ -48,7 +50,7 @@ Signed-off-by: Daniel Pawlik <pawlik.dan@gmail.com>
  
  #define REG_NPU_LOCAL_SRAM		0x0
  
-@@ -161,23 +167,34 @@ struct wlan_mbox_data {
+@@ -161,27 +167,39 @@ struct wlan_mbox_data {
  	DECLARE_FLEX_ARRAY(u8, d);
  };
  
@@ -78,6 +80,8 @@ Signed-off-by: Daniel Pawlik <pawlik.dan@gmail.com>
  
 -	regmap_write(npu->regmap, REG_CR_MBQ0_CTRL(0) + offset, dma_addr);
 -	regmap_write(npu->regmap, REG_CR_MBQ0_CTRL(1) + offset, size);
+-	regmap_read(npu->regmap, REG_CR_MBQ0_CTRL(2) + offset, &val);
+-	regmap_write(npu->regmap, REG_CR_MBQ0_CTRL(2) + offset, val + 1);
 +	/*
 +	 * Mailbox payloads are bidirectional (CPU request, NPU response).
 +	 * On EN7581+MT7996, streaming DMA_BIDIRECTIONAL against the
@@ -92,10 +96,15 @@ Signed-off-by: Daniel Pawlik <pawlik.dan@gmail.com>
 +
 +	regmap_write(npu->regmap, REG_CR_MBQ0_CTRL(0) + offset, core->addr);
 +	regmap_write(npu->regmap, REG_CR_MBQ0_CTRL(1) + offset, len);
- 	regmap_read(npu->regmap, REG_CR_MBQ0_CTRL(2) + offset, &val);
- 	regmap_write(npu->regmap, REG_CR_MBQ0_CTRL(2) + offset, val + 1);
  	val = FIELD_PREP(MBOX_MSG_FUNC_ID, func_id) | MBOX_MSG_WAIT_RSP;
-@@ -190,13 +207,21 @@ static int airoha_npu_send_msg(struct ai
+ 	regmap_write(npu->regmap, REG_CR_MBQ0_CTRL(3) + offset, val);
++	/* Latch CTRL(3) before ringing the CTRL(2) doorbell. */
++	regmap_read(npu->regmap, REG_CR_MBQ0_CTRL(2) + offset, &val);
++	regmap_write(npu->regmap, REG_CR_MBQ0_CTRL(2) + offset, val + 1);
+ 
+ 	ret = regmap_read_poll_timeout_atomic(npu->regmap,
+ 					      REG_CR_MBQ0_CTRL(3) + offset,
+@@ -190,13 +208,21 @@ static int airoha_npu_send_msg(struct ai
  	if (!ret && FIELD_GET(MBOX_MSG_STATUS, val) != NPU_MBOX_SUCCESS)
  		ret = -EINVAL;
  
@@ -119,7 +128,7 @@ Signed-off-by: Daniel Pawlik <pawlik.dan@gmail.com>
  static int airoha_npu_load_firmware(struct device *dev, void __iomem *addr,
  				    const char *fw_name, int fw_max_size)
  {
-@@ -500,9 +525,8 @@ static int airoha_npu_wlan_msg_get(struc
+@@ -500,9 +526,8 @@ static int airoha_npu_wlan_msg_get(struc
  	wlan_data->func_type = NPU_OP_GET;
  	wlan_data->func_id = func_id;
  
@@ -131,7 +140,7 @@ Signed-off-by: Daniel Pawlik <pawlik.dan@gmail.com>
  	kfree(wlan_data);
  
  	return err;
-@@ -776,6 +800,15 @@ static int airoha_npu_probe(struct platf
+@@ -776,6 +801,15 @@ static int airoha_npu_probe(struct platf
  	if (err)
  		return err;
  

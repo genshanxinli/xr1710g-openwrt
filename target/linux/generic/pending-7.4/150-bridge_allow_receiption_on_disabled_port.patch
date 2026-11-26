@@ -20,7 +20,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 -	__br_handle_local_finish(skb);
 +	struct net_bridge_port *p = br_port_get_rcu(skb->dev);
 +
-+	if (p->state != BR_STATE_DISABLED)
++	if (p && p->state != BR_STATE_DISABLED)
 +		__br_handle_local_finish(skb);
  	kfree_skb(skb);
  

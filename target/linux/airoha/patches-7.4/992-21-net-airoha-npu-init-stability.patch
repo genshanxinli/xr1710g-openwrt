@@ -2,11 +2,11 @@ From: fanboy <fanboy@openwrt.org>
 Date: Sun, 9 Aug 2026 07:53:16 -1000
 Subject: [PATCH] net: airoha: npu: split atomic/init mailbox timeouts and retry WLAN init
 
-Retry transient WLAN NPU mailbox init commands and split mailbox poll
-timeouts into 20 ms for atomic/BH callers vs 500 ms for blocking init
-callers, logging ratelimited warnings on timeout.
+Retry transient WLAN NPU mailbox init commands using sleepable msleep(10)
+delays and split mailbox poll timeouts into 20 ms for atomic/BH callers vs
+500 ms for blocking init callers, logging ratelimited warnings on timeout.
 
-Origin: archive/xr1710g-v1@e85677d284c0
+Origin: archive/xr1710g-v1@e85677d284c0; https://github.com/openwrt/openwrt/pull/26812 (msleep retry)
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_npu.c
@@ -38,7 +38,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  {
  	struct airoha_npu_core *core = &npu->cores[0]; /* FIXME: core */
  	u32 val, offset = 0;
-@@ -203,19 +217,46 @@ static int __airoha_npu_send_msg(struct
+@@ -204,19 +218,46 @@ static int __airoha_npu_send_msg(struct
  	ret = regmap_read_poll_timeout_atomic(npu->regmap,
  					      REG_CR_MBQ0_CTRL(3) + offset,
  					      val, (val & MBOX_MSG_DONE),
@@ -88,7 +88,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  static int airoha_npu_send_msg(struct airoha_npu *npu, int func_id,
  			       void *data, int len)
  {
-@@ -438,8 +479,8 @@ static int airoha_npu_foe_commit_entry(s
+@@ -439,8 +480,8 @@ static int airoha_npu_foe_commit_entry(s
  	ppe_data->set_info.func_id = ppe2 ? PPE2_SRAM_SET_ENTRY
  					  : PPE_SRAM_SET_ENTRY;
  
@@ -99,7 +99,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	if (err)
  		goto out;
  
-@@ -447,8 +488,8 @@ static int airoha_npu_foe_commit_entry(s
+@@ -448,8 +489,8 @@ static int airoha_npu_foe_commit_entry(s
  	ppe_data->set_info.data = hash;
  	ppe_data->set_info.size = sizeof(u32);
  
@@ -110,7 +110,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  out:
  	kfree(ppe_data);
  
-@@ -509,7 +550,9 @@ static int airoha_npu_wlan_msg_send(stru
+@@ -510,7 +551,9 @@ static int airoha_npu_wlan_msg_send(stru
  	wlan_data->func_id = func_id;
  	memcpy(wlan_data->d, data, data_len);
  
@@ -121,7 +121,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	kfree(wlan_data);
  
  	return err;
-@@ -531,8 +574,9 @@ static int airoha_npu_wlan_msg_get(struc
+@@ -532,8 +575,9 @@ static int airoha_npu_wlan_msg_get(struc
  	wlan_data->func_type = NPU_OP_GET;
  	wlan_data->func_id = func_id;
  
@@ -133,7 +133,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	kfree(wlan_data);
  
  	return err;
-@@ -558,29 +602,55 @@ airoha_npu_wlan_set_reserved_memory(stru
+@@ -559,29 +603,55 @@ airoha_npu_wlan_set_reserved_memory(stru
  					sizeof(val), GFP_KERNEL);
  }
  
@@ -154,10 +154,10 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +								  name, cmd);
 +		if (!err)
 +			break;
-+		mdelay(10);
++		msleep(10);
 +		retry_cnt--;
 +	}
-+	mdelay(10);
++	msleep(10);
 +	if (!retry_cnt)
 +		return err;
 +	return 0;
@@ -194,7 +194,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	if (err)
  		return err;
  
-@@ -593,8 +663,8 @@ static int airoha_npu_wlan_init_memory(s
+@@ -594,8 +664,8 @@ static int airoha_npu_wlan_init_memory(s
  	}
  
  	cmd = WLAN_FUNC_SET_WAIT_IS_FORCE_TO_CPU;

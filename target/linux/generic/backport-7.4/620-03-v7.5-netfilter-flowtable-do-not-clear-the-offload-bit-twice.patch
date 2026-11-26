@@ -1,0 +1,55 @@
+From 8147f6e61e163af13e76e643c8524cac04f29dcc Mon Sep 17 00:00:00 2001
+From: João Silva <jgc3silva@gmail.com>
+Date: Thu, 5 Nov 2026 11:34:41 +0000
+Subject: [PATCH] netfilter: flowtable: do not clear the offload bit twice
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+An expired hardware flow remains in the flowtable until its asynchronous
+hardware deletion completes. Teardown clears IPS_OFFLOAD_BIT, so a packet
+can create a replacement flow referencing the same conntrack entry while
+the old flow is still waiting for deletion.
+
+The next GC pass calls flow_offload_teardown() on the expired old flow
+again, clearing the replacement's offload bit. More packets can then
+create additional flows for the same conntrack entry. A pending hardware
+work item can also delay deletion and expose the same repeated teardown.
+
+Commit d2d31ea8cd80 ("netfilter: conntrack: fix erronous removal of
+offload bit") closed this window for software flows by unlinking them in
+the same GC pass and made the conntrack state fixup one-shot, but
+hardware flows stay linked until NF_FLOW_HW_DEAD is set.
+
+Make clearing IPS_OFFLOAD_BIT part of the existing one-time teardown
+transition, alongside the conntrack state fixup. Subsequent teardown calls
+must not alter the offload state now owned by a replacement flow.
+
+Fixes: e5eaac2beb54 ("netfilter: flowtable: fix TCP flow teardown")
+Origin: https://git.kernel.org/pub/scm/linux/kernel/git/netdev/net-next.git/commit/?id=8147f6e61e163af13e76e643c8524cac04f29dcc
+Signed-off-by: João Silva <jgc3silva@gmail.com>
+Signed-off-by: Pablo Neira Ayuso <pablo@netfilter.org>
+---
+ net/netfilter/nf_flow_table_core.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/net/netfilter/nf_flow_table_core.c b/net/netfilter/nf_flow_table_core.c
+index 733107180d567..d5652e45ee047 100644
+--- a/net/netfilter/nf_flow_table_core.c
++++ b/net/netfilter/nf_flow_table_core.c
+@@ -398,9 +398,11 @@ static void flow_offload_del(struct nf_flowtable *flow_table,
+ 
+ void flow_offload_teardown(struct flow_offload *flow)
+ {
++	if (test_and_set_bit(NF_FLOW_TEARDOWN, &flow->flags))
++		return;
++
+ 	clear_bit(IPS_OFFLOAD_BIT, &flow->ct->status);
+-	if (!test_and_set_bit(NF_FLOW_TEARDOWN, &flow->flags))
+-		flow_offload_fixup_ct(flow);
++	flow_offload_fixup_ct(flow);
+ }
+ EXPORT_SYMBOL_GPL(flow_offload_teardown);
+ 
+-- 
+cgit 1.3.1-korg

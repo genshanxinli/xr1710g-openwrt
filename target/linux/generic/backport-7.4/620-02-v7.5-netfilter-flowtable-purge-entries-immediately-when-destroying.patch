@@ -1,0 +1,130 @@
+From 1ba460c8e20bbe300ddb165bfb95ef6c9fe2676b Mon Sep 17 00:00:00 2001
+From: Pablo Neira Ayuso <pablo@netfilter.org>
+Date: Fri, 30 Oct 2026 00:06:57 +0100
+Subject: [PATCH] netfilter: flowtable: purge entries immediately when
+ destroying the flowtable
+
+Do not use hardware offload workqueue to purge the remaining flow
+entries when the flowtable is being destroyed. Instead, iterate over the
+flowtable to purge the remaining flow offload entries. Work memory
+allocations can fail, leaving us with either waiting indefinitely until
+work can be allocated or leaving entries in the hardware.
+
+Given it is possible to encounter either the original or reply direction
+when walking down the rhashtable in the destroy path, use the
+NF_FLOW_PENDING bit to indicate that the first tuplehash has been
+already visited, so this flow can be safely released.
+
+Fixes: c921ffe85333 ("netfilter: flowtable: Fix flushing of offloaded flows on free")
+Origin: https://git.kernel.org/pub/scm/linux/kernel/git/netdev/net-next.git/commit/?id=1ba460c8e20bbe300ddb165bfb95ef6c9fe2676b
+Signed-off-by: Pablo Neira Ayuso <pablo@netfilter.org>
+---
+ include/net/netfilter/nf_flow_table.h |  3 ++-
+ net/netfilter/nf_flow_table_core.c    | 29 +++++++++++++++++++++++++----
+ net/netfilter/nf_flow_table_offload.c | 23 +++++++++++++++--------
+ 3 files changed, 42 insertions(+), 13 deletions(-)
+
+diff --git a/include/net/netfilter/nf_flow_table.h b/include/net/netfilter/nf_flow_table.h
+index 5b22d31cb1407..9bb46457c1920 100644
+--- a/include/net/netfilter/nf_flow_table.h
++++ b/include/net/netfilter/nf_flow_table.h
+@@ -375,7 +375,8 @@ void nf_flow_offload_stats(struct nf_flowtable *flowtable,
+ 			   struct flow_offload *flow);
+ 
+ void nf_flow_table_offload_flush(struct nf_flowtable *flowtable);
+-void nf_flow_table_offload_flush_cleanup(struct nf_flowtable *flowtable);
++void nf_flow_table_offload_purge(struct nf_flowtable *flowtable,
++				 struct flow_offload *flow);
+ 
+ int nf_flow_table_offload_setup(struct nf_flowtable *flowtable,
+ 				struct net_device *dev,
+diff --git a/net/netfilter/nf_flow_table_core.c b/net/netfilter/nf_flow_table_core.c
+index 2aa2647ed9df0..733107180d567 100644
+--- a/net/netfilter/nf_flow_table_core.c
++++ b/net/netfilter/nf_flow_table_core.c
+@@ -770,6 +770,29 @@ void nf_flow_table_cleanup(struct net_device *dev)
+ }
+ EXPORT_SYMBOL_GPL(nf_flow_table_cleanup);
+ 
++static void nf_flow_table_do_purge(void *ptr, void *arg)
++{
++	struct flow_offload_tuple_rhash *tuplehash = ptr;
++	struct nf_flowtable *flow_table = arg;
++	struct flow_offload *flow;
++	int dir;
++
++	dir = tuplehash->tuple.dir;
++	flow = container_of(tuplehash, struct flow_offload, tuplehash[dir]);
++
++	/* Let the second tuplehash that is seen release the flow. */
++	if (!test_and_set_bit(NF_FLOW_PENDING, &flow->flags))
++		return;
++
++	flow_offload_teardown(flow);
++
++	if (nf_flowtable_hw_offload(flow_table) &&
++	    !test_bit(NF_FLOW_HW_DEAD, &flow->flags))
++		nf_flow_table_offload_purge(flow_table, flow);
++
++	flow_offload_free(flow);
++}
++
+ void nf_flow_table_free(struct nf_flowtable *flow_table)
+ {
+ 	mutex_lock(&flowtable_lock);
+@@ -779,10 +802,8 @@ void nf_flow_table_free(struct nf_flowtable *flow_table)
+ 	cancel_delayed_work_sync(&flow_table->gc_work);
+ 	nf_flow_table_offload_flush(flow_table);
+ 	/* ... no more pending work after this stage ... */
+-	nf_flow_table_iterate(flow_table, nf_flow_table_do_cleanup, NULL);
+-	nf_flow_table_gc_run(flow_table);
+-	nf_flow_table_offload_flush_cleanup(flow_table);
+-	rhashtable_destroy(&flow_table->rhashtable);
++	rhashtable_free_and_destroy(&flow_table->rhashtable,
++				    nf_flow_table_do_purge, flow_table);
+ }
+ EXPORT_SYMBOL_GPL(nf_flow_table_free);
+ 
+diff --git a/net/netfilter/nf_flow_table_offload.c b/net/netfilter/nf_flow_table_offload.c
+index c302051489f23..11434cfb105b7 100644
+--- a/net/netfilter/nf_flow_table_offload.c
++++ b/net/netfilter/nf_flow_table_offload.c
+@@ -1181,14 +1181,6 @@ void nf_flow_offload_stats(struct nf_flowtable *flowtable,
+ 	flow_offload_queue_work(offload);
+ }
+ 
+-void nf_flow_table_offload_flush_cleanup(struct nf_flowtable *flowtable)
+-{
+-	if (nf_flowtable_hw_offload(flowtable)) {
+-		flush_workqueue(nf_flow_offload_del_wq);
+-		nf_flow_table_gc_run(flowtable);
+-	}
+-}
+-
+ void nf_flow_table_offload_flush(struct nf_flowtable *flowtable)
+ {
+ 	if (nf_flowtable_hw_offload(flowtable)) {
+@@ -1198,6 +1190,21 @@ void nf_flow_table_offload_flush(struct nf_flowtable *flowtable)
+ 	}
+ }
+ 
++void nf_flow_table_offload_purge(struct nf_flowtable *flowtable,
++				 struct flow_offload *flow)
++{
++	struct flow_offload_work offload = {
++		.cmd		= FLOW_CLS_DESTROY,
++		.flowtable	= flowtable,
++		.flow		= flow,
++	};
++
++	if (nf_flow_offload_unsupported(flow))
++		return;
++
++	flow_offload_work_del(&offload);
++}
++
+ static int nf_flow_table_block_setup(struct nf_flowtable *flowtable,
+ 				     struct flow_block_offload *bo,
+ 				     enum flow_block_command cmd)
+-- 
+cgit 1.3.1-korg
