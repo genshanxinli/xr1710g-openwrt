@@ -1,12 +1,12 @@
 #!/bin/sh
-# Opt-in latency/CPU sampler; writes JSON atomically inside 0700 /var/run/flowsense.
+# Opt-in latency/CPU sampler; writes JSON atomically inside 0700 /var/run/flowsense-jitter.
 
 TARGET="${1:-1.1.1.1}"
 case "$TARGET" in
 	''|auto|0.0.0.0|-*|*[!a-zA-Z0-9.:_-]*) TARGET="1.1.1.1" ;;
 esac
 
-RUN_DIR="${FLOWSENSE_RUN_DIR:-/var/run/flowsense}"
+RUN_DIR="${FLOWSENSE_RUN_DIR:-/var/run/flowsense-jitter}"
 RESULT_FILE="$RUN_DIR/npu-jitter.json"
 WINDOW=10
 INTERVAL=2

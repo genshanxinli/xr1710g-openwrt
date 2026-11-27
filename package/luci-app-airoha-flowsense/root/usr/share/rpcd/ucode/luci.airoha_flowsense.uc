@@ -13,7 +13,9 @@ const PPE_BIND = '/sys/kernel/debug/ppe/bind';
 const PPE_ENTRIES = '/sys/kernel/debug/ppe/entries';
 const PHY_DBG = '/sys/kernel/debug/ieee80211/phy0';
 const STATE_DIR = '/var/run/flowsense';
-const JITTER_FILE = `${STATE_DIR}/npu-jitter.json`;
+const JITTER_DIR = '/var/run/flowsense-jitter';
+const JITTER_USER = 'npu-jitter';
+const JITTER_FILE = `${JITTER_DIR}/npu-jitter.json`;
 
 let ubus_conn;
 
@@ -92,7 +94,41 @@ function ensure_state_dir() {
 	return true;
 }
 
+function lookup_uid(username) {
+	const raw = readfile('/etc/passwd');
+	if (!raw)
+		return null;
+	for (let line in split(raw, '\n')) {
+		if (!length(line) || substr(line, 0, 1) == '#')
+			continue;
+		const fields = split(line, ':');
+		if (fields[0] != username)
+			continue;
+		if (length(fields) < 4 || !match(fields[2], /^[0-9]+$/))
+			return null;
+		const uid = +fields[2];
+		return (uid > 0) ? uid : null;
+	}
+	return null;
+}
+
 function read_jitter() {
+	const jitter_uid = lookup_uid(JITTER_USER);
+	if (jitter_uid == null)
+		return null;
+
+	const dir_st = lstat(JITTER_DIR);
+	if (!dir_st || dir_st.type != 'directory' ||
+	    type(dir_st.uid) != 'int' || dir_st.uid != jitter_uid ||
+	    type(dir_st.mode) != 'int' || (dir_st.mode & 0o077) != 0)
+		return null;
+
+	const file_st = lstat(JITTER_FILE);
+	if (!file_st || file_st.type != 'file' ||
+	    type(file_st.uid) != 'int' || file_st.uid != jitter_uid ||
+	    type(file_st.mode) != 'int' || (file_st.mode & 0o077) != 0)
+		return null;
+
 	const raw = readfile(JITTER_FILE);
 	if (!raw)
 		return null;
