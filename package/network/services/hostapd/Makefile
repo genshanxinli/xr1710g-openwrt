@@ -691,7 +691,8 @@ define Build/Compile
 endef
 
 define Install/hostapd/full
-	$(INSTALL_DIR) $(1)/etc/init.d $(1)/etc/config $(1)/etc/radius
+	$(INSTALL_DIR) $(1)/etc/init.d $(1)/etc/config
+	install -d -m0700 $(1)/etc/radius
 	ln -sf hostapd $(1)/usr/sbin/hostapd-radius
 	$(INSTALL_BIN) ./files/radius.init $(1)/etc/init.d/radius
 	$(INSTALL_CONF) ./files/radius.config $(1)/etc/config/radius
