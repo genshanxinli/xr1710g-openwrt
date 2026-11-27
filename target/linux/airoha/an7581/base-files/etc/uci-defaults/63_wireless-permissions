@@ -1,7 +1,19 @@
 #!/bin/sh
-# Restrict /etc/config/wireless to root-only so WPA/SAE passphrases are not world-readable.
+# Restrict wireless and RADIUS secrets to root-only permissions.
 
-WIRELESS_CFG="${WIRELESS_CONFIG:-${IPKG_INSTROOT:-}/etc/config/wireless}"
-[ -f "$WIRELESS_CFG" ] && chmod 600 "$WIRELESS_CFG"
+ROOT="${IPKG_INSTROOT:-}"
+WIRELESS_CFG="${WIRELESS_CONFIG:-$ROOT/etc/config/wireless}"
+RADIUS_DIR="$ROOT/etc/radius"
+
+for f in "$WIRELESS_CFG" "$ROOT/etc/config/radius"; do
+	[ ! -L "$f" ] && [ -f "$f" ] && chmod 600 "$f"
+done
+
+if [ ! -L "$RADIUS_DIR" ] && [ -d "$RADIUS_DIR" ]; then
+	chmod 700 "$RADIUS_DIR"
+	for f in "$RADIUS_DIR/clients" "$RADIUS_DIR/users"; do
+		[ ! -L "$f" ] && [ -f "$f" ] && chmod 600 "$f"
+	done
+fi
 
 exit 0
