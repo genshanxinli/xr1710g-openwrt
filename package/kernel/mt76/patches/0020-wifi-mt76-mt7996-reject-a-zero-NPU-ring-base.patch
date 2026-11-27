@@ -7,7 +7,7 @@ ring base. Guard missing queue regs, and on a zero base restore valid host
 q->desc_dma instead of programming 0x0 into an active WFDMA ring; return 0 on
 RX so other bands stay usable and return -EIO on TX.
 
-Origin: xr1710g_issue_triage_pipeline@3b8ef087f7
+Origin: local, xr1710g (#397)
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/mt7996/npu.c

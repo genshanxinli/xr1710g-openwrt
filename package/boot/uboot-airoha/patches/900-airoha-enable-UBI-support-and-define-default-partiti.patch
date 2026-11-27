@@ -1,7 +1,6 @@
-From 54483fd54b42ee7ddb23e0d69f5b59fcaec74dee Mon Sep 17 00:00:00 2001
 From: Christian Marangi <ansuelsmth@gmail.com>
 Date: Wed, 28 May 2025 03:10:53 +0200
-Subject: [PATCH 23/29] airoha: enable UBI support and define default partition
+Subject: [PATCH] airoha: enable UBI support and define default partition
 
 Enable UBI/UBI block and default bl2/ubi SPI-NAND partitions for Airoha EVB
 targets, refreshing an7583_evb_defconfig context against MDIO/PCS patches for
@@ -10,26 +9,22 @@ strict fuzz=0 application.
 Origin: openwrt/openwrt commit baeacca598 (refreshed for fuzz=0)
 Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
 ---
- arch/arm/dts/an7583-evb.dts         | 22 ++++++++++++++++++++++
+ arch/arm/dts/an7583-evb.dts         | 18 ++++++++++++++++++
  arch/arm/dts/en7523-evb-u-boot.dtsi | 22 ++++++++++++++++++++++
  arch/arm/dts/en7581-evb-u-boot.dtsi | 22 ++++++++++++++++++++++
  configs/an7581_evb_defconfig        |  8 ++++++++
  configs/an7583_evb_defconfig        |  8 ++++++++
  configs/en7523_evb_defconfig        |  8 ++++++++
- 6 files changed, 90 insertions(+)
+ 6 files changed, 86 insertions(+)
 
 diff --git a/arch/arm/dts/an7583-evb.dts b/arch/arm/dts/an7583-evb.dts
 index d02cd194e8a..b3045e6e7d0 100644
 --- a/arch/arm/dts/an7583-evb.dts
 +++ b/arch/arm/dts/an7583-evb.dts
-@@ -46,6 +46,28 @@
+@@ -46,6 +46,24 @@
  	};
  };
  
-+&snfi {
-+	status = "okay";
-+};
-+
 +&spi_nand {
 +	partitions {
 +		compatible = "fixed-partitions";
@@ -212,6 +207,4 @@ index 8b1f3c71e9b..7f05cb63a28 100644
  CONFIG_AIROHA_SNFI_SPI=y
 +# CONFIG_UBIFS_SILENCE_MSG is not set
  CONFIG_SHA512=y
--- 
-2.53.0
 

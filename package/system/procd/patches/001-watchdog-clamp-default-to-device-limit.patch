@@ -6,7 +6,7 @@ AN7581 watchdog. Read the kernel's maximum during initialization so
 early init and subsequent procd stages use a supported default. Leave
 explicit timeout requests and devices without sysfs limits unchanged.
 
-Origin: backport, xr1710g-openwrt@5d9f5fa3c2
+Origin: local, xr1710g (archive/xr1710g-v1)
 Signed-off-by: Vitaliy Sochnev <sochnev.v.74@gmail.com>
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---

@@ -1,6 +1,14 @@
+From: Mikhail Zhilkin <csharper2005@gmail.com>
+Subject: [PATCH] uboot-airoha: add Nokia XG-040G-MD support
+
+Add U-Boot defconfig, default environment, and DTS for Nokia XG-040G-MD.
+
+Origin: openwrt/openwrt commit fb4c485122 (PR #24741); local defconfig cleanup
+Signed-off-by: Mikhail Zhilkin <csharper2005@gmail.com>
+---
 --- /dev/null
 +++ b/configs/an7581_nokia_xg-040g-md_defconfig
-@@ -0,0 +1,133 @@
+@@ -0,0 +1,129 @@
 +CONFIG_ARM=y
 +CONFIG_ARCH_AIROHA=y
 +CONFIG_POSITION_INDEPENDENT=y
@@ -91,7 +99,6 @@
 +CONFIG_BUTTON=y
 +CONFIG_BUTTON_GPIO=y
 +CONFIG_OF_UPSTREAM=y
-+CONFIG_SYS_RELOC_GD_ENV_ADDR=y
 +CONFIG_SYS_RX_ETH_BUFFER=8
 +CONFIG_REGMAP=y
 +CONFIG_SYSCON=y
@@ -128,9 +135,6 @@
 +CONFIG_DM_SPI=y
 +CONFIG_AIROHA_SNFI_SPI=y
 +CONFIG_SHA512=y
-+CONFIG_USE_DEFAULT_ENV_FILE=y
-+CONFIG_DEFAULT_ENV_FILE="defenvs/an7581_nokia_xg-040g-md_env"
-+CONFIG_PCS_AIROHA_AN7581=y
 +CONFIG_PHY_AIROHA_EN8811=y
 +CONFIG_PHY_ANEG_TIMEOUT=10000
 +CONFIG_PHY_ETHERNET_ID=y

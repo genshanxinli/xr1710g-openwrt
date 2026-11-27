@@ -7,7 +7,7 @@ priv->led_state uninitialized unlike mt7981_phy_probe() and
 mt7988_phy_probe() (issue #388). Call mtk_phy_leds_state_init(phydev) right
 after assigning phydev->priv.
 
-Origin: xr1710g-v2 (#388)
+Origin: local, xr1710g (#388)
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/drivers/net/phy/mediatek/mtk-ge-soc.c

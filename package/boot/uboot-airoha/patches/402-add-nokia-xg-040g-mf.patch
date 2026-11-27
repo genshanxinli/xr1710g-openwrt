@@ -3,11 +3,12 @@ Subject: [PATCH] uboot-airoha: add Nokia XG-040G-MF support
 
 Introduce OpenWrt U-Boot support for the Nokia XG-040G-MF board.
 
+Origin: openwrt/openwrt commit c5aa00bc5f (PR #24654); local defconfig cleanup
 Signed-off-by: Mikhail Zhilkin <csharper2005@gmail.com>
-
+---
 --- /dev/null
 +++ b/configs/an7583_nokia_xg-040g-mf_defconfig
-@@ -0,0 +1,131 @@
+@@ -0,0 +1,128 @@
 +CONFIG_ARM=y
 +CONFIG_ARCH_AIROHA=y
 +CONFIG_POSITION_INDEPENDENT=y
@@ -97,7 +98,6 @@ Signed-off-by: Mikhail Zhilkin <csharper2005@gmail.com>
 +CONFIG_NET_RANDOM_ETHADDR=y
 +CONFIG_BUTTON=y
 +CONFIG_BUTTON_GPIO=y
-+CONFIG_SYS_RELOC_GD_ENV_ADDR=y
 +CONFIG_SYS_RX_ETH_BUFFER=8
 +CONFIG_REGMAP=y
 +CONFIG_SYSCON=y
@@ -134,8 +134,6 @@ Signed-off-by: Mikhail Zhilkin <csharper2005@gmail.com>
 +CONFIG_DM_SPI=y
 +CONFIG_AIROHA_SNFI_SPI=y
 +CONFIG_SHA512=y
-+CONFIG_USE_DEFAULT_ENV_FILE=y
-+CONFIG_DEFAULT_ENV_FILE="defenvs/an7583_nokia_xg-040g-mf_env"
 +CONFIG_PHY_AIROHA_EN8811=y
 +CONFIG_PHY_ANEG_TIMEOUT=10000
 +CONFIG_PHY_ETHERNET_ID=y

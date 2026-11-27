@@ -122,7 +122,7 @@ define Device/gemtek_xr1710g-ubi
   DEVICE_PACKAGES := -airoha-en7581-npu-firmware \
 		    airoha-en7581-mt7996-npu-firmware fitblk \
 		    kmod-hwmon-nct7802 kmod-mt7996-firmware kmod-nft-fullcone \
-		    rtl826x-firmware rtl8261c-firmware dumpimage \
+		    rtl826x-firmware dumpimage \
 		    kmod-br-netfilter wpad-mbedtls usteer ethtool-full \
 		    luci-ssl luci-app-airoha-fancontrol luci-app-mlo \
 		    luci-app-airoha-flowsense

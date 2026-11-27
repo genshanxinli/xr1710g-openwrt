@@ -17,7 +17,7 @@ bands (2.4GHz/6GHz) and DMA-path bands (5GHz).
 
 [xr1710g: refresh hunk context for mt76 acb7b1c8 so patch applies with fuzz=0]
 
-Origin: backport, openwrt/mt76-v2
+Origin: local, xr1710g
 Signed-off-by: Ryan Chen <rchen14b@gmail.com>
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---

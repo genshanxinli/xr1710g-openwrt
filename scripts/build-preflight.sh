@@ -322,59 +322,7 @@ changed_patches_since() {
 	  git -C "$TOPDIR" ls-files --others --exclude-standard -- "$@"; } | LC_ALL=C sort -u
 }
 
-check_patch_queue() {
-	pq_fails=$FAILS
-	for d in target/linux/airoha/patches-7.4 package/kernel/mt76/patches package/boot/uboot-airoha/patches; do
-		[ -d "$TOPDIR/$d" ] || continue
-		dups=$(find "$TOPDIR/$d" -maxdepth 1 -name '*.patch' -exec basename {} \; |
-			sed -n 's/^\([0-9][0-9]*\(-[0-9][0-9]*\)*\)-.*/\1/p' | LC_ALL=C sort | uniq -d)
-		[ -z "$dups" ] || fail "$d duplicate numeric prefix(es): $(printf '%s' "$dups" | tr '\n' ' ')"
-		find "$TOPDIR/$d" -maxdepth 1 -type f -name '*.patch' | LC_ALL=C sort > "$WORK/dir_patches"
-		while IFS= read -r p; do
-			[ -f "$p" ] || continue
-			awk '/^(diff --git |--- (a\/|\/dev\/null))/{exit} /example\.org|\.local>/{exit 1}' "$p" || fail "$p header contains placeholder email"
-			dc=$(awk '/^(diff --git |--- (a\/|\/dev\/null))/{exit} /[0-9]+ files? changed/{c++} END{print c+0}' "$p")
-			[ "$dc" -le 1 ] || fail "$p has $dc duplicate diffstat blocks"
-		done < "$WORK/dir_patches"
-	done
-
-	set -- \
-		target/linux/airoha/patches-7.4 \
-		target/linux/generic/backport-7.4 \
-		target/linux/generic/pending-7.4 \
-		target/linux/generic/hack-7.4 \
-		package/kernel/mt76/patches \
-		package/boot/uboot-airoha/patches \
-		package/network/services/hostapd/patches \
-		package/kernel/mac80211/patches \
-		package/network/config/firewall4/patches \
-		package/network/utils/fullconenat-nft/patches \
-		package/system/procd/patches \
-		tools/fakeroot/patches
-	if git -C "$TOPDIR" rev-parse --verify -q "$PATCH_BASE_REF" >/dev/null 2>&1; then
-		changed_patches_since "$PATCH_BASE_REF" "$@" > "$WORK/changed_patches"
-		while IFS= read -r rel; do
-			[ -f "$TOPDIR/$rel" ] || continue
-			case "$rel" in *.patch) ;; *) continue ;; esac
-			awk '/^(diff --git |--- (a\/|\/dev\/null))/{exit} /^From: /{f=1} /^Subject: /{s=1} /^Origin: /{o=1}
-			     END{ if(!f) print "From:"; if(!s) print "Subject:"; if(!o) print "Origin:" }' "$TOPDIR/$rel" > "$WORK/hdr.miss"
-			[ ! -s "$WORK/hdr.miss" ] || fail "$rel missing header(s): $(tr '\n' ' ' < "$WORK/hdr.miss")"
-		done < "$WORK/changed_patches"
-	fi
-	if git -C "$TOPDIR" rev-parse --verify -q "$PATCH_FORMAT_BASE_REF" >/dev/null 2>&1; then
-		changed_patches_since "$PATCH_FORMAT_BASE_REF" "$@" > "$WORK/format_patches"
-		while IFS= read -r rel; do
-			[ -f "$TOPDIR/$rel" ] || continue
-			case "$rel" in *.patch) ;; *) continue ;; esac
-			bad=$(awk 'NR==1 && /^From [0-9a-f]+ Mon Sep 17/ && length($2)==40 { m=1 }
-			           f && /^[0-9]+\.[0-9]+/ { g=1 }
-			           { f = ($0 == "-- ") ? 1 : 0 }
-			           END { o = (m ? "From-mbox" : ""); if (g) o = (o ? o " " : "") "git-footer"; if (o) print o }' "$TOPDIR/$rel")
-			[ -z "$bad" ] || fail "$rel contains git format-patch artifact(s): $bad"
-		done < "$WORK/format_patches"
-	fi
-	[ "$FAILS" -eq "$pq_fails" ] && ok "patch-queue prefixes and headers verified"
-
+check_linux_patch_queue() {
 	src="${TARBALL:-${LINUX_TARBALL:-}}"; ksuf=''
 	if [ -z "$src" ]; then
 		ksuf=$(awk -F= '/^LINUX_VERSION-7\.4[ \t]*=/{gsub(/[ \t]/,"",$2); print $2; exit}' "$TOPDIR/target/linux/generic/kernel-7.4" 2>/dev/null || true)
@@ -413,6 +361,113 @@ check_patch_queue() {
 		done < "$WORK/pdir_patches"
 	done
 	ok "applied $applied Linux 7.4 patches cleanly with strict fuzz=0 against $src"
+}
+
+check_uboot_patch_queue() {
+	ubdir="$TOPDIR/package/boot/uboot-airoha/patches"
+	[ -d "$ubdir" ] || return
+	ubver=$(awk '/^PKG_VERSION[ \t]*:?=/{sub(/^[^=]*=[ \t]*/,""); gsub(/[ \t\r]/,""); print; exit}' "$TOPDIR/package/boot/uboot-airoha/Makefile" 2>/dev/null || true)
+	ubsrc=${UBOOT_TARBALL:-}
+	if [ -z "$ubsrc" ] && [ -n "$ubver" ]; then
+		dldir=${DL_DIR:-$TOPDIR/dl}
+		for cand in "$dldir/u-boot-${ubver}.tar.bz2" "$dldir/u-boot-${ubver}.tar.gz" "$dldir/u-boot-${ubver}.tar.xz" "$dldir/u-boot-${ubver}.tar.zst"; do
+			[ -f "$cand" ] && { ubsrc=$cand; break; }
+		done
+	elif [ -n "$ubsrc" ] && [ ! -e "$ubsrc" ]; then
+		fail "U-Boot patch-queue source not found: $ubsrc"; return
+	fi
+	if [ -z "$ubsrc" ]; then
+		if [ "$REQUIRE_TARBALL" = 1 ] && [ -z "$TARBALL" ]; then
+			fail "U-Boot ${ubver} tarball not found in ${DL_DIR:-$TOPDIR/dl} (--require-tarball)"
+		else
+			printf 'SKIP: U-Boot %s tarball not found in %s; set UBOOT_TARBALL or DL_DIR\n' "$ubver" "${DL_DIR:-$TOPDIR/dl}"
+		fi
+		return
+	fi
+
+	mkdir -p "$WORK/uboot-src"
+	if [ -d "$ubsrc" ]; then
+		tar -C "$ubsrc" -cf - . | tar -C "$WORK/uboot-src" -xf - || { fail "copying $ubsrc failed"; return; }
+	else
+		tar -xf "$ubsrc" -C "$WORK/uboot-src" --strip-components=1 || { fail "extracting $ubsrc failed"; return; }
+	fi
+	[ -d "$TOPDIR/package/boot/uboot-airoha/files" ] && cp -a "$TOPDIR/package/boot/uboot-airoha/files"/. "$WORK/uboot-src/"
+	ub_applied=0
+	find "$ubdir" -maxdepth 1 -type f -name '*.patch' | LC_ALL=C sort > "$WORK/uboot_patches"
+	while IFS= read -r p; do
+		[ -f "$p" ] || continue
+		if ! ( cd "$WORK/uboot-src" && patch -p1 -f -F0 --dry-run -s < "$p" >/dev/null && patch -p1 -f -F0 -s < "$p" >/dev/null ) 2>"$WORK/ub.err"; then
+			fail "strict fuzz=0 U-Boot patch failed: ${p#"$TOPDIR"/}: $(head -n 1 "$WORK/ub.err")"; return
+		fi
+		ub_applied=$((ub_applied + 1))
+	done < "$WORK/uboot_patches"
+	ok "applied $ub_applied U-Boot ${ubver} patches cleanly with strict fuzz=0 against $ubsrc"
+}
+
+check_patch_queue() {
+	pq_fails=$FAILS
+	for d in \
+		target/linux/airoha/patches-7.4 \
+		package/kernel/mt76/patches \
+		package/boot/uboot-airoha/patches \
+		package/firmware/wireless-regdb/patches \
+		package/libs/libnftnl/patches \
+		package/network/utils/nftables/patches; do
+		[ -d "$TOPDIR/$d" ] || continue
+		dups=$(find "$TOPDIR/$d" -maxdepth 1 -name '*.patch' -exec basename {} \; |
+			sed -n 's/^\([0-9][0-9]*\(-[0-9][0-9]*\)*\)-.*/\1/p' | LC_ALL=C sort | uniq -d)
+		[ -z "$dups" ] || fail "$d duplicate numeric prefix(es): $(printf '%s' "$dups" | tr '\n' ' ')"
+		find "$TOPDIR/$d" -maxdepth 1 -type f -name '*.patch' | LC_ALL=C sort > "$WORK/dir_patches"
+		while IFS= read -r p; do
+			[ -f "$p" ] || continue
+			awk '/^(diff --git |--- (a\/|\/dev\/null))/{exit} /example\.org|\.local>/{exit 1}' "$p" || fail "$p header contains placeholder email"
+			dc=$(awk '/^(diff --git |--- (a\/|\/dev\/null))/{exit} /[0-9]+ files? changed/{c++} END{print c+0}' "$p")
+			[ "$dc" -le 1 ] || fail "$p has $dc duplicate diffstat blocks"
+		done < "$WORK/dir_patches"
+	done
+
+	set -- \
+		target/linux/airoha/patches-7.4 \
+		target/linux/generic/backport-7.4 \
+		target/linux/generic/pending-7.4 \
+		target/linux/generic/hack-7.4 \
+		package/kernel/mt76/patches \
+		package/boot/uboot-airoha/patches \
+		package/firmware/wireless-regdb/patches \
+		package/libs/libnftnl/patches \
+		package/network/utils/nftables/patches \
+		package/network/services/hostapd/patches \
+		package/kernel/mac80211/patches \
+		package/network/config/firewall4/patches \
+		package/network/utils/fullconenat-nft/patches \
+		package/system/procd/patches \
+		tools/fakeroot/patches
+	if git -C "$TOPDIR" rev-parse --verify -q "$PATCH_BASE_REF" >/dev/null 2>&1; then
+		changed_patches_since "$PATCH_BASE_REF" "$@" > "$WORK/changed_patches"
+		while IFS= read -r rel; do
+			[ -f "$TOPDIR/$rel" ] || continue
+			case "$rel" in *.patch) ;; *) continue ;; esac
+			awk '/^(diff --git |--- (a\/|\/dev\/null))/{exit} /^From: /{f=1} /^Subject: /{s=1} /^Origin: /{o=1}
+			     END{ if(!f) print "From:"; if(!s) print "Subject:"; if(!o) print "Origin:" }' "$TOPDIR/$rel" > "$WORK/hdr.miss"
+			[ ! -s "$WORK/hdr.miss" ] || fail "$rel missing header(s): $(tr '\n' ' ' < "$WORK/hdr.miss")"
+		done < "$WORK/changed_patches"
+	fi
+	if git -C "$TOPDIR" rev-parse --verify -q "$PATCH_FORMAT_BASE_REF" >/dev/null 2>&1; then
+		changed_patches_since "$PATCH_FORMAT_BASE_REF" "$@" > "$WORK/format_patches"
+		while IFS= read -r rel; do
+			[ -f "$TOPDIR/$rel" ] || continue
+			case "$rel" in *.patch) ;; *) continue ;; esac
+			bad=$(awk 'NR==1 && /^From [0-9a-f]+ Mon Sep 17/ && length($2)==40 { m=1 }
+			           f && /^[0-9]+\.[0-9]+/ { g=1 }
+			           { f = ($0 == "-- ") ? 1 : 0 }
+			           END { o = (m ? "From-mbox" : ""); if (g) o = (o ? o " " : "") "git-footer"; if (o) print o }' "$TOPDIR/$rel")
+			[ -z "$bad" ] || fail "$rel contains git format-patch artifact(s): $bad"
+		done < "$WORK/format_patches"
+	fi
+	[ "$FAILS" -eq "$pq_fails" ] && ok "patch-queue prefixes and headers verified"
+
+	check_linux_patch_queue
+	check_uboot_patch_queue
 }
 
 [ "$DO_DEFAULT" = 1 ] && { check_ascii_topdir; check_scripts; check_hygiene; }

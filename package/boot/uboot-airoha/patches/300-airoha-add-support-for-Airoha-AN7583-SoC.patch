@@ -1,13 +1,13 @@
-From 05ecfc09cfcc4b3562ea7ed1d21a654d27f21610 Mon Sep 17 00:00:00 2001
 From: Christian Marangi <ansuelsmth@gmail.com>
 Date: Fri, 31 Jul 2026 08:54:15 +0200
-Subject: [PATCH 01/16] airoha: add support for Airoha AN7583 SoC
+Subject: [PATCH] airoha: add support for Airoha AN7583 SoC
 
 Add support for Airoha AN7583 SoC. This adds the Kconfig and Makefile
 entry for the SoC, DTSI and initial config for it. Also add the code for
 CPU and RAM initialization. Everything is mostly based on AN7581 that
 share lots of common piece.
 
+Origin: openwrt/openwrt commit 82e2e4f492 (PR #24646); local guard for CONFIG_NR_DRAM_BANKS > 1
 Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
 ---
  arch/arm/dts/an7583-evb.dts          |  67 +++++
@@ -15,13 +15,13 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  arch/arm/mach-airoha/Kconfig         |  14 +
  arch/arm/mach-airoha/Makefile        |   1 +
  arch/arm/mach-airoha/an7583/Makefile |   3 +
- arch/arm/mach-airoha/an7583/init.c   |  66 +++++
+ arch/arm/mach-airoha/an7583/init.c   |  68 +++++
  board/airoha/an7583/MAINTAINERS      |   5 +
  board/airoha/an7583/Makefile         |   3 +
  board/airoha/an7583/an7583_rfb.c     |  16 ++
  configs/an7583_evb_defconfig         |  79 ++++++
  include/configs/an7583.h             |  19 ++
- 11 files changed, 660 insertions(+)
+ 11 files changed, 662 insertions(+)
  create mode 100644 arch/arm/dts/an7583-evb.dts
  create mode 100644 arch/arm/dts/an7583.dtsi
  create mode 100644 arch/arm/mach-airoha/an7583/Makefile
@@ -559,7 +559,7 @@ new file mode 100644
 index 00000000000..4cf7f8caf85
 --- /dev/null
 +++ b/arch/arm/mach-airoha/an7583/init.c
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,68 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
 +#include <fdtdec.h>
@@ -588,10 +588,12 @@ index 00000000000..4cf7f8caf85
 +	gd->bd->bi_dram[0].start = gd->ram_base;
 +	gd->bd->bi_dram[0].size = get_effective_memsize();
 +
++#if CONFIG_NR_DRAM_BANKS > 1
 +	if (gd->ram_size > SZ_2G) {
 +		gd->bd->bi_dram[1].start = gd->ram_base + SZ_2G;
 +		gd->bd->bi_dram[1].size = gd->ram_size - SZ_2G;
 +	}
++#endif
 +
 +	return 0;
 +}
@@ -778,6 +780,4 @@ index 00000000000..c865afea1a2
 +#define CFG_SYS_SDRAM_BASE		0x80000000
 +
 +#endif
--- 
-2.53.0
 

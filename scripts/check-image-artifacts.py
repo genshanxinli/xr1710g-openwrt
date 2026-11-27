@@ -5,8 +5,10 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import json
+import lzma
 import re
 import shutil
 import struct
@@ -30,6 +32,9 @@ FIT_RAMOOPS_CEILING = 0x1FF0000
 UBI_LEB_SIZE = 0x1F000
 # mtd1 (chainloader) partition size = 1 MiB
 CHAINLOADER_MAX_BYTES = 0x100000
+# 0x84000000 (npu_binary) - 0x80200000 (KERNEL_LOADADDR) = 62 MiB
+RECOVERY_KERNEL_MAX_BYTES = 0x3E00000
+FDT_BEGIN_NODE, FDT_END_NODE, FDT_PROP, FDT_NOP, FDT_END = 1, 2, 3, 4, 9
 
 BOARD_COMPAT = "gemtek,xr1710g-ubi"
 FDT_DESC_NEEDLE = "OpenWrt gemtek_xr1710g-ubi device tree blob"
@@ -40,7 +45,6 @@ REQUIRED_PKGS = (
     "airoha-en7581-mt7996-npu-firmware",
     "kmod-mt7996-firmware",
     "rtl826x-firmware",
-    "rtl8261c-firmware",
     "px5g-mbedtls",
     "luci-app-airoha-fancontrol",
     "luci-app-mlo",
@@ -111,6 +115,114 @@ def parse_fwx0_metadata(data: bytes, label: str, fit_total: int) -> dict:
     return meta
 
 
+def inspect_fit_kernel(data: bytes, label: str) -> tuple[str, int, int]:
+    """Parse FIT FDT to locate kernel image and return (compression, compressed_size, decompressed_size)."""
+    if len(data) < 40 or data[:4] != FIT_MAGIC:
+        raise ValueError(f"{label}: invalid FIT header")
+    (
+        _magic,
+        totalsize,
+        off_struct,
+        off_strings,
+        _off_rsv,
+        _ver,
+        _last_comp,
+        _boot_cpu,
+        size_strings,
+        size_struct,
+    ) = struct.unpack_from(">10I", data, 0)
+    if totalsize > len(data) or off_struct + size_struct > totalsize or off_strings + size_strings > totalsize:
+        raise ValueError(f"{label}: corrupt FIT FDT bounds (totalsize={totalsize}, len={len(data)})")
+
+    pos = off_struct
+    end_struct = off_struct + size_struct
+    str_end = off_strings + size_strings
+    stack: list[str] = []
+    images: dict[str, dict[str, bytes]] = {}
+    order: list[str] = []
+
+    while pos + 4 <= end_struct:
+        tok = struct.unpack_from(">I", data, pos)[0]
+        pos += 4
+        if tok == FDT_BEGIN_NODE:
+            nul = data.find(b"\x00", pos, end_struct)
+            if nul < 0:
+                raise ValueError(f"{label}: unterminated FDT node name")
+            node_name = data[pos:nul].decode("ascii", errors="replace")
+            pos = (nul + 4) & ~3
+            stack.append(node_name)
+            if len(stack) == 3 and stack[1] == "images":
+                images[node_name] = {}
+                order.append(node_name)
+        elif tok == FDT_END_NODE:
+            if not stack:
+                raise ValueError(f"{label}: unexpected FDT_END_NODE")
+            stack.pop()
+        elif tok == FDT_PROP:
+            if pos + 8 > end_struct:
+                raise ValueError(f"{label}: truncated FDT_PROP header")
+            plen, nameoff = struct.unpack_from(">II", data, pos)
+            pos += 8
+            if pos + plen > end_struct:
+                raise ValueError(f"{label}: truncated FDT_PROP payload")
+            pstart = off_strings + nameoff
+            pnul = data.find(b"\x00", pstart, str_end)
+            if pnul < 0:
+                raise ValueError(f"{label}: unterminated FDT property name")
+            pname = data[pstart:pnul].decode("ascii", errors="replace")
+            pval = data[pos : pos + plen]
+            pos = (pos + plen + 3) & ~3
+            if len(stack) == 3 and stack[1] == "images":
+                images[stack[2]][pname] = pval
+        elif tok == FDT_NOP:
+            continue
+        elif tok == FDT_END:
+            break
+        else:
+            raise ValueError(f"{label}: unknown FDT token {tok:#x}")
+
+    knode = None
+    if "kernel-1" in images:
+        knode = images["kernel-1"]
+    else:
+        for nm in order:
+            props = images[nm]
+            itype = props.get("type", b"").rstrip(b"\x00").decode("ascii", errors="replace")
+            if itype == "kernel" or nm.startswith("kernel"):
+                knode = props
+                break
+    if knode is None:
+        raise ValueError(f"{label}: FIT missing /images/kernel node")
+
+    if "data" in knode:
+        payload = knode["data"]
+    elif "data-size" in knode and ("data-position" in knode or "data-offset" in knode):
+        dsize = struct.unpack_from(">I", knode["data-size"], 0)[0]
+        if "data-position" in knode:
+            doff = struct.unpack_from(">I", knode["data-position"], 0)[0]
+        else:
+            doff = ((totalsize + 3) & ~3) + struct.unpack_from(">I", knode["data-offset"], 0)[0]
+        if doff + dsize > len(data):
+            raise ValueError(f"{label}: external FIT kernel data out of bounds ({doff}+{dsize} > {len(data)})")
+        payload = data[doff : doff + dsize]
+    else:
+        raise ValueError(f"{label}: FIT kernel node missing data property")
+
+    comp = knode.get("compression", b"none").rstrip(b"\x00").decode("ascii", errors="replace")
+    try:
+        if comp == "none":
+            raw_size = len(payload)
+        elif comp == "lzma":
+            raw_size = len(lzma.decompress(payload))
+        elif comp == "gzip":
+            raw_size = len(gzip.decompress(payload))
+        else:
+            raise ValueError(f"{label}: unsupported FIT kernel compression {comp!r}")
+    except (lzma.LZMAError, OSError, EOFError, zlib.error) as exc:
+        raise ValueError(f"{label}: failed to decompress {comp} FIT kernel: {exc}") from exc
+    return comp, len(payload), raw_size
+
+
 def check_image(
     path: Path,
     dumpimage: str | None,
@@ -119,6 +231,7 @@ def check_image(
     expect_fwx0: bool = True,
     max_bytes: int | None = None,
     ubi_leb_size: int | None = None,
+    max_kernel_bytes: int | None = None,
 ) -> list[str]:
     errs: list[str] = []
     name = path.name
@@ -143,6 +256,18 @@ def check_image(
         errs.append(
             f"{name}: image {actual_size}B (read footprint {eff_size:#x}) exceeds ceiling {max_bytes:#x} ({max_bytes}B)"
         )
+
+    if max_kernel_bytes is not None:
+        try:
+            comp, _comp_size, raw_size = inspect_fit_kernel(data, name)
+        except ValueError as exc:
+            errs.append(str(exc))
+        else:
+            if raw_size >= max_kernel_bytes:
+                errs.append(
+                    f"{name}: decompressed kernel {raw_size}B ({raw_size:#x}, {comp}) >= ceiling "
+                    f"{max_kernel_bytes:#x} ({max_kernel_bytes}B)"
+                )
 
     if meta is not None:
         raw_meta = json.dumps(meta).lower()
@@ -266,7 +391,9 @@ def main(argv: list[str]) -> int:
             ubi_leb_size=UBI_LEB_SIZE,
         )
     )
-    fails.extend(check_image(recovery, dumpimage, args.require_dumpimage))
+    fails.extend(
+        check_image(recovery, dumpimage, args.require_dumpimage, max_kernel_bytes=RECOVERY_KERNEL_MAX_BYTES)
+    )
     fails.extend(
         check_image(chainloader, dumpimage, args.require_dumpimage, expect_fwx0=False, max_bytes=CHAINLOADER_MAX_BYTES)
     )

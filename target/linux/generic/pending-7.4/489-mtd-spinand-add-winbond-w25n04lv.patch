@@ -1,3 +1,13 @@
+From: Huasin Liao <huasinliao@gmail.com>
+Subject: [PATCH] mtd: spinand: winbond: add support for W25N04LV
+
+Add SPI-NAND ID, memory organization, and OOB ECC layout for Winbond
+W25N04LV (3.3V, 4Gb, 4096-byte page, 256-byte OOB).
+
+Origin: https://lkml.org/lkml/2026/8/16/238 (openwrt commit e34020d796)
+Signed-off-by: Huasin Liao <huasinliao@gmail.com>
+Signed-off-by: Andrew Patrikalakis <anrp@anrp.net>
+---
 --- a/drivers/mtd/nand/spi/winbond.c
 +++ b/drivers/mtd/nand/spi/winbond.c
 @@ -435,6 +435,35 @@ static int w25n01jw_ooblayout_free(struc
