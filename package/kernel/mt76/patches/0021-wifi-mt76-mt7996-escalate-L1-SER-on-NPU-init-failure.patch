@@ -1,0 +1,71 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 09:32:41 +0800
+Subject: [PATCH] wifi: mt76: mt7996: escalate L1 SER on NPU init failure
+
+mt7996_mac_reset_work() discards the return value of __mt7996_npu_hw_init().
+When NPU hardware re-initialization fails during L1 SER recovery (for example
+due to IPC errors or a zero NPU ring base rejected with -EIO), NPU IRQs remain
+disabled while L1 SER clears MT76_RESET/MT76_MCU_RESET and logs "L1 SER
+recovery completed.", leaving the NPU Wi-Fi data path silently dead.
+
+Guard __mt7996_npu_hw_init() with mt76_npu_device_active() and capture its
+error return. On failure, log an error, complete all symmetric L1 SER teardown
+reversal (balanced NAPI enable without scheduling NPU RX NAPIs, tx_worker,
+tx_napi, ieee80211_wake_queues, and mutex_unlock(&dev->mt76.mutex)), then skip
+mac_work re-arming and the completion log and invoke
+mt7996_mac_full_reset_queue() under spin_lock_bh(&dev->mt76.lock) so reset_work
+re-runs into full chip reset with retry/rollback handling.
+
+Origin: local, xr1710g (#420)
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+diff --git a/mt7996/mac.c b/mt7996/mac.c
+--- a/mt7996/mac.c
++++ b/mt7996/mac.c
+@@ -2613,7 +2613,7 @@
+ 	struct ieee80211_hw *hw;
+ 	struct mt7996_dev *dev;
+ 	struct mt7996_phy *phy;
+-	int i;
++	int i, npu_err = 0;
+ 
+ 	dev = container_of(work, struct mt7996_dev, reset_work);
+ 	hw = mt76_hw(dev);
+@@ -2723,7 +2723,13 @@
+ 				     MT_INT_TX_RX_DONE_EXT);
+ 	}
+ 
+-	__mt7996_npu_hw_init(dev);
++	if (mt76_npu_device_active(&dev->mt76)) {
++		npu_err = __mt7996_npu_hw_init(dev);
++		if (npu_err)
++			dev_err(dev->mt76.dev,
++				"NPU re-init after L1 SER failed: %d, escalating to full reset\n",
++				npu_err);
++	}
+ 
+ 	clear_bit(MT76_MCU_RESET, &dev->mphy.state);
+ 	mt7996_for_each_phy(dev, phy)
+@@ -2742,6 +2748,8 @@
+ 			continue;
+ 
+ 		napi_enable(&dev->mt76.napi[i]);
++		if (npu_err && mt76_queue_is_npu_rx(&dev->mt76.q_rx[i]))
++			continue;
+ 		local_bh_disable();
+ 		napi_schedule(&dev->mt76.napi[i]);
+ 		local_bh_enable();
+@@ -2765,6 +2773,13 @@
+ 
+ 	mutex_unlock(&dev->mt76.mutex);
+ 
++	if (npu_err) {
++		spin_lock_bh(&dev->mt76.lock);
++		mt7996_mac_full_reset_queue(dev);
++		spin_unlock_bh(&dev->mt76.lock);
++		return;
++	}
++
+ 	mt7996_for_each_phy(dev, phy)
+ 		ieee80211_queue_delayed_work(hw, &phy->mt76->mac_work,
+ 					     MT7996_WATCHDOG_TIME);
