@@ -1,0 +1,73 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 13:19:06 +0800
+Subject: [PATCH] net: airoha: write REG_PPE_MTU to all PPEs
+
+airoha_ppe_set_xmit_frame_size() selected a single PPE using the port's
+own ingress PPE (!airoha_is_lan_gdm_dev(dev) && airoha_ppe_is_enabled(eth, 1))
+and updated only REG_PPE_MTU(ppe_id, index).
+
+However, REG_PPE_MTU(ppe, port_index) constrains the egress frame length
+for flows processed by that PPE toward port_index. Cross-domain offloaded
+traffic enters through the opposite PPE (LAN/Wi-Fi -> WAN via PPE1,
+WAN -> LAN/CPU via PPE2), leaving the active cross-PPE egress MTU registers
+stuck at the 1514-byte hardware default and breaking 1518-byte 802.1Q VLAN,
+1508-byte PPPoE RFC 4638, and jumbo frames.
+
+In addition, when no netdev on the port is running (for example during
+airoha_ppe_hw_init() before interfaces are brought up), len remained 0 and
+len += VLAN_ETH_HLEN erroneously wrote 18 into REG_PPE_MTU.
+
+Compute the maximum MTU across all running devices on the physical GDM
+port (dropping the per-QDMA filter introduced for single-PPE selection so
+sibling devices on different QDMAs cannot clobber the shared egress MTU
+with a smaller value), return early when no device is running (!len), and
+write REG_PPE_MTU(i, index) to all PPEs (0 .. eth->soc->num_ppe - 1).
+
+Origin: local, xr1710g (#427)
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -147,34 +147,29 @@ void airoha_ppe_set_xmit_frame_size(stru
+ {
+ 	struct airoha_gdm_port *port = dev->port;
+ 	struct airoha_eth *eth = dev->eth;
+-	struct airoha_qdma *qdma;
+-	int i, ppe_id, index;
++	int i, index;
+ 	u32 len = 0;
+ 
+-	qdma = airoha_qdma_deref(dev);
+ 	for (i = 0; i < ARRAY_SIZE(port->devs); i++) {
+ 		struct airoha_gdm_dev *d = port->devs[i];
+ 		struct net_device *netdev;
+-		struct airoha_qdma *q;
+ 
+ 		if (!d)
+ 			continue;
+ 
+-		q = airoha_qdma_deref(d);
+-		if (q != qdma)
+-			continue;
+-
+ 		netdev = netdev_from_priv(d);
+ 		if (netif_running(netdev))
+ 			len = max_t(u32, len, netdev->mtu);
+ 	}
+-	len += VLAN_ETH_HLEN;
++	if (!len)
++		return;
+ 
+-	ppe_id = !airoha_is_lan_gdm_dev(dev) && airoha_ppe_is_enabled(eth, 1);
++	len += VLAN_ETH_HLEN;
+ 	index = port->id == AIROHA_GDM4_IDX ? 7 : port->id;
+-	airoha_fe_rmw(eth, REG_PPE_MTU(ppe_id, index),
+-		      FP_EGRESS_MTU_MASK(index),
+-		      __field_prep(FP_EGRESS_MTU_MASK(index), len));
++	for (i = 0; i < eth->soc->num_ppe; i++)
++		airoha_fe_rmw(eth, REG_PPE_MTU(i, index),
++			      FP_EGRESS_MTU_MASK(index),
++			      __field_prep(FP_EGRESS_MTU_MASK(index), len));
+ }
+ 
+ static void airoha_ppe_hw_init(struct airoha_ppe *ppe)
