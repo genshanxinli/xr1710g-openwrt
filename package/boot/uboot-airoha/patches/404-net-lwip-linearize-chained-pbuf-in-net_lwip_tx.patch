@@ -1,0 +1,66 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 15:10:00 +0800
+Subject: [PATCH] net: lwip: linearize chained pbufs in net_lwip_tx()
+
+net_lwip_tx() previously passed only p->payload and p->len to the Ethernet
+driver, silently truncating chained pbufs (p->next != NULL) such as TCP
+payload frames. Reject empty or oversized frames (> PKTSIZE_ALIGN) and
+linearize chained or unaligned pbufs into a PKTALIGN-aligned buffer via
+pbuf_copy_partial() before transmitting p->tot_len bytes.
+
+Origin: local, xr1710g (#386)
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/net/lwip/net-lwip.c
++++ b/net/lwip/net-lwip.c
+@@ -41,26 +41,39 @@ static err_t net_lwip_tx(struct netif *netif, struct pbuf *p)
+ {
+ 	struct udevice *udev = netif->state;
+ 	void *pp = NULL;
++	void *tx_buf;
+ 	int err;
+ 
+-	if (CONFIG_IS_ENABLED(LWIP_DEBUG_RXTX)) {
+-		printf("net_lwip_tx: %u bytes, udev %s\n", p->len, udev->name);
+-		print_hex_dump("net_lwip_tx: ", 0, 16, 1, p->payload, p->len,
+-			       true);
+-	}
++	if (!p || !p->tot_len || p->tot_len > PKTSIZE_ALIGN)
++		return ERR_BUF;
+ 
+-	if ((unsigned long)p->payload % PKTALIGN) {
++	if (p->next || p->len != p->tot_len ||
++	    (unsigned long)p->payload % PKTALIGN) {
+ 		/*
+-		 * Some net drivers have strict alignment requirements and may
+-		 * fail or output invalid data if the packet is not aligned.
++		 * Linearize chained pbufs and align unaligned payloads so
++		 * Ethernet drivers always receive a single contiguous,
++		 * DMA-aligned frame of p->tot_len bytes.
+ 		 */
+-		pp = memalign(PKTALIGN, p->len);
++		pp = memalign(PKTALIGN, ALIGN(p->tot_len, PKTALIGN));
+ 		if (!pp)
+ 			return ERR_ABRT;
+-		memcpy(pp, p->payload, p->len);
++		if (pbuf_copy_partial(p, pp, p->tot_len, 0) != p->tot_len) {
++			free(pp);
++			return ERR_BUF;
++		}
++		tx_buf = pp;
++	} else {
++		tx_buf = p->payload;
++	}
++
++	if (CONFIG_IS_ENABLED(LWIP_DEBUG_RXTX)) {
++		printf("net_lwip_tx: %u bytes, udev %s\n", p->tot_len,
++		       udev->name);
++		print_hex_dump("net_lwip_tx: ", 0, 16, 1, tx_buf, p->tot_len,
++			       true);
+ 	}
+ 
+-	err = eth_get_ops(udev)->send(udev, pp ? pp : p->payload, p->len);
++	err = eth_get_ops(udev)->send(udev, tx_buf, p->tot_len);
+ 	free(pp);
+ 	if (err) {
+ 		debug("send error %d\n", err);

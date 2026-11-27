@@ -1,17 +1,19 @@
 From: Andrey Korshunov <razor1702@gmail.com>
+Date: Fri, 27 Nov 2026 15:10:00 +0800
 Subject: [PATCH] an7581: add uboot chainloader for Gemtek XR1710G
 
 Add the U-Boot UBI chainloader target for Gemtek XR1710G (AN7581, 2 GiB RAM,
-no MMC) with loadaddr=0x85000000, CONFIG_ENV_SIZE=0x4000, preboot reset-button
-TFTP recovery, manual-only ubi_format, and bootcmd=run boot_ubi.
+no MMC) with loadaddr=0x85000000, CONFIG_ENV_SIZE=0x4000, CONFIG_NET_LWIP,
+preboot reset-button RAM-only HTTP FIT recovery (boot_httpd), TFTP recovery
+fallback, manual-only ubi_format, and bootcmd=run boot_ubi.
 
-Origin: openwrt/openwrt#26296 (b8d878f0b6), xr1710g overrides from archive/xr1710g-v1@4b840202be
+Origin: openwrt/openwrt#26296 (b8d878f0b6), xr1710g overrides from archive/xr1710g-v1@4b840202be; local, xr1710g (#386)
 Signed-off-by: Andrey Korshunov <razor1702@gmail.com>
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- /dev/null
 +++ b/configs/an7581_xr1710g_defconfig
-@@ -0,0 +1,107 @@
+@@ -0,0 +1,112 @@
 +CONFIG_ARM=y
 +CONFIG_ARCH_AIROHA=y
 +CONFIG_AUTOBOOT_KEYED=y
@@ -49,7 +51,9 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +CONFIG_CMD_SF_TEST=y
 +CONFIG_CMD_SPI=y
 +# CONFIG_CMD_SETEXPR is not set
++CONFIG_CMD_HTTPD=y
 +CONFIG_CMD_PING=y
++CONFIG_CMD_TFTPBOOT=y
 +CONFIG_CMD_EXT4=y
 +CONFIG_CMD_FAT=y
 +CONFIG_CMD_FS_GENERIC=y
@@ -60,12 +64,15 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +# CONFIG_ENV_IS_IN_MTD is not set
 +CONFIG_ENV_RELOC_GD_ENV_ADDR=y
 +CONFIG_ENV_VARS_UBOOT_RUNTIME_CONFIG=y
++CONFIG_NET_LWIP=y
++CONFIG_LWIP_TCP_WND=65535
 +CONFIG_NET_RANDOM_ETHADDR=y
 +CONFIG_SYS_RX_ETH_BUFFER=8
 +CONFIG_REGMAP=y
 +CONFIG_SYSCON=y
 +CONFIG_BUTTON=y
 +CONFIG_BUTTON_GPIO=y
++CONFIG_CMD_BUTTON=y
 +CONFIG_CLK=y
 +CONFIG_DMA=y
 +CONFIG_LED=y
@@ -121,16 +128,18 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +CONFIG_SHA512=y
 --- /dev/null
 +++ b/defenvs/an7581_xr1710g_env
-@@ -0,0 +1,29 @@
+@@ -0,0 +1,32 @@
 +loadaddr=0x85000000
 +initaddr=0x89000000
 +ipaddr=192.168.1.1
++netmask=255.255.255.0
 +serverip=192.168.1.254
 +bootfile=openwrt-airoha-an7581-gemtek_xr1710g-ubi-initramfs-recovery.itb
 +bootled_pwr=status:red
 +bootled_rec=status:blue
 +boot_ubi=run ubi_prepare && run boot_production ; run boot_tftp_forever
 +boot_production=led $bootled_pwr on ; run ubi_read_production && bootm $loadaddr#$bootconf ; led $bootled_pwr off
++boot_httpd=httpd $initaddr && bootm $initaddr
 +boot_tftp=tftpboot $initaddr $bootfile && bootm $initaddr#$bootconf
 +boot_tftp_forever=led $bootled_rec on ; while true ; do run boot_tftp ; sleep 1 ; done
 +bootconf=config-1
@@ -142,9 +151,10 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +bootmenu_title=      [0;34m( ( ( [1;39mOpenWrt[0;34m ) ) )
 +bootmenu_0=Run default boot command.=run bootcmd
 +bootmenu_1=Boot system via TFTP.=run boot_tftp ; run bootmenu_confirm_return
-+bootmenu_2=Reboot.=reset
-+check_buttons=if button reset ; then run boot_tftp_forever ; fi
-+preboot=run check_buttons
++bootmenu_2=Boot recovery via HTTP (RAM-only).=run boot_httpd ; run bootmenu_confirm_return
++bootmenu_3=Reboot.=reset
++check_reset_btn=if button reset; then echo Reset button held - entering RAM-only HTTP recovery; run boot_httpd; fi
++preboot=run check_reset_btn
 +ubi_read_production=ubi read $loadaddr fit && iminfo $loadaddr
 +ubi_prepare=ubi part ubi && run ubi_create_vols && run ubi_init_env
 +ubi_init_env=if env exists _init_env ; then run _init_env ; else true ; fi
