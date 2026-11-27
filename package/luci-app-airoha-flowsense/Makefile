@@ -3,12 +3,12 @@
 include $(TOPDIR)/rules.mk
 
 PKG_VERSION:=1.1.9
-PKG_RELEASE:=12
+PKG_RELEASE:=13
 PKG_LICENSE:=Apache-2.0
 
 LUCI_TITLE:=LuCI Airoha FlowSense — Offload & PPE Monitor
 LUCI_DEPENDS:=+luci-base +rpcd-mod-ucode +ucode-mod-fs +ucode-mod-ubus +ucode-mod-uci \
-	+ucode-mod-nl80211 +ip-bridge +tc-tiny \
+	+ucode-mod-nl80211 +ip-bridge +tc \
 	+kmod-sched-core @TARGET_airoha
 
 define Package/luci-app-airoha-flowsense/conffiles
