@@ -2,18 +2,23 @@ From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 Date: Fri, 27 Nov 2026 15:10:00 +0800
 Subject: [PATCH] cmd: lwip: add RAM-only httpd FIT recovery command
 
-Add CONFIG_CMD_HTTPD (depends on NET_LWIP, selects PROT_TCP_LWIP) and
-cmd/lwip/httpd.c implementing a strictly RAM-only HTTP/1.1 recovery server
-on TCP port 80. The server serves a self-contained HTML upload page on
-GET /, streams multipart/form-data uploads directly into RAM at loadaddr
-(default $initaddr or 0x89000000) with a hard 64 MiB ceiling (HTTP 413 on
-overflow), validates the FDT/FIT header via fdt_check_header() and
-fdt_totalsize() (HTTP 400 while remaining listening on invalid FIT),
-flushes the HTTP 200 response before closing, sets $filesize/$fileaddr,
-and exits cleanly with CMD_RET_SUCCESS for caller-driven bootm without
+Add CONFIG_CMD_HTTPD (depends on NET_LWIP && FIT, selects PROT_TCP_LWIP)
+and cmd/lwip/httpd.c implementing a strictly RAM-only HTTP/1.1 recovery
+server on TCP port 80. The server serves a self-contained HTML upload
+page on GET /, validates load addresses and every write chunk against
+wrap and LMB reserved regions, streams multipart/form-data uploads
+directly into RAM at loadaddr (default $initaddr or 0x89000000) with a
+hard 64 MiB ceiling (HTTP 413 on overflow while allowing multipart
+envelope overhead), validates FIT format via fit_check_format(),
+/configurations, kernel presence, external data bounds, and rejects
+flash filesystem/rootfs images (HTTP 400 while remaining listening),
+reclaims stalled/idle connections via tcp_poll/tcp_abort, temporarily
+enables Ctrl-C during preboot recovery while restoring the prior state
+on exit, flushes HTTP 200 before closing, sets $filesize/$fileaddr, and
+exits cleanly with CMD_RET_SUCCESS for caller-driven bootm without
 touching flash.
 
-Origin: local, xr1710g (#386)
+Origin: local, xr1710g (#386, #429)
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/cmd/Kconfig
@@ -24,7 +29,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
 +config CMD_HTTPD
 +	bool "httpd"
-+	depends on NET_LWIP
++	depends on NET_LWIP && FIT
 +	select PROT_TCP_LWIP
 +	help
 +	  Start a RAM-only HTTP recovery server on port 80 that accepts a
@@ -45,7 +50,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  obj-$(CONFIG_CMD_SNTP) += sntp.o
 --- /dev/null
 +++ b/cmd/lwip/httpd.c
-@@ -0,0 +1,1249 @@
+@@ -0,0 +1,1459 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * RAM-only HTTP FIT recovery server for lwIP.
@@ -62,8 +67,12 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +#include <image.h>
 +#include <linux/ctype.h>
 +#include <linux/errno.h>
++#include <linux/kconfig.h>
 +#include <linux/libfdt.h>
 +#include <linux/string.h>
++#if CONFIG_IS_ENABLED(LMB)
++#include <lmb.h>
++#endif
 +#include <lwip/ip_addr.h>
 +#include <lwip/pbuf.h>
 +#include <lwip/tcp.h>
@@ -82,6 +91,10 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +#define HTTPD_MAX_BOUNDARY_LEN		128
 +#define HTTPD_DELIM_MAX			(HTTPD_MAX_BOUNDARY_LEN + 5)
 +#define HTTPD_MAX_CONNS			4
++#define HTTPD_MIN_CHECK_SIZE		4096UL
++#define HTTPD_POLL_INTERVAL		4
++#define HTTPD_IDLE_TIMEOUT_POLLS	15
++#define HTTPD_CLOSING_TIMEOUT_POLLS	5
 +#define HTTPD_FLUSH_TIMEOUT_MS		2000
 +#define HTTPD_FIN_DRAIN_MS		50
 +#define HTTPD_PROGRESS_STEP		(1024UL * 1024UL)
@@ -96,6 +109,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	HTTPD_RES_METHOD_NOT_ALLOWED,
 +	HTTPD_RES_PAYLOAD_TOO_LARGE,
 +	HTTPD_RES_BUSY,
++	HTTPD_RES_MEM_ERROR,
 +};
 +
 +enum httpd_parse_state {
@@ -110,6 +124,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +struct httpd_parser {
 +	enum httpd_parse_state state;
 +	enum httpd_result result;
++	ulong load_addr;
 +	u8 *dst_buf;
 +	size_t max_size;
 +	size_t file_size;
@@ -138,6 +153,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	struct tcp_pcb *pcb;
 +	struct httpd_parser parser;
 +	u32 tx_pending;
++	unsigned int idle_polls;
 +	bool closing;
 +	bool owns_upload;
 +	bool is_success_upload;
@@ -185,8 +201,8 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	"<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
 +	"<title>Invalid FIT Image</title></head><body>"
 +	"<h2>400 Bad Request - Invalid FIT Image</h2>"
-+	"<p>Uploaded file is not a valid FIT/FDT image. "
-+	"Please upload <b>initramfs-recovery.itb</b> and try again.</p>"
++	"<p>Uploaded file is not a valid RAM recovery FIT image. "
++	"Please upload <b>initramfs-recovery.itb</b> (not sysupgrade.itb) and try again.</p>"
 +	"<p><a href=\"/\">Back to upload form</a></p></body></html>\n";
 +
 +static const char httpd_bad_req_html[] =
@@ -212,6 +228,13 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +static const char httpd_busy_html[] =
 +	"<!DOCTYPE html><html><body><h2>503 Busy</h2>"
 +	"<p>Another upload is in progress. Please retry.</p></body></html>\n";
++
++static const char httpd_mem_err_html[] =
++	"<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
++	"<title>Memory Bounds Error</title></head><body>"
++	"<h2>500 Internal Server Error - Target Memory Out of Bounds</h2>"
++	"<p>Upload target address overlaps reserved memory or exceeds available RAM.</p>"
++	"<p><a href=\"/\">Back to upload form</a></p></body></html>\n";
 +
 +static bool httpd_ci_eq_n(const char *a, const char *b, size_t n)
 +{
@@ -405,8 +428,25 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	return -EINVAL;
 +}
 +
++static int httpd_check_mem_range(ulong addr, size_t len)
++{
++	if (!addr || !len || len > (size_t)(~(ulong)0 - addr))
++		return -EFAULT;
++
++#if CONFIG_IS_ENABLED(LMB)
++	if (lmb_read_check(addr, len))
++		return -EFAULT;
++#endif
++
++	return 0;
++}
++
 +static int httpd_validate_fit(const void *buf, size_t received_size)
 +{
++	int images_noffset;
++	int confs_noffset;
++	int noffset;
++	bool has_kernel = false;
 +	u32 totalsize;
 +
 +	if (!buf || received_size < sizeof(struct fdt_header))
@@ -419,15 +459,111 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	if (totalsize < sizeof(struct fdt_header) || totalsize > received_size)
 +		return -EINVAL;
 +
++	if (fit_check_format(buf, (ulong)received_size) != 0)
++		return -EINVAL;
++
++	confs_noffset = fdt_path_offset(buf, FIT_CONFS_PATH);
++	if (confs_noffset < 0 || fdt_first_subnode(buf, confs_noffset) < 0)
++		return -EINVAL;
++
++	images_noffset = fdt_path_offset(buf, FIT_IMAGES_PATH);
++	if (images_noffset < 0)
++		return -EINVAL;
++
++	fdt_for_each_subnode(noffset, buf, images_noffset) {
++		const char *name = fdt_get_name(buf, noffset, NULL);
++		const char *type_str;
++		const fdt32_t *pos_prop;
++		const fdt32_t *off_prop;
++		const fdt32_t *size_prop;
++		int type_len = 0;
++		int pos_len = 0;
++		int off_len = 0;
++		int size_len = 0;
++
++		type_str = fdt_getprop(buf, noffset, FIT_TYPE_PROP, &type_len);
++		if (!type_str || type_len <= 0 ||
++		    type_str[type_len - 1] != '\0')
++			return -EINVAL;
++
++		/*
++		 * Reject sysupgrade.itb images containing a flash rootfs or
++		 * filesystem payload so RAM-only recovery stays listening
++		 * instead of handing an unbootable image to bootm.
++		 */
++		if (strcmp(type_str, "filesystem") == 0 ||
++		    (name && (strncmp(name, "rootfs", 6) == 0 ||
++			      strncmp(name, "filesystem", 10) == 0)))
++			return -EINVAL;
++
++		if (strcmp(type_str, "kernel") == 0 ||
++		    strcmp(type_str, "kernel_noload") == 0)
++			has_kernel = true;
++
++		pos_prop = fdt_getprop(buf, noffset, FIT_DATA_POSITION_PROP,
++				       &pos_len);
++		off_prop = fdt_getprop(buf, noffset, FIT_DATA_OFFSET_PROP,
++				       &off_len);
++		if (pos_prop && off_prop)
++			return -EINVAL;
++
++		if (pos_prop || off_prop) {
++			u64 ext_off;
++			u64 ext_size;
++
++			size_prop = fdt_getprop(buf, noffset,
++						FIT_DATA_SIZE_PROP, &size_len);
++			if (!size_prop || size_len != (int)sizeof(fdt32_t))
++				return -EINVAL;
++			ext_size = (u64)fdt32_ld(size_prop);
++			if (!ext_size)
++				return -EINVAL;
++
++			if (pos_prop) {
++				if (pos_len != (int)sizeof(fdt32_t))
++					return -EINVAL;
++				ext_off = (u64)fdt32_ld(pos_prop);
++			} else {
++				u64 base = ((u64)totalsize + 3ULL) & ~3ULL;
++				u64 rel;
++
++				if (off_len != (int)sizeof(fdt32_t))
++					return -EINVAL;
++				rel = (u64)fdt32_ld(off_prop);
++				if (base > (u64)received_size ||
++				    rel > (u64)received_size - base)
++					return -EINVAL;
++				ext_off = base + rel;
++			}
++
++			if (ext_off > (u64)received_size ||
++			    ext_size > (u64)received_size - ext_off)
++				return -EINVAL;
++		} else {
++			int data_len = 0;
++
++			if (!fdt_getprop(buf, noffset, FIT_DATA_PROP,
++					 &data_len) || data_len <= 0)
++				return -EINVAL;
++		}
++	}
++
++	if (noffset < 0 && noffset != -FDT_ERR_NOTFOUND)
++		return -EINVAL;
++
++	if (!has_kernel)
++		return -EINVAL;
++
 +	return 0;
 +}
 +
-+static void httpd_parser_init(struct httpd_parser *p, u8 *dst_buf,
-+			      size_t max_size)
++static void httpd_parser_init(struct httpd_parser *p, ulong load_addr,
++			      u8 *dst_buf, size_t max_size)
 +{
 +	memset(p, 0, sizeof(*p));
 +	p->state = HTTPD_ST_HTTP_HDR;
 +	p->result = HTTPD_RES_PENDING;
++	p->load_addr = load_addr;
 +	p->dst_buf = dst_buf;
 +	p->max_size = max_size;
 +	p->next_progress = HTTPD_PROGRESS_STEP;
@@ -436,6 +572,8 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +static int httpd_emit_file_bytes(struct httpd_parser *p, const u8 *src,
 +				 size_t len)
 +{
++	ulong write_addr;
++
 +	if (!p->in_file_part || !len)
 +		return 0;
 +
@@ -443,6 +581,19 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +		p->result = HTTPD_RES_PAYLOAD_TOO_LARGE;
 +		p->state = HTTPD_ST_DONE;
 +		return -EFBIG;
++	}
++
++	if (p->file_size > (size_t)(~(ulong)0 - p->load_addr)) {
++		p->result = HTTPD_RES_MEM_ERROR;
++		p->state = HTTPD_ST_DONE;
++		return -EFAULT;
++	}
++
++	write_addr = p->load_addr + (ulong)p->file_size;
++	if (httpd_check_mem_range(write_addr, len) != 0) {
++		p->result = HTTPD_RES_MEM_ERROR;
++		p->state = HTTPD_ST_DONE;
++		return -EFAULT;
 +	}
 +
 +	memcpy(p->dst_buf + p->file_size, src, len);
@@ -537,7 +688,8 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +		int ret = httpd_parse_u64_dec(val, val_len, &p->content_length);
 +
 +		if (ret == -ERANGE ||
-+		    (ret == 0 && p->content_length > (u64)p->max_size)) {
++		    (ret == 0 && p->content_length >
++		     (u64)p->max_size + HTTPD_MAX_ENVELOPE_OVERHEAD)) {
 +			p->result = HTTPD_RES_PAYLOAD_TOO_LARGE;
 +			p->state = HTTPD_ST_DONE;
 +			return;
@@ -852,6 +1004,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	httpd_release_upload_lock(conn);
 +	conn->pcb = NULL;
 +	conn->tx_pending = 0;
++	conn->idle_polls = 0;
 +	conn->closing = false;
 +	conn->is_success_upload = false;
 +	conn->in_use = false;
@@ -880,7 +1033,9 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	if (err != ERR_OK) {
 +		tcp_arg(pcb, conn);
 +		tcp_err(pcb, httpd_err_cb);
-+		tcp_poll(pcb, httpd_poll_cb, 4);
++		tcp_poll(pcb, httpd_poll_cb, HTTPD_POLL_INTERVAL);
++		if (!conn->closing)
++			conn->idle_polls = 0;
 +		conn->closing = true;
 +		return err;
 +	}
@@ -923,6 +1078,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	}
 +
 +	conn->closing = true;
++	conn->idle_polls = 0;
 +}
 +
 +static err_t httpd_sent_cb(void *arg, struct tcp_pcb *tpcb, u16_t len)
@@ -933,6 +1089,9 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	(void)tpcb;
 +	if (!conn)
 +		return ERR_OK;
++
++	if (len > 0)
++		conn->idle_polls = 0;
 +
 +	srv = conn->server;
 +	if (len >= conn->tx_pending)
@@ -955,7 +1114,6 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +{
 +	struct httpd_conn *conn = arg;
 +
-+	(void)tpcb;
 +	if (!conn)
 +		return ERR_OK;
 +
@@ -963,8 +1121,34 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +		bool was_ok = conn->is_success_upload;
 +		struct httpd_server *srv = conn->server;
 +
-+		if (httpd_conn_close(conn) == ERR_OK && was_ok)
++		if (httpd_conn_close(conn) == ERR_OK) {
++			if (was_ok)
++				srv->response_flushed = true;
++			return ERR_OK;
++		}
++	}
++
++	conn->idle_polls++;
++	if ((conn->closing && conn->idle_polls >= HTTPD_CLOSING_TIMEOUT_POLLS) ||
++	    (!conn->closing && conn->idle_polls >= HTTPD_IDLE_TIMEOUT_POLLS)) {
++		bool was_ok = conn->is_success_upload;
++		struct httpd_server *srv = conn->server;
++		struct tcp_pcb *pcb = conn->pcb ? conn->pcb : tpcb;
++
++		if (pcb) {
++			tcp_arg(pcb, NULL);
++			tcp_recv(pcb, NULL);
++			tcp_sent(pcb, NULL);
++			tcp_err(pcb, NULL);
++			tcp_poll(pcb, NULL, 0);
++		}
++		httpd_conn_release(conn);
++		if (was_ok)
 +			srv->response_flushed = true;
++		if (pcb) {
++			tcp_abort(pcb);
++			return ERR_ABRT;
++		}
 +	}
 +
 +	return ERR_OK;
@@ -1007,29 +1191,35 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +
 +	if (err != ERR_OK) {
 +		pbuf_free(p);
-+		return err;
++		return ERR_OK;
 +	}
++
++	if (!conn->closing && p->tot_len > 0)
++		conn->idle_polls = 0;
 +
 +	if (!conn->closing && !srv->upload_succeeded) {
 +		for (q = p; q; q = q->next) {
 +			res = httpd_parser_feed(&conn->parser,
 +						(const u8 *)q->payload, q->len);
-+			if (conn->parser.is_post && !conn->owns_upload &&
++			if (res == HTTPD_RES_PENDING &&
++			    conn->parser.is_post && !conn->owns_upload &&
 +			    conn->parser.dst_buf)
 +				httpd_claim_upload_lock(conn);
-+			if (conn->parser.need_100_continue) {
++			if (res != HTTPD_RES_PENDING)
++				break;
++		}
++		if (conn->parser.need_100_continue) {
++			conn->parser.need_100_continue = false;
++			if (res == HTTPD_RES_PENDING) {
 +				static const char cont[] =
 +					"HTTP/1.1 100 Continue\r\n\r\n";
 +
-+				conn->parser.need_100_continue = false;
 +				if (tcp_write(tpcb, cont, sizeof(cont) - 1,
 +					      TCP_WRITE_FLAG_COPY) == ERR_OK) {
 +					conn->tx_pending += sizeof(cont) - 1;
 +					tcp_output(tpcb);
 +				}
 +			}
-+			if (res != HTTPD_RES_PENDING)
-+				break;
 +		}
 +	}
 +
@@ -1054,7 +1244,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +		httpd_send_response(conn, "200 OK", httpd_ok_html);
 +		break;
 +	case HTTPD_RES_BAD_FIT:
-+		printf("\nHTTP upload rejected: invalid FIT header (%zu bytes)\n",
++		printf("\nHTTP upload rejected: invalid FIT image (%zu bytes)\n",
 +		       conn->parser.file_size);
 +		httpd_release_upload_lock(conn);
 +		httpd_send_response(conn, "400 Bad Request", httpd_bad_fit_html);
@@ -1075,6 +1265,12 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	case HTTPD_RES_BUSY:
 +		httpd_send_response(conn, "503 Service Unavailable",
 +				    httpd_busy_html);
++		break;
++	case HTTPD_RES_MEM_ERROR:
++		printf("\nHTTP upload rejected: target memory reserved or out of bounds\n");
++		httpd_release_upload_lock(conn);
++		httpd_send_response(conn, "500 Internal Server Error",
++				    httpd_mem_err_html);
 +		break;
 +	case HTTPD_RES_BAD_REQUEST:
 +	default:
@@ -1112,7 +1308,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	conn->server = srv;
 +	conn->pcb = newpcb;
 +	conn->in_use = true;
-+	httpd_parser_init(&conn->parser,
++	httpd_parser_init(&conn->parser, srv->load_addr,
 +			  srv->upload_active ? NULL : srv->dst_buf,
 +			  srv->max_size);
 +
@@ -1120,7 +1316,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	tcp_recv(newpcb, httpd_recv_cb);
 +	tcp_sent(newpcb, httpd_sent_cb);
 +	tcp_err(newpcb, httpd_err_cb);
-+	tcp_poll(newpcb, httpd_poll_cb, 4);
++	tcp_poll(newpcb, httpd_poll_cb, HTTPD_POLL_INTERVAL);
 +
 +	return ERR_OK;
 +}
@@ -1161,6 +1357,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	struct httpd_server *srv;
 +	struct netif *netif;
 +	struct tcp_pcb *pcb;
++	int prev_ctrlc;
 +	int ret = -1;
 +
 +	netif = net_lwip_new_netif(udev);
@@ -1209,6 +1406,8 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	       load_addr, srv->max_size >> 20);
 +	printf("Press Ctrl-C to abort.\n");
 +
++	prev_ctrlc = disable_ctrlc(0);
++
 +	while (1) {
 +		net_lwip_rx(udev, netif);
 +
@@ -1230,6 +1429,8 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +			break;
 +		}
 +	}
++
++	disable_ctrlc(prev_ctrlc);
 +
 +	if (ret == 0) {
 +		if (env_set_hex("filesize", srv->uploaded_size) ||
@@ -1268,10 +1469,24 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +		if (*end || !load_addr)
 +			return CMD_RET_USAGE;
 +	} else {
-+		load_addr = env_get_ulong("initaddr", 16,
-+					  HTTPD_DEFAULT_LOAD_ADDR);
-+		if (!load_addr)
++		val = env_get("initaddr");
++		if (val && *val) {
++			char *end;
++
++			load_addr = hextoul(val, &end);
++			if (*end) {
++				printf("httpd: invalid initaddr '%s'\n", val);
++				return CMD_RET_FAILURE;
++			}
++		} else {
 +			load_addr = HTTPD_DEFAULT_LOAD_ADDR;
++		}
++	}
++
++	if (httpd_check_mem_range(load_addr, HTTPD_MIN_CHECK_SIZE) != 0) {
++		printf("httpd: load address 0x%lx is reserved or out of bounds\n",
++		       load_addr);
++		return CMD_RET_FAILURE;
 +	}
 +
 +	/* Ensure RAM-only network defaults if an older ubootenv lacks them. */
