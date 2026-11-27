@@ -70,6 +70,7 @@ start_service() {
 	procd_set_param command "$DAEMON" "$target"
 	procd_set_param pidfile "$PIDFILE"
 	procd_set_param respawn 30 5 0
+	procd_set_param no_new_privs 1
 	procd_set_param stdout 0
 	procd_set_param stderr 0
 	procd_close_instance

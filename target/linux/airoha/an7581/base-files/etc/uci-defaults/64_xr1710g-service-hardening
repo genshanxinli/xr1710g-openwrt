@@ -1,5 +1,5 @@
 #!/bin/sh
-# Restrict dnsmasq away from WAN interfaces and harden uhttpd defaults on XR1710G.
+# Restrict dnsmasq away from WAN interfaces and harden uhttpd/dropbear defaults on XR1710G.
 
 # shellcheck disable=SC1090,SC1091
 . "${IPKG_INSTROOT:-}/lib/functions.sh"
@@ -28,6 +28,7 @@ list_has_word() {
 
 dhcp_changed=0
 uhttpd_changed=0
+dropbear_changed=0
 
 if [ -e "${IPKG_INSTROOT:-}/etc/config/dhcp" ] && uci -q get dhcp.@dnsmasq[0] >/dev/null; then
 	_notifs="$(uci -q get dhcp.@dnsmasq[0].notinterface)"
@@ -48,7 +49,29 @@ if [ -e "${IPKG_INSTROOT:-}/etc/config/uhttpd" ] && uci -q get uhttpd.main >/dev
 	done
 fi
 
+if [ -e "${IPKG_INSTROOT:-}/etc/config/dropbear" ] && uci -q get dropbear.@dropbear[0] >/dev/null; then
+	if [ -z "$(uci -q get dropbear.@dropbear[0]._xr1710g_dropbear_init)" ]; then
+		_db_direct="$(uci -q get dropbear.@dropbear[0].DirectInterface)"
+		_db_iface="$(uci -q get dropbear.@dropbear[0].Interface)"
+		if [ -z "$_db_direct" ] && [ -z "$_db_iface" ]; then
+			uci -q set dropbear.@dropbear[0].DirectInterface='lan'
+		fi
+		case "$(uci -q get dropbear.@dropbear[0].RemotePortForward)" in
+		''|on|1|true|yes|enabled)
+			uci -q set dropbear.@dropbear[0].RemotePortForward='off'
+			;;
+		esac
+		_db_idle="$(uci -q get dropbear.@dropbear[0].IdleTimeout)"
+		if [ -z "$_db_idle" ] || [ "$_db_idle" = "0" ]; then
+			uci -q set dropbear.@dropbear[0].IdleTimeout='900'
+		fi
+		uci -q set dropbear.@dropbear[0]._xr1710g_dropbear_init='1'
+		dropbear_changed=1
+	fi
+fi
+
 [ "$dhcp_changed" = 1 ] && uci commit dhcp
 [ "$uhttpd_changed" = 1 ] && uci commit uhttpd
+[ "$dropbear_changed" = 1 ] && uci commit dropbear
 
 exit 0
