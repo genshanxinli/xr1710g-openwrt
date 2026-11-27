@@ -30,7 +30,7 @@ Link: https://patchwork.kernel.org/project/linux-mediatek/patch/20260806072601.1
 Link: https://patchwork.kernel.org/project/linux-mediatek/patch/20260807064058.1117747-1-pawlik.dan@gmail.com/
 Assisted-by: Cursor:composer-2
 Signed-off-by: Daniel Pawlik <pawlik.dan@gmail.com>
-[xr1710g: latch REG_CR_MBQ0_CTRL(3) before ringing REG_CR_MBQ0_CTRL(2) doorbell]
+[xr1710g: latch REG_CR_MBQ0_CTRL(3) before ringing REG_CR_MBQ0_CTRL(2) doorbell; reject len <= 0 (#413)]
 Origin: https://github.com/openwrt/openwrt/pull/26812; local, xr1710g (archive/xr1710g-v1)
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
@@ -70,7 +70,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 -	ret = dma_mapping_error(npu->dev, dma_addr);
 -	if (ret)
 -		return ret;
-+	if (len > AIROHA_NPU_MBOX_SIZE)
++	if (len <= 0 || len > AIROHA_NPU_MBOX_SIZE)
 +		return -EINVAL;
  
 -	spin_lock_bh(&npu->cores[core].lock);
@@ -127,7 +127,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  static int airoha_npu_load_firmware(struct device *dev, void __iomem *addr,
  				    const char *fw_name, int fw_max_size)
  {
-@@ -500,9 +526,8 @@ static int airoha_npu_wlan_msg_get(struc
+@@ -506,9 +532,8 @@ static int airoha_npu_wlan_msg_get(struc
  	wlan_data->func_type = NPU_OP_GET;
  	wlan_data->func_id = func_id;
  
@@ -139,7 +139,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	kfree(wlan_data);
  
  	return err;
-@@ -776,6 +801,15 @@ static int airoha_npu_probe(struct platf
+@@ -782,6 +807,15 @@ static int airoha_npu_probe(struct platf
  	if (err)
  		return err;
  

@@ -1,18 +1,47 @@
 From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 Date: Sun, 25 Oct 2026 14:00:00 +0800
-Subject: [PATCH] net: airoha: tear down displaced L2 subflows on key replacement
+Subject: [PATCH] net: airoha: tear down displaced L2 subflows safely on key replacement
 
 rhashtable_replace_fast() in airoha_ppe_foe_l2_flow_commit_entry() swaps
 the bridge rhash node without tearing down subflows anchored on the
 displaced entry, stranding them in PPE hardware. Tear down displaced L2
-subflows under ppe_lock while keeping the entry alive for destroy().
+subflows under ppe_lock while keeping the entry alive for destroy(). Also
+check airoha_ppe_foe_commit_entry() status in
+airoha_ppe_foe_commit_subflow_entry() and save f->data on success, verify
+hardware slot ownership before evicting in airoha_ppe_foe_remove_flow(),
+and insert into eth->flow_table before committing to PPE/l2_flows so a
+flow_table insertion failure never leaves a displaced prev orphaned.
 
-Origin: archive/xr1710g-v1@e85677d284c0
+Origin: archive/xr1710g-v1@e85677d284c0; xr1710g #413
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -911,20 +911,29 @@ static void airoha_ppe_foe_remove_flow(s
+@@ -905,10 +905,19 @@ static void airoha_ppe_foe_remove_flow(s
+ 
+ 	hlist_del_init(&e->list);
+ 	if (e->hash != 0xffff) {
+-		e->data.ib1 &= ~AIROHA_FOE_IB1_BIND_STATE;
+-		e->data.ib1 |= FIELD_PREP(AIROHA_FOE_IB1_BIND_STATE,
+-					  AIROHA_FOE_STATE_INVALID);
+-		airoha_ppe_foe_commit_entry(ppe, &e->data, e->hash, false);
++		struct airoha_foe_entry *hwe;
++
++		hwe = airoha_ppe_foe_get_entry_locked(ppe, e->hash);
++		if (hwe &&
++		    !((hwe->ib1 ^ e->data.ib1) &
++		      AIROHA_FOE_IB1_BIND_PACKET_TYPE) &&
++		    airoha_ppe_foe_compare_entry(e, hwe)) {
++			e->data.ib1 &= ~AIROHA_FOE_IB1_BIND_STATE;
++			e->data.ib1 |= FIELD_PREP(AIROHA_FOE_IB1_BIND_STATE,
++						  AIROHA_FOE_STATE_INVALID);
++			airoha_ppe_foe_commit_entry(ppe, &e->data, e->hash,
++						    false);
++		}
+ 		e->hash = 0xffff;
+ 	}
+ 	if (e->type == FLOW_TYPE_L2_SUBFLOW) {
+@@ -917,20 +926,29 @@ static void airoha_ppe_foe_remove_flow(s
  	}
  }
  
@@ -46,7 +75,41 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  static void airoha_ppe_foe_flow_remove_entry(struct airoha_ppe *ppe,
  					     struct airoha_flow_table_entry *e)
  {
-@@ -1137,31 +1146,42 @@ airoha_ppe_foe_l2_flow_commit_entry(stru
+@@ -952,7 +970,7 @@ airoha_ppe_foe_commit_subflow_entry(stru
+ 	u32 mask = AIROHA_FOE_IB1_BIND_PACKET_TYPE | AIROHA_FOE_IB1_BIND_UDP;
+ 	struct airoha_foe_entry *hwe_p, hwe;
+ 	struct airoha_flow_table_entry *f;
+-	int type;
++	int err, type;
+ 
+ 	hwe_p = airoha_ppe_foe_get_entry_locked(ppe, hash);
+ 	if (!hwe_p)
+@@ -961,8 +979,6 @@ airoha_ppe_foe_commit_subflow_entry(stru
+ 	f = kzalloc_obj(*f, GFP_ATOMIC);
+ 	if (!f)
+ 		return -ENOMEM;
+-
+-	hlist_add_head(&f->l2_subflow_node, &e->l2_flows);
+ 	f->type = FLOW_TYPE_L2_SUBFLOW;
+ 	f->hash = hash;
+ 
+@@ -988,7 +1004,14 @@ airoha_ppe_foe_commit_subflow_entry(stru
+ 	}
+ 
+ 	hwe.bridge.data = e->data.bridge.data;
+-	airoha_ppe_foe_commit_entry(ppe, &hwe, hash, rx_wlan);
++	err = airoha_ppe_foe_commit_entry(ppe, &hwe, hash, rx_wlan);
++	if (err) {
++		kfree(f);
++		return err;
++	}
++
++	memcpy(&f->data, &hwe, sizeof(f->data));
++	hlist_add_head(&f->l2_subflow_node, &e->l2_flows);
+ 
+ 	return 0;
+ }
+@@ -1149,31 +1172,42 @@ airoha_ppe_foe_l2_flow_commit_entry(stru
  				    struct airoha_flow_table_entry *e)
  {
  	struct airoha_flow_table_entry *prev;
@@ -78,14 +141,14 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +		err = 0;
 +		goto unlock;
 +	}
- 
--	if (IS_ERR(prev))
--		return PTR_ERR(prev);
++
 +	if (IS_ERR(prev)) {
 +		err = PTR_ERR(prev);
 +		goto unlock;
 +	}
-+
+ 
+-	if (IS_ERR(prev))
+-		return PTR_ERR(prev);
 +	err = rhashtable_replace_fast(&ppe->l2_flows, &prev->l2_node,
 +				      &e->l2_node,
 +				      airoha_l2_flow_table_params);
@@ -103,3 +166,31 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  }
  
  static int airoha_ppe_foe_flow_commit_entry(struct airoha_ppe *ppe,
+@@ -1484,19 +1518,20 @@ static int airoha_ppe_flow_offload_repla
+ 	e->ingress_stamp = jiffies;
+ 	memcpy(&e->data, &hwe, sizeof(e->data));
+ 
+-	err = airoha_ppe_foe_flow_commit_entry(eth->ppe, e);
+-	if (err)
+-		goto free_entry;
+-
+ 	err = rhashtable_insert_fast(&eth->flow_table, &e->node,
+ 				     airoha_flow_table_params);
+ 	if (err < 0)
+-		goto remove_foe_entry;
++		goto free_entry;
++
++	err = airoha_ppe_foe_flow_commit_entry(eth->ppe, e);
++	if (err)
++		goto remove_flow_table;
+ 
+ 	return 0;
+ 
+-remove_foe_entry:
+-	airoha_ppe_foe_flow_remove_entry(eth->ppe, e);
++remove_flow_table:
++	rhashtable_remove_fast(&eth->flow_table, &e->node,
++			       airoha_flow_table_params);
+ free_entry:
+ 	kfree(e);
+ 

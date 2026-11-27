@@ -4,9 +4,10 @@ Subject: [PATCH net-next 1/2] net: netfilter: flowtable: Add the capability to o
 
 Introduce SW and HW DSCP offloading in netfilter flowtables, recording
 dscp_valid only for the observed direction so the opposite direction's
-DS field is not overwritten with zero.
+DS field is not overwritten with zero, and masking ip.tos with
+INET_DSCP_MASK so ECN bits remain wildcarded.
 
-Origin: archive/xr1710g-v1@e85677d284c0
+Origin: archive/xr1710g-v1@e85677d284c0; xr1710g #413
 Signed-off-by: Lorenzo Bianconi <lorenzo@kernel.org>
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
@@ -97,7 +98,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
 +	if (tuple->dscp_valid) {
 +		key->ip.tos = FIELD_PREP(INET_DSCP_MASK, tuple->dscp);
-+		mask->ip.tos = 0xff;
++		mask->ip.tos = INET_DSCP_MASK;
 +		match->dissector.used_keys |= BIT_ULL(FLOW_DISSECTOR_KEY_IP);
 +	}
 +
@@ -144,7 +145,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  static bool nft_flow_offload_skip(struct sk_buff *skb, int family)
  {
  	if (skb_sec_path(skb))
-@@ -255,6 +279,8 @@ static void nft_flow_offload_eval(const
+@@ -254,6 +278,8 @@ static void nft_flow_offload_eval(const
  	if (!flow)
  		goto err_flow_alloc;
  

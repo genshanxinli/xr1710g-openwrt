@@ -3,25 +3,37 @@ Date: Fri, 30 Oct 2026 12:00:00 +0800
 Subject: [PATCH] net: airoha: refuse an HFWD ring the queue cannot hold
 
 airoha_qdma_init_hfwd_queues() writes num_desc into the 17-bit
-HW_FWD_DESC_NUM_MASK field without bounds checks, silently truncating
-oversized reserved-memory regions or accepting zero descriptors. Reject
-num_desc == 0 or num_desc > HW_FWD_DESC_NUM_MASK with -EINVAL.
+HW_FWD_DESC_NUM_MASK field without bounds checks, and truncating div_u64()
+to int before validation could wrap oversized counts back into range.
+Validate the u64 quotient against 1..HW_FWD_DESC_NUM_MASK before assigning
+num_desc and reject out-of-range values with -EINVAL.
 
-Origin: archive/xr1710g-v1@e85677d284c0
+Origin: archive/xr1710g-v1@e85677d284c0; xr1710g #413
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -1575,6 +1575,12 @@ static int airoha_qdma_init_hfwd_queues(
+@@ -1560,6 +1560,7 @@ static int airoha_qdma_init_hfwd_queues(
+ 	if (index >= 0) {
+ 		struct reserved_mem *rmem;
+ 		struct device_node *np;
++		u64 n;
+ 
+ 		/* Consume reserved memory for hw forwarding buffers queue if
+ 		 * available in the DTS
+@@ -1578,7 +1579,14 @@ static int airoha_qdma_init_hfwd_queues(
+ 		/* Compute the number of hw descriptors according to the
  		 * reserved memory size and the payload buffer size
  		 */
- 		num_desc = div_u64(rmem->size, buf_size);
-+		if (!num_desc || num_desc > HW_FWD_DESC_NUM_MASK) {
+-		num_desc = div_u64(rmem->size, buf_size);
++		n = div_u64(rmem->size, buf_size);
++		if (!n || n > HW_FWD_DESC_NUM_MASK) {
 +			dev_err(eth->dev,
-+				"%s needs %d descriptors, only 1-%lu fit\n",
-+				name, num_desc, HW_FWD_DESC_NUM_MASK);
++				"%s needs %llu descriptors, only 1-%lu fit\n",
++				name, n, HW_FWD_DESC_NUM_MASK);
 +			return -EINVAL;
 +		}
++		num_desc = n;
  	} else {
  		size = buf_size * num_desc;
  		if (!dmam_alloc_coherent(eth->dev, size, &dma_addr,

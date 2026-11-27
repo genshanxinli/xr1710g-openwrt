@@ -1,0 +1,340 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 09:50:00 +0800
+Subject: [PATCH] net: airoha: fix phylink BH locking, open ordering, and QDMA teardown
+
+Fix three locking, lifecycle, and teardown hazards around phylink and QDMA:
+- Acquire port->lock with spin_lock_bh()/spin_unlock_bh() in both
+  airoha_update_hw_stats() (callable from softirq/BH via ndo_get_stats64)
+  and airoha_mac_link_up() to prevent CPU self-deadlock.
+- In airoha_dev_open(), move netif_tx_start_all_queues() and
+  phylink_start() to the non-failing tail after GDM STAG, MTU, port->users,
+  forwarding, and LRO configuration, and disconnect PHY if
+  airoha_set_vip_for_gdm_port() fails.
+- Free any in-progress scattered q->skb in airoha_qdma_cleanup_rx_queue(),
+  record irq_bank->irq only after devm_request_irq() succeeds, and unify
+  airoha_probe() error unwind and airoha_remove() via airoha_teardown() so
+  netdevs are unregistered first, DEV_STATE_INITIALIZED is cleared, QDMA
+  TX/RX DMA and all IRQ banks (INT_REG_IDX0..4) are disabled and
+  synchronize_irq()'d before NAPI stop, TX/RX cleanup, and napi_dev free.
+
+Origin: local, xr1710g #413
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -1158,6 +1158,11 @@ static void airoha_qdma_cleanup_rx_queue
+ 	struct airoha_eth *eth = qdma->eth;
+ 	int qid = q - &qdma->q_rx[0];
+ 
++	if (q->skb) {
++		dev_kfree_skb(q->skb);
++		q->skb = NULL;
++	}
++
+ 	while (q->queued) {
+ 		struct airoha_queue_entry *e = &q->entry[q->tail];
+ 		struct airoha_qdma_desc *desc = &q->desc[q->tail];
+@@ -1816,26 +1821,28 @@ static int airoha_qdma_init_irq_banks(st
+ 
+ 	for (i = 0; i < ARRAY_SIZE(qdma->irq_banks); i++) {
+ 		struct airoha_irq_bank *irq_bank = &qdma->irq_banks[i];
+-		int err, irq_index = 4 * id + i;
++		int err, irq, irq_index = 4 * id + i;
+ 		const char *name;
+ 
+ 		spin_lock_init(&irq_bank->irq_lock);
+ 		irq_bank->qdma = qdma;
+ 
+-		irq_bank->irq = platform_get_irq(pdev, irq_index);
+-		if (irq_bank->irq < 0)
+-			return irq_bank->irq;
++		irq = platform_get_irq(pdev, irq_index);
++		if (irq < 0)
++			return irq;
+ 
+ 		name = devm_kasprintf(eth->dev, GFP_KERNEL,
+ 				      KBUILD_MODNAME ".%d", irq_index);
+ 		if (!name)
+ 			return -ENOMEM;
+ 
+-		err = devm_request_irq(eth->dev, irq_bank->irq,
++		err = devm_request_irq(eth->dev, irq,
+ 				       airoha_irq_handler, IRQF_SHARED, name,
+ 				       irq_bank);
+ 		if (err)
+ 			return err;
++
++		irq_bank->irq = irq;
+ 	}
+ 
+ 	return 0;
+@@ -1877,22 +1884,52 @@ static int airoha_qdma_init(struct platf
+ 	return airoha_qdma_hw_init(qdma);
+ }
+ 
++static void airoha_qdma_disable_irqs(struct airoha_qdma *qdma)
++{
++	int i, j;
++
++	if (IS_ERR_OR_NULL(qdma->regs))
++		return;
++
++	for (i = 0; i < ARRAY_SIZE(qdma->irq_banks); i++) {
++		struct airoha_irq_bank *irq_bank = &qdma->irq_banks[i];
++
++		if (!irq_bank->qdma)
++			continue;
++
++		for (j = 0; j < QDMA_INT_REG_MAX; j++)
++			airoha_qdma_irq_disable(irq_bank, j, ~0U);
++
++		if (irq_bank->irq > 0)
++			synchronize_irq(irq_bank->irq);
++	}
++}
++
++static void airoha_qdma_stop_dma(struct airoha_qdma *qdma)
++{
++	u32 status;
++
++	if (IS_ERR_OR_NULL(qdma->regs))
++		return;
++
++	airoha_qdma_clear(qdma, REG_QDMA_GLOBAL_CFG,
++			  GLOBAL_CFG_TX_DMA_EN_MASK |
++			  GLOBAL_CFG_RX_DMA_EN_MASK);
++	if (read_poll_timeout(airoha_qdma_rr, status,
++			      !(status & (GLOBAL_CFG_TX_DMA_BUSY_MASK |
++					  GLOBAL_CFG_RX_DMA_BUSY_MASK)),
++			      USEC_PER_MSEC, 50 * USEC_PER_MSEC, true,
++			      qdma, REG_QDMA_GLOBAL_CFG))
++		dev_warn(qdma->eth->dev, "QDMA DMA busy timeout\n");
++}
++
+ static void airoha_qdma_cleanup(struct airoha_eth *eth,
+ 				struct airoha_qdma *qdma)
+ {
+ 	int i;
+ 
+-	if (test_bit(DEV_STATE_INITIALIZED, &eth->state)) {
+-		u32 status;
+-
+-		airoha_qdma_clear(qdma, REG_QDMA_GLOBAL_CFG,
+-				  GLOBAL_CFG_RX_DMA_EN_MASK);
+-		if (read_poll_timeout(airoha_qdma_rr, status,
+-				      !(status & GLOBAL_CFG_RX_DMA_BUSY_MASK),
+-				      USEC_PER_MSEC, 50 * USEC_PER_MSEC, true,
+-				      qdma, REG_QDMA_GLOBAL_CFG))
+-			dev_warn(eth->dev, "QDMA RX DMA busy timeout\n");
+-	}
++	airoha_qdma_stop_dma(qdma);
++	airoha_qdma_disable_irqs(qdma);
+ 
+ 	for (i = 0; i < ARRAY_SIZE(qdma->q_rx); i++) {
+ 		if (!qdma->q_rx[i].ndesc)
+@@ -2009,7 +2046,7 @@ static void airoha_update_hw_stats(struc
+ 	u32 val, i = 0;
+ 	u64 data;
+ 
+-	spin_lock(&port->lock);
++	spin_lock_bh(&port->lock);
+ 
+ 	/* Read relevant MIB for GDM with multiple port attached */
+ 	if (port->id == AIROHA_GDM3_IDX || port->id == AIROHA_GDM4_IDX)
+@@ -2203,7 +2240,7 @@ static void airoha_update_hw_stats(struc
+ 
+ 	u64_stats_update_end(&dev->stats.syncp);
+ 
+-	spin_unlock(&port->lock);
++	spin_unlock_bh(&port->lock);
+ }
+ 
+ static void airoha_update_netdev_features(struct airoha_gdm_dev *dev)
+@@ -2266,12 +2303,11 @@ static int airoha_dev_open(struct net_de
+ 		return err;
+ 	}
+ 
+-	phylink_start(dev->phylink);
+-
+-	netif_tx_start_all_queues(netdev);
+ 	err = airoha_set_vip_for_gdm_port(dev, true);
+-	if (err)
++	if (err) {
++		phylink_disconnect_phy(dev->phylink);
+ 		return err;
++	}
+ 
+ 	/* It seems GDM3 and GDM4 needs SPORT enabled to correctly work */
+ 	if (netdev_uses_dsa(netdev) || port->id > 2)
+@@ -2293,6 +2329,9 @@ static int airoha_dev_open(struct net_de
+ 	if (netdev->features & NETIF_F_LRO)
+ 		airoha_dev_lro_enable(dev);
+ 
++	netif_tx_start_all_queues(netdev);
++	phylink_start(dev->phylink);
++
+ 	return 0;
+ }
+ 
+@@ -3905,7 +3944,7 @@ static void airoha_mac_link_up(struct ph
+ 		frag_size_rx = 0;
+ 	}
+ 
+-	spin_lock(&port->lock);
++	spin_lock_bh(&port->lock);
+ 
+ 	/* Configure TX/RX frag based on speed */
+ 	if (dev->nbq == 1) {
+@@ -3930,7 +3969,7 @@ static void airoha_mac_link_up(struct ph
+ 	}
+ 	airoha_fe_rmw(eth, REG_FE_GDM4_RMBI_FRAG, mask, val);
+ 
+-	spin_unlock(&port->lock);
++	spin_unlock_bh(&port->lock);
+ }
+ 
+ /* Nothing to do in MAC, everything is handled in PCS */
+@@ -4193,6 +4232,68 @@ static int airoha_register_gdm_devices(s
+ 	return 0;
+ }
+ 
++static void airoha_teardown(struct airoha_eth *eth)
++{
++	int i;
++
++	clear_bit(DEV_STATE_REGISTERED, &eth->state);
++
++	for (i = 0; i < ARRAY_SIZE(eth->ports); i++) {
++		struct airoha_gdm_port *port = eth->ports[i];
++		int j;
++
++		if (!port)
++			continue;
++
++		for (j = 0; j < ARRAY_SIZE(port->devs); j++) {
++			struct airoha_gdm_dev *dev = port->devs[j];
++			struct net_device *netdev;
++
++			if (!dev)
++				continue;
++
++			netdev = netdev_from_priv(dev);
++			if (netdev->reg_state == NETREG_REGISTERED)
++				unregister_netdev(netdev);
++		}
++	}
++
++	clear_bit(DEV_STATE_INITIALIZED, &eth->state);
++	smp_mb__after_atomic();
++
++	for (i = 0; i < ARRAY_SIZE(eth->qdma); i++) {
++		airoha_qdma_stop_dma(&eth->qdma[i]);
++		airoha_qdma_disable_irqs(&eth->qdma[i]);
++		airoha_qdma_stop_napi(&eth->qdma[i]);
++		airoha_qdma_disable_irqs(&eth->qdma[i]);
++		airoha_qdma_tx_cleanup(&eth->qdma[i]);
++	}
++
++	for (i = 0; i < ARRAY_SIZE(eth->ports); i++) {
++		struct airoha_gdm_port *port = eth->ports[i];
++		int j;
++
++		if (!port)
++			continue;
++
++		for (j = 0; j < ARRAY_SIZE(port->devs); j++) {
++			struct airoha_gdm_dev *dev = port->devs[j];
++			struct net_device *netdev;
++
++			if (!dev)
++				continue;
++
++			netdev = netdev_from_priv(dev);
++			if (dev->phylink)
++				phylink_destroy(dev->phylink);
++			of_node_put(netdev->dev.of_node);
++		}
++		airoha_metadata_dst_free(port);
++	}
++
++	airoha_hw_cleanup(eth);
++}
++
+ static int airoha_probe(struct platform_device *pdev)
+ {
+ 	struct reset_control_bulk_data *xsi_rsts;
+@@ -4290,35 +4391,7 @@ static int airoha_probe(struct platform_
+ 	return 0;
+ 
+ error_napi_stop:
+-	for (i = 0; i < ARRAY_SIZE(eth->qdma); i++) {
+-		airoha_qdma_stop_napi(&eth->qdma[i]);
+-		airoha_qdma_tx_cleanup(&eth->qdma[i]);
+-	}
+-
+-	for (i = 0; i < ARRAY_SIZE(eth->ports); i++) {
+-		struct airoha_gdm_port *port = eth->ports[i];
+-		int j;
+-
+-		if (!port)
+-			continue;
+-
+-		for (j = 0; j < ARRAY_SIZE(port->devs); j++) {
+-			struct airoha_gdm_dev *dev = port->devs[j];
+-			struct net_device *netdev;
+-
+-			if (!dev)
+-				continue;
+-
+-			netdev = netdev_from_priv(dev);
+-			if (netdev->reg_state == NETREG_REGISTERED)
+-				unregister_netdev(netdev);
+-			if (dev->phylink)
+-				phylink_destroy(dev->phylink);
+-			of_node_put(netdev->dev.of_node);
+-		}
+-		airoha_metadata_dst_free(port);
+-	}
+-	airoha_hw_cleanup(eth);
++	airoha_teardown(eth);
+ error_netdev_free:
+ 	free_netdev(eth->napi_dev);
+ 	platform_set_drvdata(pdev, NULL);
+@@ -4329,36 +4402,8 @@ error_netdev_free:
+ static void airoha_remove(struct platform_device *pdev)
+ {
+ 	struct airoha_eth *eth = platform_get_drvdata(pdev);
+-	int i;
+-
+-	for (i = 0; i < ARRAY_SIZE(eth->qdma); i++) {
+-		airoha_qdma_stop_napi(&eth->qdma[i]);
+-		airoha_qdma_tx_cleanup(&eth->qdma[i]);
+-	}
+-
+-	for (i = 0; i < ARRAY_SIZE(eth->ports); i++) {
+-		struct airoha_gdm_port *port = eth->ports[i];
+-		int j;
+-
+-		if (!port)
+-			continue;
+-
+-		for (j = 0; j < ARRAY_SIZE(port->devs); j++) {
+-			struct airoha_gdm_dev *dev = port->devs[j];
+-			struct net_device *netdev;
+-
+-			if (!dev)
+-				continue;
+-
+-			netdev = netdev_from_priv(dev);
+-			unregister_netdev(netdev);
+-			phylink_destroy(dev->phylink);
+-			of_node_put(netdev->dev.of_node);
+-		}
+-		airoha_metadata_dst_free(port);
+-	}
+-	airoha_hw_cleanup(eth);
+ 
++	airoha_teardown(eth);
+ 	free_netdev(eth->napi_dev);
+ 	platform_set_drvdata(pdev, NULL);
+ }

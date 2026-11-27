@@ -3,28 +3,44 @@ Date: Wed, 28 Oct 2026 12:05:00 +0800
 Subject: [PATCH] net: airoha: do not alias flow counters onto unrelated flows
 
 airoha_ppe_foe_get_flow_stats_index() subtracted PPE_STATS_NUM_ENTRIES for
-hashes >= ppe_num_stats_entries, aliasing DRAM/out-of-range hashes onto live
-SRAM flow counter slots. Return -ENOENT for hashes outside the counter block
-and map in-range hashes directly.
+hashes >= ppe_num_stats_entries, aliasing carve-out hole and DRAM hashes
+onto live SRAM counter slots. Compute ppe_id = hash / PPE_SRAM_NUM_ENTRIES
+and entry = hash % PPE_SRAM_NUM_ENTRIES, reject ppe_id >= num_ppe or
+entry >= num_stats with -ENOENT, and map PPE1/PPE2 data slots cleanly to
+ppe_id * num_stats + entry.
 
-Origin: archive/xr1710g-v1@e85677d284c0
+Origin: archive/xr1710g-v1@e85677d284c0; xr1710g #413
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -629,8 +629,13 @@ static int airoha_ppe_foe_get_flow_stats
- 	if (ppe_num_stats_entries < 0)
- 		return ppe_num_stats_entries;
+@@ -629,14 +629,23 @@ static u32 airoha_ppe_foe_get_entry_hash
+ static int airoha_ppe_foe_get_flow_stats_index(struct airoha_ppe *ppe,
+ 					       u32 hash, u32 *index)
+ {
+-	int ppe_num_stats_entries;
++	struct airoha_eth *eth = ppe->eth;
++	int num_stats = airoha_ppe_get_num_stats_entries(ppe);
++	u32 ppe_id, entry;
+ 
+-	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
+-	if (ppe_num_stats_entries < 0)
+-		return ppe_num_stats_entries;
++	if (num_stats <= 0)
++		return num_stats < 0 ? num_stats : -ENOENT;
  
 -	*index = hash >= ppe_num_stats_entries ? hash - PPE_STATS_NUM_ENTRIES
 -					       : hash;
-+	/* Map SRAM hashes directly to their counter slot; reject out-of-range
-+	 * hashes instead of aliasing them onto unrelated counter slots.
++	/* Hardware addresses PPE2 at a fixed PPE_SRAM_NUM_ENTRIES stride.
++	 * Reject carve-out holes (entry >= num_stats) and out-of-range hashes
++	 * instead of aliasing counters onto unrelated flows.
 +	 */
-+	if (hash >= ppe_num_stats_entries)
++	ppe_id = hash / PPE_SRAM_NUM_ENTRIES;
++	entry = hash % PPE_SRAM_NUM_ENTRIES;
++	if (ppe_id >= eth->soc->num_ppe || entry >= num_stats)
 +		return -ENOENT;
 +
-+	*index = hash;
++	*index = ppe_id * num_stats + entry;
  
  	return 0;
  }

@@ -1,33 +1,38 @@
 From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 Date: Sun, 25 Oct 2026 12:05:00 +0800
-Subject: [PATCH] net: airoha: give the RX rings room for a 10G burst
+Subject: [PATCH] net: airoha: give active non-LRO RX rings room for a 10G burst
 
 Default 32-descriptor RX rings hold only ~25 us of 10G burst traffic,
 causing QDMA drops before NAPI refills. Raise multi-gigabit rings (2, 4,
-11, 15) to 256 descriptors and other non-CPU rings to 128 while keeping
-ring 0 at 1024.
+11, 15) to 256 descriptors and other active IRQ-wired non-LRO rings to 128
+while keeping ring 0 at 1024, LRO order-2 rings (24..31) at 32, and the
+unwired non-IRQ rings (10, 14, 16..20) at 32 (saving 26.625 MiB of pinned
+DMA memory across both QDMAs).
 
-Origin: archive/xr1710g-v1@e85677d284c0
+Origin: archive/xr1710g-v1@e85677d284c0; xr1710g #413
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -39,12 +39,13 @@
+@@ -39,12 +39,15 @@
  #define HW_DSCP_NUM			2048
  #define IRQ_QUEUE_LEN(_n)		((_n) ? 1024 : 2048)
  #define TX_DSCP_NUM			1024
-+/* Ring 0: 1024; multi-gig rings (2, 4, 11, 15): 256; others: 128. */
- #define RX_DSCP_NUM(_n)			\
+-#define RX_DSCP_NUM(_n)			\
 -	((_n) ==  2 ? 128 :		\
 -	 (_n) ==  4 ? 128 :		\
 -	 (_n) == 11 ? 128 :		\
 -	 (_n) == 15 ? 128 :		\
 -	 (_n) ==  0 ? 1024 : 32)
-+	((_n) ==  2 ? 256 :		\
-+	 (_n) ==  4 ? 256 :		\
-+	 (_n) == 11 ? 256 :		\
-+	 (_n) == 15 ? 256 :		\
-+	 (_n) ==  0 ? 1024 : 128)
++/* Ring 0: 1024; multi-gig rings (2, 4, 11, 15): 256; LRO (>= 24) and
++ * unwired non-IRQ rings (10, 14, 16..20): 32; other active IRQ rings: 128.
++ */
++#define RX_DSCP_NUM(_n)					\
++	((_n) ==  0 ? 1024 :				\
++	 (_n) ==  2 || (_n) ==  4 ||			\
++	 (_n) == 11 || (_n) == 15 ? 256 :		\
++	 (_n) >= 24 || (_n) == 10 || (_n) == 14 ||	\
++	 ((_n) >= 16 && (_n) <= 20) ? 32 : 128)
  
  #define AIROHA_LRO_PAGE_ORDER		get_order(SZ_16K)
  #define AIROHA_MAX_NUM_LRO_QUEUES	8

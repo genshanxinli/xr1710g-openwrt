@@ -5,9 +5,11 @@ Subject: [PATCH] net: airoha: keep LRO off shared QDMAs with balanced refcountin
 Hardware LRO merges all RX queues on a QDMA, so shared QDMAs cannot safely
 attribute merged frames to one port, while unpaired enable/disable calls
 across QDMA moves and open/stop could leak or underflow LRO state. Track
-per-QDMA lro_users gated by per-device AIROHA_DEV_F_LRO and block shared LRO.
+per-QDMA lro_users gated by per-device AIROHA_DEV_F_LRO, block shared LRO,
+and guard airoha_dev_lro_enable() with netif_running(netdev) so DOWN devices
+cannot arm hardware LRO during QDMA assignment or ethtool feature updates.
 
-Origin: archive/xr1710g-v1@e85677d284c0
+Origin: archive/xr1710g-v1@e85677d284c0; xr1710g #413
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
@@ -81,15 +83,25 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  		return -EBUSY;
  	}
  
-@@ -2430,7 +2446,7 @@ static void airoha_dev_set_qdma(struct a
+@@ -2430,7 +2446,8 @@ static void airoha_dev_set_qdma(struct a
  	}
  
  	airoha_update_netdev_features(dev);
 -	if (netdev->features & NETIF_F_LRO)
-+	if (qdma->users == 1 && (netdev->features & NETIF_F_LRO))
++	if (netif_running(netdev) && qdma->users == 1 &&
++	    (netdev->features & NETIF_F_LRO))
  		airoha_dev_lro_enable(dev);
  }
  
+@@ -2600,7 +2617,7 @@ static int airoha_dev_set_features(struc
+ {
+ 	struct airoha_gdm_dev *dev = netdev_priv(netdev);
+ 
+-	if (features & NETIF_F_LRO)
++	if (netif_running(netdev) && (features & NETIF_F_LRO))
+ 		airoha_dev_lro_enable(dev);
+ 	else
+ 		airoha_dev_lro_disable(dev);
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
 @@ -576,6 +576,8 @@ struct airoha_qdma {

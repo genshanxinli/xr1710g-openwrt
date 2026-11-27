@@ -1,14 +1,18 @@
 From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 Date: Sun, 15 Nov 2026 04:20:00 +0800
-Subject: [PATCH] net: airoha: keep TTL on bridged flows (L2 bridge and nft bridge_input)
+Subject: [PATCH] net: airoha: keep TTL on bridged flows (SW fast-path and HW PPE)
 
-Do not set AIROHA_FOE_IB1_BIND_TTL on PPE_PKT_TYPE_BRIDGE flows or on
-bridged flows entering inet flowtables via br_netfilter as IPv4/IPv6 tuples,
-so the PPE does not decrement TTL on L2-switched frames. Propagate
-is_bridging as bridge_input to flow_cls_offload and only set
-AIROHA_FOE_IB1_BIND_TTL when type != PPE_PKT_TYPE_BRIDGE && !bridged.
+Preserve IPv4 TTL and IPv6 hop_limit on L2-bridged flows entering inet
+flowtables via br_netfilter in both the software fast-path
+(nf_flow_table_ip.c) and Airoha PPE hardware offload (airoha_ppe.c).
+Propagate the authoritative is_bridging flag as bridge_input onto
+flow_offload_tuple and flow_cls_offload (replacing the old in_master ==
+out_master heuristic from patch 916 that falsely matched inter-VLAN routed
+flows across a VLAN-filtering bridge), skip TTL/hop_limit decrement when
+tuple->bridge_input is set, and only set AIROHA_FOE_IB1_BIND_TTL when
+type != PPE_PKT_TYPE_BRIDGE && !bridged.
 
-Origin: archive/xr1710g-v1@e85677d284c0 (folded 960 into 963)
+Origin: archive/xr1710g-v1@e85677d284c0 (folded 916 and 960 into 963); xr1710g #413
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/include/net/netfilter/nf_flow_table.h
@@ -61,6 +65,28 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  		flow_tuple->bridge_vlan = route->tuple[dir].out.bridge_vlan;
  		flow_tuple->port_vlans = route->tuple[dir].out.port_vlans;
  		break;
+--- a/net/netfilter/nf_flow_table_ip.c
++++ b/net/netfilter/nf_flow_table_ip.c
+@@ -522,7 +522,8 @@ static int nf_flow_offload_forward(struc
+ 				    FIELD_PREP(INET_DSCP_MASK,
+ 					       tuplehash->tuple.dscp));
+ 
+-	ip_decrease_ttl(iph);
++	if (!tuplehash->tuple.bridge_input)
++		ip_decrease_ttl(iph);
+ 	skb_clear_tstamp(skb);
+ 
+ 	/* As ip_forward() does for the packets the flow did not take. */
+@@ -1163,7 +1164,8 @@ static int nf_flow_offload_ipv6_forward(
+ 				    FIELD_PREP(INET_DSCP_MASK,
+ 					       tuplehash->tuple.dscp));
+ 
+-	ip6h->hop_limit--;
++	if (!tuplehash->tuple.bridge_input)
++		ip6h->hop_limit--;
+ 	skb_clear_tstamp(skb);
+ 
+ 	if (flow->priority)
 --- a/net/netfilter/nf_flow_table_offload.c
 +++ b/net/netfilter/nf_flow_table_offload.c
 @@ -919,6 +919,7 @@ static void nf_flow_offload_init(struct
@@ -73,7 +99,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  static int nf_flow_offload_tuple(struct nf_flowtable *flowtable,
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -402,7 +402,7 @@ static int airoha_ppe_foe_entry_prepare(
+@@ -399,7 +399,7 @@ static int airoha_ppe_foe_entry_prepare(
  					struct airoha_foe_entry *hwe,
  					struct net_device *netdev, int type,
  					struct airoha_flow_data *data,
@@ -82,7 +108,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  {
  	u32 qdata = FIELD_PREP(AIROHA_FOE_SHAPER_ID, 0x7f), ports_pad, val;
  	int wlan_etype = -EINVAL, dsa_port = airoha_get_dsa_port(&netdev);
-@@ -416,8 +416,9 @@ static int airoha_ppe_foe_entry_prepare(
+@@ -413,8 +413,9 @@ static int airoha_ppe_foe_entry_prepare(
  	      FIELD_PREP(AIROHA_FOE_IB1_BIND_UDP, l4proto == IPPROTO_UDP) |
  	      FIELD_PREP(AIROHA_FOE_IB1_BIND_VLAN_LAYER, data->vlan.num) |
  	      FIELD_PREP(AIROHA_FOE_IB1_BIND_VPM, data->vlan.num) |
@@ -94,7 +120,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	hwe->ib1 = val;
  
  	val = FIELD_PREP(AIROHA_FOE_IB2_PORT_AG, 0x1f);
-@@ -1414,7 +1415,8 @@ static int airoha_ppe_flow_offload_repla
+@@ -1441,7 +1442,8 @@ static int airoha_ppe_flow_offload_repla
  		return -EINVAL;
  
  	err = airoha_ppe_foe_entry_prepare(eth, &hwe, odev, offload_type,

@@ -3,11 +3,15 @@ Date: Sun, 25 Oct 2026 12:20:00 +0800
 Subject: [PATCH] net: airoha: keep PPE offload when the NPU refuses flow stats
 
 airoha_ppe_offload_setup() aborts PPE offload if NPU flow-stats setup fails
-or returns a zero SRAM stats address. Warn and continue without flow stats
-using ppe->foe_stats_enabled, and only enable PSE port 6 shared flow
-control when flow stats are active.
+or returns a zero SRAM stats address, and airoha_ppe_init() pre-allocated
+foe_stats on eth->dev outside the NPU's <0xc0000000 DMA pool. Defer
+foe_stats allocation to airoha_ppe_offload_setup() on npu->dev (freeing on
+refusal or before airoha_npu_put() in airoha_ppe_deinit()), gate
+airoha_ppe_check_skb() on rcu_access_pointer(ppe->eth->npu), access
+ppe->foe_stats_enabled via WRITE_ONCE/READ_ONCE, and unwind ppe_init() on
+airoha_ppe_wait_for_npu_init() failure.
 
-Origin: archive/xr1710g-v1@e85677d284c0
+Origin: archive/xr1710g-v1@e85677d284c0; xr1710g #413
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_npu.c
@@ -27,10 +31,11 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  				  size);
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -647,6 +647,8 @@ struct airoha_ppe {
+@@ -649,6 +649,9 @@ struct airoha_ppe {
  
  	struct airoha_foe_stats *foe_stats;
  	dma_addr_t foe_stats_dma;
++	size_t foe_stats_size;
 +	/* True when NPU accepted flow-stats allocation. */
 +	bool foe_stats_enabled;
  
@@ -55,66 +60,171 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  		PPE_RAM_NUM_ENTRIES_SHIFT(sram_ppe_num_data_entries);
  
 +	/* Enable port 6 shared flow control only while flow stats are active. */
-+	if (sram_num_stats_entries > 0 && ppe->foe_stats_enabled)
++	if (sram_num_stats_entries > 0 && READ_ONCE(ppe->foe_stats_enabled))
 +		airoha_fe_clear(eth, PSE_FC_CFG, PSE_PORT6_SHARE_DIS);
 +
  	for (i = 0; i < eth->soc->num_ppe; i++) {
  		airoha_fe_wr(eth, REG_PPE_TB_BASE(i),
  			     ppe->foe_dma + sram_tb_size);
-@@ -622,6 +626,9 @@ static void airoha_ppe_foe_flow_stats_re
+@@ -622,6 +626,10 @@ static void airoha_ppe_foe_flow_stats_re
  {
  	int i, ppe_num_stats_entries;
  
-+	if (unlikely(!ppe->foe_stats_enabled))
++	if (unlikely(!READ_ONCE(ppe->foe_stats_enabled) || !ppe->foe_stats ||
++		     !npu->stats))
 +		return;
 +
  	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
  	if (ppe_num_stats_entries < 0)
  		return;
-@@ -640,6 +647,9 @@ static void airoha_ppe_foe_flow_stats_up
+@@ -640,6 +648,10 @@ static void airoha_ppe_foe_flow_stats_up
  	int ppe_num_stats_entries;
  	u8 nbq;
  
-+	if (unlikely(!ppe->foe_stats_enabled))
++	if (unlikely(!READ_ONCE(ppe->foe_stats_enabled) || !ppe->foe_stats ||
++		     !npu->stats))
 +		return;
 +
  	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
  	if (ppe_num_stats_entries < 0)
  		return;
-@@ -1312,6 +1322,9 @@ void airoha_ppe_foe_entry_get_stats(stru
+@@ -1312,6 +1324,9 @@ void airoha_ppe_foe_entry_get_stats(stru
  	struct airoha_npu *npu;
  	u32 index;
  
-+	if (unlikely(!ppe->foe_stats_enabled))
++	if (unlikely(!READ_ONCE(ppe->foe_stats_enabled)))
 +		return;
 +
  	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
  	if (ppe_num_stats_entries < 0)
  		return;
-@@ -1325,7 +1338,7 @@ void airoha_ppe_foe_entry_get_stats(stru
+@@ -1325,7 +1340,7 @@ void airoha_ppe_foe_entry_get_stats(stru
  	rcu_read_lock();
  
  	npu = rcu_dereference(eth->npu);
 -	if (npu) {
-+	if (npu && npu->stats) {
++	if (npu && npu->stats && ppe->foe_stats) {
  		u64 packets = ppe->foe_stats[index].packets;
  		u64 bytes = ppe->foe_stats[index].bytes;
  		struct airoha_foe_stats npu_stats;
-@@ -1457,8 +1470,15 @@ static int airoha_ppe_offload_setup(stru
+@@ -1451,14 +1466,40 @@ static int airoha_ppe_offload_setup(stru
+ 	/* Wait for NPU PPE configuration to complete */
+ 	err = airoha_ppe_wait_for_npu_init(eth);
+ 	if (err)
+-		goto error_npu_put;
++		goto error_ppe_deinit;
+ 
+ 	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
  	if (ppe_num_stats_entries > 0) {
- 		err = npu->ops.ppe_init_stats(npu, ppe->foe_stats_dma,
- 					      ppe_num_stats_entries);
+-		err = npu->ops.ppe_init_stats(npu, ppe->foe_stats_dma,
+-					      ppe_num_stats_entries);
 -		if (err)
 -			goto error_npu_put;
-+		if (err) {
++		size_t stats_size = ppe_num_stats_entries *
++				    sizeof(*ppe->foe_stats);
++
++		/* Allocate flow-stats buffer from npu->dev's <0xc0000000 DMA pool. */
++		ppe->foe_stats = dma_alloc_coherent(npu->dev, stats_size,
++						    &ppe->foe_stats_dma,
++						    GFP_KERNEL);
++		if (!ppe->foe_stats) {
 +			dev_warn(eth->dev,
-+				 "NPU refused flow stats (%d), continuing without counters\n",
-+				 err);
-+			ppe->foe_stats_enabled = false;
-+			err = 0;
++				 "failed to allocate flow stats on NPU DMA pool, continuing without counters\n");
++			WRITE_ONCE(ppe->foe_stats_enabled, false);
 +		} else {
-+			ppe->foe_stats_enabled = true;
++			err = npu->ops.ppe_init_stats(npu, ppe->foe_stats_dma,
++						      ppe_num_stats_entries);
++			if (err) {
++				dev_warn(eth->dev,
++					 "NPU refused flow stats (%d), continuing without counters\n",
++					 err);
++				dma_free_coherent(npu->dev, stats_size,
++						  ppe->foe_stats,
++						  ppe->foe_stats_dma);
++				ppe->foe_stats = NULL;
++				ppe->foe_stats_dma = 0;
++				WRITE_ONCE(ppe->foe_stats_enabled, false);
++				err = 0;
++			} else {
++				ppe->foe_stats_size = stats_size;
++				WRITE_ONCE(ppe->foe_stats_enabled, true);
++			}
 +		}
  	}
  
  	airoha_ppe_hw_init(ppe);
+@@ -1469,6 +1510,8 @@ static int airoha_ppe_offload_setup(stru
+ 
+ 	return 0;
+ 
++error_ppe_deinit:
++	npu->ops.ppe_deinit(npu);
+ error_npu_put:
+ 	airoha_npu_put(npu);
+ 
+@@ -1504,9 +1547,13 @@ void airoha_ppe_check_skb(struct airoha_
+ 			  u16 hash, bool rx_wlan)
+ {
+ 	struct airoha_ppe *ppe = dev->priv;
+-	u32 ppe_hash_mask = airoha_ppe_get_total_num_entries(ppe) - 1;
++	u32 ppe_hash_mask;
+ 	u16 now, diff;
+ 
++	if (unlikely(!rcu_access_pointer(ppe->eth->npu)))
++		return;
++
++	ppe_hash_mask = airoha_ppe_get_total_num_entries(ppe) - 1;
+ 	if (hash > ppe_hash_mask)
+ 		return;
+ 
+@@ -1596,7 +1643,7 @@ EXPORT_SYMBOL_GPL(airoha_ppe_put_dev);
+ 
+ int airoha_ppe_init(struct airoha_eth *eth)
+ {
+-	int foe_size, err, ppe_num_stats_entries;
++	int foe_size, err;
+ 	u32 ppe_num_entries;
+ 	struct airoha_ppe *ppe;
+ 
+@@ -1623,16 +1670,6 @@ int airoha_ppe_init(struct airoha_eth *e
+ 	if (!ppe->foe_flow)
+ 		return -ENOMEM;
+ 
+-	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
+-	if (ppe_num_stats_entries > 0) {
+-		foe_size = ppe_num_stats_entries * sizeof(*ppe->foe_stats);
+-		ppe->foe_stats = dmam_alloc_coherent(eth->dev, foe_size,
+-						     &ppe->foe_stats_dma,
+-						     GFP_KERNEL);
+-		if (!ppe->foe_stats)
+-			return -ENOMEM;
+-	}
+-
+ 	ppe->foe_check_time = devm_kzalloc(eth->dev,
+ 					   ppe_num_entries * sizeof(*ppe->foe_check_time),
+ 					   GFP_KERNEL);
+@@ -1667,6 +1704,7 @@ error_flow_table_destroy:
+ 
+ void airoha_ppe_deinit(struct airoha_eth *eth)
+ {
++	struct airoha_ppe *ppe = eth->ppe;
+ 	struct airoha_npu *npu;
+ 
+ 	mutex_lock(&flow_offload_mutex);
+@@ -1674,8 +1712,16 @@ void airoha_ppe_deinit(struct airoha_eth
+ 	npu = rcu_replace_pointer(eth->npu, NULL,
+ 				  lockdep_is_held(&flow_offload_mutex));
+ 	if (npu) {
++		WRITE_ONCE(ppe->foe_stats_enabled, false);
+ 		synchronize_rcu();
+ 		npu->ops.ppe_deinit(npu);
++		if (ppe->foe_stats) {
++			dma_free_coherent(npu->dev, ppe->foe_stats_size,
++					  ppe->foe_stats, ppe->foe_stats_dma);
++			ppe->foe_stats = NULL;
++			ppe->foe_stats_dma = 0;
++			ppe->foe_stats_size = 0;
++		}
+ 		airoha_npu_put(npu);
+ 	}
+ 

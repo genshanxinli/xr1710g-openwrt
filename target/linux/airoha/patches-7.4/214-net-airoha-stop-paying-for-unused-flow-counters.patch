@@ -2,12 +2,14 @@ From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 12:10:00 +0800
 Subject: [PATCH] net: airoha: stop paying for flow counters the NPU never provides
 
-Avoid carving out half of PPE SRAM when the NPU refuses flow counters, and
-enable PPE_DRAM_TABLE_EN/PPE_DRAM_HASH1_EN with readback verification and
-bounds checking in airoha_ppe_foe_commit_entry() so DRAM hash slots are
-actually searched by hardware.
+Avoid carving out half of PPE SRAM when the NPU refuses flow counters,
+keeping PPE_DRAM_TABLE_EN and PPE_DRAM_HASH1_EN disabled (pure 16K SRAM
+mode to prevent concurrent dual-PPE corruption of a shared DRAM table).
+Bounds-check hash against total entries and SRAM carve-out holes in
+airoha_ppe_foe_commit_entry(), and publish hwe->ib1 with wmb() strictly
+after payload copy and airoha_ppe_foe_flow_stats_update().
 
-Origin: archive/xr1710g-v1@e85677d284c0
+Origin: archive/xr1710g-v1@e85677d284c0; xr1710g #413
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
@@ -31,7 +33,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +{
 +	int num_stats = airoha_ppe_stats_capable_entries(ppe);
 +
-+	if (num_stats > 0 && !ppe->foe_stats_enabled)
++	if (num_stats > 0 && !READ_ONCE(ppe->foe_stats_enabled))
 +		return -EOPNOTSUPP;
 +
 +	return num_stats;
@@ -44,16 +46,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
  	if (num_stats > 0) {
  		struct airoha_eth *eth = ppe->eth;
-@@ -154,7 +166,7 @@ void airoha_ppe_set_xmit_frame_size(stru
- static void airoha_ppe_hw_init(struct airoha_ppe *ppe)
- {
- 	u32 sram_ppe_num_data_entries = airoha_ppe_get_sram_num_entries(ppe);
--	u32 sram_num_entries;
-+	u32 sram_num_entries, val;
- 	u32 sram_tb_size, dram_num_entries;
- 	struct airoha_eth *eth = ppe->eth;
- 	int i, sram_num_stats_entries;
-@@ -190,6 +202,7 @@ static void airoha_ppe_hw_init(struct ai
+@@ -196,6 +208,7 @@ static void airoha_ppe_hw_init(struct ai
  			      PPE_SRAM_TABLE_EN_MASK |
  			      PPE_SRAM_HASH1_EN_MASK |
  			      PPE_DRAM_TABLE_EN_MASK |
@@ -61,30 +54,19 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  			      PPE_SRAM_HASH0_MODE_MASK |
  			      PPE_SRAM_HASH1_MODE_MASK |
  			      PPE_DRAM_HASH0_MODE_MASK |
-@@ -197,6 +210,8 @@ static void airoha_ppe_hw_init(struct ai
- 			      FIELD_PREP(PPE_SRAM_TABLE_EN_MASK, 1) |
- 			      FIELD_PREP(PPE_SRAM_HASH1_EN_MASK, 1) |
- 			      FIELD_PREP(PPE_SRAM_HASH1_MODE_MASK, 1) |
-+			      FIELD_PREP(PPE_DRAM_TABLE_EN_MASK, 1) |
-+			      FIELD_PREP(PPE_DRAM_HASH1_EN_MASK, 1) |
- 			      FIELD_PREP(PPE_DRAM_HASH1_MODE_MASK, 3));
- 
- 		airoha_fe_rmw(eth, REG_PPE_TB_CFG(i),
-@@ -212,6 +227,13 @@ static void airoha_ppe_hw_init(struct ai
- 			      FIELD_PREP(PPE_DRAM_TB_NUM_ENTRY_MASK,
- 					 dram_num_entries));
- 
-+		/* Verify hardware latched PPE_DRAM_TABLE_EN_MASK. */
-+		val = airoha_fe_rr(eth, REG_PPE_TB_HASH_CFG(i));
-+		if (!(val & PPE_DRAM_TABLE_EN_MASK))
-+			dev_warn(eth->dev,
-+				 "PPE%u: DRAM table did not come up, %u entries unreachable\n",
-+				 i + 1, PPE_DRAM_NUM_ENTRIES);
-+
- 		airoha_fe_rmw(eth, REG_PPE_BIND_RATE(i),
- 			      PPE_BIND_RATE_L2B_BIND_MASK |
- 			      PPE_BIND_RATE_BIND_MASK,
-@@ -818,12 +840,19 @@ static int airoha_ppe_foe_commit_entry(s
+@@ -678,9 +691,9 @@ static void airoha_ppe_foe_flow_stats_re
+ static void airoha_ppe_foe_flow_stats_update(struct airoha_ppe *ppe,
+ 					     struct airoha_npu *npu,
+ 					     struct airoha_foe_entry *hwe,
+-					     u32 hash)
++					     u32 hash, u32 ib1)
+ {
+-	int type = FIELD_GET(AIROHA_FOE_IB1_BIND_PACKET_TYPE, hwe->ib1);
++	int type = FIELD_GET(AIROHA_FOE_IB1_BIND_PACKET_TYPE, ib1);
+ 	u32 index, pse_port, val, *data, *ib2, *meter;
+ 	int ppe_num_stats_entries;
+ 	u8 nbq;
+@@ -831,18 +844,23 @@ static int airoha_ppe_foe_commit_entry(s
  				       u32 hash, bool rx_wlan)
  {
  	u32 sram_num_entries = airoha_ppe_get_total_sram_num_entries(ppe);
@@ -95,21 +77,35 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	struct airoha_npu *npu;
  	int err = 0;
  
-+	/* Bounds-check before writing host buffer. */
+-	memcpy(&hwe->d, &e->d, sizeof(*hwe) - sizeof(hwe->ib1));
+-	wmb();
++	/* Bounds-check before writing host buffer or SRAM. */
 +	if (hash >= airoha_ppe_get_total_num_entries(ppe))
++		return -EINVAL;
++	if (hash < sram_num_entries &&
++	    !airoha_ppe_is_valid_sram_hash(ppe, hash))
 +		return -EINVAL;
 +
 +	hwe = ppe->foe + hash * sizeof(*hwe);
-+
-+	/* Publish entry payload before state field (DRAM table reads buffer directly). */
- 	memcpy(&hwe->d, &e->d, sizeof(*hwe) - sizeof(hwe->ib1));
- 	wmb();
  
-@@ -1695,6 +1724,7 @@ int airoha_ppe_init(struct airoha_eth *e
- 	if (!ppe->foe_check_time)
- 		return -ENOMEM;
+ 	e->ib1 &= ~AIROHA_FOE_IB1_BIND_TIMESTAMP;
+ 	e->ib1 |= FIELD_PREP(AIROHA_FOE_IB1_BIND_TIMESTAMP, ts);
+-	hwe->ib1 = e->ib1;
  
-+	/* Flush full 8192/PPE SRAM before offload_setup() may shrink geometry. */
- 	err = airoha_ppe_flush_sram_entries(ppe);
- 	if (err)
- 		return err;
+ 	rcu_read_lock();
+ 
+@@ -852,8 +870,13 @@ static int airoha_ppe_foe_commit_entry(s
+ 		goto unlock;
+ 	}
+ 
++	/* Populate entry payload and stats rewrite before publishing ib1. */
++	memcpy(&hwe->d, &e->d, sizeof(*hwe) - sizeof(hwe->ib1));
+ 	if (!rx_wlan)
+-		airoha_ppe_foe_flow_stats_update(ppe, npu, hwe, hash);
++		airoha_ppe_foe_flow_stats_update(ppe, npu, hwe, hash, e->ib1);
++	wmb();
++	WRITE_ONCE(hwe->ib1, e->ib1);
++	wmb();
+ 
+ 	if (hash < sram_num_entries)
+ 		err = airoha_ppe_foe_commit_sram_entry(ppe, hash);
