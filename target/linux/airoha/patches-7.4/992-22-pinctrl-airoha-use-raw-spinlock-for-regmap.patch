@@ -1,0 +1,90 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Sat, 28 Nov 2026 03:18:39 +0800
+Subject: [PATCH] pinctrl: airoha: use raw_spinlock MMIO regmap for GPIO/IRQ registers
+
+airoha_gpio_irq_chip callbacks (airoha_irq_ack(), airoha_irq_mask(), and
+airoha_irq_unmask()) access pinctrl->regmap while irq_desc->lock
+(raw_spinlock_t) is held. Previously airoha_pinctrl_probe() obtained
+pinctrl->regmap from the parent gpio-sysctl syscon via
+device_node_to_regmap(), whose regmap uses a regular spinlock_t
+(drivers/mfd/syscon.c), triggering PROVE_RAW_LOCK_NESTING /
+"[ BUG: Invalid wait context ]" under CONFIG_PROVE_LOCKING=y when
+gpiod_to_irq() maps GPIO interrupts.
+
+The sibling pwm-airoha consumer of the parent gpio-sysctl region shares
+zero register offsets with pinctrl-airoha (GPIO/IRQ and PWM mux registers
+are completely disjoint from PWM waveform/flash registers), and syscon
+maps via of_iomap() without reserving the memory region. Map the parent
+MMIO region directly with devm_ioremap() and initialize a dedicated
+devm_regmap_init_mmio() instance with .use_raw_spinlock = true,
+preserving DT endianness handling and leaving pinctrl->chip_scu intact.
+
+Origin: local, xr1710g #438
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/pinctrl/airoha/pinctrl-airoha.c
++++ b/drivers/pinctrl/airoha/pinctrl-airoha.c
+@@ -5,6 +5,10 @@
+  * Author: Markus Gothe <markus.gothe@genexis.eu>
+  */
+ 
++#include <linux/io.h>
++#include <linux/of_address.h>
++#include <linux/regmap.h>
++
+ #include "airoha-common.h"
+ 
+ /* GPIOs */
+@@ -797,8 +801,17 @@ static const struct pinctrl_ops airoha_p
+ int airoha_pinctrl_probe(struct platform_device *pdev)
+ {
+ 	const struct airoha_pinctrl_match_data *data;
++	struct regmap_config regmap_config = {
++		.reg_bits = 32,
++		.val_bits = 32,
++		.reg_stride = 4,
++		.use_raw_spinlock = true,
++	};
+ 	struct device *dev = &pdev->dev;
+ 	struct airoha_pinctrl *pinctrl;
++	struct device_node *parent_np;
++	struct resource res;
++	void __iomem *base;
+ 	struct regmap *map;
+ 	int err, i;
+ 
+@@ -810,7 +823,33 @@ int airoha_pinctrl_probe(struct platform
+ 	if (!pinctrl)
+ 		return -ENOMEM;
+ 
+-	pinctrl->regmap = device_node_to_regmap(dev->parent->of_node);
++	parent_np = dev->parent ? dev->parent->of_node : NULL;
++	if (!parent_np)
++		return -ENODEV;
++
++	err = of_address_to_resource(parent_np, 0, &res);
++	if (err)
++		return err;
++
++	if (resource_size(&res) < sizeof(u32))
++		return -EINVAL;
++
++	base = devm_ioremap(dev, res.start, resource_size(&res));
++	if (!base)
++		return -ENOMEM;
++
++	if (of_property_read_bool(parent_np, "big-endian"))
++		regmap_config.val_format_endian = REGMAP_ENDIAN_BIG;
++	else if (of_property_read_bool(parent_np, "little-endian"))
++		regmap_config.val_format_endian = REGMAP_ENDIAN_LITTLE;
++	else if (of_property_read_bool(parent_np, "native-endian"))
++		regmap_config.val_format_endian = REGMAP_ENDIAN_NATIVE;
++
++	regmap_config.max_register = resource_size(&res) - sizeof(u32);
++	if (!regmap_config.max_register)
++		regmap_config.max_register_is_0 = true;
++
++	pinctrl->regmap = devm_regmap_init_mmio(dev, base, &regmap_config);
+ 	if (IS_ERR(pinctrl->regmap))
+ 		return PTR_ERR(pinctrl->regmap);
+ 
