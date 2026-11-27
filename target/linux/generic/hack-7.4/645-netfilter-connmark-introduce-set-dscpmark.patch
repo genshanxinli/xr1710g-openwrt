@@ -1,4 +1,3 @@
-From eda40b8c8c82e0f2789d6bc8bf63846dce2e8f32 Mon Sep 17 00:00:00 2001
 From: Kevin Darbyshire-Bryant <ldir@darbyshire-bryant.me.uk>
 Date: Sat, 23 Mar 2019 09:29:49 +0000
 Subject: [PATCH] netfilter: connmark: introduce set-dscpmark
@@ -75,11 +74,13 @@ filter parent ffff: protocol all pref 10 u32 chain 0 fh 800::800 order 2048 key 
 | 6 bits      |
 |-------------|
 
+Origin: openwrt/generic/hack-7.4 (refreshed for linux-7.4-rc4: include <linux/ip.h>, <linux/ipv6.h>, <net/dsfield.h>)
 Signed-off-by: Kevin Darbyshire-Bryant <ldir@darbyshire-bryant.me.uk>
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
  include/uapi/linux/netfilter/xt_connmark.h | 10 ++++
- net/netfilter/xt_connmark.c                | 55 ++++++++++++++++++----
- 2 files changed, 57 insertions(+), 8 deletions(-)
+ net/netfilter/xt_connmark.c                | 58 +++++++++++++++++++----
+ 2 files changed, 60 insertions(+), 8 deletions(-)
 
 --- a/include/uapi/linux/netfilter/xt_connmark.h
 +++ b/include/uapi/linux/netfilter/xt_connmark.h
@@ -109,7 +110,17 @@ Signed-off-by: Kevin Darbyshire-Bryant <ldir@darbyshire-bryant.me.uk>
  	__u8 invert;
 --- a/net/netfilter/xt_connmark.c
 +++ b/net/netfilter/xt_connmark.c
-@@ -24,13 +24,13 @@ MODULE_ALIAS("ipt_connmark");
+@@ -10,6 +10,9 @@
+ 
+ #include <linux/module.h>
+ #include <linux/skbuff.h>
++#include <linux/ip.h>
++#include <linux/ipv6.h>
++#include <net/dsfield.h>
+ #include <net/netfilter/nf_conntrack.h>
+ #include <net/netfilter/nf_conntrack_ecache.h>
+ #include <linux/netfilter/x_tables.h>
+@@ -24,13 +27,13 @@ MODULE_ALIAS("ipt_connmark");
  MODULE_ALIAS("ip6t_connmark");
  
  static unsigned int
@@ -125,7 +136,7 @@ Signed-off-by: Kevin Darbyshire-Bryant <ldir@darbyshire-bryant.me.uk>
  
  	ct = nf_ct_get(skb, &ctinfo);
  	if (ct == NULL)
-@@ -38,13 +38,24 @@ connmark_tg_shift(struct sk_buff *skb, c
+@@ -38,13 +41,24 @@ connmark_tg_shift(struct sk_buff *skb, c
  
  	switch (info->mode) {
  	case XT_CONNMARK_SET:
@@ -156,7 +167,7 @@ Signed-off-by: Kevin Darbyshire-Bryant <ldir@darbyshire-bryant.me.uk>
  		if (READ_ONCE(ct->mark) != newmark) {
  			WRITE_ONCE(ct->mark, newmark);
  			nf_conntrack_event_cache(IPCT_MARK, ct);
-@@ -83,20 +94,36 @@ static unsigned int
+@@ -83,20 +97,36 @@ static unsigned int
  connmark_tg(struct sk_buff *skb, const struct xt_action_param *par)
  {
  	const struct xt_connmark_tginfo1 *info = par->targinfo;
@@ -195,7 +206,7 @@ Signed-off-by: Kevin Darbyshire-Bryant <ldir@darbyshire-bryant.me.uk>
  
  	return connmark_tg_shift(skb, info);
  }
-@@ -178,6 +205,16 @@ static struct xt_target connmark_tg_reg[
+@@ -178,6 +208,16 @@ static struct xt_target connmark_tg_reg[
  		.destroy        = connmark_tg_destroy,
  		.me             = THIS_MODULE,
  	},
@@ -212,7 +223,7 @@ Signed-off-by: Kevin Darbyshire-Bryant <ldir@darbyshire-bryant.me.uk>
  #if IS_ENABLED(CONFIG_IP6_NF_IPTABLES)
  	{
  		.name           = "CONNMARK",
-@@ -199,6 +236,16 @@ static struct xt_target connmark_tg_reg[
+@@ -199,6 +239,16 @@ static struct xt_target connmark_tg_reg[
  		.destroy        = connmark_tg_destroy,
  		.me             = THIS_MODULE,
  	},
