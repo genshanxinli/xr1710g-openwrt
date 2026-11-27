@@ -9,4 +9,8 @@ LUCI_DEPENDS:=+luci-base +jsonfilter @TARGET_airoha
 
 include $(TOPDIR)/feeds/luci/luci.mk
 
+define Package/luci-app-airoha-fancontrol/conffiles
+/etc/config/fan
+endef
+
 # call BuildPackage - OpenWrt buildroot signature

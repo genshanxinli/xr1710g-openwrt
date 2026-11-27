@@ -1,0 +1,27 @@
+#!/bin/sh
+# One-shot migration: clear legacy default target '1.1.1.1' so npu-jitter resolves gateway automatically.
+
+migrated_named=$(uci -q get npu-monitor.jitter._target_migrated)
+migrated_anon=$(uci -q get npu-monitor.@jitter[0]._target_migrated)
+if [ "$migrated_named" = "1" ] || [ "$migrated_anon" = "1" ]; then
+	exit 0
+fi
+
+sec=""
+if [ "$(uci -q get npu-monitor.jitter)" = "jitter" ]; then
+	sec="jitter"
+elif [ "$(uci -q get npu-monitor.@jitter[0])" = "jitter" ]; then
+	sec="@jitter[0]"
+else
+	exit 0
+fi
+
+cur_target=$(uci -q get "npu-monitor.${sec}.target")
+if [ "$cur_target" = "1.1.1.1" ]; then
+	uci -q delete "npu-monitor.${sec}.target"
+fi
+
+uci -q set "npu-monitor.${sec}._target_migrated=1"
+uci commit npu-monitor
+
+exit 0
