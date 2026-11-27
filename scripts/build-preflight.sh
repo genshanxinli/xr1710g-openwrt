@@ -318,6 +318,103 @@ PY
 	[ "$FAILS" -eq "$hyg_before" ] && ok "repository hygiene verified"
 }
 
+check_luci_conffiles() {
+	lc_before=$FAILS
+	lc_checked=0
+	for d in "$TOPDIR"/package/luci-app-*; do
+		[ -d "$d" ] || continue
+		mk="$d/Makefile"
+		[ -f "$mk" ] || continue
+		lc_checked=$((lc_checked + 1))
+		rel=${mk#"$TOPDIR"/}
+		printf '#cfgs\n' > "$WORK/luci_cfgs"
+		if [ -d "$d/root/etc/config" ]; then
+			( cd "$d/root" && find etc/config \( -type f -o -type l \) 2>/dev/null | LC_ALL=C sort | sed 's|^|/|' ) >> "$WORK/luci_cfgs"
+		fi
+		if ! awk -v rel="$rel" '
+			NR == FNR {
+				if (FNR > 1 && $0 != "") cfg[++n_cfg] = $0
+				next
+			}
+			{ sub(/\r$/, "") }
+			/^[ \t]*#/ { next }
+			in_conf {
+				if (/^[ \t]*endef([ \t#]|$)/) {
+					in_conf = 0
+					next
+				}
+				line = $0
+				sub(/[ \t]*#.*$/, "", line)
+				sub(/^[ \t]+/, "", line)
+				sub(/[ \t]+$/, "", line)
+				if (line != "") decl[line] = 1
+				next
+			}
+			!inc && /^[ \t]*PKG_NAME[ \t]*[:+?]?=/ { pkg_set = 1 }
+			!inc && /^[ \t]*LUCI_NAME[ \t]*[:+?]?=/ { luci_set = 1 }
+			!inc && /^[ \t]*(-|s)?include[ \t]+.*luci\.mk([ \t#]|$)/ {
+				inc = FNR
+				next
+			}
+			/^[ \t]*(override[ \t]+)?define[ \t]+Package\/[^ \t#=:+?]+\/conffiles([ \t#=:+?]|$)/ {
+				if (inc > 0) {
+					printf "%s:%d: define Package/.../conffiles after include luci.mk (line %d)\n", rel, FNR, inc
+					e = 1
+					next
+				}
+				if (!pkg_set && ($0 ~ /Package\/\$\(PKG_NAME\)\/conffiles/ || $0 ~ /Package\/\$\{PKG_NAME\}\/conffiles/)) {
+					printf "%s:%d: Package/$(PKG_NAME)/conffiles used before PKG_NAME is set\n", rel, FNR
+					e = 1
+				}
+				if (!luci_set && ($0 ~ /Package\/\$\(LUCI_NAME\)\/conffiles/ || $0 ~ /Package\/\$\{LUCI_NAME\}\/conffiles/)) {
+					printf "%s:%d: Package/$(LUCI_NAME)/conffiles used before LUCI_NAME is set\n", rel, FNR
+					e = 1
+				}
+				before = FNR
+				in_conf = 1
+				next
+			}
+			END {
+				if (in_conf) {
+					printf "%s: unterminated define Package/.../conffiles block\n", rel
+					e = 1
+				}
+				if (n_cfg > 0) {
+					if (!before) {
+						if (inc > 0)
+							printf "%s: ships root/etc/config/* without define Package/.../conffiles before include luci.mk (line %d)\n", rel, inc
+						else
+							printf "%s: ships root/etc/config/* without define Package/.../conffiles\n", rel
+						e = 1
+					} else {
+						for (i = 1; i <= n_cfg; i++) {
+							c = cfg[i]
+							if (!(c in decl) && !("/etc/config" in decl) && !("/etc/config/" in decl)) {
+								printf "%s: conffiles before luci.mk missing %s\n", rel, c
+								e = 1
+							}
+						}
+					}
+				}
+				exit e + 0
+			}
+		' "$WORK/luci_cfgs" "$mk" > "$WORK/luci_cfgs.err" 2>&1; then
+			if [ -s "$WORK/luci_cfgs.err" ]; then
+				while IFS= read -r _e; do
+					[ -n "$_e" ] && fail "LuCI conffiles: $_e"
+				done < "$WORK/luci_cfgs.err"
+			else
+				fail "LuCI conffiles: check failed on $rel"
+			fi
+		fi
+	done
+	if [ "$lc_checked" -eq 0 ]; then
+		fail "no package/luci-app-*/Makefile found"
+	elif [ "$FAILS" -eq "$lc_before" ]; then
+		ok "checked $lc_checked LuCI app Makefile(s) for conffiles ordering"
+	fi
+}
+
 changed_patches_since() {
 	_ref=$1; shift
 	{ git -C "$TOPDIR" diff -M --name-only --diff-filter=AMR "$_ref"..HEAD -- "$@"
@@ -525,7 +622,7 @@ check_patch_queue() {
 	check_uboot_patch_queue
 }
 
-[ "$DO_DEFAULT" = 1 ] && { check_ascii_topdir; check_scripts; check_hygiene; }
+[ "$DO_DEFAULT" = 1 ] && { check_ascii_topdir; check_scripts; check_hygiene; check_luci_conffiles; }
 [ "$DO_PATCHES" = 1 ] && check_patch_queue
 [ "$FAILS" -eq 0 ] || { printf 'build-preflight: %d failure(s)\n' "$FAILS" >&2; exit 1; }
 exit 0

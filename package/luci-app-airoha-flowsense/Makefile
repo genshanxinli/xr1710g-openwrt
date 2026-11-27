@@ -3,7 +3,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_VERSION:=1.1.9
-PKG_RELEASE:=11
+PKG_RELEASE:=12
 PKG_LICENSE:=Apache-2.0
 
 LUCI_TITLE:=LuCI Airoha FlowSense — Offload & PPE Monitor
@@ -11,11 +11,11 @@ LUCI_DEPENDS:=+luci-base +rpcd-mod-ucode +ucode-mod-fs +ucode-mod-ubus +ucode-mo
 	+ucode-mod-nl80211 +ip-bridge +tc-tiny \
 	+kmod-sched-core @TARGET_airoha
 
-include $(TOPDIR)/feeds/luci/luci.mk
-
 define Package/luci-app-airoha-flowsense/conffiles
 /etc/config/npu-monitor
 endef
+
+include $(TOPDIR)/feeds/luci/luci.mk
 
 define Package/luci-app-airoha-flowsense/postinst
 #!/bin/sh
