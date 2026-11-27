@@ -1,24 +1,26 @@
 From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
-Date: Fri, 27 Nov 2026 09:00:00 +0800
+Date: Fri, 27 Nov 2026 13:12:00 +0800
 Subject: [PATCH] wireless-regdb: enable US U-NII-4 and 6 GHz AP operation
 
-Split the US 5.8 GHz / U-NII-4 range back into two adjacent AUTO-BW rules so
+Split the US 5.8 GHz / U-NII-4 range into two adjacent AUTO-BW rules so
 5850-5895 MHz retains the FCC NO-OUTDOOR restriction while removing only NO-IR,
-keeping a conservative 27 dBm limit for U-NII-4 AP operation.
+and raise the U-NII-4 limit from the conservative 27 dBm client value to
+30 dBm for indoor AP operation (FCC 40 MHz+ indoor AP 36 dBm EIRP minus
+~6 dBi internal antenna gain), aligning with adjacent U-NII-3 (5730-5850 MHz,
+30 dBm) so 5 GHz 160 MHz channels spanning U-NII-3/4 are not throttled while
+strictly retaining NO-OUTDOOR and AUTO-BW.
 
 Enable US 6 GHz LPI AP operation by removing NO-IR on 5925-7125 MHz while
-retaining NO-OUTDOOR and the 30 dBm ceiling. Note: the XR1710G DTS currently
-defines no per-band power-limits node; final confirmation of the 6 GHz LPI
-30 dBm PSD policy and U-NII-4 power cap is tracked for human decision under
-issue #414 (Batch B 3c).
+retaining NO-OUTDOOR and the 30 dBm ceiling. Calibrated XR1710G DTS
+power-limits tables (including 6 GHz LPI PSD limits) are tracked separately
+in issue #423.
 
 Refreshed cleanly at offset 0 against wireless-regdb 2026.09.03.
 
-Origin: local, xr1710g (#414)
+Origin: local, xr1710g (#414, #423)
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 diff --git a/db.txt b/db.txt
-index 5bd24b2..f91ee1b 100644
 --- a/db.txt
 +++ b/db.txt
 @@ -2091,10 +2091,10 @@ country US: DFS-FCC
@@ -26,7 +28,7 @@ index 5bd24b2..f91ee1b 100644
  	# https://www.federalregister.gov/documents/2021/05/03/2021-08802/use-of-the-5850-5925-ghz-band
  	# max. 33 dBm AP @ 20MHz, 36 dBm AP @ 40Mhz+, 6 dB less for clients
 -	(5850 - 5895 @ 40), (27), NO-OUTDOOR, AUTO-BW, NO-IR
-+	(5850 - 5895 @ 40), (27), NO-OUTDOOR, AUTO-BW
++	(5850 - 5895 @ 40), (30), NO-OUTDOOR, AUTO-BW
  	# 6g band
  	# https://www.federalregister.gov/documents/2020/05/26/2020-11236/unlicensed-use-of-the-6ghz-band
 -	(5925 - 7125 @ 320), (12), NO-OUTDOOR, NO-IR
