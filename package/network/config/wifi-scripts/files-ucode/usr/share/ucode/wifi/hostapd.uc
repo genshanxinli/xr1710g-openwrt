@@ -1,8 +1,8 @@
 'use strict';
 
 import {
-	append, append_raw, append_vars, dump_config, flush_config, set_default,
-	wiphy_info, wiphy_band
+	append, append_raw, append_vars, dump_config, flush_config, secure_file_perms,
+	set_default, wiphy_info, wiphy_band
 } from 'wifi.common';
 import { validate } from 'wifi.validate';
 import * as netifd from 'wifi.netifd';
@@ -642,8 +642,10 @@ export function setup(data) {
 
 	flush_config();
 
-	if (fs.stat(file_name))
+	if (fs.stat(file_name)) {
 		fs.rename(file_name, file_name + '.prev');
+		secure_file_perms(file_name + '.prev');
+	}
 
 	data.config.phy = data.phy;
 

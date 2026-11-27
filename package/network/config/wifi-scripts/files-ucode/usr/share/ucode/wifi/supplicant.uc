@@ -2,7 +2,7 @@
 
 import {
 	append, append_raw, append_vars, network_append, network_append_raw, network_append_vars,
-	network_append_string_vars, set_default, dump_network, flush_network,
+	network_append_string_vars, secure_file_perms, set_default, dump_network, flush_network,
 	wiphy_info, wiphy_band
 } from 'wifi.common';
 import * as netifd from 'wifi.netifd';
@@ -328,7 +328,10 @@ export function generate(config_list, data, interface) {
 
 	/* RECONFIGURE drops a control interface that the file does not name */
 	interface.config.ctrl_interface = '/var/run/wpa_supplicant';
-	interface.config.country = data.config.country_code;
+	if (data.config.country_code && match(data.config.country_code, /^[A-Za-z][A-Za-z]$/))
+		interface.config.country = uc(data.config.country_code);
+	else
+		delete interface.config.country;
 	interface.config.beacon_int = data.config.beacon_int;
 	if (!data.config.scan_list)
 		data.config.scan_list = wiphy_frequencies(data.phy, data.config.band, data.config.radio);
@@ -345,8 +348,10 @@ export function generate(config_list, data, interface) {
 	setup_sta(data.config, interface.config, phy_features);
 
 	let file_name = `/var/run/wpa-supplicant-${interface.config.ifname}.conf`;
-	if (fs.stat(file_name))
+	if (fs.stat(file_name)) {
 		fs.rename(file_name, file_name + '.prev');
+		secure_file_perms(file_name + '.prev');
+	}
 	dump_network(file_name);
 
 	let config = {

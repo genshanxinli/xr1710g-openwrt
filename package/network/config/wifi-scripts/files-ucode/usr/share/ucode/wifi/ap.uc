@@ -6,7 +6,7 @@ import * as fs from 'fs';
 
 import {
 	append, append_raw, append_value, append_vars, append_list, append_string_vars, comment, config_mark,
-	config_rewind, push_config, set_default, touch_file
+	config_rewind, push_config, set_default, touch_file, write_secure_file
 } from 'wifi.common';
 import * as netifd from 'wifi.netifd';
 import * as iface from 'wifi.iface';
@@ -446,32 +446,30 @@ function iface_macfilter(config) {
 		return;
 	}
 
-	let file = fs.open(path, 'w');
-	if (!file) {
-		warn(`Failed to open ${path}`);
-		return;
-	}
-
+	let content = '';
 	if (config.maclist)
-		file.write(join('\n', config.maclist));
+		content += join('\n', config.maclist);
 
 	let macfile = fs.readfile(config.macfile);
 	if (macfile)
-		file.write(macfile);
-	file.close();
+		content += macfile;
+
+	if (!write_secure_file(path, content))
+		warn(`Failed to open ${path}`);
 }
 
 function iface_vlan(interface, config, vlans) {
 	let path = `/var/run/hostapd-${config.ifname}.vlan`;
+	let content = '';
 
-	let file = fs.open(path, 'w');
 	for (let k, vlan in vlans)
 		if (vlan.config.name && vlan.config.vid) {
 			let ifname = `${config.ifname}-${vlan.config.name}`;
-			file.write(`${vlan.config.vid} ${ifname}\n`);
+			content += `${vlan.config.vid} ${ifname}\n`;
 			netifd.set_vlan(interface, ifname, k);
 		}
-	file.close();
+	if (!write_secure_file(path, content))
+		warn(`Failed to open ${path}`);
 
 	set_default(config, 'vlan_file', path);
 	append_vars(config, [ 'vlan_file' ]);
@@ -495,12 +493,16 @@ function station_file_write(config, option, path, lines) {
 	if (config[option] && user_entries == null)
 		return;
 
-	let file = fs.open(path, 'w');
+	let content = '';
 	if (length(user_entries))
-		file.write(rtrim(user_entries, '\n') + '\n');
+		content += rtrim(user_entries, '\n') + '\n';
 	for (let line in lines)
-		file.write(line + '\n');
-	file.close();
+		content += line + '\n';
+
+	if (!write_secure_file(path, content)) {
+		warn(`Failed to open ${path}`);
+		return;
+	}
 
 	config[option] = path;
 }

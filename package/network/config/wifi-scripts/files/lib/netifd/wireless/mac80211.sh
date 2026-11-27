@@ -126,8 +126,8 @@ mac80211_add_he_capabilities() {
 	IFS=:
 	for capab in "$@"; do
 		set -- $capab
-		[ "$(($4))" -gt 0 ] || continue
-		[ "$(((0x$2) & $3))" -gt 0 ] || {
+		[ "$((${4:-0}))" -gt 0 ] || continue
+		[ -n "$2" ] && [ "$(((0x$2) & $3))" -gt 0 ] || {
 			eval "$1=0"
 			continue
 		}
@@ -501,7 +501,13 @@ mac80211_hostapd_setup_base() {
 				append base_cfg "he_spr_srg_bss_colors=$he_spr_srg_bss_colors" "$N"
 			[ -n "$he_spr_srg_partial_bssid" ] && \
 				append base_cfg "he_spr_srg_partial_bssid=$he_spr_srg_partial_bssid" "$N"
-			[ "$he_spr_psr_enabled" -gt 0 ] && he_spr_psr_enabled=$((0x${he_phy_cap:14:2} & 0x1))
+			[ "$he_spr_psr_enabled" -gt 0 ] && {
+				if [ -n "${he_phy_cap:14:2}" ]; then
+					he_spr_psr_enabled=$((0x${he_phy_cap:14:2} & 0x1))
+				else
+					he_spr_psr_enabled=0
+				fi
+			}
 			[ "$he_spr_psr_enabled" -gt 0 ] || he_spr_sr_control=$((he_spr_sr_control | (1 << 0)))
 			append base_cfg "he_spr_sr_control=$he_spr_sr_control" "$N"
 		else

@@ -15,17 +15,18 @@ The file shows:
 Useful for diagnosing token pool starvation between NPU-offloaded
 bands (2.4GHz/6GHz) and DMA-path bands (5GHz).
 
-[xr1710g: refresh hunk context for mt76 acb7b1c8 so patch applies with fuzz=0]
+[xr1710g: refresh hunk context for mt76 acb7b1c8, snapshot token_start and
+token_size under token_lock, and guard zero values against unsigned underflow]
 
 Origin: local, xr1710g
 Signed-off-by: Ryan Chen <rchen14b@gmail.com>
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 diff --git a/mt7996/debugfs.c b/mt7996/debugfs.c
-index c37c882..347fe17 100644
+index c37c882..36a3b0e 100644
 --- a/mt7996/debugfs.c
 +++ b/mt7996/debugfs.c
-@@ -947,6 +947,68 @@ static int mt7996_vow_atf_get(void *data, u64 *val)
+@@ -947,6 +947,76 @@ static int mt7996_vow_atf_get(void *data, u64 *val)
  DEFINE_DEBUGFS_ATTRIBUTE(fops_vow_atf, mt7996_vow_atf_get, mt7996_vow_atf_set,
  			 "%lld\n");
  
@@ -34,14 +35,17 @@ index c37c882..347fe17 100644
 +	struct mt7996_dev *dev = dev_get_drvdata(s->private);
 +	struct mt76_dev *mdev = &dev->mt76;
 +	bool npu_active = mt76_npu_device_active(mdev);
++	u16 token_start, token_size;
 +	int i;
 +
 +	seq_puts(s, "=== Token Pool ===\n");
 +
 +	spin_lock_bh(&mdev->token_lock);
++	token_start = mdev->token_start;
++	token_size = mdev->token_size;
 +	seq_printf(s, "  token_count:     %u / %u (SW in-flight / pool size)\n",
-+		   mdev->token_count, mdev->token_size);
-+	seq_printf(s, "  token_start:     %u\n", mdev->token_start);
++		   mdev->token_count, token_size);
++	seq_printf(s, "  token_start:     %u\n", token_start);
 +	seq_printf(s, "  wed_token_count: %u\n", mdev->wed_token_count);
 +	spin_unlock_bh(&mdev->token_lock);
 +
@@ -52,11 +56,16 @@ index c37c882..347fe17 100644
 +	if (npu_active) {
 +		seq_printf(s, "\n=== NPU Offload ===\n");
 +		seq_printf(s, "  status:          active\n");
-+		seq_printf(s, "  hw_token_range:  0 - %u (NPU firmware)\n",
-+			   mdev->token_start - 1);
-+		seq_printf(s, "  sw_token_range:  %u - %u (host driver)\n",
-+			   mdev->token_start,
-+			   mdev->token_start + mdev->token_size - 1);
++		if (token_start > 0)
++			seq_printf(s, "  hw_token_range:  0 - %u (NPU firmware)\n",
++				   token_start - 1);
++		else
++			seq_puts(s, "  hw_token_range:  none (NPU firmware)\n");
++		if (token_size > 0)
++			seq_printf(s, "  sw_token_range:  %u - %u (host driver)\n",
++				   token_start, token_start + token_size - 1);
++		else
++			seq_puts(s, "  sw_token_range:  none (host driver)\n");
 +	}
 +
 +	seq_printf(s, "\n=== NPU Queues ===\n");
@@ -94,7 +103,7 @@ index c37c882..347fe17 100644
  int mt7996_init_debugfs(struct mt7996_dev *dev)
  {
  	struct dentry *dir;
-@@ -978,6 +1040,8 @@ int mt7996_init_debugfs(struct mt7996_dev *dev)
+@@ -978,6 +1048,8 @@ int mt7996_init_debugfs(struct mt7996_dev *dev)
  			    &fops_radar_trigger);
  	debugfs_create_devm_seqfile(dev->mt76.dev, "rdd_monitor", dir,
  				    mt7996_rdd_monitor);

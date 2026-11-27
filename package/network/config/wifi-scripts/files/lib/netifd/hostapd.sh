@@ -147,6 +147,15 @@ hostapd_common_add_device_config() {
 	hostapd_add_log_config
 }
 
+hostapd_secure_file() {
+	local file="$1"
+	[ -e "$file" ] || return 0
+	chmod 0600 "$file" 2>/dev/null || true
+	if chgrp network "$file" 2>/dev/null || chgrp 101 "$file" 2>/dev/null; then
+		chmod 0640 "$file" 2>/dev/null || true
+	fi
+}
+
 hostapd_prepare_device_config() {
 	local config="$1"
 	local driver="$2"
@@ -169,7 +178,7 @@ hostapd_prepare_device_config() {
 
 	# Reject non-ISO country codes (e.g. '00') that make hostapd refuse the phy.
 	case "$country" in
-	[A-Za-z][A-Za-z]) ;;
+	[A-Za-z][A-Za-z]) country="$(printf '%s' "$country" | tr 'a-z' 'A-Z')" ;;
 	*) country= ;;
 	esac
 
@@ -279,10 +288,15 @@ hostapd_prepare_device_config() {
 		append base_cfg "$val" "$N"
 	done
 
-	cat > "$config" <<EOF
+	rm -f "$config"
+	(
+		umask 027
+		cat > "$config" <<EOF
 driver=$driver
 $base_cfg
 EOF
+	)
+	hostapd_secure_file "$config"
 }
 
 hostapd_common_add_bss_config() {
@@ -426,7 +440,11 @@ hostapd_set_vlan_file() {
 	local ifname="$1"
 	local vlan="$2"
 	json_get_vars name vid
-	echo "${vid} ${ifname}-${name}" >> /var/run/hostapd-${ifname}.vlan
+	(
+		umask 027
+		echo "${vid} ${ifname}-${name}" >> "/var/run/hostapd-${ifname}.vlan"
+	)
+	hostapd_secure_file "/var/run/hostapd-${ifname}.vlan"
 	wireless_add_vlan "${vlan}" "${ifname}-${name}"
 }
 
@@ -447,8 +465,12 @@ hostapd_set_psk_file() {
 	set_default mac_list "00:00:00:00:00:00"
 	[ -n "$vid" ] && vlan_id="vlanid=$vid "
 	for mac in $mac_list; do
-		echo "${vlan_id} ${mac} ${key}" >> /var/run/hostapd-${ifname}.psk
+		(
+			umask 027
+			echo "${vlan_id} ${mac} ${key}" >> "/var/run/hostapd-${ifname}.psk"
+		)
 	done
+	hostapd_secure_file "/var/run/hostapd-${ifname}.psk"
 }
 
 hostapd_set_psk() {
@@ -473,8 +495,12 @@ hostapd_set_sae_file() {
 	[ -n "$vid" ] && vlan_id="|vlanid=$vid"
 	for mac in $mac_list; do
 		mac="|mac=$mac"
-		printf '%s%s%s\n' "${key}" "${mac}" "${vlan_id}" >> /var/run/hostapd-${ifname}.sae
+		(
+			umask 027
+			printf '%s%s%s\n' "${key}" "${mac}" "${vlan_id}" >> "/var/run/hostapd-${ifname}.sae"
+		)
 	done
+	hostapd_secure_file "/var/run/hostapd-${ifname}.sae"
 }
 
 hostapd_set_sae() {
@@ -714,12 +740,14 @@ hostapd_set_bss_options() {
 			fi
 			[ -z "$wpa_psk_file" ] && set_default wpa_psk_file /var/run/hostapd-$ifname.psk
 			[ -n "$wpa_psk_file" ] && [ "$auth_type" = "psk" -o "$auth_type" = "psk-sae" ] && {
-				[ -e "$wpa_psk_file" ] || touch "$wpa_psk_file"
+				[ -e "$wpa_psk_file" ] || ( umask 027 && touch "$wpa_psk_file" )
+				hostapd_secure_file "$wpa_psk_file"
 				append bss_conf "wpa_psk_file=$wpa_psk_file" "$N"
 			}
 			[ -z "$sae_password_file" ] && set_default sae_password_file /var/run/hostapd-$ifname.sae
 			[ -n "$sae_password_file" ] && [ "$auth_type" = "sae" -o "$auth_type" = "psk-sae" ] && {
-				[ -e "$sae_password_file" ] || touch "$sae_password_file"
+				[ -e "$sae_password_file" ] || ( umask 027 && touch "$sae_password_file" )
+				hostapd_secure_file "$sae_password_file"
 				append bss_conf "sae_password_file=$sae_password_file" "$N"
 			}
 			[ "$eapol_version" -ge "1" -a "$eapol_version" -le "2" ] && append bss_conf "eapol_version=$eapol_version" "$N"
@@ -1071,11 +1099,15 @@ hostapd_set_bss_options() {
 
 		rm -f "$_macfile"
 		(
-			for mac in $maclist; do
-				echo "$mac"
-			done
-			[ -n "$macfile" -a -f "$macfile" ] && cat "$macfile"
-		) > "$_macfile"
+			umask 027
+			(
+				for mac in $maclist; do
+					echo "$mac"
+				done
+				[ -n "$macfile" -a -f "$macfile" ] && cat "$macfile"
+			) > "$_macfile"
+		)
+		hostapd_secure_file "$_macfile"
 	}
 
 	[ -n "$vlan_possible" -a -n "$dynamic_vlan" ] && {
@@ -1093,7 +1125,8 @@ hostapd_set_bss_options() {
 		[ -n "$vlan_tagged_interface" ] && \
 			append bss_conf "vlan_tagged_interface=$vlan_tagged_interface" "$N"
 		[ -n "$vlan_file" ] && {
-			[ -e "$vlan_file" ] || touch "$vlan_file"
+			[ -e "$vlan_file" ] || ( umask 027 && touch "$vlan_file" )
+			hostapd_secure_file "$vlan_file"
 			append bss_conf "vlan_file=$vlan_file" "$N"
 		}
 	}
@@ -1313,9 +1346,13 @@ wpa_supplicant_prepare_interface() {
 	}
 
 	local country_str=
-	[ -n "$country" ] && {
+	# Reject non-ISO country codes (e.g. '00') that make wpa_supplicant fail or reset regdomain.
+	case "$country" in
+	[A-Za-z][A-Za-z])
+		country="$(printf '%s' "$country" | tr 'a-z' 'A-Z')"
 		country_str="country=$country"
-	}
+		;;
+	esac
 
 	multiap_flag_file="${_config}.is_multiap"
 	if [ "$multi_ap" = "1" ]; then
@@ -1324,12 +1361,16 @@ wpa_supplicant_prepare_interface() {
 		[ -e "$multiap_flag_file" ] && rm "$multiap_flag_file"
 	fi
 	wpa_supplicant_teardown_interface "$ifname"
-	cat > "$_config" <<EOF
+	(
+		umask 027
+		cat > "$_config" <<EOF
 ctrl_interface=$_rpath
 ${scan_list:+freq_list=$scan_list}
 $ap_scan
 $country_str
 EOF
+	)
+	hostapd_secure_file "$_config"
 	return 0
 }
 
@@ -1678,10 +1719,12 @@ wpa_supplicant_add_network() {
 		[ -n "$dpp_netaccesskey" ] && append network_data "dpp_netaccesskey=$dpp_netaccesskey" "$N$T"
 	}
 
-	if [ "$key_mgmt" = "WPS" ]; then
-		echo "wps_cred_processing=1" >> "$_config"
-	else
-		cat >> "$_config" <<EOF
+	(
+		umask 027
+		if [ "$key_mgmt" = "WPS" ]; then
+			echo "wps_cred_processing=1" >> "$_config"
+		else
+			cat >> "$_config" <<EOF
 network={
 	$scan_ssid
 	ssid="$ssid"
@@ -1690,6 +1733,8 @@ network={
 	$network_data
 }
 EOF
-	fi
+		fi
+	)
+	hostapd_secure_file "$_config"
 	return 0
 }

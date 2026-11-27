@@ -141,12 +141,34 @@ export function push_config(dict, key, option, value) {
 	push(dict[key], value);
 };
 
+export function secure_file_perms(path) {
+	fs.chmod(path, 0o600);
+	if (fs.chown(path, 0, 'network') || fs.chown(path, 0, 101))
+		fs.chmod(path, 0o640);
+};
+
+export function write_secure_file(path, data) {
+	let file = fs.open(path, 'w', 0o600);
+	if (!file)
+		return false;
+
+	fs.chmod(path, 0o600);
+	if (data != null && length(data))
+		file.write(data);
+	file.close();
+	secure_file_perms(path);
+
+	return true;
+};
+
 export function touch_file(filename) {
-	let file = fs.open(filename, "a");
-	if (file)
+	let file = fs.open(filename, "a", 0o600);
+	if (file) {
 		file.close();
-	else
+		secure_file_perms(filename);
+	} else {
 		log('Failed to touch ' + filename);
+	}
 };
 
 export function append_value(config, key, value) {
@@ -162,18 +184,18 @@ export function comment(comment) {
 
 export function dump_config(file) {
 	if (file)
-		fs.writefile(file, config_data);
+		write_secure_file(file, config_data);
 
 	return config_data;
 };
 
 export function dump_network(file) {
 	config_data += 'network={\n';
-	config_data += network_data;;
+	config_data += network_data;
 	config_data += '}\n';
 
 	if (file)
-		fs.writefile(file, config_data);
+		write_secure_file(file, config_data);
 
 	return config_data;
 };

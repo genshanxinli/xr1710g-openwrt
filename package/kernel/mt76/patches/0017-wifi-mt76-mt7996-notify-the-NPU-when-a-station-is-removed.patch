@@ -7,16 +7,16 @@ reconnecting station reusing that WCID to inherit stale forwarding state. Send
 WLAN_FUNC_SET_WAIT_DEL_STA from mt7996_mac_sta_remove_link() before destroying
 link state, skipping the mailbox when MT76_MCU_RESET or hw_full_reset is set.
 
-[xr1710g: refresh hunk context for mt76 acb7b1c8 so patch applies with fuzz=0]
+[xr1710g: refresh hunk offsets to 0 for mt76 acb7b1c8]
 
 Origin: backport, archive/xr1710g-v1
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 diff --git a/mt7996/main.c b/mt7996/main.c
-index d8bbef0..2767fb0 100644
+index 1201c18..8bf92f1 100644
 --- a/mt7996/main.c
 +++ b/mt7996/main.c
-@@ -1495,6 +1495,9 @@ void mt7996_mac_sta_remove_link(struct mt7996_dev *dev,
+@@ -1507,6 +1507,9 @@ void mt7996_mac_sta_remove_link(struct mt7996_dev *dev,
  	if (!msta_link)
  		return;
  
@@ -27,7 +27,7 @@ index d8bbef0..2767fb0 100644
  		rcu_assign_pointer(msta->link[link_id], NULL);
  		rcu_assign_pointer(dev->mt76.wcid[msta_link->wcid.idx], NULL);
 diff --git a/mt7996/mt7996.h b/mt7996/mt7996.h
-index 6310dd1..5d1fd4a 100644
+index 769f4db..903823e 100644
 --- a/mt7996/mt7996.h
 +++ b/mt7996/mt7996.h
 @@ -577,6 +577,7 @@ struct mt7996_dev {
@@ -38,15 +38,15 @@ index 6310dd1..5d1fd4a 100644
  
  	bool ibf;
  	u8 fw_debug_wm;
-@@ -1085,6 +1086,7 @@ int __mt7996_npu_hw_init(struct mt7996_dev *dev);
- int mt7996_npu_hw_init(struct mt7996_dev *dev);
+@@ -1086,6 +1087,7 @@ int mt7996_npu_hw_init(struct mt7996_dev *dev);
+ int __mt7996_npu_hw_stop(struct mt7996_dev *dev);
  int mt7996_npu_hw_stop(struct mt7996_dev *dev);
  int mt7996_npu_rx_queues_init(struct mt7996_dev *dev);
 +void mt7996_npu_del_sta(struct mt7996_dev *dev, u8 band_idx, u16 wcid_idx);
  #else
  static inline int __mt7996_npu_hw_init(struct mt7996_dev *dev)
  {
-@@ -1105,6 +1107,11 @@ static inline int mt7996_npu_rx_queues_init(struct mt7996_dev *dev)
+@@ -1111,6 +1113,11 @@ static inline int mt7996_npu_rx_queues_init(struct mt7996_dev *dev)
  {
  	return 0;
  }
@@ -59,7 +59,7 @@ index 6310dd1..5d1fd4a 100644
  
  #endif
 diff --git a/mt7996/npu.c b/mt7996/npu.c
-index 3fb9f39..e9683eb 100644
+index 6262115..4a70457 100644
 --- a/mt7996/npu.c
 +++ b/mt7996/npu.c
 @@ -239,6 +239,36 @@ static int mt7996_npu_offload_init(struct mt7996_dev *dev,

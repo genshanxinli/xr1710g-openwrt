@@ -4,20 +4,34 @@ Subject: [PATCH] wifi: mt76: mt7996: restart the NPU on a full chip reset
 
 mt7996_mac_full_reset()/mt7996_mac_restart() skip stopping/re-initing the NPU
 and run napi_disable() on unregistered NPU RRO/txfree queues (NULL ->dev).
-Mirror L1 SER: stop the NPU before reset, skip NPU queues in both NAPI loops,
-and re-run __mt7996_npu_hw_init() on restart.
+Mirror L1 SER: stop the NPU before reset, skip unregistered NPU queues in both
+NAPI loops, and re-run __mt7996_npu_hw_init() on restart.
 
-[xr1710g: refresh hunk context for mt76 acb7b1c8 so patch applies with fuzz=0]
+[xr1710g: re-init HWRRO registers and resend NPU RRO addr_elem/session
+addresses before __mt7996_npu_hw_init(); defer NPU RX NAPI enable/schedule
+until after NPU re-init while keeping napi_disable/enable balanced without
+scheduling on error; split lock-held __mt7996_npu_hw_stop() with a
+CONFIG_MT7996_NPU=n stub to stop the NPU and disable its IRQs on post-init
+restart failure without relocking dev->mt76.mutex]
 
 Origin: https://github.com/Gilly1970/Gemtek-W1700K-6.18
 Signed-off-by: Gilly <gilroyscott1970@gmail.com>
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 diff --git a/mt7996/mac.c b/mt7996/mac.c
-index dc2a745..a912cd1 100644
+index d294dbc..545e7d9 100644
 --- a/mt7996/mac.c
 +++ b/mt7996/mac.c
-@@ -2260,6 +2260,13 @@ mt7996_mac_restart(struct mt7996_dev *dev)
+@@ -2229,6 +2229,8 @@ mt7996_mac_restart(struct mt7996_dev *dev)
+ {
+ 	struct mt76_dev *mdev = &dev->mt76;
+ 	struct mt7996_phy *phy;
++	bool npu_napi_enabled = false;
++	bool npu_started = false;
+ 	int i, ret;
+ 
+ 	mt7996_wed_stop(dev);
+@@ -2260,6 +2262,13 @@ mt7996_mac_restart(struct mt7996_dev *dev)
  		    mt76_queue_is_wed_rro(&mdev->q_rx[i]))
  			continue;
  
@@ -31,7 +45,7 @@ index dc2a745..a912cd1 100644
  		if (mdev->q_rx[i].ndesc)
  			napi_disable(&dev->mt76.napi[i]);
  	}
-@@ -2276,6 +2283,13 @@ mt7996_mac_restart(struct mt7996_dev *dev)
+@@ -2276,6 +2285,16 @@ mt7996_mac_restart(struct mt7996_dev *dev)
  		    mt76_queue_is_wed_rro(&mdev->q_rx[i]))
  			continue;
  
@@ -42,24 +56,86 @@ index dc2a745..a912cd1 100644
 +		if (mt76_queue_is_npu_txfree(&mdev->q_rx[i]))
 +			continue;
 +
++		if (mt76_queue_is_npu_rx(&mdev->q_rx[i]))
++			continue;
++
  		if (mdev->q_rx[i].ndesc) {
  			napi_enable(&dev->mt76.napi[i]);
  			local_bh_disable();
-@@ -2329,6 +2343,13 @@ mt7996_mac_restart(struct mt7996_dev *dev)
+@@ -2329,6 +2348,52 @@ mt7996_mac_restart(struct mt7996_dev *dev)
  				     MT_INT_TX_RX_DONE_EXT);
  	}
  
++	if (mt76_npu_device_active(mdev) && mt7996_has_hwrro(dev)) {
++		if (is_mt7996(mdev)) {
++			for (i = 0; i < ARRAY_SIZE(dev->wed_rro.addr_elem); i++) {
++				ret = mt76_npu_send_txrx_addr(mdev, 0, i,
++						dev->wed_rro.addr_elem[i].phy_addr,
++						0, 0);
++				if (ret) {
++					dev_err(mdev->dev,
++						"NPU RRO addr_elem[%d] re-init failed: %d\n",
++						i, ret);
++					goto out;
++				}
++			}
++
++			ret = mt76_npu_send_txrx_addr(mdev, 1, 0,
++					dev->wed_rro.session.phy_addr, 0, 0);
++			if (ret) {
++				dev_err(mdev->dev,
++					"NPU RRO session addr re-init failed: %d\n",
++					ret);
++				goto out;
++			}
++		}
++
++		mt7996_rro_hw_init(dev);
++	}
++
 +	/* Re-init NPU with recreated rings; fail restart on error so full reset retries. */
 +	ret = __mt7996_npu_hw_init(dev);
 +	if (ret) {
 +		dev_err(mdev->dev, "NPU re-init after full reset failed: %d\n", ret);
 +		goto out;
 +	}
++	npu_started = mt76_npu_device_active(mdev);
++
++	for (i = MT_RXQ_NPU0; i <= MT_RXQ_NPU1; i++) {
++		if (mt76_queue_is_npu_rx(&mdev->q_rx[i]) &&
++		    mdev->q_rx[i].ndesc) {
++			napi_enable(&dev->mt76.napi[i]);
++			local_bh_disable();
++			napi_schedule(&dev->mt76.napi[i]);
++			local_bh_enable();
++		}
++	}
++	npu_napi_enabled = true;
 +
  	/* set the necessary init items */
  	ret = mt7996_mcu_set_eeprom(dev);
  	if (ret)
-@@ -2438,6 +2459,8 @@ mt7996_mac_full_reset(struct mt7996_dev *dev)
+@@ -2363,6 +2428,19 @@ mt7996_mac_restart(struct mt7996_dev *dev)
+ 	}
+ 
+ out:
++	if (ret && npu_started) {
++		__mt7996_npu_hw_stop(dev);
++		mt76_npu_disable_irqs(mdev);
++	}
++
++	if (!npu_napi_enabled) {
++		for (i = MT_RXQ_NPU0; i <= MT_RXQ_NPU1; i++) {
++			if (mt76_queue_is_npu_rx(&mdev->q_rx[i]) &&
++			    mdev->q_rx[i].ndesc)
++				napi_enable(&dev->mt76.napi[i]);
++		}
++	}
++
+ 	/* reset done */
+ 	mt7996_for_each_phy(dev, phy)
+ 		clear_bit(MT76_RESET, &phy->mt76->state);
+@@ -2438,6 +2516,8 @@ mt7996_mac_full_reset(struct mt7996_dev *dev)
  
  	dev->recovery.hw_full_reset = true;
  
@@ -68,3 +144,77 @@ index dc2a745..a912cd1 100644
  	set_bit(MT76_RESTART, &dev->mphy.state);
  	set_bit(MT76_MCU_RESET, &dev->mphy.state);
  	wake_up(&dev->mt76.mcu.wait);
+diff --git a/mt7996/mt7996.h b/mt7996/mt7996.h
+index d218b85..9cf628b 100644
+--- a/mt7996/mt7996.h
++++ b/mt7996/mt7996.h
+@@ -1079,6 +1079,7 @@ void mt7996_dma_rro_start(struct mt7996_dev *dev);
+ #ifdef CONFIG_MT7996_NPU
+ int __mt7996_npu_hw_init(struct mt7996_dev *dev);
+ int mt7996_npu_hw_init(struct mt7996_dev *dev);
++int __mt7996_npu_hw_stop(struct mt7996_dev *dev);
+ int mt7996_npu_hw_stop(struct mt7996_dev *dev);
+ int mt7996_npu_rx_queues_init(struct mt7996_dev *dev);
+ #else
+@@ -1092,6 +1093,11 @@ static inline int mt7996_npu_hw_init(struct mt7996_dev *dev)
+ 	return 0;
+ }
+ 
++static inline int __mt7996_npu_hw_stop(struct mt7996_dev *dev)
++{
++	return 0;
++}
++
+ static inline int mt7996_npu_hw_stop(struct mt7996_dev *dev)
+ {
+ 	return 0;
+diff --git a/mt7996/npu.c b/mt7996/npu.c
+index 3fb9f39..6262115 100644
+--- a/mt7996/npu.c
++++ b/mt7996/npu.c
+@@ -591,22 +591,21 @@ int mt7996_npu_hw_init(struct mt7996_dev *dev)
+ 	return err;
+ }
+ 
+-int mt7996_npu_hw_stop(struct mt7996_dev *dev)
++int __mt7996_npu_hw_stop(struct mt7996_dev *dev)
+ {
+ 	struct airoha_npu *npu;
+ 	int i, err = 0;
+ 	u32 info;
+ 
+-	mutex_lock(&dev->mt76.mutex);
+-
+-	npu = rcu_dereference_protected(dev->mt76.mmio.npu, &dev->mt76.mutex);
++	npu = rcu_dereference_protected(dev->mt76.mmio.npu,
++					lockdep_is_held(&dev->mt76.mutex));
+ 	if (!npu)
+-		goto unlock;
++		return 0;
+ 
+ 	err = mt76_npu_send_msg(npu, 4, WLAN_FUNC_SET_WAIT_INODE_TXRX_REG_ADDR,
+ 				0, GFP_KERNEL);
+ 	if (err)
+-		goto unlock;
++		return err;
+ 
+ 	for (i = 0; i < 10; i++) {
+ 		err = mt76_npu_get_msg(npu, 3, WLAN_FUNC_GET_WAIT_NPU_INFO,
+@@ -624,7 +623,16 @@ int mt7996_npu_hw_stop(struct mt7996_dev *dev)
+ 					0, GFP_KERNEL);
+ 	else
+ 		dev_err(dev->mt76.dev, "npu stop failed\n");
+-unlock:
++
++	return err;
++}
++
++int mt7996_npu_hw_stop(struct mt7996_dev *dev)
++{
++	int err;
++
++	mutex_lock(&dev->mt76.mutex);
++	err = __mt7996_npu_hw_stop(dev);
+ 	mutex_unlock(&dev->mt76.mutex);
+ 
+ 	return err;
