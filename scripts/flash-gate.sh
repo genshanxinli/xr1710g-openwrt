@@ -167,6 +167,15 @@ if [ "$PROBE" = 0 ]; then
 	fi
 	row image.size ">=FIT($FIT_TOTAL)" "$FSIZE" PASS
 
+	ACTUAL=$FSIZE
+	[ "$FIT_TOTAL" -gt "$ACTUAL" ] && ACTUAL=$FIT_TOTAL
+	EFF=$(( ((ACTUAL + 126975) / 126976) * 126976 ))
+	if [ "$EFF" -gt 33488896 ]; then
+		row image.ramoops '<=33488896' "${EFF}B(raw=${ACTUAL}B)" FAIL
+		die "$EXIT_COMPAT" "$IMAGE UBI-aligned size (${EFF} B, raw ${ACTUAL} B) exceeds 33488896 B ramoops ceiling"
+	fi
+	row image.ramoops '<=33488896' "${EFF}B" PASS
+
 	case "$IMAGE" in */*) _dir=${IMAGE%/*} ;; *) _dir=. ;; esac
 	_name=${IMAGE##*/}
 	DIGEST=''
@@ -268,8 +277,19 @@ fi
 # Strictly read-only mtd0 (vendor) and mtd1 (chainloader) header check/backup.
 BKDIR=''
 if [ "$CHECK_ONLY" = 0 ]; then
-	BKDIR="$BACKUP_ROOT/$(date +%Y%m%d-%H%M%S)"
-	mkdir -p "$BKDIR" && cp "$PROC_MTD" "$BKDIR/mtd.txt" || die "$EXIT_BACKUP" "cannot initialize backup in $BKDIR"
+	while [ "$BACKUP_ROOT" != "/" ]; do
+		case "$BACKUP_ROOT" in
+		*/) BACKUP_ROOT="${BACKUP_ROOT%/}" ;;
+		*) break ;;
+		esac
+	done
+	[ -L "$BACKUP_ROOT" ] && die "$EXIT_BACKUP" "backup root '$BACKUP_ROOT' must not be a symlink"
+	mkdir -p -m 0700 "$BACKUP_ROOT" && [ ! -L "$BACKUP_ROOT" ] && [ -d "$BACKUP_ROOT" ] && chmod 0700 "$BACKUP_ROOT" ||
+		die "$EXIT_BACKUP" "cannot prepare backup root $BACKUP_ROOT"
+	BKDIR=$(mktemp -d "$BACKUP_ROOT/$(date +%Y%m%d-%H%M%S).XXXXXX") ||
+		die "$EXIT_BACKUP" "cannot create backup dir in $BACKUP_ROOT"
+	chmod 0700 "$BKDIR" && cp "$PROC_MTD" "$BKDIR/mtd.txt" ||
+		die "$EXIT_BACKUP" "cannot initialize backup in $BKDIR"
 fi
 
 BK_FAIL=''

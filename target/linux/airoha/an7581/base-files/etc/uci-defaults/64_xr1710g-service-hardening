@@ -1,0 +1,54 @@
+#!/bin/sh
+# Restrict dnsmasq away from WAN interfaces and harden uhttpd defaults on XR1710G.
+
+# shellcheck disable=SC1090,SC1091
+. "${IPKG_INSTROOT:-}/lib/functions.sh"
+
+case "$(board_name)" in
+gemtek,xr1710g*) ;;
+*) exit 0 ;;
+esac
+
+list_has_word() {
+	_lhw_word="$1"
+	_lhw_vals="$2"
+	set -f
+	# shellcheck disable=SC2086
+	for _lhw_item in $_lhw_vals; do
+		case "$_lhw_item" in
+		"$_lhw_word"|"'$_lhw_word'")
+			set +f
+			return 0
+			;;
+		esac
+	done
+	set +f
+	return 1
+}
+
+dhcp_changed=0
+uhttpd_changed=0
+
+if [ -e "${IPKG_INSTROOT:-}/etc/config/dhcp" ] && uci -q get dhcp.@dnsmasq[0] >/dev/null; then
+	_notifs="$(uci -q get dhcp.@dnsmasq[0].notinterface)"
+	for _iface in wan wan6; do
+		if ! list_has_word "$_iface" "$_notifs"; then
+			uci -q add_list "dhcp.@dnsmasq[0].notinterface=$_iface"
+			dhcp_changed=1
+		fi
+	done
+fi
+
+if [ -e "${IPKG_INSTROOT:-}/etc/config/uhttpd" ] && uci -q get uhttpd.main >/dev/null; then
+	for _opt in no_dirlists no_symlinks; do
+		if [ -z "$(uci -q get "uhttpd.main.$_opt")" ]; then
+			uci -q set "uhttpd.main.$_opt=1"
+			uhttpd_changed=1
+		fi
+	done
+fi
+
+[ "$dhcp_changed" = 1 ] && uci commit dhcp
+[ "$uhttpd_changed" = 1 ] && uci commit uhttpd
+
+exit 0

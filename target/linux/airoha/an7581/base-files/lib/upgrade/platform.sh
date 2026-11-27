@@ -30,8 +30,8 @@ gemtek_mac_bytes() {
 # vendor partition, which the install leaves untouched. Rebuild it when it is
 # missing or empty, as after the chainloader formatted the ubi partition.
 gemtek_prepare_factory() {
-	local ubidev vol mtd dsd ebs off eeprom wan lan fan serial mac
-	local blob eeprom_blob
+	local ubidev vol mtd dsd ebs blk off eeprom wan lan fan serial mac
+	local dsd_found mac_ok blob eeprom_blob
 
 	ubidev="$(nand_find_ubi ubi)" || return 0
 	vol="$(nand_find_volume "$ubidev" factory)"
@@ -41,35 +41,51 @@ gemtek_prepare_factory() {
 	[ -n "$mtd" ] || return 0
 	mtd="/dev/mtd$mtd"
 
-	dsd="$(dd if="$mtd" bs=4096 skip=$((0x400000 / 4096)) count=1 2>/dev/null | tr -c ' -~' '\n')"
-	wan="$(echo "$dsd" | sed -n '/^wan_mac=/{s///p;q}')"
-	lan="$(echo "$dsd" | sed -n '/^lan_mac=/{s///p;q}')"
-	fan="$(echo "$dsd" | sed -n '/^fan_id=/{s///p;q}')"
-	serial="$(echo "$dsd" | sed -n '/^serial_number=/{s///p;q}')"
-
-	case "$serial" in
-	XR1710G*) ;;
-	*)
-		v "factory: serial number '$serial' does not match, not rebuilding"
-		return 0
-		;;
+	ebs="$(cat "/sys/class/mtd/${mtd#/dev/}/erasesize" 2>/dev/null)"
+	case "$ebs" in
+	''|*[!0-9]*) ebs=0 ;;
 	esac
+	if [ "$ebs" -le 0 ] || [ $((ebs % 4096)) -ne 0 ]; then
+		v "factory: cannot read valid vendor erasesize, not rebuilding"
+		return 0
+	fi
 
-	for mac in "$wan" "$lan"; do
-		echo "$mac" | grep -qE '^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$' || {
-			v "factory: invalid MAC '$mac' in the vendor partition, not rebuilding"
-			return 0
-		}
+	# The DSD block is in the first good eraseblock from 0x400000.
+	dsd_found=0
+	for blk in 0 1 2 3; do
+		off=$((0x400000 + blk * ebs))
+		dsd="$(dd if="$mtd" bs=4096 skip=$((off / 4096)) count=1 2>/dev/null | tr -c ' -~' '\n')"
+		wan="$(printf '%s\n' "$dsd" | sed -n '/^wan_mac=/{s///p;q}')"
+		lan="$(printf '%s\n' "$dsd" | sed -n '/^lan_mac=/{s///p;q}')"
+		fan="$(printf '%s\n' "$dsd" | sed -n '/^fan_id=/{s///p;q}')"
+		serial="$(printf '%s\n' "$dsd" | sed -n '/^serial_number=/{s///p;q}')"
+
+		case "$serial" in
+		XR1710G*) ;;
+		*) continue ;;
+		esac
+
+		mac_ok=1
+		for mac in "$wan" "$lan"; do
+			printf '%s\n' "$mac" | grep -qE '^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$' || {
+				mac_ok=0
+				break
+			}
+		done
+		[ "$mac_ok" -eq 1 ] || continue
+
+		dsd_found=1
+		break
 	done
 
-	# The EEPROM is in the first good block from 0x405000.
-	ebs="$(cat "/sys/class/mtd/${mtd#/dev/}/erasesize" 2>/dev/null)"
-	[ -n "$ebs" ] && [ "$ebs" -gt 0 ] 2>/dev/null || {
-		v "factory: cannot read vendor erasesize, not rebuilding"
+	[ "$dsd_found" -eq 1 ] || {
+		v "factory: no valid DSD in the vendor partition, not rebuilding"
 		return 0
 	}
-	for off in 0 1 2 3; do
-		off=$((0x405000 + off * ebs))
+
+	# The EEPROM is in the first good block from 0x405000.
+	for blk in 0 1 2 3; do
+		off=$((0x405000 + blk * ebs))
 		[ "$(hexdump -v -s "$off" -n 2 -e '2/1 "%02x"' "$mtd")" = "9079" ] && {
 			eeprom="$off"
 			break

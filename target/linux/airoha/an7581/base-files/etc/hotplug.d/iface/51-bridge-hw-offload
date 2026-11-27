@@ -10,13 +10,28 @@ SETTLE_TIMEOUT="${BR_HW_SETTLE_TIMEOUT:-120}"
 SETTLE_INTERVAL="${BR_HW_SETTLE_INTERVAL:-5}"
 SETTLE_STABLE="${BR_HW_SETTLE_STABLE:-3}"
 RECHECK_DELAY="${RECHECK_DELAY:-40}"
-LOCK_FILE="${BRIDGE_HW_OFFLOAD_LOCK:-/var/lock/bridge-hw-offload.lock}"
+LOCK_FILE="${BRIDGE_HW_OFFLOAD_LOCK:-/var/run/xr1710g-locks/bridge-hw-offload.lock}"
 DIRTY_FILE="${LOCK_FILE}.dirty"
 SETTLE_LOCK="${LOCK_FILE}.settle"
-RELOAD_CMD="${BR_HW_RELOAD:-/etc/init.d/firewall reload}"
 
 [ -d "${SYS_NET}/${BRIDGE}/bridge" ] || exit 0
-[ "${LOCK_FILE%/*}" != "$LOCK_FILE" ] && [ -n "${LOCK_FILE%/*}" ] && mkdir -p "${LOCK_FILE%/*}" 2>/dev/null
+LOCK_DIR="${LOCK_FILE%/*}"
+if [ "$LOCK_DIR" != "$LOCK_FILE" ] && [ -n "$LOCK_DIR" ]; then
+	while [ "$LOCK_DIR" != "/" ]; do
+		case "$LOCK_DIR" in
+		*/) LOCK_DIR="${LOCK_DIR%/}" ;;
+		*) break ;;
+		esac
+	done
+	[ -L "$LOCK_DIR" ] && exit 1
+	mkdir -p -m 0700 "$LOCK_DIR" 2>/dev/null || exit 1
+	[ -L "$LOCK_DIR" ] && exit 1
+	[ -d "$LOCK_DIR" ] || exit 1
+	chmod 0700 "$LOCK_DIR" 2>/dev/null || exit 1
+fi
+if [ -L "$LOCK_FILE" ] || [ -L "$DIRTY_FILE" ] || [ -L "$SETTLE_LOCK" ]; then
+	exit 1
+fi
 
 list_brif() {
 	_out=""
@@ -44,8 +59,7 @@ run_reload() {
 	while :; do
 		while [ -e "$DIRTY_FILE" ]; do
 			rm -f "$DIRTY_FILE"
-			# shellcheck disable=SC2086
-			$RELOAD_CMD 8>&- 9>&- >/dev/null 2>&1
+			/etc/init.d/firewall reload 8>&- 9>&- >/dev/null 2>&1
 		done
 		flock -u 9
 		[ -e "$DIRTY_FILE" ] || break

@@ -9,7 +9,15 @@ fwtool_check_signature() {
 		fi
 	}
 
-	if ! fwtool -q -s /tmp/sysupgrade.ucert "$1"; then
+	local tmpdir rc
+	tmpdir="$(mktemp -d)" || return 1
+	chmod 0700 "$tmpdir" || {
+		rm -rf "$tmpdir"
+		return 1
+	}
+
+	if ! fwtool -q -s "$tmpdir/sysupgrade.ucert" "$1"; then
+		rm -rf "$tmpdir"
 		v "Image signature not present"
 		[ "$REQUIRE_IMAGE_SIGNATURE" = 1 -a "$FORCE" != 1 ] && {
 			v "Use sysupgrade -F to override this check when downgrading or flashing to vendor firmware"
@@ -19,9 +27,11 @@ fwtool_check_signature() {
 	fi
 
 	fwtool -q -T -s /dev/null "$1" | \
-		ucert -V -m - -c "/tmp/sysupgrade.ucert" -P /etc/opkg/keys
+		ucert -V -m - -c "$tmpdir/sysupgrade.ucert" -P /etc/opkg/keys
+	rc=$?
+	rm -rf "$tmpdir"
 
-	return $?
+	return "$rc"
 }
 
 fwtool_check_image() {
@@ -29,7 +39,19 @@ fwtool_check_image() {
 
 	. /usr/share/libubox/jshn.sh
 
-	if ! fwtool -q -i /tmp/sysupgrade.meta "$1"; then
+	local tmpdir meta
+	tmpdir="$(mktemp -d)" || {
+		[ "$REQUIRE_IMAGE_METADATA" = 1 ] && return 74
+		return 1
+	}
+	chmod 0700 "$tmpdir" || {
+		rm -rf "$tmpdir"
+		[ "$REQUIRE_IMAGE_METADATA" = 1 ] && return 74
+		return 1
+	}
+
+	if ! fwtool -q -i "$tmpdir/sysupgrade.meta" "$1"; then
+		rm -rf "$tmpdir"
 		v "Image metadata not present"
 		[ "$REQUIRE_IMAGE_METADATA" = 1 ] && {
 			v "This board requires image metadata, so the compat version cannot be checked and -F cannot override this."
@@ -41,7 +63,10 @@ fwtool_check_image() {
 		return 0
 	fi
 
-	json_load "$(cat /tmp/sysupgrade.meta)" || {
+	meta="$(cat "$tmpdir/sysupgrade.meta")"
+	rm -rf "$tmpdir"
+
+	json_load "$meta" || {
 		v "Invalid image metadata"
 		[ "$REQUIRE_IMAGE_METADATA" = 1 ] && return 74
 		return 1

@@ -4,8 +4,6 @@
 [ "$ACTION" = ifup ] || [ "$ACTION" = ifupdate ] || exit 0
 [ "$INTERFACE" = "${PF_IFACE:-wan}" ] || exit 0
 
-HOOK="${PF_FIREWALL_HOOK:-/etc/hotplug.d/firewall/54-pppoe-flowtable}"
-[ -r "$HOOK" ] || HOOK="${0%/*}/../firewall/54-pppoe-flowtable"
-[ -r "$HOOK" ] && sh "$HOOK"
+[ -r /etc/hotplug.d/firewall/54-pppoe-flowtable ] && sh /etc/hotplug.d/firewall/54-pppoe-flowtable
 
 exit 0

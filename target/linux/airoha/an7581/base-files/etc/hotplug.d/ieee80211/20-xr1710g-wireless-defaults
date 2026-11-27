@@ -10,8 +10,22 @@ WIRELESS_CFG="${WIRELESS_CONFIG:-${IPKG_INSTROOT:-}/etc/config/wireless}"
 [ -s "$WIRELESS_CFG" ] || exit 0
 [ "$(uci -q get wireless.radio0._xr1710g_tuned)" = "1" ] && exit 0
 
-LOCK_FILE="${XR1710G_WIFI_LOCK:-/var/lock/xr1710g-wifi-defaults.lock}"
-[ "${LOCK_FILE%/*}" != "$LOCK_FILE" ] && mkdir -p "${LOCK_FILE%/*}" 2>/dev/null
+LOCK_FILE="${XR1710G_WIFI_LOCK:-/var/run/xr1710g-locks/xr1710g-wifi-defaults.lock}"
+LOCK_DIR="${LOCK_FILE%/*}"
+if [ "$LOCK_DIR" != "$LOCK_FILE" ] && [ -n "$LOCK_DIR" ]; then
+	while [ "$LOCK_DIR" != "/" ]; do
+		case "$LOCK_DIR" in
+		*/) LOCK_DIR="${LOCK_DIR%/}" ;;
+		*) break ;;
+		esac
+	done
+	[ -L "$LOCK_DIR" ] && exit 1
+	mkdir -p -m 0700 "$LOCK_DIR" 2>/dev/null || exit 1
+	[ -L "$LOCK_DIR" ] && exit 1
+	[ -d "$LOCK_DIR" ] || exit 1
+	chmod 0700 "$LOCK_DIR" 2>/dev/null || exit 1
+fi
+[ -L "$LOCK_FILE" ] && exit 1
 
 set_from() {
 	_sf_sec="$1"; _sf_opt="$2"; _sf_val="$3"; _sf_match=0
