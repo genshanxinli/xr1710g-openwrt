@@ -6,6 +6,12 @@ Add standalone NFPROTO_BRIDGE flowtable offload support to nft_flow_offload
 and check nft_dev_forward_path() < 0 unconditionally so failed forward-path
 lookups on routed FLOW_OFFLOAD_XMIT_NEIGH tuples are not silently ignored.
 
+Enforce unconditional nft_flowtable_find_dev() device allowlist validation
+on bridged paths, query the ingress bridge port PVID for the reverse path
+(preferring nf_bridge_get_physindev() when CONFIG_BRIDGE_NETFILTER is
+enabled, falling back to nft_in(pkt) with NULL guard), and guard
+ip6_dst_alloc() with IS_ENABLED(CONFIG_IPV6) using DST_NOXFRM.
+
 Origin: archive/xr1710g-v1@e85677d284c0
 Signed-off-by: Jihong Min <hurryman2212@gmail.com>
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
@@ -59,18 +65,19 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
 --- a/net/netfilter/nf_flow_table_path.c
 +++ b/net/netfilter/nf_flow_table_path.c
-@@ -15,6 +15,10 @@
+@@ -15,6 +15,11 @@
  #include <net/netfilter/nf_conntrack_core.h>
  #include <net/netfilter/nf_conntrack_extend.h>
  #include <net/netfilter/nf_flow_table.h>
 +#include <linux/if_bridge.h>
++#include <linux/netfilter_bridge.h>
 +#include <net/route.h>
 +#include <net/ip6_route.h>
 +#include <linux/if_vlan.h>
  
  static enum flow_offload_xmit_type nft_xmit_type(struct dst_entry *dst)
  {
-@@ -42,7 +46,8 @@ static bool nft_is_valid_ether_device(co
+@@ -42,7 +47,8 @@ static bool nft_is_valid_ether_device(co
  	return true;
  }
  
@@ -80,7 +87,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  				     const struct nf_conn *ct,
  				     enum ip_conntrack_dir dir,
  				     u8 *ha, __be16 ether_type,
-@@ -50,11 +55,6 @@ static int nft_dev_fill_forward_path(con
+@@ -50,11 +56,6 @@ static int nft_dev_fill_forward_path(con
  {
  	const void *daddr = &ct->tuplehash[!dir].tuple.src.u3;
  	struct net_device *dev = dst_cache->dev;
@@ -92,7 +99,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	struct neighbour *n;
  	u8 nud_state;
  
-@@ -63,6 +63,9 @@ static int nft_dev_fill_forward_path(con
+@@ -63,6 +64,9 @@ static int nft_dev_fill_forward_path(con
  		goto out;
  	}
  
@@ -102,7 +109,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	n = dst_neigh_lookup(dst_cache, daddr);
  	if (!n)
  		return -1;
-@@ -77,9 +80,11 @@ static int nft_dev_fill_forward_path(con
+@@ -77,9 +81,11 @@ static int nft_dev_fill_forward_path(con
  		return -1;
  
  out:
@@ -116,17 +123,17 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  }
  
  struct nft_forward_info {
-@@ -104,7 +109,8 @@ static bool nft_flowtable_find_dev(const
+@@ -104,7 +110,8 @@ static bool nft_flowtable_find_dev(const
  
  static int nft_dev_path_info(struct net_device_path_stack *stack,
  			     struct nft_forward_info *info,
 -			     unsigned char *ha, struct nft_flowtable *ft)
-+			     unsigned char *ha, bool is_bridging,
++			     unsigned char *ha,
 +			     struct nft_flowtable *ft)
  {
  	const struct net_device_path *path;
  	int i;
-@@ -113,6 +119,7 @@ static int nft_dev_path_info(struct net_
+@@ -113,6 +120,7 @@ static int nft_dev_path_info(struct net_
  
  	for (i = 0; i < stack->num_paths; i++) {
  		path = &stack->path[i];
@@ -134,7 +141,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  		switch (path->type) {
  		case DEV_PATH_ETHERNET:
  		case DEV_PATH_IEEE80211:
-@@ -120,7 +127,6 @@ static int nft_dev_path_info(struct net_
+@@ -120,7 +128,6 @@ static int nft_dev_path_info(struct net_
  		case DEV_PATH_VLAN:
  		case DEV_PATH_PPPOE:
  		case DEV_PATH_TUN:
@@ -142,7 +149,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  			if (is_zero_ether_addr(info->h_source))
  				memcpy(info->h_source, path->dev->dev_addr, ETH_ALEN);
  
-@@ -176,8 +182,8 @@ static int nft_dev_path_info(struct net_
+@@ -176,8 +183,8 @@ static int nft_dev_path_info(struct net_
  				info->num_encaps++;
  				break;
  			case DEV_PATH_BR_VLAN_UNTAG:
@@ -153,7 +160,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
  				info->num_encaps--;
  				break;
-@@ -186,6 +192,11 @@ static int nft_dev_path_info(struct net_
+@@ -186,6 +193,11 @@ static int nft_dev_path_info(struct net_
  			}
  			info->xmit_type = FLOW_OFFLOAD_XMIT_DIRECT;
  			break;
@@ -165,16 +172,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  		default:
  			goto err_out;
  		}
-@@ -195,7 +206,7 @@ static int nft_dev_path_info(struct net_
- 	    nft_is_valid_ether_device(info->dev))
- 		info->xmit_type = FLOW_OFFLOAD_XMIT_DIRECT;
- 
--	if (!nft_flowtable_find_dev(info->dev, ft))
-+	if (!is_bridging && !nft_flowtable_find_dev(info->dev, ft))
- 		goto err_out;
- 
- 	return 0;
-@@ -223,19 +234,52 @@ static bool nft_flowtable_find_dev(const
+@@ -223,21 +235,67 @@ static bool nft_flowtable_find_dev(const
  }
  
  static int nft_dev_forward_path(const struct nft_pktinfo *pkt,
@@ -197,18 +195,30 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	int i;
  
 -	if (nft_dev_fill_forward_path(dst, ct, dir, ha, pkt->ethertype, &stack) < 0 ||
--	    nft_dev_path_info(&stack, &info, ha, ft) < 0)
 +	if (is_bridging) {
 +		struct ethhdr *eth = eth_hdr(pkt->skb);
-+		__be16 vlan_proto;
-+		u16 vlan_id;
++		const struct net_device *vlan_dev;
++		__be16 vlan_proto = 0;
++		u16 vlan_id = 0;
 +
 +		memcpy(ha, skb_dir != dir ? eth->h_source : eth->h_dest, ETH_ALEN);
 +		memcpy(info.h_source, skb_dir != dir ? eth->h_dest : eth->h_source, ETH_ALEN);
 +
 +		rcu_read_lock();
-+		vlan_id = br_vlan_get_offload_info_rcu(pkt->skb->dev,
-+							pkt->skb, &vlan_proto);
++		if (skb_dir != dir) {
++			vlan_dev = NULL;
++#if IS_ENABLED(CONFIG_BRIDGE_NETFILTER)
++			vlan_dev = nf_bridge_get_physindev(pkt->skb, nft_net(pkt));
++#endif
++			if (!vlan_dev)
++				vlan_dev = nft_in(pkt);
++		} else {
++			vlan_dev = pkt->skb->dev;
++		}
++		if (vlan_dev)
++			vlan_id = br_vlan_get_offload_info_rcu(vlan_dev,
++							       pkt->skb,
++							       &vlan_proto);
 +		if (vlan_id) {
 +			ctx.num_vlans = 1;
 +			ctx.vlan[0].id = vlan_id;
@@ -225,14 +235,16 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	}
 +
 +	if (nft_dev_fill_forward_path(&ctx, dst, ct, dir, ha, pkt->ethertype, &stack) < 0 ||
-+	    nft_dev_path_info(&stack, &info, ha, is_bridging, ft) < 0)
-+		return -ENOENT;
-+
-+	if (!info.dev)
+ 	    nft_dev_path_info(&stack, &info, ha, ft) < 0)
  		return -ENOENT;
  
++	if (!info.dev)
++		return -ENOENT;
++
  	route->tuple[!dir].in.ifindex = info.dev->ifindex;
-@@ -273,11 +317,44 @@ int nft_flow_route(const struct nft_pkti
+ 	route->tuple[dir].out.ifindex = info.dev->ifindex;
+ 
+@@ -273,11 +331,46 @@ int nft_flow_route(const struct nft_pkti
  		   struct nf_flow_route *route, enum ip_conntrack_dir dir,
  		   struct nft_flowtable *ft)
  {
@@ -254,11 +266,13 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +				this_dst = rt ? &rt->dst : NULL;
 +				break;
 +			}
++#if IS_ENABLED(CONFIG_IPV6)
 +			case NFPROTO_IPV6: {
-+				struct rt6_info *rt = ip6_dst_alloc(nft_net(pkt), br_dev, 0);
++				struct rt6_info *rt = ip6_dst_alloc(nft_net(pkt), br_dev, DST_NOXFRM);
 +				this_dst = rt ? &rt->dst : NULL;
 +				break;
 +			}
++#endif
 +			}
 +		}
 +		rcu_read_unlock();
@@ -281,7 +295,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	switch (nft_pf(pkt)) {
  	case NFPROTO_IPV4:
  		fl.u.ip4.daddr = ct->tuplehash[dir].tuple.src.u3.ip;
-@@ -308,15 +385,17 @@ int nft_flow_route(const struct nft_pkti
+@@ -308,15 +401,17 @@ int nft_flow_route(const struct nft_pkti
  		return -ENOENT;
  	}
  

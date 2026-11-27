@@ -74,18 +74,31 @@ $(curdir)/merge:
 		mv $(PACKAGE_MERGE_LIST).new $(PACKAGE_MERGE_LIST); \
 	fi
 
+APK_KEY_STAGED:=$(TMP_DIR)/apk-keys/$(notdir $(BUILD_KEY_APK_PUB))
+
 $(BUILD_KEY_APK_SEC):
-	$(STAGING_DIR_HOST)/bin/openssl ecparam -name prime256v1 -genkey -noout -out $(BUILD_KEY_APK_SEC)
+	( umask 077; \
+		$(STAGING_DIR_HOST)/bin/openssl ecparam -name prime256v1 -genkey -noout -out $(BUILD_KEY_APK_SEC).tmp && \
+		mv -f $(BUILD_KEY_APK_SEC).tmp $(BUILD_KEY_APK_SEC) || { rm -f $(BUILD_KEY_APK_SEC).tmp; exit 1; }; \
+	)
 
 $(BUILD_KEY_APK_PUB): $(BUILD_KEY_APK_SEC)
-	$(STAGING_DIR_HOST)/bin/openssl ec -in $(BUILD_KEY_APK_SEC) -pubout > $(BUILD_KEY_APK_PUB)
+	( umask 022; \
+		$(STAGING_DIR_HOST)/bin/openssl ec -in $(BUILD_KEY_APK_SEC) -pubout -out $(BUILD_KEY_APK_PUB).tmp && \
+		mv -f $(BUILD_KEY_APK_PUB).tmp $(BUILD_KEY_APK_PUB) || { rm -f $(BUILD_KEY_APK_PUB).tmp; exit 1; }; \
+	)
 
-$(curdir)/merge-index: $(curdir)/merge
+$(APK_KEY_STAGED): $(BUILD_KEY_APK_PUB)
+	rm -rf $(TMP_DIR)/apk-keys
+	mkdir -p $(TMP_DIR)/apk-keys
+	$(CP) $(BUILD_KEY_APK_PUB) $@
+
+$(curdir)/merge-index: $(curdir)/merge $(if $(CONFIG_USE_APK),$(if $(APK_KEYS),,$(APK_KEY_STAGED)))
 ifneq ($(CONFIG_USE_APK),)
 	[ -f $(PACKAGE_INDEX_FILE) ] || \
 	(cd $(PACKAGE_DIR_ALL) && $(STAGING_DIR_HOST)/bin/apk mkndx \
 			--root $(TOPDIR) \
-			--keys-dir $(TOPDIR) \
+			--keys-dir $(APK_KEYS_DIR) \
 			--allow-untrusted \
 			$(if $(CONFIG_SIGNED_PACKAGES),--sign $(BUILD_KEY_APK_SEC),) \
 			--output packages.adb \
@@ -99,13 +112,13 @@ endif
 ifndef SDK
   $(curdir)//compile = $(STAGING_DIR)/.prepared $(BIN_DIR)
 ifneq ($(CONFIG_USE_APK),)
-  $(curdir)//compile += $(curdir)/system/apk/host/compile $(BUILD_KEY_APK_SEC) $(BUILD_KEY_APK_PUB)
+  $(curdir)//compile += $(curdir)/system/apk/host/compile $(BUILD_KEY_APK_SEC) $(BUILD_KEY_APK_PUB) $(if $(APK_KEYS),,$(APK_KEY_STAGED))
 else
   $(curdir)/compile: $(curdir)/system/opkg/host/compile
 endif
 else
 ifneq ($(CONFIG_USE_APK),)
-  $(curdir)//compile += $(BUILD_KEY_APK_SEC) $(BUILD_KEY_APK_PUB)
+  $(curdir)//compile += $(BUILD_KEY_APK_SEC) $(BUILD_KEY_APK_PUB) $(if $(APK_KEYS),,$(APK_KEY_STAGED))
 endif
 endif
 
@@ -179,7 +192,7 @@ else
 	$(call prepare_rootfs,$(TARGET_DIR),$(TOPDIR)/files)
 endif
 
-$(curdir)/index: FORCE
+$(curdir)/index: $(if $(CONFIG_USE_APK),$(if $(APK_KEYS),,$(APK_KEY_STAGED))) FORCE
 	@echo Generating package index...
 ifneq ($(CONFIG_USE_APK),)
 	@for d in $(PACKAGE_SUBDIRS); do \
@@ -194,7 +207,7 @@ ifneq ($(CONFIG_USE_APK),)
 		fi; \
 		$(STAGING_DIR_HOST)/bin/apk mkndx \
 			--root $(TOPDIR) \
-			--keys-dir $(TOPDIR) \
+			--keys-dir $(APK_KEYS_DIR) \
 			--allow-untrusted \
 			$(if $(CONFIG_SIGNED_PACKAGES),--sign $(BUILD_KEY_APK_SEC),) \
 			--output packages.adb \

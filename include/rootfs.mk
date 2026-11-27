@@ -43,11 +43,13 @@ opkg = \
 	--add-arch all:100 \
 	--add-arch $(if $(ARCH_PACKAGES),$(ARCH_PACKAGES),$(BOARD)):200
 
+APK_KEYS_DIR = $(if $(APK_KEYS),$(APK_KEYS),$(TMP_DIR)/apk-keys)
+
 apk = \
   IPKG_INSTROOT=$(1) \
   $(FAKEROOT) $(STAGING_DIR_HOST)/bin/apk \
 	--root $(1) \
-	--keys-dir $(if $(APK_KEYS),$(APK_KEYS),$(TOPDIR)) \
+	--keys-dir $(APK_KEYS_DIR) \
 	--no-logfile \
 	--preserve-env
 

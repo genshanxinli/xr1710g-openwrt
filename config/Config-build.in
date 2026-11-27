@@ -342,6 +342,7 @@ menu "Global build settings"
 
 	choice
 		prompt "Kernel space Stack-Smashing Protection"
+		default KERNEL_CC_STACKPROTECTOR_STRONG if TARGET_airoha
 		default KERNEL_CC_STACKPROTECTOR_REGULAR
 		help
 		  Enable GCC Stack-Smashing Protection (SSP) for the kernel

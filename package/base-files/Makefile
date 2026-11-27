@@ -28,6 +28,8 @@ PKG_LICENSE:=GPL-2.0
 # Extend depends from version.mk
 PKG_CONFIG_DEPENDS += \
 	CONFIG_SIGNED_PACKAGES \
+	CONFIG_SIGN_FIRMWARE \
+	CONFIG_USE_APK \
 	CONFIG_TARGET_INIT_PATH \
 	CONFIG_TARGET_PREINIT_DISABLE_FAILSAFE \
 	CONFIG_TARGET_SERIAL \
@@ -129,31 +131,38 @@ define Build/Compile/Default
 endef
 Build/Compile = $(Build/Compile/Default)
 
-ifneq ($(CONFIG_USE_APK),)
+ifneq ($(or $(CONFIG_SIGN_FIRMWARE),$(if $(CONFIG_USE_APK),,$(CONFIG_SIGNED_PACKAGES))),)
 ifndef CONFIG_BUILDBOT
-  define Package/base-files/install-key
+  define Build/Configure
+	( umask 077; set -e; \
+		[ -s $(BUILD_KEY) -a -s $(BUILD_KEY).pub ] || \
+			$(STAGING_DIR_HOST)/bin/usign -G -s $(BUILD_KEY) -p $(BUILD_KEY).pub -c "Local build key"; \
+		[ -s $(BUILD_KEY).ucert ] || \
+			$(STAGING_DIR_HOST)/bin/ucert -I -c $(BUILD_KEY).ucert -p $(BUILD_KEY).pub -s $(BUILD_KEY); \
+	)
+  endef
+endif
+endif
+
+ifndef CONFIG_BUILDBOT
+ifneq ($(and $(CONFIG_USE_APK),$(CONFIG_SIGNED_PACKAGES)),)
+  define Package/base-files/install-apk-key
 	mkdir -p $(1)/etc/apk/keys
 	$(CP) $(BUILD_KEY_APK_PUB) $(1)/etc/apk/keys/
   endef
 endif
-else
-ifdef CONFIG_SIGNED_PACKAGES
-  define Build/Configure
-	[ -s $(BUILD_KEY) -a -s $(BUILD_KEY).pub ] || \
-		$(STAGING_DIR_HOST)/bin/usign -G -s $(BUILD_KEY) -p $(BUILD_KEY).pub -c "Local build key"
 
-	[ -s $(BUILD_KEY).ucert ] || \
-		$(STAGING_DIR_HOST)/bin/ucert -I -c $(BUILD_KEY).ucert -p $(BUILD_KEY).pub -s $(BUILD_KEY)
-
-  endef
-
-ifndef CONFIG_BUILDBOT
-  define Package/base-files/install-key
+ifneq ($(or $(CONFIG_SIGN_FIRMWARE),$(if $(CONFIG_USE_APK),,$(CONFIG_SIGNED_PACKAGES))),)
+  define Package/base-files/install-usign-key
 	mkdir -p $(1)/etc/opkg/keys
 	$(CP) $(BUILD_KEY).pub $(1)/etc/opkg/keys/`$(STAGING_DIR_HOST)/bin/usign -F -p $(BUILD_KEY).pub`
   endef
 endif
-endif
+
+  define Package/base-files/install-key
+	$(Package/base-files/install-apk-key)
+	$(Package/base-files/install-usign-key)
+  endef
 endif
 
 ifeq ($(CONFIG_NAND_SUPPORT),)
