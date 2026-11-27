@@ -5,7 +5,8 @@ Subject: [PATCH] watchdog: airoha: log the NP-SCU reset-cause bitmap
 airoha_wdt_probe() never inspected the NP-SCU PMC reset-cause register at
 0x080, leaving reboot causes unrecorded (issue #382). Read and log the raw
 PMC bitmap via an optional airoha,scu syscon phandle without clearing W1C
-bits, and document airoha,scu in the DT binding.
+bits (propagating -EPROBE_DEFER while warning on other lookup errors without
+blocking watchdog registration), and document airoha,scu in the DT binding.
 
 Origin: archive/xr1710g-v1@e85677d284c0
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
@@ -42,19 +43,27 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	int ret;
  
  	airoha_wdt = devm_kzalloc_obj(dev, *airoha_wdt);
-@@ -163,6 +172,16 @@ static int airoha_wdt_probe(struct platf
+@@ -163,6 +172,24 @@ static int airoha_wdt_probe(struct platf
  	wdog_dev->min_timeout = 1;
  	wdog_dev->parent = dev;
  
-+	scu = syscon_regmap_lookup_by_phandle(dev->of_node, "airoha,scu");
-+	if (IS_ERR(scu))
-+		dev_info(dev, "no SCU reset-cause regmap: %ld\n", PTR_ERR(scu));
-+	else if (regmap_read(scu, AIROHA_SCU_PMC, &pmc))
-+		dev_warn(dev, "failed to read SCU PMC\n");
-+	else
-+		dev_info(dev, "SCU PMC=0x%08x WDG_RST_R=%u SYS_RST_R=%u\n",
-+			 pmc, !!(pmc & AIROHA_SCU_PMC_WDG_RST_R),
-+			 !!(pmc & AIROHA_SCU_PMC_SYS_RST_R));
++	scu = syscon_regmap_lookup_by_phandle_optional(dev->of_node,
++						       "airoha,scu");
++	if (IS_ERR(scu)) {
++		if (PTR_ERR(scu) == -EPROBE_DEFER)
++			return dev_err_probe(dev, PTR_ERR(scu),
++					     "waiting for SCU syscon\n");
++		dev_warn(dev, "failed to look up SCU reset-cause regmap: %ld\n",
++			 PTR_ERR(scu));
++	} else if (scu) {
++		if (regmap_read(scu, AIROHA_SCU_PMC, &pmc))
++			dev_warn(dev, "failed to read SCU PMC\n");
++		else
++			dev_info(dev,
++				 "SCU PMC=0x%08x WDG_RST_R=%u SYS_RST_R=%u\n",
++				 pmc, !!(pmc & AIROHA_SCU_PMC_WDG_RST_R),
++				 !!(pmc & AIROHA_SCU_PMC_SYS_RST_R));
++	}
 +
  	watchdog_set_drvdata(wdog_dev, airoha_wdt);
  	watchdog_set_nowayout(wdog_dev, nowayout);
