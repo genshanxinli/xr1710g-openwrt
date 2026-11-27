@@ -34,6 +34,8 @@ UBI_LEB_SIZE = 0x1F000
 CHAINLOADER_MAX_BYTES = 0x100000
 # 0x84000000 (npu_binary) - 0x80200000 (KERNEL_LOADADDR) = 62 MiB
 RECOVERY_KERNEL_MAX_BYTES = 0x3E00000
+# 405 HTTPD_MAX_UPLOAD_SIZE = 64 MiB RAM-only HTTP recovery upload ceiling
+RECOVERY_MAX_BYTES = 0x4000000
 FDT_BEGIN_NODE, FDT_END_NODE, FDT_PROP, FDT_NOP, FDT_END = 1, 2, 3, 4, 9
 
 BOARD_COMPAT = "gemtek,xr1710g-ubi"
@@ -197,11 +199,22 @@ def inspect_fit_kernel(data: bytes, label: str) -> tuple[str, int, int]:
     if "data" in knode:
         payload = knode["data"]
     elif "data-size" in knode and ("data-position" in knode or "data-offset" in knode):
-        dsize = struct.unpack_from(">I", knode["data-size"], 0)[0]
+        def _fdt_u32(prop: str) -> int:
+            raw = knode[prop]
+            if len(raw) != 4:
+                raise ValueError(
+                    f"{label}: FIT kernel property {prop!r} has invalid length {len(raw)} (expected 4)"
+                )
+            try:
+                return struct.unpack_from(">I", raw, 0)[0]
+            except struct.error as exc:
+                raise ValueError(f"{label}: malformed FIT kernel property {prop!r}: {exc}") from exc
+
+        dsize = _fdt_u32("data-size")
         if "data-position" in knode:
-            doff = struct.unpack_from(">I", knode["data-position"], 0)[0]
+            doff = _fdt_u32("data-position")
         else:
-            doff = ((totalsize + 3) & ~3) + struct.unpack_from(">I", knode["data-offset"], 0)[0]
+            doff = ((totalsize + 3) & ~3) + _fdt_u32("data-offset")
         if doff + dsize > len(data):
             raise ValueError(f"{label}: external FIT kernel data out of bounds ({doff}+{dsize} > {len(data)})")
         payload = data[doff : doff + dsize]
@@ -392,7 +405,13 @@ def main(argv: list[str]) -> int:
         )
     )
     fails.extend(
-        check_image(recovery, dumpimage, args.require_dumpimage, max_kernel_bytes=RECOVERY_KERNEL_MAX_BYTES)
+        check_image(
+            recovery,
+            dumpimage,
+            args.require_dumpimage,
+            max_bytes=RECOVERY_MAX_BYTES,
+            max_kernel_bytes=RECOVERY_KERNEL_MAX_BYTES,
+        )
     )
     fails.extend(
         check_image(chainloader, dumpimage, args.require_dumpimage, expect_fwx0=False, max_bytes=CHAINLOADER_MAX_BYTES)
