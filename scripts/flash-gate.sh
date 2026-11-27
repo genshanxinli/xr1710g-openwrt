@@ -10,7 +10,7 @@ EMPTY_SHA='e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
 IMAGE=''; SUMS_ARG=''; PROBE=0; CHECK_ONLY=0; RUN=0; HEAD_KB=256; WORK=''
 BACKUP_ROOT=${FG_BACKUP_DIR:-/tmp/flash-gate}
 
-cleanup() { [ -n "$WORK" ] && rm -rf "$WORK"; }
+cleanup() { [ -n "$WORK" ] && rm -rf "$WORK"; WORK=''; }
 trap cleanup EXIT INT TERM
 
 usage() {
@@ -277,6 +277,7 @@ fi
 # Strictly read-only mtd0 (vendor) and mtd1 (chainloader) header check/backup.
 BKDIR=''
 if [ "$CHECK_ONLY" = 0 ]; then
+	[ -n "$BACKUP_ROOT" ] || die "$EXIT_BACKUP" "backup root must not be empty"
 	while [ "$BACKUP_ROOT" != "/" ]; do
 		case "$BACKUP_ROOT" in
 		*/) BACKUP_ROOT="${BACKUP_ROOT%/}" ;;
@@ -284,11 +285,16 @@ if [ "$CHECK_ONLY" = 0 ]; then
 		esac
 	done
 	[ -L "$BACKUP_ROOT" ] && die "$EXIT_BACKUP" "backup root '$BACKUP_ROOT' must not be a symlink"
-	mkdir -p -m 0700 "$BACKUP_ROOT" && [ ! -L "$BACKUP_ROOT" ] && [ -d "$BACKUP_ROOT" ] && chmod 0700 "$BACKUP_ROOT" ||
-		die "$EXIT_BACKUP" "cannot prepare backup root $BACKUP_ROOT"
-	BKDIR=$(mktemp -d "$BACKUP_ROOT/$(date +%Y%m%d-%H%M%S).XXXXXX") ||
+	if [ -e "$BACKUP_ROOT" ]; then
+		[ -d "$BACKUP_ROOT" ] || die "$EXIT_BACKUP" "backup root '$BACKUP_ROOT' is not a directory"
+	else
+		( umask 077 && mkdir -p "$BACKUP_ROOT" ) && [ ! -L "$BACKUP_ROOT" ] && [ -d "$BACKUP_ROOT" ] && chmod 0700 "$BACKUP_ROOT" ||
+			die "$EXIT_BACKUP" "cannot prepare backup root $BACKUP_ROOT"
+	fi
+	BKDIR=$(umask 077 && mktemp -d "${BACKUP_ROOT%/}/$(date +%Y%m%d-%H%M%S).XXXXXX") ||
 		die "$EXIT_BACKUP" "cannot create backup dir in $BACKUP_ROOT"
-	chmod 0700 "$BKDIR" && cp "$PROC_MTD" "$BKDIR/mtd.txt" ||
+	[ ! -L "$BKDIR" ] && [ -d "$BKDIR" ] && chmod 0700 "$BKDIR" &&
+		( umask 077 && cp "$PROC_MTD" "$BKDIR/mtd.txt" ) && chmod 0600 "$BKDIR/mtd.txt" ||
 		die "$EXIT_BACKUP" "cannot initialize backup in $BKDIR"
 fi
 
@@ -320,7 +326,7 @@ while read -r pnum psize perase pname; do
 		rm -f "$TMP"
 	else
 		OUT="$BKDIR/${pname}.head"
-		if dd if="$DEV" of="$OUT" bs=4096 count="$CNT" 2>/dev/null && [ "$(wc -c < "$OUT" | tr -d ' ')" = "$WANT" ]; then
+		if ( umask 077 && dd if="$DEV" of="$OUT" bs=4096 count="$CNT" 2>/dev/null ) && chmod 0600 "$OUT" && [ "$(wc -c < "$OUT" | tr -d ' ')" = "$WANT" ]; then
 			row "backup.${pname}" "${WANT}B" "${WANT}B" PASS
 		else
 			row "backup.${pname}" "${WANT}B" failed FAIL; BK_FAIL="$BK_FAIL $pname"
@@ -330,7 +336,7 @@ done < "$WORK/parts"
 [ -z "$BK_FAIL" ] || die "$EXIT_BACKUP" "read-only header backup failed for:$BK_FAIL"
 
 if [ "$CHECK_ONLY" = 0 ]; then
-	( cd "$BKDIR" && sha256sum vendor.head chainloader.head mtd.txt > manifest.sha256 && sha256sum -c manifest.sha256 >/dev/null 2>&1 ) || {
+	( umask 077 && cd "$BKDIR" && sha256sum vendor.head chainloader.head mtd.txt > manifest.sha256 && chmod 0600 manifest.sha256 && sha256sum -c manifest.sha256 >/dev/null 2>&1 ) || {
 		row backup.verify 'sha256sum -c' mismatch FAIL; die "$EXIT_BACKUP" "backup manifest verification failed"
 	}
 	row backup.verify 'sha256sum -c' ok PASS
@@ -346,5 +352,8 @@ fi
 say "GATE PASS"
 [ "$CHECK_ONLY" = 1 ] && exit 0
 say "next: sysupgrade $IMAGE"
-[ "$RUN" = 1 ] && exec sysupgrade "$IMAGE"
+if [ "$RUN" = 1 ]; then
+	cleanup
+	exec sysupgrade "$IMAGE"
+fi
 exit 0
