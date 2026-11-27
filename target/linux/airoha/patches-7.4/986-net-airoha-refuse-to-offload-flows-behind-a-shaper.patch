@@ -3,69 +3,433 @@ Date: Tue, 10 Nov 2026 12:00:00 +0800
 Subject: [PATCH] net: airoha: refuse to offload flows behind a shaping qdisc
 
 The PPE driver hardcodes AIROHA_FOE_SHAPER_ID to 0x7f (unshaped), so
-offloaded flows bypass software rate-shaping qdiscs on the egress netdev.
-Return -EOPNOTSUPP in airoha_ppe_foe_entry_prepare() when the egress root
-qdisc is a non-offloaded shaping qdisc.
+offloaded flows bypass software rate-shaping qdiscs on both egress and
+ingress paths.  Checking only the final physical netdev root qdisc inside
+airoha_ppe_foe_entry_prepare() misses shapers attached to upper tunnel or
+VLAN devices (pppoe-wan, wan.100), mq per-TXQ subqueues, child qdiscs in
+dev->qdisc_hash, and ingress redirect/police chains (sqm-scripts ifb4*,
+qosify downlink ifb-wan, act_police).
 
-Origin: archive/xr1710g-v1@e85677d284c0
+Export an RCU-only helper tc_netdev_has_shaper_rcu() from net/sched/cls_api.c
+that inspects:
+  - the root qdisc, mq TXQ qdisc_sleeping entries, and dev->qdisc_hash
+    against non-offloaded software shaping qdiscs;
+  - per-block RCU-tracked police and mirred redirect actions attached to
+    dev->tcx_ingress (non-recursively checking only the egress shaper of
+    each mirred target, avoiding false positives on pure qosify cls_bpf or
+    ifb-dns fq_codel redirects).
+
+Reject flowtable offload in nft_dev_path_info() when any hop along the
+forward path has an active shaper, and keep a defense-in-depth check on
+both egress and ingress netdevs in airoha_ppe_flow_offload_replace().
+
+Origin: archive/xr1710g-v1@e85677d284c0; local, xr1710g #424
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
---- a/drivers/net/ethernet/airoha/airoha_ppe.c
-+++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -398,19 +398,55 @@ static void airoha_ppe_foe_set_bridge_ad
- 	br->src_mac_lo = get_unaligned_be32(eh->h_source + 2);
+--- a/include/net/sch_generic.h
++++ b/include/net/sch_generic.h
+@@ -510,6 +510,9 @@ struct tcf_block {
+ 	struct rcu_head rcu;
+ 	DECLARE_HASHTABLE(proto_destroy_ht, 7);
+ 	struct mutex proto_destroy_lock; /* Lock for proto_destroy hashtable. */
++#ifdef CONFIG_NET_CLS_ACT
++	struct list_head shaper_list;
++#endif
+ };
+ 
+ struct tcf_block *tcf_block_lookup(struct net *net, u32 block_index);
+@@ -1549,4 +1552,13 @@ static inline void qdisc_synchronize(con
+ 		msleep(1);
  }
  
-+/* Non-offloaded rate-shaping qdiscs that PPE shaper-id 0x7f would bypass. */
-+static const char *const airoha_ppe_shaping_qdiscs[] = {
-+	"tbf", "htb", "hfsc", "cake", "cake_mq", "netem", "mqprio", "cbs",
++#if IS_ENABLED(CONFIG_NET_CLS)
++bool tc_netdev_has_shaper_rcu(const struct net_device *dev);
++#else
++static inline bool tc_netdev_has_shaper_rcu(const struct net_device *dev)
++{
++	return false;
++}
++#endif
++
+ #endif
+--- a/include/net/pkt_cls.h
++++ b/include/net/pkt_cls.h
+@@ -234,6 +234,10 @@ static inline void tc_cls_bind_class(u32
+ 	}
+ }
+ 
++#ifdef CONFIG_NET_CLS_ACT
++struct tcf_exts_shaper_node;
++#endif
++
+ struct tcf_exts {
+ #ifdef CONFIG_NET_CLS_ACT
+ 	__u32	type; /* for backward compat(TCA_OLD_COMPAT) */
+@@ -242,6 +246,7 @@ struct tcf_exts {
+ 	struct net	*net;
+ 	netns_tracker	ns_tracker;
+ 	struct tcf_exts_miss_cookie_node *miss_cookie_node;
++	struct tcf_exts_shaper_node *shaper_node;
+ #endif
+ 	/* Map to export classifier specific extension TLV types to the
+ 	 * generic extensions API. Unsupported extensions must be set to 0.
+--- a/net/sched/cls_api.c
++++ b/net/sched/cls_api.c
+@@ -42,6 +42,7 @@
+ #include <net/tc_act/tc_gate.h>
+ #include <net/flow_offload.h>
+ #include <net/tc_wrapper.h>
++#include <net/tcx.h>
+ 
+ /* The list of all installed classifier types */
+ static LIST_HEAD(tcf_proto_base);
+@@ -141,6 +142,210 @@ static void tcf_exts_miss_cookie_base_de
+ }
+ #endif /* IS_ENABLED(CONFIG_NET_TC_SKB_EXT) */
+ 
++#ifdef CONFIG_NET_CLS_ACT
++static DEFINE_SPINLOCK(tcf_block_shaper_lock);
++
++struct tcf_exts_shaper_node {
++	struct list_head list;
++	struct tcf_block *block;
++	struct rcu_head rcu;
++	bool has_police;
++	unsigned int nr_mirred;
++	struct tc_action *mirred[];
 +};
 +
-+static bool airoha_ppe_netdev_is_shaped(struct net_device *netdev)
++static void tcf_exts_shaper_destroy(struct tcf_exts *exts)
 +{
-+	struct Qdisc *qdisc;
-+	bool shaped = false;
++	struct tcf_exts_shaper_node *node = exts->shaper_node;
++
++	if (!node)
++		return;
++
++	exts->shaper_node = NULL;
++	spin_lock_bh(&tcf_block_shaper_lock);
++	if (node->block) {
++		list_del_rcu(&node->list);
++		node->block = NULL;
++	}
++	spin_unlock_bh(&tcf_block_shaper_lock);
++	kfree_rcu(node, rcu);
++}
++
++static int tcf_exts_shaper_register(struct tcf_exts *exts,
++				    struct tcf_proto *tp)
++{
++	struct tcf_exts_shaper_node *node;
++	struct tcf_block *block;
++	struct tc_action *a;
++	unsigned int nr_mirred = 0, idx = 0;
++	bool has_police = false;
 +	int i;
 +
-+	if (!netdev)
++	tcf_exts_shaper_destroy(exts);
++
++	if (!tp || !tp->chain || !tp->chain->block ||
++	    !exts->actions || !exts->nr_actions)
++		return 0;
++
++	tcf_exts_for_each_action(i, a, exts) {
++		if (a->ops && a->ops->id == TCA_ID_POLICE)
++			has_police = true;
++		else if (is_tcf_mirred_egress_redirect(a) ||
++			 is_tcf_mirred_ingress_redirect(a))
++			nr_mirred++;
++	}
++
++	if (!has_police && !nr_mirred)
++		return 0;
++
++	node = kzalloc(struct_size(node, mirred, nr_mirred),
++		       GFP_KERNEL_ACCOUNT);
++	if (!node)
++		return -ENOMEM;
++
++	node->has_police = has_police;
++	node->nr_mirred = nr_mirred;
++	tcf_exts_for_each_action(i, a, exts) {
++		if (is_tcf_mirred_egress_redirect(a) ||
++		    is_tcf_mirred_ingress_redirect(a))
++			node->mirred[idx++] = a;
++	}
++
++	block = tp->chain->block;
++	spin_lock_bh(&tcf_block_shaper_lock);
++	node->block = block;
++	list_add_rcu(&node->list, &block->shaper_list);
++	spin_unlock_bh(&tcf_block_shaper_lock);
++
++	exts->shaper_node = node;
++	return 0;
++}
++
++static void tcf_block_shaper_flush(struct tcf_block *block)
++{
++	struct tcf_exts_shaper_node *node, *tmp;
++
++	spin_lock_bh(&tcf_block_shaper_lock);
++	list_for_each_entry_safe(node, tmp, &block->shaper_list, list) {
++		list_del_rcu(&node->list);
++		node->block = NULL;
++	}
++	spin_unlock_bh(&tcf_block_shaper_lock);
++}
++#else
++static inline void tcf_exts_shaper_destroy(struct tcf_exts *exts)
++{
++}
++
++static inline void tcf_block_shaper_flush(struct tcf_block *block)
++{
++}
++#endif
++
++static const char *const tc_sw_shaping_qdiscs[] = {
++	"tbf",
++	"htb",
++	"hfsc",
++	"cake",
++	"cake_mq",
++	"netem",
++	"mqprio",
++	"cbs",
++	"etf",
++	"taprio",
++};
++
++static bool tc_qdisc_is_sw_shaper(const struct Qdisc *q)
++{
++	size_t i;
++
++	if (!q || !q->ops || (q->flags & (TCQ_F_BUILTIN | TCQ_F_OFFLOADED)))
++		return false;
++
++	for (i = 0; i < ARRAY_SIZE(tc_sw_shaping_qdiscs); i++) {
++		if (!strcmp(q->ops->id, tc_sw_shaping_qdiscs[i]))
++			return true;
++	}
++
++	return false;
++}
++
++static bool tc_netdev_has_egress_shaper_rcu(const struct net_device *dev)
++{
++	const struct Qdisc *q;
++	unsigned int bkt;
++
++	q = rcu_dereference(dev->qdisc);
++	if (tc_qdisc_is_sw_shaper(q))
++		return true;
++
++	if (q && (q->flags & TCQ_F_MQROOT)) {
++		unsigned int ntx;
++
++		for (ntx = 0; ntx < dev->num_tx_queues; ntx++) {
++			const struct netdev_queue *txq =
++				netdev_get_tx_queue(dev, ntx);
++
++			if (tc_qdisc_is_sw_shaper(rcu_dereference(txq->qdisc_sleeping)))
++				return true;
++		}
++	}
++
++	hash_for_each_rcu(dev->qdisc_hash, bkt, q, hash) {
++		if (tc_qdisc_is_sw_shaper(q))
++			return true;
++	}
++
++	return false;
++}
++
++bool tc_netdev_has_shaper_rcu(const struct net_device *dev)
++{
++	if (!dev)
++		return false;
++
++	if (tc_netdev_has_egress_shaper_rcu(dev))
++		return true;
++
++#if defined(CONFIG_NET_XGRESS) && defined(CONFIG_NET_CLS_ACT)
++	{
++		struct bpf_mprog_entry *entry;
++
++		entry = rcu_dereference(dev->tcx_ingress);
++		if (entry) {
++			struct mini_Qdisc *miniq;
++
++			miniq = rcu_dereference(tcx_entry(entry)->miniq);
++			if (miniq && miniq->block) {
++				struct tcf_exts_shaper_node *node;
++
++				list_for_each_entry_rcu(node,
++							&miniq->block->shaper_list,
++							list) {
++					unsigned int i;
++
++					if (node->has_police)
++						return true;
++
++					for (i = 0; i < node->nr_mirred; i++) {
++						const struct net_device *target;
++
++						target = rcu_dereference(
++							to_mirred(node->mirred[i])->tcfm_dev);
++						if (target &&
++						    tc_netdev_has_egress_shaper_rcu(target))
++							return true;
++					}
++				}
++			}
++		}
++	}
++#endif
++
++	return false;
++}
++EXPORT_SYMBOL_GPL(tc_netdev_has_shaper_rcu);
++
+ static u64 tcf_exts_miss_cookie_get(u32 miss_cookie_base, int act_index)
+ {
+ 	union tcf_exts_miss_cookie mc = { .act_index = act_index, };
+@@ -573,6 +778,7 @@ static bool tcf_chain_detach(struct tcf_
+ 
+ static void tcf_block_destroy(struct tcf_block *block)
+ {
++	tcf_block_shaper_flush(block);
+ 	mutex_destroy(&block->lock);
+ 	mutex_destroy(&block->proto_destroy_lock);
+ 	xa_destroy(&block->ports);
+@@ -1043,6 +1249,9 @@ static struct tcf_block *tcf_block_creat
+ 	INIT_LIST_HEAD(&block->chain_list);
+ 	INIT_LIST_HEAD(&block->owner_list);
+ 	INIT_LIST_HEAD(&block->chain0.filter_chain_list);
++#ifdef CONFIG_NET_CLS_ACT
++	INIT_LIST_HEAD(&block->shaper_list);
++#endif
+ 
+ 	refcount_set(&block->refcnt, 1);
+ 	block->net = net;
+@@ -3396,6 +3605,7 @@ int tcf_exts_init_ex(struct tcf_exts *ex
+ 	exts->type = 0;
+ 	exts->nr_actions = 0;
+ 	exts->miss_cookie_node = NULL;
++	exts->shaper_node = NULL;
+ 	/* Note: we do not own yet a reference on net.
+ 	 * This reference might be taken later from tcf_exts_get_net().
+ 	 */
+@@ -3432,6 +3642,7 @@ void tcf_exts_destroy(struct tcf_exts *e
+ 	tcf_exts_miss_cookie_base_destroy(exts);
+ 
+ #ifdef CONFIG_NET_CLS_ACT
++	tcf_exts_shaper_destroy(exts);
+ 	if (exts->actions) {
+ 		tcf_action_destroy(exts->actions, TCA_ACT_UNBIND);
+ 		kfree(exts->actions);
+@@ -3482,6 +3693,18 @@ int tcf_exts_validate_ex(struct net *net
+ 				return err;
+ 			exts->nr_actions = err;
+ 		}
++
++		if (exts->nr_actions) {
++			int err = tcf_exts_shaper_register(exts, tp);
++
++			if (err) {
++				tcf_action_destroy(exts->actions,
++						   TCA_ACT_UNBIND);
++				exts->nr_actions = 0;
++				exts->type = 0;
++				return err;
++			}
++		}
+ 	}
+ #else
+ 	if ((exts->action && tb[exts->action]) ||
+@@ -3510,6 +3733,7 @@ void tcf_exts_change(struct tcf_exts *ds
+ 	struct tcf_exts old = *dst;
+ 
+ 	*dst = *src;
++	src->shaper_node = NULL;
+ 	tcf_exts_destroy(&old);
+ #endif
+ }
+--- a/net/netfilter/nf_flow_table_path.c
++++ b/net/netfilter/nf_flow_table_path.c
+@@ -19,6 +19,7 @@
+ #include <linux/netfilter_bridge.h>
+ #include <net/route.h>
+ #include <net/ip6_route.h>
++#include <net/sch_generic.h>
+ #include <linux/if_vlan.h>
+ 
+ static enum flow_offload_xmit_type nft_xmit_type(struct dst_entry *dst)
+@@ -122,7 +123,15 @@ static int nft_dev_path_info(struct net_
+ 	memcpy(info->h_dest, ha, ETH_ALEN);
+ 
+ 	for (i = 0; i < stack->num_paths; i++) {
++		bool shaped;
++
+ 		path = &stack->path[i];
++		rcu_read_lock();
++		shaped = tc_netdev_has_shaper_rcu(path->dev);
++		rcu_read_unlock();
++		if (shaped)
++			goto err_out;
++
+ 		info->dev = path->dev;
+ 		switch (path->type) {
+ 		case DEV_PATH_ETHERNET:
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -14,6 +14,7 @@
+ #include <net/ipv6.h>
+ #include <net/pkt_cls.h>
+ #include <net/route.h>
++#include <net/sch_generic.h>
+ 
+ #include "airoha_regs.h"
+ #include "airoha_eth.h"
+@@ -1320,6 +1321,30 @@ static int airoha_ppe_entry_idle_time(st
+ 	return airoha_ppe_get_entry_idle_time(ppe, e->data.ib1);
+ }
+ 
++static bool airoha_ppe_flow_is_shaped(const struct net_device *egress,
++				      int ingress_ifindex)
++{
++	bool shaped = false;
++
++	if (!egress)
 +		return false;
 +
 +	rcu_read_lock();
-+	qdisc = rcu_dereference(netdev->qdisc);
-+	if (qdisc && !(qdisc->flags & TCQ_F_OFFLOADED)) {
-+		for (i = 0; i < ARRAY_SIZE(airoha_ppe_shaping_qdiscs); i++) {
-+			if (!strcmp(qdisc->ops->id,
-+				    airoha_ppe_shaping_qdiscs[i])) {
-+				shaped = true;
-+				break;
-+			}
-+		}
++	if (tc_netdev_has_shaper_rcu(egress)) {
++		shaped = true;
++	} else if (ingress_ifindex > 0) {
++		struct net_device *ingress;
++
++		ingress = dev_get_by_index_rcu(dev_net(egress),
++					       ingress_ifindex);
++		if (ingress && tc_netdev_has_shaper_rcu(ingress))
++			shaped = true;
 +	}
 +	rcu_read_unlock();
 +
 +	return shaped;
 +}
 +
- static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
- 					struct airoha_foe_entry *hwe,
- 					struct net_device *netdev, int type,
- 					struct airoha_flow_data *data,
- 					int l4proto, u8 dsfield, bool bridged)
+ static int airoha_ppe_flow_offload_replace(struct airoha_eth *eth,
+ 					   struct flow_cls_offload *f)
  {
--	u32 qdata = FIELD_PREP(AIROHA_FOE_SHAPER_ID, 0x7f), ports_pad, val;
-+	u32 qdata, ports_pad, val;
-+	struct net_device *egress = netdev;
- 	int wlan_etype = -EINVAL, dsa_port = airoha_get_dsa_port(&netdev);
- 	struct airoha_foe_mac_info_common *l2;
- 	u8 smac_id = 0xf;
+@@ -1436,6 +1461,10 @@ static int airoha_ppe_flow_offload_repla
+ 	    !is_valid_ether_addr(data.eth.h_dest))
+ 		return -EINVAL;
  
- 	memset(hwe, 0, sizeof(*hwe));
- 
-+	if (airoha_ppe_netdev_is_shaped(egress))
++	if (airoha_ppe_flow_is_shaped(odev, meta.mask->ingress_ifindex ?
++					    meta.key->ingress_ifindex : 0))
 +		return -EOPNOTSUPP;
 +
-+	qdata = FIELD_PREP(AIROHA_FOE_SHAPER_ID, 0x7f);
-+
- 	val = FIELD_PREP(AIROHA_FOE_IB1_BIND_STATE, AIROHA_FOE_STATE_BIND) |
- 	      FIELD_PREP(AIROHA_FOE_IB1_BIND_PACKET_TYPE, type) |
- 	      FIELD_PREP(AIROHA_FOE_IB1_BIND_UDP, l4proto == IPPROTO_UDP) |
+ 	err = airoha_ppe_foe_entry_prepare(eth, &hwe, odev, offload_type,
+ 					   &data, l4proto, dsfield,
+ 					   f->bridge_input);
