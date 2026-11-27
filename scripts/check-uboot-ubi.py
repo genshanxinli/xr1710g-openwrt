@@ -32,6 +32,22 @@ KERNEL_KASLR_REQ = (
     "CONFIG_RANDOMIZE_MODULE_REGION_FULL=y",
     "CONFIG_RELOCATABLE=y",
 )
+LWIP_TX_PATCH = "404-net-lwip-linearize-chained-pbuf-in-net_lwip_tx.patch"
+HTTPD_PATCH = "405-net-lwip-add-ram-only-httpd-recovery-command.patch"
+C_STRIP_RE = re.compile(
+    r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'',
+    re.DOTALL,
+)
+BOOT_HTTPD_FORBID_RE = re.compile(
+    r"\b(?:ubi\w*|mtd\w*|nand\w*|sf|saveenv|flash\w*|mmc\w*|erase|_init_env)\b|\benv\s+save\b",
+    re.IGNORECASE,
+)
+HTTPD_FORBID_RE = re.compile(
+    r"\b(?:ubi_\w*|mtd_\w*|nand_\w*|spi_flash_\w*|sf_\w*"
+    r"|env_save\w*|saveenv|blk_dwrite|blk_derase"
+    r"|do_ubi|do_mtd|do_nand|do_sf|do_saveenv)\b"
+)
+HTTPD_REQ_SYMS = ("disable_ctrlc", "lmb_read_check", "fit_check_format", "tcp_abort")
 
 
 class PatchError(Exception):
@@ -125,7 +141,7 @@ def collect_dts_volumes(paths: list[Path]) -> tuple[set[str], list[Path]]:
         if rp in seen:
             return
         seen.add(rp)
-        text = path.read_text(encoding="utf-8")
+        text = _strip_dts_comments(path.read_text(encoding="utf-8"))
         visited.append(path)
         vols.update(VOLNAME_RE.findall(text))
         for inc in INCLUDE_RE.findall(text):
@@ -217,6 +233,52 @@ def parse_env_ubi_volumes(env_lines: list[str]) -> list[tuple[str, str]]:
     return found
 
 
+def check_boot_httpd(env_kv: dict[str, str]) -> list[str]:
+    boot_httpd = env_kv.get("boot_httpd", "").strip()
+    if not boot_httpd:
+        return ["defenv missing boot_httpd"]
+    errs: list[str] = []
+    has_httpd = False
+    queue = [boot_httpd]
+    seen: set[str] = set()
+    hits: list[str] = []
+    while queue:
+        expr = queue.pop(0)
+        hits.extend(m.group(0) for m in BOOT_HTTPD_FORBID_RE.finditer(expr))
+        for cmd in CMD_SEP_RE.split(expr):
+            t = cmd.split()
+            while t and t[0] in HUSH_PREFIX:
+                t = t[1:]
+            if not t:
+                continue
+            if t[0] == "httpd":
+                has_httpd = True
+            elif t[0] == "run":
+                for var in t[1:]:
+                    if var not in seen and var in env_kv:
+                        seen.add(var)
+                        queue.append(env_kv[var])
+    if not has_httpd:
+        errs.append(f"defenv boot_httpd={boot_httpd!r} does not invoke 'httpd'")
+    if hits:
+        uniq = ", ".join(dict.fromkeys(hits))
+        errs.append(f"defenv boot_httpd contains forbidden flash/persistence command(s): {uniq}")
+    return errs
+
+
+def check_httpd_c_ram_only(added_lines: list[str]) -> list[str]:
+    stripped = C_STRIP_RE.sub(" ", "\n".join(added_lines))
+    errs: list[str] = []
+    if hits := sorted(set(HTTPD_FORBID_RE.findall(stripped))):
+        errs.append(
+            f"{HTTPD_PATCH} cmd/lwip/httpd.c references forbidden flash/env-persistence symbol(s): {', '.join(hits)}"
+        )
+    for sym in HTTPD_REQ_SYMS:
+        if not re.search(rf"\b{re.escape(sym)}\b", stripped):
+            errs.append(f"{HTTPD_PATCH} cmd/lwip/httpd.c missing required hardening symbol: {sym}")
+    return errs
+
+
 def check_envtools(text: str, want_size: str) -> str | None:
     flat = re.sub(r"\\\n", "", text)
     for m in re.finditer(r"([^\n;]*gemtek,xr1710g-ubi[^\n;]*)\)(.*?);;", flat, re.DOTALL):
@@ -301,15 +363,24 @@ def main(argv: list[str]) -> int:
     for k, want, src in (
         ("CONFIG_SYS_LOAD_ADDR", "0x85000000", cfg_kv),
         ("loadaddr", "0x85000000", env_kv),
+        ("initaddr", "0x89000000", env_kv),
         ("CONFIG_ENV_SIZE", "0x4000", cfg_kv),
         ("CONFIG_ENV_IS_IN_UBI", "y", cfg_kv),
         ("CONFIG_ENV_REDUNDANT", "y", cfg_kv),
         ("CONFIG_ENV_UBI_PART", '"ubi"', cfg_kv),
         ("CONFIG_ENV_UBI_VOLUME", '"ubootenv"', cfg_kv),
         ("CONFIG_ENV_UBI_VOLUME_REDUND", '"ubootenv2"', cfg_kv),
+        ("CONFIG_NET_LWIP", "y", cfg_kv),
+        ("CONFIG_CMD_HTTPD", "y", cfg_kv),
+        ("CONFIG_CMD_BUTTON", "y", cfg_kv),
+        ("CONFIG_LWIP_TCP_WND", "65535", cfg_kv),
     ):
         if src.get(k, "").lower() != want:
             fails.append(f"{k}={src.get(k)!r} != {want!r}")
+    netmask = env_kv.get("netmask", "").strip()
+    if not re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}", netmask):
+        fails.append(f"defenv netmask={env_kv.get('netmask')!r} missing or invalid IPv4 mask")
+    fails.extend(check_boot_httpd(env_kv))
     for env_vol_k in ("CONFIG_ENV_UBI_VOLUME", "CONFIG_ENV_UBI_VOLUME_REDUND"):
         vname = cfg_kv.get(env_vol_k, "").strip('"')
         if vname and vname not in dts_vols:
@@ -349,16 +420,43 @@ def main(argv: list[str]) -> int:
         fails.append(f"uboot-envtools ({env_p.name}): {et_err}")
     fails.extend(f"uboot-airoha/Makefile: {e}" for e in check_uboot_makefile(mk_txt))
     fails.extend(f"kernel config ({kcfg_p.name}) missing {sym}" for sym in KERNEL_KASLR_REQ if sym not in kcfg_lines)
-    rng_patches = sorted((repo / "package/boot/uboot-airoha/patches").glob("*rng-airoha*.patch"))
+    uboot_patch_dir = repo / "package/boot/uboot-airoha/patches"
+    rng_patches = sorted(uboot_patch_dir.glob("*rng-airoha*.patch"))
     if not rng_patches:
         fails.append("package/boot/uboot-airoha/patches/ missing *rng-airoha*.patch")
+    p404 = uboot_patch_dir / LWIP_TX_PATCH
+    if not p404.is_file():
+        fails.append(f"package/boot/uboot-airoha/patches/ missing {LWIP_TX_PATCH}")
+    else:
+        try:
+            f404 = validate_and_split_patch(p404.read_text(encoding="utf-8"))
+        except (OSError, PatchError) as exc:
+            fails.append(f"{LWIP_TX_PATCH}: {exc}")
+        else:
+            if not f404.get("net/lwip/net-lwip.c"):
+                fails.append(f"{LWIP_TX_PATCH}: missing added lines for net/lwip/net-lwip.c")
+    p405 = uboot_patch_dir / HTTPD_PATCH
+    if not p405.is_file():
+        fails.append(f"package/boot/uboot-airoha/patches/ missing {HTTPD_PATCH}")
+    else:
+        try:
+            f405 = validate_and_split_patch(p405.read_text(encoding="utf-8"))
+        except (OSError, PatchError) as exc:
+            fails.append(f"{HTTPD_PATCH}: {exc}")
+        else:
+            httpd_lines = f405.get("cmd/lwip/httpd.c")
+            if not httpd_lines:
+                fails.append(f"{HTTPD_PATCH}: missing added lines for cmd/lwip/httpd.c")
+            else:
+                fails.extend(check_httpd_c_ram_only(httpd_lines))
     if fails:
         for f in fails:
             print(f"FAIL: {f}", file=sys.stderr)
         return 1
     print(
-        f"OK: U-Boot hunks, fixed-partitions ({', '.join(p[0] for p in uboot_parts)}), "
-        f"UBI volumes ({', '.join(sorted({v for _, v in refs}))}), env 0x4000, loadaddr 0x85000000, and KASLR guards verified"
+        f"OK: U-Boot hunks (403/404/405), fixed-partitions ({', '.join(p[0] for p in uboot_parts)}), "
+        f"UBI volumes ({', '.join(sorted({v for _, v in refs}))}), env 0x4000, loadaddr 0x85000000, "
+        f"RAM-only HTTP recovery, and KASLR guards verified"
     )
     return 0
 

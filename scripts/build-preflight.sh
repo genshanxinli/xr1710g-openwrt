@@ -141,6 +141,8 @@ check_scripts() {
 		"$TOPDIR/package/base-files/files/lib/preinit/70_initramfs_test" \
 		"$TOPDIR/package/boot/uboot-tools/uboot-envtools/files/airoha_an7581" \
 		"$TOPDIR/package/boot/uboot-tools/uboot-envtools/files/uboot-envtools.sh" \
+		"$TOPDIR/package/network/services/hostapd/files/wpad.init" \
+		"$TOPDIR/package/network/config/netifd/files/etc/init.d/network" \
 		"$TOPDIR/scripts/flash-gate.sh" "$TOPDIR/scripts/build-preflight.sh"; do
 		[ -f "$f" ] && printf '%s\n' "$f" >> "$list"
 	done
@@ -160,9 +162,11 @@ check_scripts() {
 		[ "$shbin" = sh ] && { out=$(ash_lint_file "$f") || fail "ash lint: $out"; }
 		checked=$((checked + 1))
 	done < "$list"
+	# Upstream scripts using BusyBox-specific constructs (e.g., dnsmasq.init echo -e): syntax-check only.
 	for f in \
 		"$TOPDIR/package/network/config/wifi-scripts/files/lib/netifd/hostapd.sh" \
-		"$TOPDIR/package/network/config/wifi-scripts/files/lib/netifd/wireless/mac80211.sh"; do
+		"$TOPDIR/package/network/config/wifi-scripts/files/lib/netifd/wireless/mac80211.sh" \
+		"$TOPDIR/package/network/services/dnsmasq/files/dnsmasq.init"; do
 		[ -f "$f" ] || continue
 		sh -n "$f" 2>"$WORK/syn.err" || fail "sh -n failed: $f: $(head -n 1 "$WORK/syn.err")"
 		checked=$((checked + 1))
@@ -342,6 +346,12 @@ check_linux_patch_queue() {
 		return
 	fi
 
+	if [ -d "$src" ]; then
+		if [ ! -f "$src/Makefile" ] || [ ! -d "$src/drivers" ]; then
+			fail "patch-queue source directory is not a Linux kernel tree (missing Makefile or drivers/): $src"
+			return
+		fi
+	fi
 	mkdir -p "$WORK/src"
 	if [ -d "$src" ]; then tar -C "$src" -cf - . | tar -C "$WORK/src" -xf - || { fail "copying $src failed"; return; }
 	else tar -xf "$src" -C "$WORK/src" --strip-components=1 || { fail "extracting $src failed"; return; }; fi
@@ -377,14 +387,20 @@ check_uboot_patch_queue() {
 		fail "U-Boot patch-queue source not found: $ubsrc"; return
 	fi
 	if [ -z "$ubsrc" ]; then
-		if [ "$REQUIRE_TARBALL" = 1 ] && [ -z "$TARBALL" ]; then
-			fail "U-Boot ${ubver} tarball not found in ${DL_DIR:-$TOPDIR/dl} (--require-tarball)"
+		if [ "$REQUIRE_TARBALL" = 1 ]; then
+			fail "U-Boot ${ubver} tarball not found in ${DL_DIR:-$TOPDIR/dl} (--require-tarball; set UBOOT_TARBALL or DL_DIR)"
 		else
 			printf 'SKIP: U-Boot %s tarball not found in %s; set UBOOT_TARBALL or DL_DIR\n' "$ubver" "${DL_DIR:-$TOPDIR/dl}"
 		fi
 		return
 	fi
 
+	if [ -d "$ubsrc" ]; then
+		if [ ! -f "$ubsrc/Makefile" ] || [ ! -d "$ubsrc/cmd" ]; then
+			fail "U-Boot patch-queue source directory is not a U-Boot tree (missing Makefile or cmd/): $ubsrc"
+			return
+		fi
+	fi
 	mkdir -p "$WORK/uboot-src"
 	if [ -d "$ubsrc" ]; then
 		tar -C "$ubsrc" -cf - . | tar -C "$WORK/uboot-src" -xf - || { fail "copying $ubsrc failed"; return; }
@@ -404,6 +420,46 @@ check_uboot_patch_queue() {
 	ok "applied $ub_applied U-Boot ${ubver} patches cleanly with strict fuzz=0 against $ubsrc"
 }
 
+check_patch_dir() {
+	_d=$1
+	[ -d "$TOPDIR/$_d" ] || return 0
+	dups=$(find "$TOPDIR/$_d" -maxdepth 1 -type f -name '*.patch' -exec basename {} \; |
+		sed -n 's/^\([0-9][0-9]*\(-[0-9][0-9]*\)*\)-.*/\1/p' | LC_ALL=C sort | uniq -d)
+	if [ -n "$dups" ]; then
+		_bad=''
+		for _pfx in $dups; do
+			if [ "${_d#package/kernel/mac80211/patches/}" != "$_d" ] && \
+			   git -C "$TOPDIR" rev-parse --verify -q "$PATCH_BASE_REF" >/dev/null 2>&1; then
+				_cur=$(find "$TOPDIR/$_d" -maxdepth 1 -type f -name "${_pfx}-*.patch" -exec basename {} \; |
+					grep -Ev "^${_pfx}-[0-9]+-" | LC_ALL=C sort || true)
+				_base=$(git -C "$TOPDIR" ls-tree --name-only "$PATCH_BASE_REF" "$_d/" 2>/dev/null |
+					sed 's|.*/||' | grep -E "^${_pfx}-.*\.patch$" | grep -Ev "^${_pfx}-[0-9]+-" | LC_ALL=C sort || true)
+				if [ -n "$_base" ] && [ "$_cur" = "$_base" ]; then
+					continue
+				fi
+			fi
+			_bad="${_bad:+$_bad }$_pfx"
+		done
+		[ -z "$_bad" ] || fail "$_d duplicate numeric prefix(es): $_bad"
+	fi
+	find "$TOPDIR/$_d" -maxdepth 1 -type f -name '*.patch' -exec awk '
+		function flush() {
+			if (cur == "") return
+			if (ph) printf "%s header contains placeholder email\n", cur
+			if (dc > 1) printf "%s has %d duplicate diffstat blocks\n", cur, dc
+		}
+		FNR == 1 { flush(); cur = FILENAME; in_hdr = 1; ph = 0; dc = 0 }
+		!in_hdr { next }
+		/^(diff --git |--- (a\/|\/dev\/null))/ { in_hdr = 0; next }
+		/example\.org|\.local>/ { ph = 1 }
+		/[0-9]+ files? changed/ { dc++ }
+		END { flush() }
+	' {} + > "$WORK/dir_hdr.err"
+	while IFS= read -r _e; do
+		[ -n "$_e" ] && fail "$_e"
+	done < "$WORK/dir_hdr.err"
+}
+
 check_patch_queue() {
 	pq_fails=$FAILS
 	for d in \
@@ -412,18 +468,17 @@ check_patch_queue() {
 		package/boot/uboot-airoha/patches \
 		package/firmware/wireless-regdb/patches \
 		package/libs/libnftnl/patches \
-		package/network/utils/nftables/patches; do
-		[ -d "$TOPDIR/$d" ] || continue
-		dups=$(find "$TOPDIR/$d" -maxdepth 1 -name '*.patch' -exec basename {} \; |
-			sed -n 's/^\([0-9][0-9]*\(-[0-9][0-9]*\)*\)-.*/\1/p' | LC_ALL=C sort | uniq -d)
-		[ -z "$dups" ] || fail "$d duplicate numeric prefix(es): $(printf '%s' "$dups" | tr '\n' ' ')"
-		find "$TOPDIR/$d" -maxdepth 1 -type f -name '*.patch' | LC_ALL=C sort > "$WORK/dir_patches"
-		while IFS= read -r p; do
-			[ -f "$p" ] || continue
-			awk '/^(diff --git |--- (a\/|\/dev\/null))/{exit} /example\.org|\.local>/{exit 1}' "$p" || fail "$p header contains placeholder email"
-			dc=$(awk '/^(diff --git |--- (a\/|\/dev\/null))/{exit} /[0-9]+ files? changed/{c++} END{print c+0}' "$p")
-			[ "$dc" -le 1 ] || fail "$p has $dc duplicate diffstat blocks"
-		done < "$WORK/dir_patches"
+		package/network/utils/nftables/patches \
+		package/network/config/firewall4/patches \
+		package/network/utils/fullconenat-nft/patches \
+		package/system/procd/patches \
+		tools/fakeroot/patches \
+		package/network/services/hostapd/patches; do
+		check_patch_dir "$d"
+	done
+	for sub in "$TOPDIR"/package/kernel/mac80211/patches/*; do
+		[ -d "$sub" ] || continue
+		check_patch_dir "${sub#"$TOPDIR"/}"
 	done
 
 	set -- \
