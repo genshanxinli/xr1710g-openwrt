@@ -7,7 +7,7 @@ seeding initial genpd performance state from airoha_cpu_pmdomain_get_state()
 so scaling down from the bootloader OPP is not dropped as a cached no-op,
 and depend on AIROHA_CPU_PM_DOMAIN in Kconfig.
 
-Origin: archive/xr1710g-v1@e85677d284c0
+Origin: archive/xr1710g-v1@e85677d284c0; xr1710g #415
 Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
 Signed-off-by: Viresh Kumar <viresh.kumar@linaro.org>
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
@@ -63,7 +63,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  
  	/* CPUs refer to the same OPP table */
  	cpu_dev = get_cpu_device(0);
-@@ -62,17 +61,82 @@ static int airoha_cpufreq_probe(struct p
+@@ -62,17 +61,85 @@ static int airoha_cpufreq_probe(struct p
  	if (priv->opp_token < 0)
  		return dev_err_probe(dev, priv->opp_token, "Failed to set OPP config\n");
  
@@ -89,17 +89,20 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +
 +		/* Attach each genpd domain */
 +		for (i = 0; i < num_devs; i++) {
-+			virt_devs[i] = dev_pm_domain_attach_by_name(cpu_dev, 
-+								     airoha_cpufreq_pd_names[i]);
++			virt_devs[i] = dev_pm_domain_attach_by_name(cpu_dev,
++								    airoha_cpufreq_pd_names[i]);
 +			if (IS_ERR_OR_NULL(virt_devs[i])) {
++				const char *pd_name = airoha_cpufreq_pd_names[i];
++
 +				ret = PTR_ERR(virt_devs[i]) ? : -ENODEV;
-+				dev_err(dev, "failed to attach %s: %d\n",
-+					airoha_cpufreq_pd_names[i], ret);
 +
 +				/* Detach previously attached domains */
 +				while (--i >= 0)
 +					dev_pm_domain_detach(virt_devs[i], false);
 +
++				ret = dev_err_probe(dev, ret,
++						    "failed to attach %s\n",
++						    pd_name);
 +				goto err_clear_opp_config;
 +			}
 +		}
@@ -152,7 +155,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	}
  
  	priv->cpufreq_dt = cpufreq_dt;
-@@ -80,9 +144,15 @@ static int airoha_cpufreq_probe(struct p
+@@ -80,9 +147,15 @@ static int airoha_cpufreq_probe(struct p
  
  	return 0;
  
@@ -171,7 +174,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	dev_pm_opp_clear_config(priv->opp_token);
  
  	return ret;
-@@ -91,12 +161,18 @@ clear_opp_config:
+@@ -91,12 +164,18 @@ clear_opp_config:
  static void airoha_cpufreq_remove(struct platform_device *pdev)
  {
  	struct airoha_cpufreq_priv *priv = platform_get_drvdata(pdev);
@@ -192,7 +195,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  }
  
  static struct platform_driver airoha_cpufreq_driver = {
-@@ -110,6 +186,7 @@ static struct platform_driver airoha_cpu
+@@ -110,6 +189,7 @@ static struct platform_driver airoha_cpu
  static const struct of_device_id airoha_cpufreq_match_list[] __initconst = {
  	{ .compatible = "airoha,an7583" },
  	{ .compatible = "airoha,en7581" },

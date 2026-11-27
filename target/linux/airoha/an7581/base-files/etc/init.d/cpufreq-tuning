@@ -1,0 +1,29 @@
+#!/bin/sh /etc/rc.common
+# shellcheck disable=SC2034
+# Reduce AN7581 ondemand governor PLL transition churn on Gemtek XR1710G.
+
+START=50
+
+CPUFREQ_POLICY0="/sys/devices/system/cpu/cpufreq/policy0"
+ONDEMAND_DIR="/sys/devices/system/cpu/cpufreq/ondemand"
+
+write_attr() {
+	[ -w "$1" ] || return 0
+	printf '%s\n' "$2" > "$1" 2>/dev/null || true
+}
+
+start() {
+	case "$(board_name)" in
+	gemtek,xr1710g*) ;;
+	*) return 0 ;;
+	esac
+
+	[ -r "$CPUFREQ_POLICY0/scaling_governor" ] || return 0
+	read -r _gov < "$CPUFREQ_POLICY0/scaling_governor" 2>/dev/null || return 0
+	[ "$_gov" = "ondemand" ] || return 0
+	[ -d "$ONDEMAND_DIR" ] || return 0
+
+	write_attr "$ONDEMAND_DIR/sampling_rate" 50000
+	write_attr "$ONDEMAND_DIR/sampling_down_factor" 5
+	write_attr "$ONDEMAND_DIR/up_threshold" 85
+}

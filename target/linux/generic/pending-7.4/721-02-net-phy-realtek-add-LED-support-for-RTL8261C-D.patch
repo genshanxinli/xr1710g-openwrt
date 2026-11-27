@@ -1,4 +1,3 @@
-From c7a20f189840c5da0897a9aec3924d44d929e9a5 Mon Sep 17 00:00:00 2001
 From: Chad Monroe <chad@monroe.io>
 Date: Mon, 9 Mar 2026 12:45:43 -0700
 Subject: [PATCH] net: phy: realtek: add LED support for RTL8261C/D
@@ -39,9 +38,11 @@ the netdev trigger. The polarity bit was verified to be active-high when
 clear on that board. Also tested on AN7581 and MT7988A boards with an
 RTL8261C and RTL8261D.
 
+Origin: openwrt/generic/pending-7.4 (9d26c9d04e); xr1710g #415
 Signed-off-by: Chad Monroe <chad@monroe.io>
 Co-developed-by: Simon Polack <spolack+git@mailbox.org>
 Signed-off-by: Simon Polack <spolack+git@mailbox.org>
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 Assisted-by: LLM
 ---
 
@@ -271,7 +272,7 @@ Assisted-by: LLM
 +	bool active_low = false;
 +	u32 mode;
 +
-+	if (index >= RTL8261X_LED_COUNT)
++	if (index < 0 || index >= RTL8261X_LED_COUNT)
 +		return -EINVAL;
 +
 +	for_each_set_bit(mode, &modes, __PHY_LED_MODES_NUM) {

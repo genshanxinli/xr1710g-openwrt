@@ -2,14 +2,24 @@ From: Gilly <gilroyscott1970@gmail.com>
 Date: Thu, 8 May 2026 00:00:00 +1000
 Subject: [PATCH] net: dsa: mt7530: deassert PHY reset GPIOs before MDIO bus scan
 
+Pre-deassert any external PHY reset-gpios declared under the MT7530 MDIO
+subnode before devm_of_mdiobus_register() scans the bus, so PHYs left in
+reset by the bootloader respond to C45/C22 ID probes.
+
+Propagate -EPROBE_DEFER (releasing the child OF node reference via
+of_node_put() and releasing mnp via goto out) when the GPIO provider has
+not probed yet, instead of silently continuing with the PHY held in reset.
+
+Origin: openwrt/airoha (baf30a3819); xr1710g #415
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/drivers/net/dsa/mt7530.c
 +++ b/drivers/net/dsa/mt7530.c
-@@ -2327,6 +2327,38 @@ mt7530_free_mdio_irq(struct mt7530_priv
+@@ -2327,6 +2327,47 @@ mt7530_free_mdio_irq(struct mt7530_priv
  	}
  }
  
-+static void
++static int
 +mt7530_mdio_predeassert_phy_resets(struct device *dev, struct device_node *mnp)
 +{
 +	struct device_node *child;
@@ -21,14 +31,21 @@ Subject: [PATCH] net: dsa: mt7530: deassert PHY reset GPIOs before MDIO bus scan
 +		gpiod = fwnode_gpiod_get_index(of_fwnode_handle(child),
 +					       "reset", 0, GPIOD_OUT_LOW,
 +					       "mt7530-mdio-scan");
-+		if (IS_ERR_OR_NULL(gpiod))
++		if (IS_ERR(gpiod)) {
++			if (PTR_ERR(gpiod) == -EPROBE_DEFER) {
++				of_node_put(child);
++				return -EPROBE_DEFER;
++			}
++			continue;
++		}
++		if (!gpiod)
 +			continue;
 +
-+		/* fwnode_gpiod_get_index with GPIOD_OUT_LOW already drove
-+		 * the line low (deasserted, since reset-gpios in DTS is
-+		 * GPIO_ACTIVE_LOW). Honour the declared settle time before
-+		 * releasing so phylib can re-acquire the line for its own
-+		 * probe-time reset cycle.
++		/* GPIOD_OUT_LOW drives the logical line low (inactive /
++		 * deasserted), which drives the physical line high for a
++		 * GPIO_ACTIVE_LOW reset-gpios pin. Honour the declared settle
++		 * time before releasing so phylib can re-acquire the line for
++		 * its own probe-time reset cycle.
 +		 */
 +		if (of_property_read_u32(child, "reset-deassert-us",
 +					 &deassert_us) == 0 && deassert_us)
@@ -39,17 +56,22 @@ Subject: [PATCH] net: dsa: mt7530: deassert PHY reset GPIOs before MDIO bus scan
 +		dev_dbg(dev, "pre-deasserted reset for PHY %pOFn\n",
 +			child);
 +	}
++
++	return 0;
 +}
 +
  static int
  mt7530_setup_mdio(struct mt7530_priv *priv)
  {
-@@ -2364,6 +2396,9 @@ mt7530_setup_mdio(struct mt7530_priv *pr
+@@ -2364,6 +2405,12 @@ mt7530_setup_mdio(struct mt7530_priv *pr
  	if (priv->irq_domain && !mnp)
  		mt7530_setup_mdio_irq(priv);
  
-+	if (mnp)
-+		mt7530_mdio_predeassert_phy_resets(dev, mnp);
++	if (mnp) {
++		ret = mt7530_mdio_predeassert_phy_resets(dev, mnp);
++		if (ret)
++			goto out;
++	}
 +
  	ret = devm_of_mdiobus_register(dev, bus, mnp);
  	if (ret) {

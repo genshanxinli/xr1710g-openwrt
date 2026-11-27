@@ -1,0 +1,44 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 10:00:00 +0800
+Subject: [PATCH] net: phy: realtek: guard hwmon read on PHY reset and suspend
+
+When an RTL822x/RTL826x PHY is suspended or undergoing its soft-reset
+sequence (e.g. RTL826x MMD30.0x145 in rtl826x_config_init()), MDIO reads
+from TSRR/TSSR can return stale data or a floating 0xffff bus value that
+decodes to a bogus -0.5 C temperature.
+
+Return -ENODATA immediately when phydev->suspended is set (checked
+directly as phydev->suspended is a 1-bit bitfield in struct phy_device),
+and return -EIO if phy_read_mmd() returns 0xffff on TSRR or TSSR.
+
+Origin: local, xr1710g #415
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/net/phy/realtek/realtek_hwmon.c
++++ b/drivers/net/phy/realtek/realtek_hwmon.c
+@@ -28,18 +28,25 @@ static int rtl822x_hwmon_read(struct dev
+ 	struct phy_device *phydev = dev_get_drvdata(dev);
+ 	int raw;
+ 
++	if (phydev->suspended)
++		return -ENODATA;
++
+ 	switch (attr) {
+ 	case hwmon_temp_input:
+ 		raw = phy_read_mmd(phydev, MDIO_MMD_VEND2, RTL822X_VND2_TSRR);
+ 		if (raw < 0)
+ 			return raw;
++		if (raw == 0xffff)
++			return -EIO;
+ 		*val = rtl822x_hwmon_get_temp(raw & 0x3ff);
+ 		break;
+ 	case hwmon_temp_max:
+ 		/* Chip reduces speed to 1G if threshold is exceeded */
+ 		raw = phy_read_mmd(phydev, MDIO_MMD_VEND2, RTL822X_VND2_TSSR);
+ 		if (raw < 0)
+ 			return raw;
++		if (raw == 0xffff)
++			return -EIO;
+ 		*val = rtl822x_hwmon_get_temp(raw >> 6);
+ 		break;
+ 	default:

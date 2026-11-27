@@ -49,6 +49,13 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 
+		/* RTD1 is wired to an external thermal diode on XR1710G (temp1_type=3). */
+		channel@1 {
+			reg = <1>;
+			sensor-type = "temperature";
+			temperature-mode = "thermal-diode";
+		};
+
 		/* RTD2 has no external thermal diode wired on XR1710G (reads 127.875 C open). */
 		channel@2 {
 			reg = <2>;

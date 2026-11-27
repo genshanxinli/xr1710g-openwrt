@@ -64,6 +64,38 @@
 			gpios = <&en7581_pinctrl 29 GPIO_ACTIVE_LOW>;
 		};
 	};
+
+	thermal-zones {
+		lan2-phy-thermal {
+			polling-delay-passive = <0>;
+			polling-delay = <1000>;
+
+			thermal-sensors = <&phy5>;
+
+			trips {
+				lan2-phy-hot {
+					temperature = <110000>;
+					hysteresis = <5000>;
+					type = "hot";
+				};
+			};
+		};
+
+		wan-phy-thermal {
+			polling-delay-passive = <0>;
+			polling-delay = <1000>;
+
+			thermal-sensors = <&phy8>;
+
+			trips {
+				wan-phy-hot {
+					temperature = <110000>;
+					hysteresis = <5000>;
+					type = "hot";
+				};
+			};
+		};
+	};
 };
 
 &en7581_pinctrl {
@@ -319,6 +351,7 @@
 		phy5: ethernet-phy@5 {
 			compatible = "ethernet-phy-ieee802.3-c45";
 			reg = <5>;
+			#thermal-sensor-cells = <0>;
 			reset-gpios = <&en7581_pinctrl 46 GPIO_ACTIVE_LOW>;
 			reset-assert-us = <200000>;
 			reset-deassert-us = <200000>;
@@ -331,6 +364,7 @@
 		phy8: ethernet-phy@8 {
 			compatible = "ethernet-phy-ieee802.3-c45";
 			reg = <8>;
+			#thermal-sensor-cells = <0>;
 			reset-gpios = <&en7581_pinctrl 31 GPIO_ACTIVE_LOW>;
 			reset-assert-us = <200000>;
 			reset-deassert-us = <200000>;

@@ -371,12 +371,20 @@
 			};
 		};
 
-		/* Read-only zone; trips stay on the main sensor zone above */
+		/* Conservative hot-only trip; cooling and critical trips stay on cpu-thermal */
 		cpu_die_thermal: cpu-die-thermal {
 			polling-delay-passive = <0>;
 			polling-delay = <0>;
 
 			thermal-sensors = <&thermal 1>;
+
+			trips {
+				cpu_die_hot: cpu-die-hot {
+					temperature = <105000>;
+					hysteresis = <5000>;
+					type = "hot";
+				};
+			};
 		};
 	};
 

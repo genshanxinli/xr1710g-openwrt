@@ -1,17 +1,22 @@
 From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 Date: Wed, 25 Nov 2026 18:00:00 +0800
-Subject: [PATCH] thermal/drivers/airoha: log when the EN7581 hot trip is reached
+Subject: [PATCH] thermal/drivers/airoha: log hot trip and handle dual-bit IRQ status
 
 en7581_thdev_ops omitted .hot, so crossing THERMAL_TRIP_HOT produced no
 kernel warning (issue #379). Implement en7581_thermal_hot() to log a
 dev_crit() message identifying the thermal zone.
 
-Origin: archive/xr1710g-v1@e85677d284c0
+In addition, en7581_thermal_irq() used switch(status & (HOFS | LOFS)),
+silently dropping notifications into default: break when both threshold
+bits are asserted simultaneously. Replace it with an if/else if check
+giving priority to EN7581_HOFSINTSTS0 (issue #415).
+
+Origin: archive/xr1710g-v1@e85677d284c0; xr1710g #415
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/drivers/thermal/airoha_thermal.c
 +++ b/drivers/thermal/airoha_thermal.c
-@@ -481,9 +481,16 @@ static int en7581_thermal_set_trips(stru
+@@ -493,9 +493,16 @@ static int en7581_thermal_set_trips(stru
  	return 0;
  }
  
@@ -28,3 +33,25 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  };
  
  static irqreturn_t en7581_thermal_irq(int irq, void *data)
+@@ -506,19 +513,13 @@ static irqreturn_t en7581_thermal_irq(in
+ 	u32 status = 0;
+ 
+ 	regmap_read(priv->map, EN7581_TEMPMONINTSTS, &status);
+-	switch (status & (EN7581_HOFSINTSTS0 | EN7581_LOFSINTSTS0)) {
+-	case EN7581_HOFSINTSTS0:
++	if (status & EN7581_HOFSINTSTS0) {
+ 		event = THERMAL_TRIP_VIOLATED;
+ 		update = true;
+-		break;
+-	case EN7581_LOFSINTSTS0:
++	} else if (status & EN7581_LOFSINTSTS0) {
+ 		event = THERMAL_EVENT_UNSPECIFIED;
+ 		update = true;
+-		break;
+-	default:
+-		/* Should be impossible as we enable only these Interrupt */
+-		break;
+ 	}
+ 
+ 	/* Reset Interrupt */
+ 	regmap_write(priv->map, EN7581_TEMPMONINTSTS, status);
