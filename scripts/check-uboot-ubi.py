@@ -47,7 +47,15 @@ HTTPD_FORBID_RE = re.compile(
     r"|env_save\w*|saveenv|blk_dwrite|blk_derase"
     r"|do_ubi|do_mtd|do_nand|do_sf|do_saveenv)\b"
 )
-HTTPD_REQ_SYMS = ("disable_ctrlc", "lmb_read_check", "fit_check_format", "tcp_abort")
+HTTPD_REQ_SYMS = (
+    "disable_ctrlc",
+    "lmb_read_check",
+    "fit_check_format",
+    "tcp_abort",
+    "udp_sendto_if_src",
+    "led_get_by_label",
+    "EVT_POST_PREBOOT",
+)
 
 
 class PatchError(Exception):
@@ -444,6 +452,17 @@ def main(argv: list[str]) -> int:
         except (OSError, PatchError) as exc:
             fails.append(f"{HTTPD_PATCH}: {exc}")
         else:
+            kcfg_405 = f405.get("cmd/Kconfig")
+            if not kcfg_405 or not any(
+                re.search(r"^\s*select\s+PROT_UDP_LWIP\b", ln) for ln in kcfg_405
+            ):
+                fails.append(f"{HTTPD_PATCH}: cmd/Kconfig missing 'select PROT_UDP_LWIP'")
+            lwipopts_405 = f405.get("lib/lwip/u-boot/lwipopts.h")
+            lwipopts_clean = C_STRIP_RE.sub(" ", "\n".join(lwipopts_405)) if lwipopts_405 else ""
+            if not re.search(r"(?m)^\s*#\s*define\s+LWIP_IP_ACCEPT_UDP_PORT\b", lwipopts_clean):
+                fails.append(
+                    f"{HTTPD_PATCH}: lib/lwip/u-boot/lwipopts.h missing 'LWIP_IP_ACCEPT_UDP_PORT'"
+                )
             httpd_lines = f405.get("cmd/lwip/httpd.c")
             if not httpd_lines:
                 fails.append(f"{HTTPD_PATCH}: missing added lines for cmd/lwip/httpd.c")

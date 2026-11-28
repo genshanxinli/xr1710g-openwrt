@@ -1,29 +1,32 @@
 From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
-Date: Fri, 27 Nov 2026 15:10:00 +0800
+Date: Sat, 28 Nov 2026 09:50:00 +0800
 Subject: [PATCH] cmd: lwip: add RAM-only httpd FIT recovery command
 
-Add CONFIG_CMD_HTTPD (depends on NET_LWIP && FIT, selects PROT_TCP_LWIP)
-and cmd/lwip/httpd.c implementing a strictly RAM-only HTTP/1.1 recovery
-server on TCP port 80. The server serves a self-contained HTML upload
-page on GET /, validates load addresses and every write chunk against
-wrap and LMB reserved regions, streams multipart/form-data uploads
-directly into RAM at loadaddr (default $initaddr or 0x89000000) with a
-hard 64 MiB ceiling (HTTP 413 on overflow while allowing multipart
-envelope overhead), validates FIT format via fit_check_format(),
-/configurations, kernel presence, external data bounds, and rejects
-flash filesystem/rootfs images (HTTP 400 while remaining listening),
-reclaims stalled/idle connections via tcp_poll/tcp_abort, temporarily
-enables Ctrl-C during preboot recovery while restoring the prior state
-on exit, flushes HTTP 200 before closing, sets $filesize/$fileaddr, and
-exits cleanly with CMD_RET_SUCCESS for caller-driven bootm without
-touching flash.
+Add CONFIG_CMD_HTTPD (depends on NET_LWIP && FIT, selects PROT_TCP_LWIP
+and PROT_UDP_LWIP), enable LWIP_IP_ACCEPT_UDP_PORT for UDP port 67 in
+lib/lwip/u-boot/lwipopts.h, and implement cmd/lwip/httpd.c as a strictly
+RAM-only HTTP/1.1 recovery server on TCP port 80.
+
+The server serves a compact HTML upload page with native form fallback
+and XHR upload progress bar on GET /, runs a scoped 8-slot UDP DHCPv4
+server (180 s lease, anti-Rogue-NAK filtering, >= 300 B broadcast reply,
+torn down on every exit path) during httpd_loop(), drives DM status LEDs
+(blue entry/slow/fast blink, 1500 ms red error hold, steady green OK, no
+LEDST_BLINK), registers an EVT_POST_PREBOOT reset-button fallback guard
+against stale ubootenv, validates load addresses and every write chunk
+against wrap and LMB reserved regions, streams multipart/form-data
+uploads directly into RAM (capped at 64 MiB), validates FIT format via
+fit_check_format() while rejecting flash filesystem/rootfs images,
+reclaims stalled connections via tcp_poll/tcp_abort, restores Ctrl-C
+state on exit, sets $filesize/$fileaddr, and exits cleanly for
+caller-driven bootm without touching flash.
 
 Origin: local, xr1710g (#386, #429)
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/cmd/Kconfig
 +++ b/cmd/Kconfig
-@@ -2227,6 +2227,15 @@ config CMD_DNS
+@@ -2227,6 +2227,16 @@
  	help
  	  Lookup the IP of a hostname
  
@@ -31,6 +34,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	bool "httpd"
 +	depends on NET_LWIP && FIT
 +	select PROT_TCP_LWIP
++	select PROT_UDP_LWIP
 +	help
 +	  Start a RAM-only HTTP recovery server on port 80 that accepts a
 +	  FIT image upload over multipart/form-data into memory without
@@ -50,14 +54,16 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  obj-$(CONFIG_CMD_SNTP) += sntp.o
 --- /dev/null
 +++ b/cmd/lwip/httpd.c
-@@ -0,0 +1,1459 @@
+@@ -0,0 +1,2193 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * RAM-only HTTP FIT recovery server for lwIP.
 + *
 + * Streams a multipart/form-data FIT image upload directly into RAM (capped at
 + * 64 MiB), validates the FDT/FIT header, sets $filesize/$fileaddr, and returns
-+ * CMD_RET_SUCCESS for caller-driven RAM boot (bootm). Never writes to flash.
++ * CMD_RET_SUCCESS for caller-driven RAM boot (bootm). While listening, serves
++ * a scoped UDP DHCPv4 pool on the active netif and drives DM status LEDs.
++ * Never writes to flash.
 + */
 +
 +#include <command.h>
@@ -68,14 +74,25 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +#include <linux/ctype.h>
 +#include <linux/errno.h>
 +#include <linux/kconfig.h>
++#if CONFIG_IS_ENABLED(EVENT) && CONFIG_IS_ENABLED(BUTTON)
++#include <button.h>
++#include <event.h>
++#endif
++#if CONFIG_IS_ENABLED(LED)
++#include <led.h>
++#endif
 +#include <linux/libfdt.h>
 +#include <linux/string.h>
 +#if CONFIG_IS_ENABLED(LMB)
 +#include <lmb.h>
 +#endif
 +#include <lwip/ip_addr.h>
++#include <lwip/netif.h>
 +#include <lwip/pbuf.h>
++#include <lwip/prot/dhcp.h>
++#include <lwip/prot/iana.h>
 +#include <lwip/tcp.h>
++#include <lwip/udp.h>
 +#include <malloc.h>
 +#include <mapmem.h>
 +#include <net.h>
@@ -98,6 +115,20 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +#define HTTPD_FLUSH_TIMEOUT_MS		2000
 +#define HTTPD_FIN_DRAIN_MS		50
 +#define HTTPD_PROGRESS_STEP		(1024UL * 1024UL)
++
++#define HTTPD_DHCP_POOL_SIZE		8U
++#define HTTPD_DHCP_LEASE_SEC		180U
++#define HTTPD_DHCP_LEASE_MS		(HTTPD_DHCP_LEASE_SEC * 1000UL)
++#define HTTPD_DHCP_MIN_RX_LEN		240U
++#define HTTPD_DHCP_MAX_RX_LEN		1500U
++#define HTTPD_DHCP_MIN_REPLY_LEN	300U
++#define HTTPD_DHCP_MAX_REPLY_LEN	384U
++#define HTTPD_DHCP_FLAG_BROADCAST	0x8000U
++#define HTTPD_DHCP_MAC_LEN		6U
++
++#define HTTPD_LED_IDLE_MS		500UL
++#define HTTPD_LED_UPLOAD_MS		100UL
++#define HTTPD_LED_ERR_HOLD_MS		1500UL
 +
 +enum httpd_result {
 +	HTTPD_RES_PENDING = 0,
@@ -146,6 +177,36 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	size_t after_len;
 +};
 +
++struct httpd_dhcp_lease {
++	u32 ip_be;
++	u8 mac[HTTPD_DHCP_MAC_LEN];
++	bool in_use;
++	ulong last_seen;
++	u32 seq;
++};
++
++struct httpd_dhcp {
++	struct udp_pcb *pcb;
++	struct netif *netif;
++	u32 server_ip_be;
++	u32 netmask_be;
++	unsigned int pool_count;
++	u32 lru_seq;
++	struct httpd_dhcp_lease leases[HTTPD_DHCP_POOL_SIZE];
++	u8 rx_buf[HTTPD_DHCP_MAX_RX_LEN];
++	u8 tx_buf[HTTPD_DHCP_MAX_REPLY_LEN];
++};
++
++struct httpd_leds {
++	struct udevice *blue;
++	struct udevice *green;
++	struct udevice *red;
++	ulong blink_ts;
++	ulong err_ts;
++	bool err_active;
++	bool success_lit;
++};
++
 +struct httpd_server;
 +
 +struct httpd_conn {
@@ -166,6 +227,8 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	size_t max_size;
 +	struct tcp_pcb *listen_pcb;
 +	struct httpd_conn conns[HTTPD_MAX_CONNS];
++	struct httpd_dhcp dhcp;
++	struct httpd_leds leds;
 +	bool upload_active;
 +	bool upload_succeeded;
 +	bool response_flushed;
@@ -173,22 +236,53 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	ulong flush_start;
 +};
 +
++static bool httpd_ran_this_boot;
++
 +static const char httpd_index_html[] =
 +	"<!DOCTYPE html>"
 +	"<html><head><meta charset=\"utf-8\">"
++	"<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
 +	"<title>XR1710G RAM-Only Recovery</title>"
 +	"<style>body{font-family:sans-serif;max-width:560px;margin:2em auto;padding:0 1em}"
 +	".box{border:1px solid #ccc;padding:1em;border-radius:6px}"
++	".bar{width:100%;height:18px;background:#eee;border-radius:4px;overflow:hidden;margin:.6em 0;display:none}"
++	".fill{height:100%;width:0;background:#2563eb}"
++	"#st{font-size:.95em;margin-top:.5em;white-space:pre-wrap}"
 +	"button{padding:.5em 1.2em;font-size:1em}</style></head>"
-+	"<body><h2>Gemtek XR1710G RAM-Only FIT Recovery (no direct flash writes)</h2>"
++	"<body><h2>Gemtek XR1710G RAM-Only FIT Recovery (no flash writes)</h2>"
 +	"<div class=\"box\">"
-+	"<p>Connect PC to <b>lan3</b> or <b>lan4</b> with static IP <b>192.168.1.2/24</b>.</p>"
-+	"<p>Upload <b>initramfs-recovery.itb</b> (&le; 64 MiB). "
-+	"Image boots in RAM only; flash via OpenWrt <code>sysupgrade</code> after boot.</p>"
-+	"<form method=\"POST\" action=\"/\" enctype=\"multipart/form-data\">"
-+	"<p><input type=\"file\" name=\"firmware\" required></p>"
-+	"<p><button type=\"submit\">Upload &amp; Boot in RAM</button></p>"
-+	"</form></div></body></html>\n";
++	"<p>Connect PC directly to <b>lan3</b> or <b>lan4</b> (DHCP auto-assigned, or static <b>192.168.1.2/24</b>).</p>"
++	"<p>Upload <b>initramfs-recovery.itb</b> only (&le; 64 MiB). "
++	"RAM-only boot, no flash writes; flash via OpenWrt <code>sysupgrade</code> after boot.</p>"
++	"<form id=\"f\" method=\"POST\" action=\"/\" enctype=\"multipart/form-data\">"
++	"<p><input id=\"fi\" type=\"file\" name=\"firmware\" required></p>"
++	"<p><button id=\"b\" type=\"submit\">Upload &amp; Boot in RAM</button></p>"
++	"</form>"
++	"<div id=\"bar\" class=\"bar\"><div id=\"fill\" class=\"fill\"></div></div>"
++	"<div id=\"st\"></div></div>"
++	"<script>(function(){"
++	"var f=document.getElementById('f'),fi=document.getElementById('fi'),"
++	"b=document.getElementById('b'),bar=document.getElementById('bar'),"
++	"fill=document.getElementById('fill'),st=document.getElementById('st');"
++	"function mb(n){return(n/1048576).toFixed(2)+' MB';}"
++	"f.onsubmit=function(e){"
++	"if(!window.XMLHttpRequest||!window.FormData||!fi.files||!fi.files.length)return;"
++	"e.preventDefault();b.disabled=true;bar.style.display='block';fill.style.width='0%';"
++	"st.textContent='Uploading...';"
++	"var x=new XMLHttpRequest();x.open('POST','/',true);"
++	"x.upload.onprogress=function(ev){"
++	"if(ev.lengthComputable&&ev.total>0){"
++	"var p=Math.min(100,Math.round(ev.loaded*100/ev.total));"
++	"fill.style.width=p+'%';"
++	"st.textContent='Uploading: '+p+'% ('+mb(ev.loaded)+' / '+mb(ev.total)+')';"
++	"}else{st.textContent='Uploading: '+mb(ev.loaded);}};"
++	"x.onload=function(){"
++	"var t=(x.responseText||'').replace(/<[^>]+>/g,' ').replace(/\\s+/g,' ').trim();"
++	"if(x.status===200){fill.style.width='100%';st.textContent='HTTP 200 OK: '+(t||'Booting...');}"
++	"else{b.disabled=false;st.textContent='HTTP '+x.status+' '+x.statusText+': '+t;}};"
++	"x.onerror=function(){b.disabled=false;st.textContent='Upload failed (network error).';};"
++	"var fd=new FormData();fd.append('firmware',fi.files[0]);x.send(fd);};"
++	"})();</script></body></html>\n";
 +
 +static const char httpd_ok_html[] =
 +	"<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
@@ -235,6 +329,579 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	"<h2>500 Internal Server Error - Target Memory Out of Bounds</h2>"
 +	"<p>Upload target address overlaps reserved memory or exceeds available RAM.</p>"
 +	"<p><a href=\"/\">Back to upload form</a></p></body></html>\n";
++
++/* =========================================================================
++ * DM LED state machine (strictly LEDST_ON / LEDST_OFF / LEDST_TOGGLE)
++ * ========================================================================= */
++
++#if CONFIG_IS_ENABLED(LED)
++static void httpd_led_set(struct udevice *dev, enum led_state_t state)
++{
++	if (dev)
++		led_set_state(dev, state);
++}
++
++static void httpd_led_init(struct httpd_leds *leds)
++{
++	struct udevice *dev;
++
++	memset(leds, 0, sizeof(*leds));
++	if (led_get_by_label("status:blue", &dev) == 0)
++		leds->blue = dev;
++	if (led_get_by_label("status:green", &dev) == 0)
++		leds->green = dev;
++	if (led_get_by_label("status:red", &dev) == 0)
++		leds->red = dev;
++
++	httpd_led_set(leds->red, LEDST_OFF);
++	httpd_led_set(leds->green, LEDST_OFF);
++	httpd_led_set(leds->blue, LEDST_ON);
++	leds->blink_ts = get_timer(0);
++}
++
++static void httpd_led_signal_error(struct httpd_leds *leds)
++{
++	leds->err_active = true;
++	leds->err_ts = get_timer(0);
++	httpd_led_set(leds->blue, LEDST_OFF);
++	httpd_led_set(leds->red, LEDST_ON);
++}
++
++static void httpd_led_signal_success(struct httpd_leds *leds)
++{
++	leds->err_active = false;
++	leds->success_lit = true;
++	httpd_led_set(leds->blue, LEDST_OFF);
++	httpd_led_set(leds->red, LEDST_OFF);
++	httpd_led_set(leds->green, LEDST_ON);
++}
++
++static void httpd_led_poll(struct httpd_leds *leds, bool upload_active)
++{
++	ulong period;
++
++	if (leds->success_lit)
++		return;
++
++	if (leds->err_active) {
++		if (get_timer(leds->err_ts) < HTTPD_LED_ERR_HOLD_MS)
++			return;
++		leds->err_active = false;
++		httpd_led_set(leds->red, LEDST_OFF);
++		httpd_led_set(leds->blue, LEDST_ON);
++		leds->blink_ts = get_timer(0);
++		return;
++	}
++
++	period = upload_active ? HTTPD_LED_UPLOAD_MS : HTTPD_LED_IDLE_MS;
++	if (get_timer(leds->blink_ts) >= period) {
++		httpd_led_set(leds->blue, LEDST_TOGGLE);
++		leds->blink_ts = get_timer(0);
++	}
++}
++
++static void httpd_led_finish(struct httpd_leds *leds, bool succeeded)
++{
++	if (succeeded) {
++		httpd_led_signal_success(leds);
++	} else {
++		httpd_led_set(leds->blue, LEDST_OFF);
++		httpd_led_set(leds->red, LEDST_OFF);
++		if (leds->success_lit)
++			httpd_led_set(leds->green, LEDST_OFF);
++	}
++}
++#else
++static inline void httpd_led_init(struct httpd_leds *leds) { (void)leds; }
++static inline void httpd_led_signal_error(struct httpd_leds *leds) { (void)leds; }
++static inline void httpd_led_signal_success(struct httpd_leds *leds) { (void)leds; }
++static inline void httpd_led_poll(struct httpd_leds *leds, bool upload_active)
++{
++	(void)leds;
++	(void)upload_active;
++}
++static inline void httpd_led_finish(struct httpd_leds *leds, bool succeeded)
++{
++	(void)leds;
++	(void)succeeded;
++}
++#endif
++
++/* =========================================================================
++ * Scoped lwIP UDP DHCPv4 server (active strictly during httpd_loop())
++ * ========================================================================= */
++
++static bool httpd_dhcp_pool_add(struct httpd_dhcp *dhcp, u32 cand_h,
++				u32 server_h)
++{
++	unsigned int i;
++	u32 cand_be;
++
++	if (dhcp->pool_count >= HTTPD_DHCP_POOL_SIZE)
++		return false;
++	if (cand_h == server_h || (cand_h & 0xffU) == 254U)
++		return false;
++
++	cand_be = lwip_htonl(cand_h);
++	for (i = 0; i < dhcp->pool_count; i++) {
++		if (dhcp->leases[i].ip_be == cand_be)
++			return false;
++	}
++
++	dhcp->leases[dhcp->pool_count].ip_be = cand_be;
++	dhcp->leases[dhcp->pool_count].in_use = false;
++	dhcp->pool_count++;
++	return true;
++}
++
++static void httpd_dhcp_init_pool(struct httpd_dhcp *dhcp, u32 server_ip_be,
++				 u32 netmask_be)
++{
++	u32 server_h = lwip_ntohl(server_ip_be);
++	u32 mask_h = lwip_ntohl(netmask_be);
++	u32 host_max;
++	u32 net_h;
++	u32 off;
++
++	dhcp->server_ip_be = server_ip_be;
++	dhcp->netmask_be = netmask_be;
++	dhcp->pool_count = 0;
++
++	if (!server_h || !mask_h)
++		return;
++
++	host_max = ~mask_h;
++	/* Require contiguous mask and at least /30 (2 host slots). */
++	if (host_max < 3U || (host_max & (host_max + 1U)) != 0U)
++		return;
++
++	net_h = server_h & mask_h;
++
++	/* Preferred pool: <net>.100 .. <net>.107 when within subnet. */
++	for (off = 100U;
++	     off <= 107U && off < host_max && dhcp->pool_count < HTTPD_DHCP_POOL_SIZE;
++	     off++)
++		httpd_dhcp_pool_add(dhcp, net_h + off, server_h);
++
++	/* Fallback: fill remaining slots above .107, then below .100. */
++	for (off = 108U;
++	     off < host_max && dhcp->pool_count < HTTPD_DHCP_POOL_SIZE;
++	     off++)
++		httpd_dhcp_pool_add(dhcp, net_h + off, server_h);
++
++	for (off = 1U;
++	     off < 100U && off < host_max && dhcp->pool_count < HTTPD_DHCP_POOL_SIZE;
++	     off++)
++		httpd_dhcp_pool_add(dhcp, net_h + off, server_h);
++}
++
++static void httpd_dhcp_expire_leases(struct httpd_dhcp *dhcp)
++{
++	unsigned int i;
++
++	for (i = 0; i < dhcp->pool_count; i++) {
++		if (dhcp->leases[i].in_use &&
++		    get_timer(dhcp->leases[i].last_seen) >= HTTPD_DHCP_LEASE_MS) {
++			dhcp->leases[i].in_use = false;
++			memset(dhcp->leases[i].mac, 0, HTTPD_DHCP_MAC_LEN);
++		}
++	}
++}
++
++static struct httpd_dhcp_lease *httpd_dhcp_find_mac(struct httpd_dhcp *dhcp,
++						    const u8 *mac)
++{
++	unsigned int i;
++
++	for (i = 0; i < dhcp->pool_count; i++) {
++		if (dhcp->leases[i].in_use &&
++		    memcmp(dhcp->leases[i].mac, mac, HTTPD_DHCP_MAC_LEN) == 0)
++			return &dhcp->leases[i];
++	}
++
++	return NULL;
++}
++
++static struct httpd_dhcp_lease *httpd_dhcp_find_ip(struct httpd_dhcp *dhcp,
++						   u32 ip_be)
++{
++	unsigned int i;
++
++	for (i = 0; i < dhcp->pool_count; i++) {
++		if (dhcp->leases[i].ip_be == ip_be)
++			return &dhcp->leases[i];
++	}
++
++	return NULL;
++}
++
++static void httpd_dhcp_bind_lease(struct httpd_dhcp *dhcp,
++				  struct httpd_dhcp_lease *lease,
++				  const u8 *mac)
++{
++	unsigned int i;
++
++	for (i = 0; i < dhcp->pool_count; i++) {
++		if (&dhcp->leases[i] != lease && dhcp->leases[i].in_use &&
++		    memcmp(dhcp->leases[i].mac, mac, HTTPD_DHCP_MAC_LEN) == 0) {
++			dhcp->leases[i].in_use = false;
++			memset(dhcp->leases[i].mac, 0, HTTPD_DHCP_MAC_LEN);
++		}
++	}
++
++	memcpy(lease->mac, mac, HTTPD_DHCP_MAC_LEN);
++	lease->in_use = true;
++	lease->last_seen = get_timer(0);
++	lease->seq = ++dhcp->lru_seq;
++}
++
++static struct httpd_dhcp_lease *httpd_dhcp_alloc_lease(struct httpd_dhcp *dhcp,
++						       const u8 *mac,
++						       bool has_req_ip,
++						       u32 req_ip_be)
++{
++	struct httpd_dhcp_lease *lease;
++	struct httpd_dhcp_lease *victim;
++	ulong victim_age;
++	unsigned int i;
++
++	httpd_dhcp_expire_leases(dhcp);
++
++	lease = httpd_dhcp_find_mac(dhcp, mac);
++	if (lease) {
++		httpd_dhcp_bind_lease(dhcp, lease, mac);
++		return lease;
++	}
++
++	if (has_req_ip) {
++		lease = httpd_dhcp_find_ip(dhcp, req_ip_be);
++		if (lease && !lease->in_use) {
++			httpd_dhcp_bind_lease(dhcp, lease, mac);
++			return lease;
++		}
++	}
++
++	for (i = 0; i < dhcp->pool_count; i++) {
++		if (!dhcp->leases[i].in_use) {
++			httpd_dhcp_bind_lease(dhcp, &dhcp->leases[i], mac);
++			return &dhcp->leases[i];
++		}
++	}
++
++	if (!dhcp->pool_count)
++		return NULL;
++
++	/* Pool full: evict least-recently-active lease without heap growth. */
++	victim = &dhcp->leases[0];
++	victim_age = get_timer(victim->last_seen);
++	for (i = 1; i < dhcp->pool_count; i++) {
++		struct httpd_dhcp_lease *cur = &dhcp->leases[i];
++		ulong cur_age = get_timer(cur->last_seen);
++
++		if (cur_age > victim_age ||
++		    (cur_age == victim_age && (s32)(victim->seq - cur->seq) > 0)) {
++			victim = cur;
++			victim_age = cur_age;
++		}
++	}
++
++	httpd_dhcp_bind_lease(dhcp, victim, mac);
++	return victim;
++}
++
++static bool httpd_dhcp_opt_put(u8 *buf, size_t cap, size_t *pos,
++			       u8 code, const void *val, u8 len)
++{
++	if (*pos + 2U + (size_t)len >= cap)
++		return false;
++
++	buf[(*pos)++] = code;
++	buf[(*pos)++] = len;
++	if (len > 0) {
++		memcpy(buf + *pos, val, len);
++		*pos += len;
++	}
++	return true;
++}
++
++static void httpd_dhcp_send_reply(struct httpd_dhcp *dhcp, const u8 *req_xid,
++				  const u8 *mac, u8 reply_type,
++				  u32 ciaddr_be, u32 yiaddr_be, u32 lease_sec)
++{
++	u8 *reply = dhcp->tx_buf;
++	size_t cap = sizeof(dhcp->tx_buf);
++	size_t pos = DHCP_OPTIONS_OFS;
++	u16 flags_be = PP_HTONS(HTTPD_DHCP_FLAG_BROADCAST);
++	u32 cookie_be = PP_HTONL(DHCP_MAGIC_COOKIE);
++	struct pbuf *q;
++	ip_addr_t src_ip;
++
++	memset(reply, 0, cap);
++	reply[0] = DHCP_BOOTREPLY;
++	reply[1] = LWIP_IANA_HWTYPE_ETHERNET;
++	reply[2] = HTTPD_DHCP_MAC_LEN;
++	memcpy(reply + 4, req_xid, 4);
++	memcpy(reply + 10, &flags_be, 2);
++	memcpy(reply + 12, &ciaddr_be, 4);
++	memcpy(reply + 16, &yiaddr_be, 4);
++	if (reply_type != DHCP_NAK)
++		memcpy(reply + 20, &dhcp->server_ip_be, 4);
++	memcpy(reply + 28, mac, HTTPD_DHCP_MAC_LEN);
++	memcpy(reply + 236, &cookie_be, 4);
++
++	if (!httpd_dhcp_opt_put(reply, cap, &pos, DHCP_OPTION_MESSAGE_TYPE,
++				&reply_type, 1))
++		return;
++	if (!httpd_dhcp_opt_put(reply, cap, &pos, DHCP_OPTION_SERVER_ID,
++				&dhcp->server_ip_be, 4))
++		return;
++
++	if (reply_type != DHCP_NAK) {
++		if (!httpd_dhcp_opt_put(reply, cap, &pos,
++					DHCP_OPTION_SUBNET_MASK,
++					&dhcp->netmask_be, 4))
++			return;
++		if (!httpd_dhcp_opt_put(reply, cap, &pos, DHCP_OPTION_ROUTER,
++					&dhcp->server_ip_be, 4))
++			return;
++		if (!httpd_dhcp_opt_put(reply, cap, &pos,
++					DHCP_OPTION_DNS_SERVER,
++					&dhcp->server_ip_be, 4))
++			return;
++		if (lease_sec > 0) {
++			u32 lease_be = lwip_htonl(lease_sec);
++
++			if (!httpd_dhcp_opt_put(reply, cap, &pos,
++						DHCP_OPTION_LEASE_TIME,
++						&lease_be, 4))
++				return;
++		}
++	}
++
++	if (pos >= cap)
++		return;
++	reply[pos++] = DHCP_OPTION_END;
++
++	/* Pad BOOTP/DHCP reply to >= 300 bytes for Windows/macOS/Linux clients. */
++	if (pos < HTTPD_DHCP_MIN_REPLY_LEN)
++		pos = HTTPD_DHCP_MIN_REPLY_LEN;
++
++	q = pbuf_alloc(PBUF_TRANSPORT, (u16_t)pos, PBUF_RAM);
++	if (!q)
++		return;
++
++	if (pbuf_take(q, reply, (u16_t)pos) == ERR_OK) {
++		ip_addr_set_ip4_u32_val(src_ip, dhcp->server_ip_be);
++		udp_sendto_if_src(dhcp->pcb, q, IP_ADDR_BROADCAST,
++				  LWIP_IANA_PORT_DHCP_CLIENT, dhcp->netif,
++				  &src_ip);
++	}
++	pbuf_free(q);
++}
++
++static void httpd_dhcp_recv_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p,
++			       const ip_addr_t *addr, u16_t port)
++{
++	struct httpd_server *srv = arg;
++	struct httpd_dhcp *dhcp;
++	u8 *buf;
++	size_t len;
++	size_t off;
++	u32 cookie_be;
++	u32 ciaddr_be;
++	u32 giaddr_be;
++	u8 msg_type = 0;
++	bool has_msg_type = false;
++	u32 req_ip_be = 0;
++	bool has_req_ip = false;
++	u32 srv_id_be = 0;
++	bool has_srv_id = false;
++	const u8 *mac;
++	const u8 *xid;
++
++	(void)pcb;
++	(void)addr;
++
++	if (!p)
++		return;
++
++	if (!srv || !srv->dhcp.pcb || !srv->dhcp.netif ||
++	    !srv->dhcp.pool_count || port != LWIP_IANA_PORT_DHCP_CLIENT ||
++	    p->tot_len < HTTPD_DHCP_MIN_RX_LEN ||
++	    p->tot_len > HTTPD_DHCP_MAX_RX_LEN) {
++		pbuf_free(p);
++		return;
++	}
++
++	dhcp = &srv->dhcp;
++	buf = dhcp->rx_buf;
++	len = p->tot_len;
++	if (pbuf_copy_partial(p, buf, (u16_t)len, 0) != (u16_t)len) {
++		pbuf_free(p);
++		return;
++	}
++	pbuf_free(p);
++
++	if (buf[0] != DHCP_BOOTREQUEST ||
++	    buf[1] != LWIP_IANA_HWTYPE_ETHERNET ||
++	    buf[2] != HTTPD_DHCP_MAC_LEN)
++		return;
++
++	memcpy(&giaddr_be, buf + 24, 4);
++	if (giaddr_be != 0)
++		return;
++
++	memcpy(&cookie_be, buf + 236, 4);
++	if (cookie_be != PP_HTONL(DHCP_MAGIC_COOKIE))
++		return;
++
++	memcpy(&ciaddr_be, buf + 12, 4);
++	xid = buf + 4;
++	mac = buf + 28;
++
++	off = DHCP_OPTIONS_OFS;
++	while (off < len) {
++		u8 opt = buf[off++];
++		u8 opt_len;
++
++		if (opt == DHCP_OPTION_PAD)
++			continue;
++		if (opt == DHCP_OPTION_END)
++			break;
++		if (off >= len)
++			return;
++		opt_len = buf[off++];
++		if ((size_t)opt_len > len - off)
++			return;
++
++		switch (opt) {
++		case DHCP_OPTION_MESSAGE_TYPE:
++			if (opt_len != 1)
++				return;
++			msg_type = buf[off];
++			has_msg_type = true;
++			break;
++		case DHCP_OPTION_REQUESTED_IP:
++			if (opt_len != 4)
++				return;
++			memcpy(&req_ip_be, buf + off, 4);
++			has_req_ip = true;
++			break;
++		case DHCP_OPTION_SERVER_ID:
++			if (opt_len != 4)
++				return;
++			memcpy(&srv_id_be, buf + off, 4);
++			has_srv_id = true;
++			break;
++		default:
++			break;
++		}
++		off += opt_len;
++	}
++
++	if (!has_msg_type)
++		return;
++
++	switch (msg_type) {
++	case DHCP_DISCOVER: {
++		struct httpd_dhcp_lease *lease;
++
++		lease = httpd_dhcp_alloc_lease(dhcp, mac, has_req_ip, req_ip_be);
++		if (lease)
++			httpd_dhcp_send_reply(dhcp, xid, mac, DHCP_OFFER, 0,
++					      lease->ip_be,
++					      HTTPD_DHCP_LEASE_SEC);
++		break;
++	}
++	case DHCP_REQUEST: {
++		u32 target_ip_be = has_req_ip ? req_ip_be : ciaddr_be;
++		struct httpd_dhcp_lease *slot;
++
++		/* Selecting another server: silently ignore. */
++		if (has_srv_id && srv_id_be != dhcp->server_ip_be)
++			return;
++
++		/* No Server ID and foreign subnet: silently ignore (no Rogue NAK). */
++		if (!has_srv_id &&
++		    (!target_ip_be ||
++		     (target_ip_be & dhcp->netmask_be) !=
++		     (dhcp->server_ip_be & dhcp->netmask_be)))
++			return;
++
++		httpd_dhcp_expire_leases(dhcp);
++		slot = target_ip_be ? httpd_dhcp_find_ip(dhcp, target_ip_be) : NULL;
++		if (slot && (!slot->in_use ||
++			     memcmp(slot->mac, mac, HTTPD_DHCP_MAC_LEN) == 0)) {
++			httpd_dhcp_bind_lease(dhcp, slot, mac);
++			httpd_dhcp_send_reply(dhcp, xid, mac, DHCP_ACK, 0,
++					      slot->ip_be,
++					      HTTPD_DHCP_LEASE_SEC);
++		} else if (has_srv_id) {
++			/* Explicitly addressed to our Server ID with invalid/conflicting IP. */
++			httpd_dhcp_send_reply(dhcp, xid, mac, DHCP_NAK, 0, 0, 0);
++		}
++		break;
++	}
++	case DHCP_RELEASE: {
++		struct httpd_dhcp_lease *lease;
++
++		if (has_srv_id && srv_id_be != dhcp->server_ip_be)
++			return;
++
++		lease = httpd_dhcp_find_mac(dhcp, mac);
++		if (lease && (!ciaddr_be || lease->ip_be == ciaddr_be)) {
++			lease->in_use = false;
++			memset(lease->mac, 0, HTTPD_DHCP_MAC_LEN);
++		}
++		break;
++	}
++	case DHCP_INFORM:
++		if (has_srv_id && srv_id_be != dhcp->server_ip_be)
++			return;
++		httpd_dhcp_send_reply(dhcp, xid, mac, DHCP_ACK, ciaddr_be, 0, 0);
++		break;
++	default:
++		break;
++	}
++}
++
++static void httpd_dhcp_start(struct httpd_server *srv, struct netif *netif)
++{
++	struct httpd_dhcp *dhcp = &srv->dhcp;
++	struct udp_pcb *pcb;
++
++	dhcp->netif = netif;
++	httpd_dhcp_init_pool(dhcp, ip4_addr_get_u32(netif_ip4_addr(netif)),
++			     ip4_addr_get_u32(netif_ip4_netmask(netif)));
++	if (!dhcp->pool_count)
++		return;
++
++	pcb = udp_new();
++	if (!pcb)
++		return;
++
++	udp_bind_netif(pcb, netif);
++	if (udp_bind(pcb, IP4_ADDR_ANY, LWIP_IANA_PORT_DHCP_SERVER) != ERR_OK) {
++		udp_remove(pcb);
++		return;
++	}
++
++	udp_recv(pcb, httpd_dhcp_recv_cb, srv);
++	dhcp->pcb = pcb;
++}
++
++static void httpd_dhcp_stop(struct httpd_dhcp *dhcp)
++{
++	if (dhcp->pcb) {
++		udp_recv(dhcp->pcb, NULL, NULL);
++		udp_remove(dhcp->pcb);
++		dhcp->pcb = NULL;
++	}
++}
++
++/* =========================================================================
++ * HTTP/1.1 multipart/form-data streaming parser & FIT validator
++ * ========================================================================= */
 +
 +static bool httpd_ci_eq_n(const char *a, const char *b, size_t n)
 +{
@@ -1241,17 +1908,20 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +		srv->upload_succeeded = true;
 +		srv->uploaded_size = conn->parser.file_size;
 +		srv->flush_start = get_timer(0);
++		httpd_led_signal_success(&srv->leds);
 +		httpd_send_response(conn, "200 OK", httpd_ok_html);
 +		break;
 +	case HTTPD_RES_BAD_FIT:
 +		printf("\nHTTP upload rejected: invalid FIT image (%zu bytes)\n",
 +		       conn->parser.file_size);
 +		httpd_release_upload_lock(conn);
++		httpd_led_signal_error(&srv->leds);
 +		httpd_send_response(conn, "400 Bad Request", httpd_bad_fit_html);
 +		break;
 +	case HTTPD_RES_PAYLOAD_TOO_LARGE:
 +		printf("\nHTTP upload rejected: payload exceeds 64 MiB limit\n");
 +		httpd_release_upload_lock(conn);
++		httpd_led_signal_error(&srv->leds);
 +		httpd_send_response(conn, "413 Payload Too Large",
 +				    httpd_too_large_html);
 +		break;
@@ -1269,6 +1939,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	case HTTPD_RES_MEM_ERROR:
 +		printf("\nHTTP upload rejected: target memory reserved or out of bounds\n");
 +		httpd_release_upload_lock(conn);
++		httpd_led_signal_error(&srv->leds);
 +		httpd_send_response(conn, "500 Internal Server Error",
 +				    httpd_mem_err_html);
 +		break;
@@ -1276,6 +1947,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	default:
 +		printf("\nHTTP upload rejected: malformed request\n");
 +		httpd_release_upload_lock(conn);
++		httpd_led_signal_error(&srv->leds);
 +		httpd_send_response(conn, "400 Bad Request", httpd_bad_req_html);
 +		break;
 +	}
@@ -1325,6 +1997,9 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +{
 +	int i;
 +
++	/* Stop UDP DHCP server immediately on every exit path. */
++	httpd_dhcp_stop(&srv->dhcp);
++
 +	for (i = 0; i < HTTPD_MAX_CONNS; i++) {
 +		struct httpd_conn *conn = &srv->conns[i];
 +
@@ -1357,6 +2032,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	struct httpd_server *srv;
 +	struct netif *netif;
 +	struct tcp_pcb *pcb;
++	const char *ip_str;
 +	int prev_ctrlc;
 +	int ret = -1;
 +
@@ -1370,6 +2046,8 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +		return -ENOMEM;
 +	}
 +
++	httpd_led_init(&srv->leds);
++
 +	srv->load_addr = load_addr;
 +	srv->max_size = HTTPD_MAX_UPLOAD_SIZE;
 +	srv->dst_buf = map_sysmem(load_addr, srv->max_size);
@@ -1378,14 +2056,14 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	if (!pcb) {
 +		printf("httpd: failed to allocate TCP PCB\n");
 +		ret = -ENOMEM;
-+		goto out_unmap;
++		goto out_cleanup;
 +	}
 +
 +	if (tcp_bind(pcb, IP_ADDR_ANY, HTTPD_PORT) != ERR_OK) {
 +		printf("httpd: failed to bind port %d\n", HTTPD_PORT);
 +		tcp_close(pcb);
 +		ret = -EADDRINUSE;
-+		goto out_unmap;
++		goto out_cleanup;
 +	}
 +
 +	srv->listen_pcb = tcp_listen(pcb);
@@ -1393,15 +2071,22 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +		printf("httpd: failed to listen on port %d\n", HTTPD_PORT);
 +		tcp_close(pcb);
 +		ret = -ENOMEM;
-+		goto out_unmap;
++		goto out_cleanup;
 +	}
 +
 +	tcp_arg(srv->listen_pcb, srv);
 +	tcp_accept(srv->listen_pcb, httpd_accept_cb);
 +
++	httpd_dhcp_start(srv, netif);
++
++	ip_str = env_get("ipaddr");
 +	printf("Using %s device\n", udev->name);
 +	printf("RAM-only HTTP recovery listening on http://%s:%d/\n",
-+	       env_get("ipaddr"), HTTPD_PORT);
++	       ip_str ? ip_str : HTTPD_DEFAULT_IPADDR, HTTPD_PORT);
++	if (srv->dhcp.pcb)
++		printf("DHCPv4 server active on UDP port %d (%u-slot pool, %us lease)\n",
++		       LWIP_IANA_PORT_DHCP_SERVER, srv->dhcp.pool_count,
++		       HTTPD_DHCP_LEASE_SEC);
 +	printf("Load address: 0x%lx (max %lu MiB, no flash writes)\n",
 +	       load_addr, srv->max_size >> 20);
 +	printf("Press Ctrl-C to abort.\n");
@@ -1410,6 +2095,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +
 +	while (1) {
 +		net_lwip_rx(udev, netif);
++		httpd_led_poll(&srv->leds, srv->upload_active);
 +
 +		if (srv->upload_succeeded) {
 +			if (srv->response_flushed ||
@@ -1442,23 +2128,94 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +		}
 +	}
 +
++out_cleanup:
 +	httpd_server_cleanup(srv);
-+out_unmap:
++	httpd_led_finish(&srv->leds, ret == 0);
 +	unmap_sysmem(srv->dst_buf);
 +	free(srv);
 +	net_lwip_remove_netif(netif);
 +	return ret;
 +}
 +
++static int httpd_run_recovery(ulong load_addr)
++{
++	const char *val;
++	int ret;
++
++	httpd_ran_this_boot = true;
++
++	if (httpd_check_mem_range(load_addr, HTTPD_MIN_CHECK_SIZE) != 0) {
++		printf("httpd: load address 0x%lx is reserved or out of bounds\n",
++		       load_addr);
++		return -EFAULT;
++	}
++
++	/* Ensure RAM-only network defaults if an older ubootenv lacks them. */
++	val = env_get("ipaddr");
++	if (!val || !*val)
++		env_set("ipaddr", HTTPD_DEFAULT_IPADDR);
++	val = env_get("netmask");
++	if (!val || !*val)
++		env_set("netmask", HTTPD_DEFAULT_NETMASK);
++
++	if (net_lwip_eth_start() < 0)
++		return -ENODEV;
++
++	ret = httpd_loop(eth_get_dev(), load_addr);
++	net_lwip_eth_stop();
++
++	return ret;
++}
++
++#if CONFIG_IS_ENABLED(EVENT) && CONFIG_IS_ENABLED(BUTTON)
++static ulong httpd_resolve_fallback_addr(void)
++{
++	const char *val = env_get("initaddr");
++
++	if (val && *val) {
++		char *end;
++		ulong addr = hextoul(val, &end);
++
++		if (!*end && addr &&
++		    httpd_check_mem_range(addr, HTTPD_MIN_CHECK_SIZE) == 0)
++			return addr;
++	}
++
++	return HTTPD_DEFAULT_LOAD_ADDR;
++}
++
++static int httpd_post_preboot_reset_check(void)
++{
++	struct udevice *btn = NULL;
++	ulong load_addr;
++
++	if (httpd_ran_this_boot)
++		return 0;
++
++	if (button_get_by_label("reset", &btn) != 0 || !btn ||
++	    button_get_state(btn) != BUTTON_ON)
++		return 0;
++
++	printf("Reset button held - entering RAM-only HTTP recovery\n");
++	load_addr = httpd_resolve_fallback_addr();
++	if (httpd_run_recovery(load_addr) == 0)
++		run_command("bootm $fileaddr", 0);
++
++	return 0;
++}
++EVENT_SPY_SIMPLE(EVT_POST_PREBOOT, httpd_post_preboot_reset_check);
++#endif
++
 +static int do_httpd(struct cmd_tbl *cmdtp, int flag, int argc,
 +		    char *const argv[])
 +{
 +	ulong load_addr;
 +	const char *val;
-+	int ret;
 +
 +	(void)cmdtp;
 +	(void)flag;
++	httpd_ran_this_boot = true;
++
 +	if (argc > 2)
 +		return CMD_RET_USAGE;
 +
@@ -1483,30 +2240,24 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +		}
 +	}
 +
-+	if (httpd_check_mem_range(load_addr, HTTPD_MIN_CHECK_SIZE) != 0) {
-+		printf("httpd: load address 0x%lx is reserved or out of bounds\n",
-+		       load_addr);
-+		return CMD_RET_FAILURE;
-+	}
-+
-+	/* Ensure RAM-only network defaults if an older ubootenv lacks them. */
-+	val = env_get("ipaddr");
-+	if (!val || !*val)
-+		env_set("ipaddr", HTTPD_DEFAULT_IPADDR);
-+	val = env_get("netmask");
-+	if (!val || !*val)
-+		env_set("netmask", HTTPD_DEFAULT_NETMASK);
-+
-+	if (net_lwip_eth_start() < 0)
-+		return CMD_RET_FAILURE;
-+
-+	ret = httpd_loop(eth_get_dev(), load_addr);
-+	net_lwip_eth_stop();
-+
-+	return ret == 0 ? CMD_RET_SUCCESS : CMD_RET_FAILURE;
++	return httpd_run_recovery(load_addr) == 0 ?
++	       CMD_RET_SUCCESS : CMD_RET_FAILURE;
 +}
 +
 +U_BOOT_CMD(httpd, 2, 0, do_httpd,
 +	   "start RAM-only HTTP FIT recovery server",
 +	   "[loadAddress]\n"
 +	   "    - listen on TCP port 80 and load uploaded FIT image into RAM");
+--- a/lib/lwip/u-boot/lwipopts.h
++++ b/lib/lwip/u-boot/lwipopts.h
+@@ -135,6 +135,10 @@
+ #define LWIP_UDP                        0
+ #endif
+ 
++#if defined(CONFIG_CMD_HTTPD)
++#define LWIP_IP_ACCEPT_UDP_PORT(dst_port) ((dst_port) == PP_NTOHS(67))
++#endif
++
+ /*
+  * PBUF_POOL_BUFSIZE is derived from TCP_MSS even when
+  * CONFIG_PROT_TCP_LWIP is not defined
