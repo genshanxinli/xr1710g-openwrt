@@ -1,34 +1,73 @@
 From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
-Date: Sat, 28 Nov 2026 12:30:00 +0800
-Subject: [PATCH] net: airoha_eth: reset RX ring head and DMA indices on eth init
+Date: Sat, 28 Nov 2026 13:20:00 +0800
+Subject: [PATCH] net: airoha_eth: quiesce QDMA and sync RX ring head from HW on eth init
 
 airoha_eth_init() reinitializes all RX descriptors via
 airoha_qdma_init_rx_desc(), clearing QDMA_DESC_DONE_MASK across the
-ring, but leaves q->head and the hardware REG_RX_CPU_IDX(0) and
-REG_RX_DMA_IDX(0) registers untouched. After eth_halt() and a
-subsequent eth_init(), any RX traffic processed or queued during the
-previous session leaves software q->head and hardware DMA/CPU ring
-pointers out of sync with the reset descriptors, causing
-airoha_eth_recv() to stall returning -EAGAIN.
+ring, without first ensuring TX/RX DMA has drained and without syncing
+q->head and REG_RX_CPU_IDX(0) to the hardware REG_RX_DMA_IDX(0). After
+eth_halt() and a subsequent eth_init(), hardware REG_RX_DMA_IDX(0)
+retains its previous non-zero ring position (and cannot be relied upon
+to reset via software write), leaving software q->head out of sync with
+hardware DMA and causing airoha_eth_recv() to stall returning -EAGAIN.
 
-Reset q->head to 0 and reprogram REG_RX_CPU_IDX(qid) to q->ndesc - 1
-and REG_RX_DMA_IDX(qid) to 0 right after airoha_qdma_init_rx_desc()
-and before enabling RX/TX DMA, matching airoha_qdma_init_rx_queue().
+Add airoha_qdma_stop_dma() to clear TX/RX DMA enable bits and poll until
+GLOBAL_CFG_TX_DMA_BUSY_MASK | GLOBAL_CFG_RX_DMA_BUSY_MASK deassert
+(bounded 50 ms timeout with warning). Call it in both airoha_eth_stop()
+and airoha_eth_init() before resetting RX descriptors, then read
+REG_RX_DMA_IDX(qid) to align q->head and reprogram REG_RX_CPU_IDX(qid)
+to (q->head + q->ndesc - 1) % q->ndesc before re-enabling DMA.
 
 Origin: local, xr1710g (#386, #441)
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/drivers/net/airoha_eth.c
 +++ b/drivers/net/airoha_eth.c
-@@ -1017,6 +1017,11 @@
+@@ -1006,6 +1006,21 @@
+ 	return 0;
+ }
+ 
++static void airoha_qdma_stop_dma(struct airoha_qdma *qdma)
++{
++	u32 status;
++
++	airoha_qdma_clear(qdma, REG_QDMA_GLOBAL_CFG,
++			  GLOBAL_CFG_TX_DMA_EN_MASK |
++			  GLOBAL_CFG_RX_DMA_EN_MASK);
++	if (read_poll_timeout(airoha_qdma_rr, status,
++			      !(status & (GLOBAL_CFG_TX_DMA_BUSY_MASK |
++					  GLOBAL_CFG_RX_DMA_BUSY_MASK)),
++			      100, 50 * USEC_PER_MSEC, qdma,
++			      REG_QDMA_GLOBAL_CFG))
++		printf("airoha_eth: QDMA DMA busy timeout (0x%08x)\n", status);
++}
++
+ static int airoha_eth_init(struct udevice *dev)
+ {
+ 	struct airoha_gdm_port *port = dev_get_priv(dev);
+@@ -1016,7 +1031,14 @@
+ 	qid = 0;
  	q = &qdma->q_rx[qid];
  
++	airoha_qdma_stop_dma(qdma);
  	airoha_qdma_init_rx_desc(q);
-+	q->head = 0;
++	q->head = FIELD_GET(RX_RING_DMA_IDX_MASK,
++			    airoha_qdma_rr(qdma, REG_RX_DMA_IDX(qid))) %
++		  q->ndesc;
 +	airoha_qdma_rmw(qdma, REG_RX_CPU_IDX(qid), RX_RING_CPU_IDX_MASK,
-+			FIELD_PREP(RX_RING_CPU_IDX_MASK, q->ndesc - 1));
-+	airoha_qdma_rmw(qdma, REG_RX_DMA_IDX(qid), RX_RING_DMA_IDX_MASK,
-+			FIELD_PREP(RX_RING_DMA_IDX_MASK, q->head));
++			FIELD_PREP(RX_RING_CPU_IDX_MASK,
++				   (q->head + q->ndesc - 1) % q->ndesc));
  
  	airoha_qdma_set(qdma, REG_QDMA_GLOBAL_CFG,
  			GLOBAL_CFG_TX_DMA_EN_MASK |
+@@ -1082,9 +1104,7 @@
+ 	}
+ #endif
+ 
+-	airoha_qdma_clear(qdma, REG_QDMA_GLOBAL_CFG,
+-			  GLOBAL_CFG_TX_DMA_EN_MASK |
+-			  GLOBAL_CFG_RX_DMA_EN_MASK);
++	airoha_qdma_stop_dma(qdma);
+ }
+ 
+ static int airoha_eth_send(struct udevice *dev, void *packet, int length)

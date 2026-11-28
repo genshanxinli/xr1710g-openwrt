@@ -57,6 +57,7 @@ HTTPD_REQ_SYMS = (
     "udp_sendto_if_src",
     "led_get_by_label",
     "EVT_POST_PREBOOT",
+    "DHCP_NAK",
 )
 
 
@@ -286,6 +287,18 @@ def check_httpd_c_ram_only(added_lines: list[str]) -> list[str]:
     for sym in HTTPD_REQ_SYMS:
         if not re.search(rf"\b{re.escape(sym)}\b", stripped):
             errs.append(f"{HTTPD_PATCH} cmd/lwip/httpd.c missing required hardening symbol: {sym}")
+    if re.search(r"\belse\s+if\s*\(\s*has_srv_id\s*\)", stripped):
+        errs.append(
+            f"{HTTPD_PATCH} cmd/lwip/httpd.c must send DHCP_NAK for same-subnet out-of-pool/conflict requests regardless of has_srv_id"
+        )
+    if not re.search(r"\bhttpd_dhcp_send_reply\s*\([^;]*\bDHCP_ACK\s*,\s*ciaddr_be\s*,\s*slot->ip_be\b", stripped):
+        errs.append(
+            f"{HTTPD_PATCH} cmd/lwip/httpd.c DHCP_REQUEST DHCP_ACK must echo ciaddr_be per RFC 2131"
+        )
+    if not re.search(r"reply_type\s*!=\s*DHCP_NAK\s*\)\s*\{[^}]*reply\s*\+\s*12\b", stripped):
+        errs.append(
+            f"{HTTPD_PATCH} cmd/lwip/httpd.c httpd_dhcp_send_reply must keep ciaddr=0 on DHCP_NAK"
+        )
     return errs
 
 
@@ -448,9 +461,23 @@ def main(argv: list[str]) -> int:
                 fails.append(f"{ETH_RX_RESET_PATCH}: missing added lines for drivers/net/airoha_eth.c")
             else:
                 eth_clean = C_STRIP_RE.sub(" ", "\n".join(eth_118))
-                for sym in ("REG_RX_CPU_IDX", "REG_RX_DMA_IDX"):
+                for sym in (
+                    "GLOBAL_CFG_TX_DMA_BUSY_MASK",
+                    "GLOBAL_CFG_RX_DMA_BUSY_MASK",
+                    "read_poll_timeout",
+                    "REG_RX_CPU_IDX",
+                    "REG_RX_DMA_IDX",
+                ):
                     if not re.search(rf"\b{re.escape(sym)}\b", eth_clean):
                         fails.append(f"{ETH_RX_RESET_PATCH}: drivers/net/airoha_eth.c missing {sym}")
+                if not re.search(r"\bairoha_qdma_rr\s*\([^;]*\bREG_RX_DMA_IDX\b", eth_clean):
+                    fails.append(
+                        f"{ETH_RX_RESET_PATCH}: drivers/net/airoha_eth.c must sync q->head from HW REG_RX_DMA_IDX via airoha_qdma_rr()"
+                    )
+                if re.search(r"\bairoha_qdma_(?:rmw|wr)\s*\([^;]*\bREG_RX_DMA_IDX\b", eth_clean):
+                    fails.append(
+                        f"{ETH_RX_RESET_PATCH}: drivers/net/airoha_eth.c must not force-write REG_RX_DMA_IDX"
+                    )
     p404 = uboot_patch_dir / LWIP_TX_PATCH
     if not p404.is_file():
         fails.append(f"package/boot/uboot-airoha/patches/ missing {LWIP_TX_PATCH}")

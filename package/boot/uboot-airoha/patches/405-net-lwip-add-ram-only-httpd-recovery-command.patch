@@ -13,7 +13,8 @@ and XHR upload progress bar on GET /, sets SOF_REUSEADDR before binding
 TCP port 80 and UDP port 67 (preventing 2nd-run bind failures from
 TIME_WAIT PCBs) and aborts lingering active client PCBs on cleanup, runs
 a scoped 8-slot UDP DHCPv4 server (180 s lease with RFC 2131 Options
-28/58/59, anti-Rogue-NAK filtering, >= 300 B broadcast reply preserving
+28/58/59, anti-Rogue-NAK filtering with same-subnet out-of-pool/conflict
+DHCPNAK, ciaddr echo in DHCPACK, >= 300 B broadcast reply preserving
 request flags, trailing padding tolerance, concise UART diagnostics, and
 immediate teardown on every exit path) during httpd_loop(), drives DM
 status LEDs (blue entry/slow/fast blink, 1500 ms red error hold, steady
@@ -60,7 +61,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  obj-$(CONFIG_CMD_SNTP) += sntp.o
 --- /dev/null
 +++ b/cmd/lwip/httpd.c
-@@ -0,0 +1,2342 @@
+@@ -0,0 +1,2347 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * RAM-only HTTP FIT recovery server for lwIP.
@@ -691,10 +692,11 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	reply[2] = HTTPD_DHCP_MAC_LEN;
 +	memcpy(reply + 4, req_xid, 4);
 +	memcpy(reply + 10, &flags_be, 2);
-+	memcpy(reply + 12, &ciaddr_be, 4);
-+	memcpy(reply + 16, &yiaddr_be, 4);
-+	if (reply_type != DHCP_NAK)
++	if (reply_type != DHCP_NAK) {
++		memcpy(reply + 12, &ciaddr_be, 4);
++		memcpy(reply + 16, &yiaddr_be, 4);
 +		memcpy(reply + 20, &dhcp->server_ip_be, 4);
++	}
 +	memcpy(reply + 28, mac, HTTPD_DHCP_MAC_LEN);
 +	memcpy(reply + 236, &cookie_be, 4);
 +
@@ -956,21 +958,25 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +			     memcmp(slot->mac, mac, HTTPD_DHCP_MAC_LEN) == 0)) {
 +			httpd_dhcp_bind_lease(dhcp, slot, mac);
 +			if (httpd_dhcp_send_reply(dhcp, xid, req_flags_be, mac,
-+						  DHCP_ACK, 0, slot->ip_be,
++						  DHCP_ACK, ciaddr_be,
++						  slot->ip_be,
 +						  HTTPD_DHCP_LEASE_SEC)) {
 +				dhcp->stat_ack++;
 +				httpd_dhcp_log_event("REQUEST", mac, "ACK",
 +						     slot->ip_be);
 +			}
-+		} else if (has_srv_id) {
-+			/* Explicitly addressed to our Server ID with invalid/conflicting IP. */
++		} else {
++			/*
++			 * Explicitly addressed to our Server ID or same-subnet
++			 * out-of-pool/conflicting request: reply broadcast NAK
++			 * (ciaddr=0, yiaddr=0) per RFC 2131.
++			 */
 +			if (httpd_dhcp_send_reply(dhcp, xid, req_flags_be, mac,
 +						  DHCP_NAK, 0, 0, 0)) {
 +				dhcp->stat_nak++;
-+				httpd_dhcp_log_event("REQUEST", mac, "NAK", 0);
++				httpd_dhcp_log_event("REQUEST", mac, "NAK",
++						     target_ip_be);
 +			}
-+		} else {
-+			dhcp->stat_drop++;
 +		}
 +		break;
 +	}
