@@ -1,32 +1,38 @@
 From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
-Date: Sat, 28 Nov 2026 09:50:00 +0800
+Date: Sat, 28 Nov 2026 12:30:00 +0800
 Subject: [PATCH] cmd: lwip: add RAM-only httpd FIT recovery command
 
 Add CONFIG_CMD_HTTPD (depends on NET_LWIP && FIT, selects PROT_TCP_LWIP
-and PROT_UDP_LWIP), enable LWIP_IP_ACCEPT_UDP_PORT for UDP port 67 in
-lib/lwip/u-boot/lwipopts.h, and implement cmd/lwip/httpd.c as a strictly
-RAM-only HTTP/1.1 recovery server on TCP port 80.
+and PROT_UDP_LWIP), enable LWIP_IP_ACCEPT_UDP_PORT for UDP port 67 and
+SO_REUSE when CONFIG_CMD_HTTPD is enabled in lib/lwip/u-boot/lwipopts.h,
+and implement cmd/lwip/httpd.c as a strictly RAM-only HTTP/1.1 recovery
+server on TCP port 80.
 
 The server serves a compact HTML upload page with native form fallback
-and XHR upload progress bar on GET /, runs a scoped 8-slot UDP DHCPv4
-server (180 s lease, anti-Rogue-NAK filtering, >= 300 B broadcast reply,
-torn down on every exit path) during httpd_loop(), drives DM status LEDs
-(blue entry/slow/fast blink, 1500 ms red error hold, steady green OK, no
-LEDST_BLINK), registers an EVT_POST_PREBOOT reset-button fallback guard
-against stale ubootenv, validates load addresses and every write chunk
-against wrap and LMB reserved regions, streams multipart/form-data
-uploads directly into RAM (capped at 64 MiB), validates FIT format via
-fit_check_format() while rejecting flash filesystem/rootfs images,
-reclaims stalled connections via tcp_poll/tcp_abort, restores Ctrl-C
-state on exit, sets $filesize/$fileaddr, and exits cleanly for
-caller-driven bootm without touching flash.
+and XHR upload progress bar on GET /, sets SOF_REUSEADDR before binding
+TCP port 80 and UDP port 67 (preventing 2nd-run bind failures from
+TIME_WAIT PCBs) and aborts lingering active client PCBs on cleanup, runs
+a scoped 8-slot UDP DHCPv4 server (180 s lease with RFC 2131 Options
+28/58/59, anti-Rogue-NAK filtering, >= 300 B broadcast reply preserving
+request flags, trailing padding tolerance, concise UART diagnostics, and
+immediate teardown on every exit path) during httpd_loop(), drives DM
+status LEDs (blue entry/slow/fast blink, 1500 ms red error hold, steady
+green OK, no LEDST_BLINK), registers an EVT_POST_PREBOOT reset-button
+fallback guard against stale ubootenv, validates load addresses and every
+write chunk against wrap and LMB reserved regions, streams
+multipart/form-data uploads directly into RAM (capped at 64 MiB),
+validates FIT format via fit_check_format() while rejecting flash
+filesystem/rootfs images, reclaims stalled connections via
+tcp_poll/tcp_abort, restores Ctrl-C state on exit, sets
+$filesize/$fileaddr, and exits cleanly for caller-driven bootm without
+touching flash.
 
-Origin: local, xr1710g (#386, #429)
+Origin: local, xr1710g (#386, #429, #441)
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/cmd/Kconfig
 +++ b/cmd/Kconfig
-@@ -2227,6 +2227,16 @@
+@@ -2221,6 +2221,16 @@
  	help
  	  Lookup the IP of a hostname
  
@@ -54,7 +60,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  obj-$(CONFIG_CMD_SNTP) += sntp.o
 --- /dev/null
 +++ b/cmd/lwip/httpd.c
-@@ -0,0 +1,2193 @@
+@@ -0,0 +1,2342 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * RAM-only HTTP FIT recovery server for lwIP.
@@ -86,6 +92,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +#if CONFIG_IS_ENABLED(LMB)
 +#include <lmb.h>
 +#endif
++#include <lwip/ip.h>
 +#include <lwip/ip_addr.h>
 +#include <lwip/netif.h>
 +#include <lwip/pbuf.h>
@@ -118,6 +125,8 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +
 +#define HTTPD_DHCP_POOL_SIZE		8U
 +#define HTTPD_DHCP_LEASE_SEC		180U
++#define HTTPD_DHCP_T1_SEC		90U
++#define HTTPD_DHCP_T2_SEC		157U
 +#define HTTPD_DHCP_LEASE_MS		(HTTPD_DHCP_LEASE_SEC * 1000UL)
 +#define HTTPD_DHCP_MIN_RX_LEN		240U
 +#define HTTPD_DHCP_MAX_RX_LEN		1500U
@@ -192,6 +201,12 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	u32 netmask_be;
 +	unsigned int pool_count;
 +	u32 lru_seq;
++	unsigned int stat_rx;
++	unsigned int stat_offer;
++	unsigned int stat_ack;
++	unsigned int stat_nak;
++	unsigned int stat_drop;
++	unsigned int stat_tx_err;
 +	struct httpd_dhcp_lease leases[HTTPD_DHCP_POOL_SIZE];
 +	u8 rx_buf[HTTPD_DHCP_MAX_RX_LEN];
 +	u8 tx_buf[HTTPD_DHCP_MAX_REPLY_LEN];
@@ -624,17 +639,51 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	return true;
 +}
 +
-+static void httpd_dhcp_send_reply(struct httpd_dhcp *dhcp, const u8 *req_xid,
-+				  const u8 *mac, u8 reply_type,
-+				  u32 ciaddr_be, u32 yiaddr_be, u32 lease_sec)
++static bool httpd_dhcp_msg_type_valid(u8 msg_type)
++{
++	return msg_type == DHCP_DISCOVER || msg_type == DHCP_REQUEST ||
++	       msg_type == DHCP_RELEASE || msg_type == DHCP_INFORM;
++}
++
++static void httpd_dhcp_log_event(const char *req_name, const u8 *mac,
++				 const char *rep_name, u32 ip_be)
++{
++	if (rep_name && ip_be) {
++		u32 ip_h = lwip_ntohl(ip_be);
++
++		printf("DHCP: %s %02x:%02x:%02x:%02x:%02x:%02x -> %s %u.%u.%u.%u\n",
++		       req_name,
++		       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
++		       rep_name,
++		       (unsigned int)((ip_h >> 24) & 0xffU),
++		       (unsigned int)((ip_h >> 16) & 0xffU),
++		       (unsigned int)((ip_h >> 8) & 0xffU),
++		       (unsigned int)(ip_h & 0xffU));
++	} else if (rep_name) {
++		printf("DHCP: %s %02x:%02x:%02x:%02x:%02x:%02x -> %s\n",
++		       req_name,
++		       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
++		       rep_name);
++	} else {
++		printf("DHCP: %s %02x:%02x:%02x:%02x:%02x:%02x\n",
++		       req_name,
++		       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
++	}
++}
++
++static bool httpd_dhcp_send_reply(struct httpd_dhcp *dhcp, const u8 *req_xid,
++				  u16 req_flags_be, const u8 *mac,
++				  u8 reply_type, u32 ciaddr_be, u32 yiaddr_be,
++				  u32 lease_sec)
 +{
 +	u8 *reply = dhcp->tx_buf;
 +	size_t cap = sizeof(dhcp->tx_buf);
 +	size_t pos = DHCP_OPTIONS_OFS;
-+	u16 flags_be = PP_HTONS(HTTPD_DHCP_FLAG_BROADCAST);
++	u16 flags_be = req_flags_be | PP_HTONS(HTTPD_DHCP_FLAG_BROADCAST);
 +	u32 cookie_be = PP_HTONL(DHCP_MAGIC_COOKIE);
 +	struct pbuf *q;
 +	ip_addr_t src_ip;
++	err_t err;
 +
 +	memset(reply, 0, cap);
 +	reply[0] = DHCP_BOOTREPLY;
@@ -651,35 +700,50 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +
 +	if (!httpd_dhcp_opt_put(reply, cap, &pos, DHCP_OPTION_MESSAGE_TYPE,
 +				&reply_type, 1))
-+		return;
++		goto err_buf;
 +	if (!httpd_dhcp_opt_put(reply, cap, &pos, DHCP_OPTION_SERVER_ID,
 +				&dhcp->server_ip_be, 4))
-+		return;
++		goto err_buf;
 +
 +	if (reply_type != DHCP_NAK) {
++		u32 bcast_be = (dhcp->server_ip_be & dhcp->netmask_be) |
++			       ~dhcp->netmask_be;
++
 +		if (!httpd_dhcp_opt_put(reply, cap, &pos,
 +					DHCP_OPTION_SUBNET_MASK,
 +					&dhcp->netmask_be, 4))
-+			return;
++			goto err_buf;
 +		if (!httpd_dhcp_opt_put(reply, cap, &pos, DHCP_OPTION_ROUTER,
 +					&dhcp->server_ip_be, 4))
-+			return;
++			goto err_buf;
 +		if (!httpd_dhcp_opt_put(reply, cap, &pos,
 +					DHCP_OPTION_DNS_SERVER,
 +					&dhcp->server_ip_be, 4))
-+			return;
++			goto err_buf;
++		if (!httpd_dhcp_opt_put(reply, cap, &pos,
++					DHCP_OPTION_BROADCAST,
++					&bcast_be, 4))
++			goto err_buf;
 +		if (lease_sec > 0) {
 +			u32 lease_be = lwip_htonl(lease_sec);
++			u32 t1_be = lwip_htonl(HTTPD_DHCP_T1_SEC);
++			u32 t2_be = lwip_htonl(HTTPD_DHCP_T2_SEC);
 +
 +			if (!httpd_dhcp_opt_put(reply, cap, &pos,
 +						DHCP_OPTION_LEASE_TIME,
 +						&lease_be, 4))
-+				return;
++				goto err_buf;
++			if (!httpd_dhcp_opt_put(reply, cap, &pos,
++						DHCP_OPTION_T1, &t1_be, 4))
++				goto err_buf;
++			if (!httpd_dhcp_opt_put(reply, cap, &pos,
++						DHCP_OPTION_T2, &t2_be, 4))
++				goto err_buf;
 +		}
 +	}
 +
 +	if (pos >= cap)
-+		return;
++		goto err_buf;
 +	reply[pos++] = DHCP_OPTION_END;
 +
 +	/* Pad BOOTP/DHCP reply to >= 300 bytes for Windows/macOS/Linux clients. */
@@ -687,16 +751,30 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +		pos = HTTPD_DHCP_MIN_REPLY_LEN;
 +
 +	q = pbuf_alloc(PBUF_TRANSPORT, (u16_t)pos, PBUF_RAM);
-+	if (!q)
-+		return;
++	if (!q) {
++		err = ERR_MEM;
++		goto err_tx;
++	}
 +
-+	if (pbuf_take(q, reply, (u16_t)pos) == ERR_OK) {
++	err = pbuf_take(q, reply, (u16_t)pos);
++	if (err == ERR_OK) {
 +		ip_addr_set_ip4_u32_val(src_ip, dhcp->server_ip_be);
-+		udp_sendto_if_src(dhcp->pcb, q, IP_ADDR_BROADCAST,
-+				  LWIP_IANA_PORT_DHCP_CLIENT, dhcp->netif,
-+				  &src_ip);
++		err = udp_sendto_if_src(dhcp->pcb, q, IP_ADDR_BROADCAST,
++					LWIP_IANA_PORT_DHCP_CLIENT, dhcp->netif,
++					&src_ip);
 +	}
 +	pbuf_free(q);
++	if (err != ERR_OK)
++		goto err_tx;
++
++	return true;
++
++err_buf:
++	err = ERR_BUF;
++err_tx:
++	dhcp->stat_tx_err++;
++	printf("DHCP: tx failed (err=%d)\n", (int)err);
++	return false;
 +}
 +
 +static void httpd_dhcp_recv_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p,
@@ -707,6 +785,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	u8 *buf;
 +	size_t len;
 +	size_t off;
++	u16 req_flags_be;
 +	u32 cookie_be;
 +	u32 ciaddr_be;
 +	u32 giaddr_be;
@@ -726,17 +805,26 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +		return;
 +
 +	if (!srv || !srv->dhcp.pcb || !srv->dhcp.netif ||
-+	    !srv->dhcp.pool_count || port != LWIP_IANA_PORT_DHCP_CLIENT ||
-+	    p->tot_len < HTTPD_DHCP_MIN_RX_LEN ||
-+	    p->tot_len > HTTPD_DHCP_MAX_RX_LEN) {
++	    !srv->dhcp.pool_count) {
 +		pbuf_free(p);
 +		return;
 +	}
 +
 +	dhcp = &srv->dhcp;
++	dhcp->stat_rx++;
++
++	if (port != LWIP_IANA_PORT_DHCP_CLIENT ||
++	    p->tot_len < HTTPD_DHCP_MIN_RX_LEN ||
++	    p->tot_len > HTTPD_DHCP_MAX_RX_LEN) {
++		dhcp->stat_drop++;
++		pbuf_free(p);
++		return;
++	}
++
 +	buf = dhcp->rx_buf;
 +	len = p->tot_len;
 +	if (pbuf_copy_partial(p, buf, (u16_t)len, 0) != (u16_t)len) {
++		dhcp->stat_drop++;
 +		pbuf_free(p);
 +		return;
 +	}
@@ -744,17 +832,24 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +
 +	if (buf[0] != DHCP_BOOTREQUEST ||
 +	    buf[1] != LWIP_IANA_HWTYPE_ETHERNET ||
-+	    buf[2] != HTTPD_DHCP_MAC_LEN)
++	    buf[2] != HTTPD_DHCP_MAC_LEN) {
++		dhcp->stat_drop++;
 +		return;
++	}
 +
 +	memcpy(&giaddr_be, buf + 24, 4);
-+	if (giaddr_be != 0)
++	if (giaddr_be != 0) {
++		dhcp->stat_drop++;
 +		return;
++	}
 +
 +	memcpy(&cookie_be, buf + 236, 4);
-+	if (cookie_be != PP_HTONL(DHCP_MAGIC_COOKIE))
++	if (cookie_be != PP_HTONL(DHCP_MAGIC_COOKIE)) {
++		dhcp->stat_drop++;
 +		return;
++	}
 +
++	memcpy(&req_flags_be, buf + 10, 2);
 +	memcpy(&ciaddr_be, buf + 12, 4);
 +	xid = buf + 4;
 +	mac = buf + 28;
@@ -768,28 +863,42 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +			continue;
 +		if (opt == DHCP_OPTION_END)
 +			break;
-+		if (off >= len)
++		if (off >= len) {
++			if (has_msg_type && httpd_dhcp_msg_type_valid(msg_type))
++				break;
++			dhcp->stat_drop++;
 +			return;
++		}
 +		opt_len = buf[off++];
-+		if ((size_t)opt_len > len - off)
++		if ((size_t)opt_len > len - off) {
++			if (has_msg_type && httpd_dhcp_msg_type_valid(msg_type))
++				break;
++			dhcp->stat_drop++;
 +			return;
++		}
 +
 +		switch (opt) {
 +		case DHCP_OPTION_MESSAGE_TYPE:
-+			if (opt_len != 1)
++			if (opt_len != 1) {
++				dhcp->stat_drop++;
 +				return;
++			}
 +			msg_type = buf[off];
 +			has_msg_type = true;
 +			break;
 +		case DHCP_OPTION_REQUESTED_IP:
-+			if (opt_len != 4)
++			if (opt_len != 4) {
++				dhcp->stat_drop++;
 +				return;
++			}
 +			memcpy(&req_ip_be, buf + off, 4);
 +			has_req_ip = true;
 +			break;
 +		case DHCP_OPTION_SERVER_ID:
-+			if (opt_len != 4)
++			if (opt_len != 4) {
++				dhcp->stat_drop++;
 +				return;
++			}
 +			memcpy(&srv_id_be, buf + off, 4);
 +			has_srv_id = true;
 +			break;
@@ -799,18 +908,27 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +		off += opt_len;
 +	}
 +
-+	if (!has_msg_type)
++	if (!has_msg_type) {
++		dhcp->stat_drop++;
 +		return;
++	}
 +
 +	switch (msg_type) {
 +	case DHCP_DISCOVER: {
 +		struct httpd_dhcp_lease *lease;
 +
 +		lease = httpd_dhcp_alloc_lease(dhcp, mac, has_req_ip, req_ip_be);
-+		if (lease)
-+			httpd_dhcp_send_reply(dhcp, xid, mac, DHCP_OFFER, 0,
-+					      lease->ip_be,
-+					      HTTPD_DHCP_LEASE_SEC);
++		if (!lease) {
++			dhcp->stat_drop++;
++			break;
++		}
++		if (httpd_dhcp_send_reply(dhcp, xid, req_flags_be, mac,
++					  DHCP_OFFER, 0, lease->ip_be,
++					  HTTPD_DHCP_LEASE_SEC)) {
++			dhcp->stat_offer++;
++			httpd_dhcp_log_event("DISCOVER", mac, "OFFER",
++					     lease->ip_be);
++		}
 +		break;
 +	}
 +	case DHCP_REQUEST: {
@@ -818,49 +936,73 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +		struct httpd_dhcp_lease *slot;
 +
 +		/* Selecting another server: silently ignore. */
-+		if (has_srv_id && srv_id_be != dhcp->server_ip_be)
++		if (has_srv_id && srv_id_be != dhcp->server_ip_be) {
++			dhcp->stat_drop++;
 +			return;
++		}
 +
 +		/* No Server ID and foreign subnet: silently ignore (no Rogue NAK). */
 +		if (!has_srv_id &&
 +		    (!target_ip_be ||
 +		     (target_ip_be & dhcp->netmask_be) !=
-+		     (dhcp->server_ip_be & dhcp->netmask_be)))
++		     (dhcp->server_ip_be & dhcp->netmask_be))) {
++			dhcp->stat_drop++;
 +			return;
++		}
 +
 +		httpd_dhcp_expire_leases(dhcp);
 +		slot = target_ip_be ? httpd_dhcp_find_ip(dhcp, target_ip_be) : NULL;
 +		if (slot && (!slot->in_use ||
 +			     memcmp(slot->mac, mac, HTTPD_DHCP_MAC_LEN) == 0)) {
 +			httpd_dhcp_bind_lease(dhcp, slot, mac);
-+			httpd_dhcp_send_reply(dhcp, xid, mac, DHCP_ACK, 0,
-+					      slot->ip_be,
-+					      HTTPD_DHCP_LEASE_SEC);
++			if (httpd_dhcp_send_reply(dhcp, xid, req_flags_be, mac,
++						  DHCP_ACK, 0, slot->ip_be,
++						  HTTPD_DHCP_LEASE_SEC)) {
++				dhcp->stat_ack++;
++				httpd_dhcp_log_event("REQUEST", mac, "ACK",
++						     slot->ip_be);
++			}
 +		} else if (has_srv_id) {
 +			/* Explicitly addressed to our Server ID with invalid/conflicting IP. */
-+			httpd_dhcp_send_reply(dhcp, xid, mac, DHCP_NAK, 0, 0, 0);
++			if (httpd_dhcp_send_reply(dhcp, xid, req_flags_be, mac,
++						  DHCP_NAK, 0, 0, 0)) {
++				dhcp->stat_nak++;
++				httpd_dhcp_log_event("REQUEST", mac, "NAK", 0);
++			}
++		} else {
++			dhcp->stat_drop++;
 +		}
 +		break;
 +	}
 +	case DHCP_RELEASE: {
 +		struct httpd_dhcp_lease *lease;
 +
-+		if (has_srv_id && srv_id_be != dhcp->server_ip_be)
++		if (has_srv_id && srv_id_be != dhcp->server_ip_be) {
++			dhcp->stat_drop++;
 +			return;
++		}
 +
 +		lease = httpd_dhcp_find_mac(dhcp, mac);
 +		if (lease && (!ciaddr_be || lease->ip_be == ciaddr_be)) {
 +			lease->in_use = false;
 +			memset(lease->mac, 0, HTTPD_DHCP_MAC_LEN);
 +		}
++		httpd_dhcp_log_event("RELEASE", mac, NULL, 0);
 +		break;
 +	}
 +	case DHCP_INFORM:
-+		if (has_srv_id && srv_id_be != dhcp->server_ip_be)
++		if (has_srv_id && srv_id_be != dhcp->server_ip_be) {
++			dhcp->stat_drop++;
 +			return;
-+		httpd_dhcp_send_reply(dhcp, xid, mac, DHCP_ACK, ciaddr_be, 0, 0);
++		}
++		if (httpd_dhcp_send_reply(dhcp, xid, req_flags_be, mac,
++					  DHCP_ACK, ciaddr_be, 0, 0)) {
++			dhcp->stat_ack++;
++			httpd_dhcp_log_event("INFORM", mac, "ACK", ciaddr_be);
++		}
 +		break;
 +	default:
++		dhcp->stat_drop++;
 +		break;
 +	}
 +}
@@ -869,19 +1011,28 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +{
 +	struct httpd_dhcp *dhcp = &srv->dhcp;
 +	struct udp_pcb *pcb;
++	err_t err;
 +
 +	dhcp->netif = netif;
 +	httpd_dhcp_init_pool(dhcp, ip4_addr_get_u32(netif_ip4_addr(netif)),
 +			     ip4_addr_get_u32(netif_ip4_netmask(netif)));
-+	if (!dhcp->pool_count)
++	if (!dhcp->pool_count) {
++		printf("DHCP: disabled (invalid ipaddr/netmask or empty pool)\n");
 +		return;
++	}
 +
 +	pcb = udp_new();
-+	if (!pcb)
++	if (!pcb) {
++		printf("DHCP: failed to allocate UDP PCB\n");
 +		return;
++	}
 +
++	ip_set_option(pcb, SOF_REUSEADDR);
 +	udp_bind_netif(pcb, netif);
-+	if (udp_bind(pcb, IP4_ADDR_ANY, LWIP_IANA_PORT_DHCP_SERVER) != ERR_OK) {
++	err = udp_bind(pcb, IP4_ADDR_ANY, LWIP_IANA_PORT_DHCP_SERVER);
++	if (err != ERR_OK) {
++		printf("DHCP: failed to bind UDP port %d (err=%d)\n",
++		       LWIP_IANA_PORT_DHCP_SERVER, (int)err);
 +		udp_remove(pcb);
 +		return;
 +	}
@@ -2013,8 +2164,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +			tcp_sent(pcb, NULL);
 +			tcp_err(pcb, NULL);
 +			tcp_poll(pcb, NULL, 0);
-+			if (tcp_close(pcb) != ERR_OK)
-+				tcp_abort(pcb);
++			tcp_abort(pcb);
 +		}
 +		httpd_conn_release(conn);
 +	}
@@ -2059,6 +2209,7 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +		goto out_cleanup;
 +	}
 +
++	ip_set_option(pcb, SOF_REUSEADDR);
 +	if (tcp_bind(pcb, IP_ADDR_ANY, HTTPD_PORT) != ERR_OK) {
 +		printf("httpd: failed to bind port %d\n", HTTPD_PORT);
 +		tcp_close(pcb);
@@ -2117,6 +2268,10 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +	}
 +
 +	disable_ctrlc(prev_ctrlc);
++	printf("DHCP stats: rx=%u offer=%u ack=%u nak=%u drop=%u tx_err=%u\n",
++	       srv->dhcp.stat_rx, srv->dhcp.stat_offer, srv->dhcp.stat_ack,
++	       srv->dhcp.stat_nak, srv->dhcp.stat_drop,
++	       srv->dhcp.stat_tx_err);
 +
 +	if (ret == 0) {
 +		if (env_set_hex("filesize", srv->uploaded_size) ||
@@ -2261,3 +2416,15 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  /*
   * PBUF_POOL_BUFSIZE is derived from TCP_MSS even when
   * CONFIG_PROT_TCP_LWIP is not defined
+@@ -164,7 +168,11 @@
+ #define LWIP_DISABLE_MEMP_SANITY_CHECKS 1
+ 
+ #define LWIP_SOCKET                     0
++#if defined(CONFIG_CMD_HTTPD)
++#define SO_REUSE                        1
++#else
+ #define SO_REUSE                        0
++#endif
+ 
+ #define LWIP_STATS                      0
+ 

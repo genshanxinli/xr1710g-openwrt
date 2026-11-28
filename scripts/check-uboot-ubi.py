@@ -32,6 +32,7 @@ KERNEL_KASLR_REQ = (
     "CONFIG_RANDOMIZE_MODULE_REGION_FULL=y",
     "CONFIG_RELOCATABLE=y",
 )
+ETH_RX_RESET_PATCH = "118-net-airoha_eth-reset-rx-ring-head-on-eth-init.patch"
 LWIP_TX_PATCH = "404-net-lwip-linearize-chained-pbuf-in-net_lwip_tx.patch"
 HTTPD_PATCH = "405-net-lwip-add-ram-only-httpd-recovery-command.patch"
 C_STRIP_RE = re.compile(
@@ -52,6 +53,7 @@ HTTPD_REQ_SYMS = (
     "lmb_read_check",
     "fit_check_format",
     "tcp_abort",
+    "SOF_REUSEADDR",
     "udp_sendto_if_src",
     "led_get_by_label",
     "EVT_POST_PREBOOT",
@@ -432,6 +434,23 @@ def main(argv: list[str]) -> int:
     rng_patches = sorted(uboot_patch_dir.glob("*rng-airoha*.patch"))
     if not rng_patches:
         fails.append("package/boot/uboot-airoha/patches/ missing *rng-airoha*.patch")
+    p118 = uboot_patch_dir / ETH_RX_RESET_PATCH
+    if not p118.is_file():
+        fails.append(f"package/boot/uboot-airoha/patches/ missing {ETH_RX_RESET_PATCH}")
+    else:
+        try:
+            f118 = validate_and_split_patch(p118.read_text(encoding="utf-8"))
+        except (OSError, PatchError) as exc:
+            fails.append(f"{ETH_RX_RESET_PATCH}: {exc}")
+        else:
+            eth_118 = f118.get("drivers/net/airoha_eth.c")
+            if not eth_118:
+                fails.append(f"{ETH_RX_RESET_PATCH}: missing added lines for drivers/net/airoha_eth.c")
+            else:
+                eth_clean = C_STRIP_RE.sub(" ", "\n".join(eth_118))
+                for sym in ("REG_RX_CPU_IDX", "REG_RX_DMA_IDX"):
+                    if not re.search(rf"\b{re.escape(sym)}\b", eth_clean):
+                        fails.append(f"{ETH_RX_RESET_PATCH}: drivers/net/airoha_eth.c missing {sym}")
     p404 = uboot_patch_dir / LWIP_TX_PATCH
     if not p404.is_file():
         fails.append(f"package/boot/uboot-airoha/patches/ missing {LWIP_TX_PATCH}")
@@ -463,6 +482,10 @@ def main(argv: list[str]) -> int:
                 fails.append(
                     f"{HTTPD_PATCH}: lib/lwip/u-boot/lwipopts.h missing 'LWIP_IP_ACCEPT_UDP_PORT'"
                 )
+            if not re.search(r"(?m)^\s*#\s*define\s+SO_REUSE\s+1\b", lwipopts_clean):
+                fails.append(
+                    f"{HTTPD_PATCH}: lib/lwip/u-boot/lwipopts.h missing '#define SO_REUSE 1'"
+                )
             httpd_lines = f405.get("cmd/lwip/httpd.c")
             if not httpd_lines:
                 fails.append(f"{HTTPD_PATCH}: missing added lines for cmd/lwip/httpd.c")
@@ -473,7 +496,7 @@ def main(argv: list[str]) -> int:
             print(f"FAIL: {f}", file=sys.stderr)
         return 1
     print(
-        f"OK: U-Boot hunks (403/404/405), fixed-partitions ({', '.join(p[0] for p in uboot_parts)}), "
+        f"OK: U-Boot hunks (118/403/404/405), fixed-partitions ({', '.join(p[0] for p in uboot_parts)}), "
         f"UBI volumes ({', '.join(sorted({v for _, v in refs}))}), env 0x4000, loadaddr 0x85000000, "
         f"RAM-only HTTP recovery, and KASLR guards verified"
     )
