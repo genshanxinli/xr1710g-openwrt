@@ -1,0 +1,34 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Sat, 28 Nov 2026 12:30:00 +0800
+Subject: [PATCH] net: airoha_eth: reset RX ring head and DMA indices on eth init
+
+airoha_eth_init() reinitializes all RX descriptors via
+airoha_qdma_init_rx_desc(), clearing QDMA_DESC_DONE_MASK across the
+ring, but leaves q->head and the hardware REG_RX_CPU_IDX(0) and
+REG_RX_DMA_IDX(0) registers untouched. After eth_halt() and a
+subsequent eth_init(), any RX traffic processed or queued during the
+previous session leaves software q->head and hardware DMA/CPU ring
+pointers out of sync with the reset descriptors, causing
+airoha_eth_recv() to stall returning -EAGAIN.
+
+Reset q->head to 0 and reprogram REG_RX_CPU_IDX(qid) to q->ndesc - 1
+and REG_RX_DMA_IDX(qid) to 0 right after airoha_qdma_init_rx_desc()
+and before enabling RX/TX DMA, matching airoha_qdma_init_rx_queue().
+
+Origin: local, xr1710g (#386, #441)
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/net/airoha_eth.c
++++ b/drivers/net/airoha_eth.c
+@@ -1017,6 +1017,11 @@
+ 	q = &qdma->q_rx[qid];
+ 
+ 	airoha_qdma_init_rx_desc(q);
++	q->head = 0;
++	airoha_qdma_rmw(qdma, REG_RX_CPU_IDX(qid), RX_RING_CPU_IDX_MASK,
++			FIELD_PREP(RX_RING_CPU_IDX_MASK, q->ndesc - 1));
++	airoha_qdma_rmw(qdma, REG_RX_DMA_IDX(qid), RX_RING_DMA_IDX_MASK,
++			FIELD_PREP(RX_RING_DMA_IDX_MASK, q->head));
+ 
+ 	airoha_qdma_set(qdma, REG_QDMA_GLOBAL_CFG,
+ 			GLOBAL_CFG_TX_DMA_EN_MASK |
