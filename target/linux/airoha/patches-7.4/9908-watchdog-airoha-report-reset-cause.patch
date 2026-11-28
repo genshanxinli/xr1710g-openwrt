@@ -1,49 +1,90 @@
 From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
-Date: Wed, 25 Nov 2026 08:28:00 +0800
-Subject: [PATCH] watchdog: airoha: log the NP-SCU reset-cause bitmap
+Date: Sat, 28 Nov 2026 21:25:00 +0800
+Subject: [PATCH] watchdog: airoha: report WDIOF_CARDRESET via PMC and SCREG_WF0
 
-airoha_wdt_probe() never inspected the NP-SCU PMC reset-cause register at
-0x080, leaving reboot causes unrecorded (issue #382). Read and log the raw
-PMC bitmap via an optional airoha,scu syscon phandle without clearing W1C
-bits (propagating -EPROBE_DEFER while warning on other lookup errors without
-blocking watchdog registration), and document airoha,scu in the DT binding.
+Read the NP-SCU PMC reset-cause register (0x080, strictly read-only)
+together with the warm-reset scratch register SCREG_WF0 (0x240) via the
+optional airoha,scu syscon phandle to accurately report WDIOF_CARDRESET
+(issue #382):
 
-Origin: archive/xr1710g-v1@e85677d284c0
+- Never write to AIROHA_SCU_PMC (0x080). Because PSCI reboot on AN7581
+  leaves WDG_RST_R sticky, disambiguate real watchdog resets using a
+  dual-magic protocol in SCREG_WF0 (0x57445440 RUNNING / 0x57445450
+  REBOOT, keeping bits 1:0 clear to avoid colliding with AN7583 0x3 and
+  BL1 WF1).
+- Report WDIOF_CARDRESET in bootstatus only when PMC has WDG_RST_R set
+  and WF0 holds AIROHA_WDT_WF0_RUNNING.
+- Advertise WDIOF_CARDRESET in watchdog_info only when the airoha,scu
+  regmap is present, and register a SYS_OFF_MODE_RESTART handler at
+  SYS_OFF_PRIO_HIGH (ahead of PSCI 129) to mark clean reboots with
+  AIROHA_WDT_WF0_REBOOT.
+- Document airoha,scu in the DT binding.
+
+Origin: archive/xr1710g-v1@e85677d284c0; xr1710g #382
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/drivers/watchdog/airoha_wdt.c
 +++ b/drivers/watchdog/airoha_wdt.c
-@@ -21,6 +21,8 @@
+@@ -21,6 +21,9 @@
  #include <linux/platform_device.h>
  #include <linux/watchdog.h>
  #include <linux/stringify.h>
 +#include <linux/mfd/syscon.h>
++#include <linux/reboot.h>
 +#include <linux/regmap.h>
  
  /* Base address of timer and watchdog registers */
  #define TIMER_CTRL			0x0
-@@ -34,6 +36,11 @@
+@@ -34,6 +37,19 @@
  #define WDT_RELOAD			0x38
  #define   WDT_RLD			BIT(0)
  
-+/* NP-SCU PMC reset-cause bitmap (W1C; read-only). */
++/* NP-SCU PMC reset-cause bitmap (W1C; strictly read-only, never write). */
 +#define AIROHA_SCU_PMC			0x080
 +#define   AIROHA_SCU_PMC_WDG_RST_R	BIT(31)
 +#define   AIROHA_SCU_PMC_SYS_RST_R	BIT(30)
 +
++/*
++ * NP-SCU warm-reset scratch register WF0 (0x240): low 2 bits stay 0 to avoid
++ * colliding with AN7583 boot bits (0x3) and BL1 WF1 ("ECNT").
++ */
++#define AIROHA_SCU_SCREG_WF0		0x240
++#define   AIROHA_WDT_WF0_RUNNING	0x57445440
++#define   AIROHA_WDT_WF0_REBOOT		0x57445450
++
  /* Airoha watchdog structure description */
  struct airoha_wdt_desc {
  	struct watchdog_device wdog_dev;
-@@ -131,6 +138,8 @@ static int airoha_wdt_probe(struct platf
+@@ -116,6 +132,20 @@
+ 	.identity = "Airoha Watchdog",
+ };
+ 
++static const struct watchdog_info airoha_wdt_info_cardreset = {
++	.options = WDIOF_SETTIMEOUT | WDIOF_MAGICCLOSE | WDIOF_KEEPALIVEPING |
++		   WDIOF_CARDRESET,
++	.identity = "Airoha Watchdog",
++};
++
++static int airoha_wdt_restart_notify(struct sys_off_data *data)
++{
++	struct regmap *scu = data->cb_data;
++
++	regmap_write(scu, AIROHA_SCU_SCREG_WF0, AIROHA_WDT_WF0_REBOOT);
++	return NOTIFY_DONE;
++}
++
+ static const struct watchdog_ops airoha_wdt_ops = {
+ 	.owner = THIS_MODULE,
+ 	.start = airoha_wdt_start,
+@@ -131,6 +161,7 @@
  	struct watchdog_device *wdog_dev;
  	struct device *dev = &pdev->dev;
  	struct clk *bus_clk;
 +	struct regmap *scu;
-+	u32 pmc;
  	int ret;
  
  	airoha_wdt = devm_kzalloc_obj(dev, *airoha_wdt);
-@@ -163,6 +172,24 @@ static int airoha_wdt_probe(struct platf
+@@ -163,6 +194,50 @@
  	wdog_dev->min_timeout = 1;
  	wdog_dev->parent = dev;
  
@@ -56,13 +97,39 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 +		dev_warn(dev, "failed to look up SCU reset-cause regmap: %ld\n",
 +			 PTR_ERR(scu));
 +	} else if (scu) {
-+		if (regmap_read(scu, AIROHA_SCU_PMC, &pmc))
-+			dev_warn(dev, "failed to read SCU PMC\n");
-+		else
++		u32 pmc = 0, wf0 = 0;
++
++		wdog_dev->info = &airoha_wdt_info_cardreset;
++
++		if (regmap_read(scu, AIROHA_SCU_PMC, &pmc) ||
++		    regmap_read(scu, AIROHA_SCU_SCREG_WF0, &wf0)) {
++			dev_warn(dev, "failed to read SCU PMC/WF0\n");
++		} else {
++			if ((pmc & AIROHA_SCU_PMC_WDG_RST_R) &&
++			    wf0 == AIROHA_WDT_WF0_RUNNING)
++				wdog_dev->bootstatus |= WDIOF_CARDRESET;
++
 +			dev_info(dev,
-+				 "SCU PMC=0x%08x WDG_RST_R=%u SYS_RST_R=%u\n",
-+				 pmc, !!(pmc & AIROHA_SCU_PMC_WDG_RST_R),
-+				 !!(pmc & AIROHA_SCU_PMC_SYS_RST_R));
++				 "SCU PMC=0x%08x WF0=0x%08x WDG_RST_R=%u SYS_RST_R=%u bootstatus=0x%x\n",
++				 pmc, wf0, !!(pmc & AIROHA_SCU_PMC_WDG_RST_R),
++				 !!(pmc & AIROHA_SCU_PMC_SYS_RST_R),
++				 wdog_dev->bootstatus);
++		}
++
++		ret = devm_register_sys_off_handler(dev, SYS_OFF_MODE_RESTART,
++						    SYS_OFF_PRIO_HIGH,
++						    airoha_wdt_restart_notify,
++						    scu);
++		if (ret) {
++			dev_warn(dev,
++				 "failed to register WDT restart handler: %d\n",
++				 ret);
++			regmap_write(scu, AIROHA_SCU_SCREG_WF0,
++				     AIROHA_WDT_WF0_REBOOT);
++		} else if (regmap_write(scu, AIROHA_SCU_SCREG_WF0,
++					AIROHA_WDT_WF0_RUNNING)) {
++			dev_warn(dev, "failed to mark SCU WF0 running\n");
++		}
 +	}
 +
  	watchdog_set_drvdata(wdog_dev, airoha_wdt);
@@ -70,20 +137,20 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  	watchdog_stop_on_unregister(wdog_dev);
 --- a/Documentation/devicetree/bindings/watchdog/airoha,en7581-wdt.yaml
 +++ b/Documentation/devicetree/bindings/watchdog/airoha,en7581-wdt.yaml
-@@ -30,6 +30,12 @@ properties:
+@@ -30,6 +30,12 @@
    clock-names:
      const: bus
  
 +  airoha,scu:
 +    $ref: /schemas/types.yaml#/definitions/phandle
 +    description:
-+      Phandle to the NP-SCU syscon that holds the reset-cause status
-+      register.
++      Phandle to the NP-SCU syscon that holds the reset-cause status and
++      warm-reset scratch registers.
 +
  required:
    - compatible
    - reg
-@@ -45,6 +51,7 @@ examples:
+@@ -45,6 +51,7 @@
      watchdog@1fbf0100 {
          compatible = "airoha,en7581-wdt";
          reg = <0x1fbf0100 0x3c>;
