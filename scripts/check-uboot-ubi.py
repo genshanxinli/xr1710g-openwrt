@@ -35,6 +35,7 @@ KERNEL_KASLR_REQ = (
 ETH_RX_RESET_PATCH = "118-net-airoha_eth-reset-rx-ring-head-on-eth-init.patch"
 LWIP_TX_PATCH = "404-net-lwip-linearize-chained-pbuf-in-net_lwip_tx.patch"
 HTTPD_PATCH = "405-net-lwip-add-ram-only-httpd-recovery-command.patch"
+SWITCH_CPU_PORT_PATCH = "406-net-airoha_eth-enable-switch-cpu-port-6.patch"
 C_STRIP_RE = re.compile(
     r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'',
     re.DOTALL,
@@ -462,21 +463,28 @@ def main(argv: list[str]) -> int:
             else:
                 eth_clean = C_STRIP_RE.sub(" ", "\n".join(eth_118))
                 for sym in (
+                    "rx_init_done",
+                    "FE_PSE_PORT_DROP",
+                    "FE_PSE_PORT_CDM1",
+                    "GDM_PAD_EN",
                     "GLOBAL_CFG_TX_DMA_BUSY_MASK",
                     "GLOBAL_CFG_RX_DMA_BUSY_MASK",
                     "read_poll_timeout",
+                    "QDMA_DESC_DONE_MASK",
                     "REG_RX_CPU_IDX",
-                    "REG_RX_DMA_IDX",
                 ):
                     if not re.search(rf"\b{re.escape(sym)}\b", eth_clean):
                         fails.append(f"{ETH_RX_RESET_PATCH}: drivers/net/airoha_eth.c missing {sym}")
-                if not re.search(r"\bairoha_qdma_rr\s*\([^;]*\bREG_RX_DMA_IDX\b", eth_clean):
+                if re.search(r"\bREG_RX_DMA_IDX\b", eth_clean):
                     fails.append(
-                        f"{ETH_RX_RESET_PATCH}: drivers/net/airoha_eth.c must sync q->head from HW REG_RX_DMA_IDX via airoha_qdma_rr()"
+                        f"{ETH_RX_RESET_PATCH}: drivers/net/airoha_eth.c must not read or force-write REG_RX_DMA_IDX"
                     )
-                if re.search(r"\bairoha_qdma_(?:rmw|wr)\s*\([^;]*\bREG_RX_DMA_IDX\b", eth_clean):
+                if re.search(
+                    r"\bq->head\s*=(?!=)(?!\s*\(\s*q->head\s*\+\s*1\s*\)\s*%\s*q->ndesc\b)",
+                    eth_clean,
+                ):
                     fails.append(
-                        f"{ETH_RX_RESET_PATCH}: drivers/net/airoha_eth.c must not force-write REG_RX_DMA_IDX"
+                        f"{ETH_RX_RESET_PATCH}: drivers/net/airoha_eth.c must not overwrite q->head outside ring advance"
                     )
     p404 = uboot_patch_dir / LWIP_TX_PATCH
     if not p404.is_file():
@@ -518,12 +526,42 @@ def main(argv: list[str]) -> int:
                 fails.append(f"{HTTPD_PATCH}: missing added lines for cmd/lwip/httpd.c")
             else:
                 fails.extend(check_httpd_c_ram_only(httpd_lines))
+    p406 = uboot_patch_dir / SWITCH_CPU_PORT_PATCH
+    if not p406.is_file():
+        fails.append(f"package/boot/uboot-airoha/patches/ missing {SWITCH_CPU_PORT_PATCH}")
+    else:
+        try:
+            f406 = validate_and_split_patch(p406.read_text(encoding="utf-8"))
+        except (OSError, PatchError) as exc:
+            fails.append(f"{SWITCH_CPU_PORT_PATCH}: {exc}")
+        else:
+            eth_406 = f406.get("drivers/net/airoha_eth.c")
+            if not eth_406:
+                fails.append(f"{SWITCH_CPU_PORT_PATCH}: missing added lines for drivers/net/airoha_eth.c")
+            else:
+                sw_clean = C_STRIP_RE.sub(" ", "\n".join(eth_406))
+                for sym in (
+                    "SWITCH_CFC",
+                    "SWITCH_CPU_PMAP",
+                    "SWITCH_CPU_EN",
+                    "SWITCH_CPU_PORT",
+                ):
+                    if not re.search(rf"\b{re.escape(sym)}\b", sw_clean):
+                        fails.append(f"{SWITCH_CPU_PORT_PATCH}: drivers/net/airoha_eth.c missing {sym}")
+                if not re.search(r"\bdata->version\s*!=\s*0x7523\b", sw_clean):
+                    fails.append(
+                        f"{SWITCH_CPU_PORT_PATCH}: drivers/net/airoha_eth.c missing 'data->version != 0x7523' guard for SWITCH_CFC"
+                    )
+                if hits := sorted(set(re.findall(r"\b\w*(?:PVC|SPTAG)\w*\b", sw_clean, re.IGNORECASE))):
+                    fails.append(
+                        f"{SWITCH_CPU_PORT_PATCH}: drivers/net/airoha_eth.c must not touch special-tag register(s): {', '.join(hits)}"
+                    )
     if fails:
         for f in fails:
             print(f"FAIL: {f}", file=sys.stderr)
         return 1
     print(
-        f"OK: U-Boot hunks (118/403/404/405), fixed-partitions ({', '.join(p[0] for p in uboot_parts)}), "
+        f"OK: U-Boot hunks (118/403/404/405/406), fixed-partitions ({', '.join(p[0] for p in uboot_parts)}), "
         f"UBI volumes ({', '.join(sorted({v for _, v in refs}))}), env 0x4000, loadaddr 0x85000000, "
         f"RAM-only HTTP recovery, and KASLR guards verified"
     )

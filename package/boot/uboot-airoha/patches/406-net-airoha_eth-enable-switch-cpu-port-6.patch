@@ -1,0 +1,52 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Sat, 28 Nov 2026 14:40:00 +0800
+Subject: [PATCH] net: airoha_eth: enable switch CPU port 6 in MFC and CFC
+
+airoha_switch_init() sets SWITCH_MFC flood masks without setting
+SWITCH_CPU_EN / SWITCH_CPU_PORT (port 6) and without adding BIT(6) to
+SWITCH_CFC (CPU port map on MT7531-family AN7581/AN7583 switches). As a
+result, LAN-to-CPU frames (ARP, DHCP, HTTP) are not forwarded to CPU
+port 6 on hardware where BootROM/ATF leaves CPU port forwarding disabled.
+
+Enable CPU port 6 in SWITCH_MFC (0xffffffe0) and set SWITCH_CPU_PMAP to
+BIT(6) in SWITCH_CFC for non-EN7523 SoCs (data->version != 0x7523),
+leaving PVC/SPTAG registers untouched so frames remain untagged without
+MTK 4-byte special tags.
+
+Origin: local, xr1710g (#386, #441)
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/net/airoha_eth.c
++++ b/drivers/net/airoha_eth.c
+@@ -55,10 +55,14 @@
+ #define SCU_SHARE_FEMEM_SEL		0x958
+ 
+ /* SWITCH */
++#define SWITCH_CFC			0x4
++#define   SWITCH_CPU_PMAP		GENMASK(7, 0)
+ #define SWITCH_MFC			0x10
+ #define   SWITCH_BC_FFP			GENMASK(31, 24)
+ #define   SWITCH_UNM_FFP		GENMASK(23, 16)
+ #define   SWITCH_UNU_FFP		GENMASK(15, 8)
++#define   SWITCH_CPU_EN			BIT(7)
++#define   SWITCH_CPU_PORT		GENMASK(6, 4)
+ #define SWITCH_PMCR(_n)			0x3000 + ((_n) * 0x100)
+ #define   SWITCH_IPG_CFG		GENMASK(19, 18)
+ #define     SWITCH_IPG_CFG_NORMAL	FIELD_PREP(SWITCH_IPG_CFG, 0x0)
+@@ -837,9 +841,14 @@
+ 	/* Switch doesn't have a DEV, gets address and setup Flood and CPU port */
+ 	eth->switch_regs = map_sysmem(addr, 0);
+ 
+-	/* Set FLOOD, no CPU switch register */
++	/* Set FLOOD and enable CPU port 6 */
+ 	airoha_switch_wr(eth, SWITCH_MFC, SWITCH_BC_FFP | SWITCH_UNM_FFP |
+-			 SWITCH_UNU_FFP);
++			 SWITCH_UNU_FFP | SWITCH_CPU_EN |
++			 FIELD_PREP(SWITCH_CPU_PORT, 6));
++
++	if (data->version != 0x7523)
++		airoha_switch_rmw(eth, SWITCH_CFC, SWITCH_CPU_PMAP,
++				  FIELD_PREP(SWITCH_CPU_PMAP, BIT(6)));
+ 
+ 	/* Set CPU 6 PMCR */
+ 	airoha_switch_wr(eth, SWITCH_PMCR(6),
