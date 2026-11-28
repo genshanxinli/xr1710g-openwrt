@@ -1,0 +1,531 @@
+From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+Date: Sat, 28 Nov 2026 21:20:00 +0800
+Subject: [PATCH] net: phy: realtek: add RTL826x MMD 30 parallel LED support
+
+Implement PHY LED class and netdev hardware offload callbacks for the
+RTL826x family (RTL8261BE/RTL8261N/RTL8264/RTL8264B/RTL8251L/RTL8254B)
+using the MMD 30 (MDIO_MMD_VEND1) parallel LED register block
+(0x0012..0x0020):
+
+- Store per-LED polarity, CPU force, and UTP mode state in struct
+  rtl826x_priv protected by priv->led_lock (keeping rtl8261x_priv
+  completely separate).
+- Support active-low/active-high polarity via 30.0x0012 without
+  altering polarity bits during brightness_set() CPU force control.
+- Restrict hardware offload to speeds supported by RTL826x (100M..10G,
+  rejecting 10M) and populate MODE_L = 0x01ff with LINK_EN = 0 for
+  activity-only rules, since silicon gates TX_ACT/RX_ACT off when
+  MODE_L == 0.
+- Restore cached polarity and LED modes at the end of
+  rtl826x_config_init() after rtlgen_phy_patch() so link/interface
+  re-initialization does not lose LED configuration.
+
+Origin: xr1710g #390
+Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
+---
+--- a/drivers/net/phy/realtek/realtek.h
++++ b/drivers/net/phy/realtek/realtek.h
+@@ -17,6 +17,18 @@
+ 	RTL826X_RTK_SERDES_CHECK_CARRIER,
+ };
+ 
++#define RTL826X_MAX_LEDS			6
++
++struct rtl826x_led_cfg {
++	bool configured;
++	bool force_mode;
++	bool force_on;
++	bool polarity_set;
++	bool active_low;
++	u16 mode_l;
++	u16 mode_h;
++};
++
+ struct rtl826x_priv {
+ 	struct rtlgen_phy_patch_db *patch;
+ 	struct mutex sds_lock;
+@@ -29,6 +41,8 @@
+ 	struct delayed_work sds_work;
+ 	bool sds_work_disabled;
+ 	unsigned int sds_retries;
++	struct mutex led_lock;
++	struct rtl826x_led_cfg leds[RTL826X_MAX_LEDS];
+ };
+ 
+ int rtl822x_hwmon_init(struct phy_device *phydev);
+--- a/drivers/net/phy/realtek/realtek_main.c
++++ b/drivers/net/phy/realtek/realtek_main.c
+@@ -405,6 +405,40 @@
+ 
+ #define RTL826X_VND2_INSR			0xA43A
+ 
++/* RTL826x MMD 30 (VEND1) Parallel LED control registers */
++#define RTL826X_VEND1_LED_IO_CFG		0x0012
++#define   RTL826X_VEND1_LED_PARA_EN(i)		BIT(i)
++#define   RTL826X_VEND1_LED_ACTIVE_L(i)		BIT(8 + (i))
++
++#define RTL826X_VEND1_LED_SRC_SEL		0x0013
++#define   RTL826X_VEND1_LED_SRC_MASK(i)		(0x3U << ((i) * 2))
++#define   RTL826X_VEND1_LED_SRC_UTP		0x0U
++#define   RTL826X_VEND1_LED_SRC_CPU_FORCE	0x2U
++#define   RTL826X_VEND1_LED_SRC_VAL(i, v)	((v) << ((i) * 2))
++
++#define RTL826X_VEND1_LED_FORCE_VAL		0x0014
++#define   RTL826X_VEND1_LED_FORCE_MASK(i)	(0x3U << ((i) * 2))
++#define   RTL826X_VEND1_LED_FORCE_OFF		0x0U
++#define   RTL826X_VEND1_LED_FORCE_ON		0x1U
++#define   RTL826X_VEND1_LED_FORCE_SET(i, v)	((v) << ((i) * 2))
++
++#define RTL826X_VEND1_LED_MODE_L(i)		(0x0015 + 2 * (i))
++#define   RTL826X_VEND1_LED_MODE_L_10G		BIT(0)
++#define   RTL826X_VEND1_LED_MODE_L_10G_LITE	BIT(1)
++#define   RTL826X_VEND1_LED_MODE_L_5G		BIT(2)
++#define   RTL826X_VEND1_LED_MODE_L_5G_LITE	BIT(3)
++#define   RTL826X_VEND1_LED_MODE_L_2500		BIT(4)
++#define   RTL826X_VEND1_LED_MODE_L_2500_LITE	BIT(5)
++#define   RTL826X_VEND1_LED_MODE_L_1000		BIT(6)
++#define   RTL826X_VEND1_LED_MODE_L_500		BIT(7)
++#define   RTL826X_VEND1_LED_MODE_L_100		BIT(8)
++#define   RTL826X_VEND1_LED_MODE_L_ALL		0x01ffU
++
++#define RTL826X_VEND1_LED_MODE_H(i)		(0x0016 + 2 * (i))
++#define   RTL826X_VEND1_LED_MODE_H_RX_ACT	BIT(2)
++#define   RTL826X_VEND1_LED_MODE_H_TX_ACT	BIT(3)
++#define   RTL826X_VEND1_LED_MODE_H_LINK_EN	BIT(9)
++
+ MODULE_DESCRIPTION("Realtek PHY driver");
+ MODULE_AUTHOR("Johnson Leung");
+ MODULE_LICENSE("GPL");
+@@ -3876,6 +3910,7 @@
+ 		return -ENOMEM;
+ 
+ 	mutex_init(&priv->sds_lock);
++	mutex_init(&priv->led_lock);
+ 	priv->enable_pma_low_power = device_property_read_bool(dev, "realtek,enable-pma-low-power");
+ 	priv->patch_rtk_serdes =
+ 		device_property_read_bool(dev, "realtek,patch-rtk-serdes");
+@@ -3974,6 +4009,339 @@
+ 			      mask, set);
+ }
+ 
++static int rtl826x_led_apply_force_locked(struct phy_device *phydev, u8 index,
++					  bool force_on)
++{
++	int ret;
++
++	ret = phy_modify_mmd(phydev, MDIO_MMD_VEND1,
++			     RTL826X_VEND1_LED_FORCE_VAL,
++			     RTL826X_VEND1_LED_FORCE_MASK(index),
++			     RTL826X_VEND1_LED_FORCE_SET(index,
++				force_on ? RTL826X_VEND1_LED_FORCE_ON :
++					   RTL826X_VEND1_LED_FORCE_OFF));
++	if (ret)
++		return ret;
++
++	ret = phy_modify_mmd(phydev, MDIO_MMD_VEND1,
++			     RTL826X_VEND1_LED_SRC_SEL,
++			     RTL826X_VEND1_LED_SRC_MASK(index),
++			     RTL826X_VEND1_LED_SRC_VAL(index,
++				RTL826X_VEND1_LED_SRC_CPU_FORCE));
++	if (ret)
++		return ret;
++
++	/* Ensure parallel LED output is enabled without touching ACTIVE_L. */
++	return phy_set_bits_mmd(phydev, MDIO_MMD_VEND1,
++				RTL826X_VEND1_LED_IO_CFG,
++				RTL826X_VEND1_LED_PARA_EN(index));
++}
++
++static int rtl826x_led_apply_utp_locked(struct phy_device *phydev, u8 index,
++					u16 mode_l, u16 mode_h)
++{
++	int ret;
++
++	ret = phy_write_mmd(phydev, MDIO_MMD_VEND1,
++			    RTL826X_VEND1_LED_MODE_L(index), mode_l);
++	if (ret)
++		return ret;
++
++	ret = phy_write_mmd(phydev, MDIO_MMD_VEND1,
++			    RTL826X_VEND1_LED_MODE_H(index), mode_h);
++	if (ret)
++		return ret;
++
++	ret = phy_modify_mmd(phydev, MDIO_MMD_VEND1,
++			     RTL826X_VEND1_LED_SRC_SEL,
++			     RTL826X_VEND1_LED_SRC_MASK(index),
++			     RTL826X_VEND1_LED_SRC_VAL(index,
++				RTL826X_VEND1_LED_SRC_UTP));
++	if (ret)
++		return ret;
++
++	return phy_set_bits_mmd(phydev, MDIO_MMD_VEND1,
++				RTL826X_VEND1_LED_IO_CFG,
++				RTL826X_VEND1_LED_PARA_EN(index));
++}
++
++static int rtl826x_led_polarity_set(struct phy_device *phydev, int index,
++				    unsigned long modes)
++{
++	struct rtl826x_priv *priv = phydev->priv;
++	bool active_low = false;
++	bool active_high = false;
++	unsigned long mode;
++	u16 mask, val;
++	int ret;
++
++	if (index < 0 || index >= RTL826X_MAX_LEDS)
++		return -EINVAL;
++
++	for_each_set_bit(mode, &modes, BITS_PER_LONG) {
++		switch (mode) {
++		case PHY_LED_ACTIVE_LOW:
++			active_low = true;
++			break;
++		case PHY_LED_ACTIVE_HIGH:
++			active_high = true;
++			break;
++		default:
++			return -EINVAL;
++		}
++	}
++
++	if (active_low && active_high)
++		return -EINVAL;
++
++	mask = RTL826X_VEND1_LED_PARA_EN(index) |
++	       RTL826X_VEND1_LED_ACTIVE_L(index);
++	val = RTL826X_VEND1_LED_PARA_EN(index) |
++	      (active_low ? RTL826X_VEND1_LED_ACTIVE_L(index) : 0);
++
++	mutex_lock(&priv->led_lock);
++	ret = phy_modify_mmd(phydev, MDIO_MMD_VEND1,
++			     RTL826X_VEND1_LED_IO_CFG, mask, val);
++	if (!ret) {
++		priv->leds[index].polarity_set = true;
++		priv->leds[index].active_low = active_low;
++	}
++	mutex_unlock(&priv->led_lock);
++
++	return ret;
++}
++
++static int rtl826x_led_brightness_set(struct phy_device *phydev, u8 index,
++				      enum led_brightness value)
++{
++	struct rtl826x_priv *priv = phydev->priv;
++	bool force_on = value != LED_OFF;
++	int ret;
++
++	if (index >= RTL826X_MAX_LEDS)
++		return -EINVAL;
++
++	mutex_lock(&priv->led_lock);
++	ret = rtl826x_led_apply_force_locked(phydev, index, force_on);
++	if (!ret) {
++		priv->leds[index].configured = true;
++		priv->leds[index].force_mode = true;
++		priv->leds[index].force_on = force_on;
++	}
++	mutex_unlock(&priv->led_lock);
++
++	return ret;
++}
++
++static int rtl826x_led_hw_is_supported(struct phy_device *phydev, u8 index,
++				       unsigned long rules)
++{
++	const unsigned long supported_mask =
++		BIT(TRIGGER_NETDEV_LINK) |
++		BIT(TRIGGER_NETDEV_LINK_100) |
++		BIT(TRIGGER_NETDEV_LINK_1000) |
++		BIT(TRIGGER_NETDEV_LINK_2500) |
++		BIT(TRIGGER_NETDEV_LINK_5000) |
++		BIT(TRIGGER_NETDEV_LINK_10000) |
++		BIT(TRIGGER_NETDEV_RX) |
++		BIT(TRIGGER_NETDEV_TX);
++
++	if (index >= RTL826X_MAX_LEDS)
++		return -EINVAL;
++
++	if (rules & ~supported_mask)
++		return -EOPNOTSUPP;
++
++	return 0;
++}
++
++static int rtl826x_led_hw_control_set(struct phy_device *phydev, u8 index,
++				      unsigned long rules)
++{
++	struct rtl826x_priv *priv = phydev->priv;
++	u16 mode_l = 0, mode_h = 0;
++	int ret;
++
++	ret = rtl826x_led_hw_is_supported(phydev, index, rules);
++	if (ret)
++		return ret;
++
++	mutex_lock(&priv->led_lock);
++	if (!rules) {
++		ret = rtl826x_led_apply_force_locked(phydev, index, false);
++		if (!ret) {
++			priv->leds[index].configured = true;
++			priv->leds[index].force_mode = true;
++			priv->leds[index].force_on = false;
++		}
++		mutex_unlock(&priv->led_lock);
++		return ret;
++	}
++
++	if (rules & BIT(TRIGGER_NETDEV_LINK)) {
++		mode_l = RTL826X_VEND1_LED_MODE_L_ALL;
++		mode_h |= RTL826X_VEND1_LED_MODE_H_LINK_EN;
++	} else {
++		if (rules & BIT(TRIGGER_NETDEV_LINK_10000))
++			mode_l |= RTL826X_VEND1_LED_MODE_L_10G |
++				  RTL826X_VEND1_LED_MODE_L_10G_LITE;
++		if (rules & BIT(TRIGGER_NETDEV_LINK_5000))
++			mode_l |= RTL826X_VEND1_LED_MODE_L_5G |
++				  RTL826X_VEND1_LED_MODE_L_5G_LITE;
++		if (rules & BIT(TRIGGER_NETDEV_LINK_2500))
++			mode_l |= RTL826X_VEND1_LED_MODE_L_2500 |
++				  RTL826X_VEND1_LED_MODE_L_2500_LITE;
++		if (rules & BIT(TRIGGER_NETDEV_LINK_1000))
++			mode_l |= RTL826X_VEND1_LED_MODE_L_1000;
++		if (rules & BIT(TRIGGER_NETDEV_LINK_100))
++			mode_l |= RTL826X_VEND1_LED_MODE_L_100;
++
++		if (mode_l) {
++			mode_h |= RTL826X_VEND1_LED_MODE_H_LINK_EN;
++		} else if (rules & (BIT(TRIGGER_NETDEV_RX) |
++				    BIT(TRIGGER_NETDEV_TX))) {
++			/*
++			 * RTL826x gates TX_ACT/RX_ACT behind the MODE_L speed
++			 * enables: with MODE_L == 0 activity never blinks.
++			 * Enable all speeds in MODE_L while keeping LINK_EN=0
++			 * so activity-only rules blink without steady link-on.
++			 */
++			mode_l = RTL826X_VEND1_LED_MODE_L_ALL;
++		}
++	}
++
++	if (rules & BIT(TRIGGER_NETDEV_RX))
++		mode_h |= RTL826X_VEND1_LED_MODE_H_RX_ACT;
++	if (rules & BIT(TRIGGER_NETDEV_TX))
++		mode_h |= RTL826X_VEND1_LED_MODE_H_TX_ACT;
++
++	ret = rtl826x_led_apply_utp_locked(phydev, index, mode_l, mode_h);
++	if (!ret) {
++		priv->leds[index].configured = true;
++		priv->leds[index].force_mode = false;
++		priv->leds[index].force_on = false;
++		priv->leds[index].mode_l = mode_l;
++		priv->leds[index].mode_h = mode_h;
++	}
++	mutex_unlock(&priv->led_lock);
++
++	return ret;
++}
++
++static int rtl826x_led_hw_control_get(struct phy_device *phydev, u8 index,
++				      unsigned long *rules)
++{
++	struct rtl826x_priv *priv = phydev->priv;
++	const unsigned long all_speeds = BIT(TRIGGER_NETDEV_LINK_100) |
++					 BIT(TRIGGER_NETDEV_LINK_1000) |
++					 BIT(TRIGGER_NETDEV_LINK_2500) |
++					 BIT(TRIGGER_NETDEV_LINK_5000) |
++					 BIT(TRIGGER_NETDEV_LINK_10000);
++	int src_reg, mode_l, mode_h;
++
++	if (index >= RTL826X_MAX_LEDS)
++		return -EINVAL;
++
++	*rules = 0;
++
++	mutex_lock(&priv->led_lock);
++	src_reg = phy_read_mmd(phydev, MDIO_MMD_VEND1,
++			       RTL826X_VEND1_LED_SRC_SEL);
++	if (src_reg < 0) {
++		mutex_unlock(&priv->led_lock);
++		return src_reg;
++	}
++
++	if (((src_reg >> (index * 2)) & 0x3U) != RTL826X_VEND1_LED_SRC_UTP) {
++		mutex_unlock(&priv->led_lock);
++		return 0;
++	}
++
++	mode_l = phy_read_mmd(phydev, MDIO_MMD_VEND1,
++			      RTL826X_VEND1_LED_MODE_L(index));
++	if (mode_l < 0) {
++		mutex_unlock(&priv->led_lock);
++		return mode_l;
++	}
++
++	mode_h = phy_read_mmd(phydev, MDIO_MMD_VEND1,
++			      RTL826X_VEND1_LED_MODE_H(index));
++	mutex_unlock(&priv->led_lock);
++	if (mode_h < 0)
++		return mode_h;
++
++	if (mode_h & RTL826X_VEND1_LED_MODE_H_RX_ACT)
++		__set_bit(TRIGGER_NETDEV_RX, rules);
++	if (mode_h & RTL826X_VEND1_LED_MODE_H_TX_ACT)
++		__set_bit(TRIGGER_NETDEV_TX, rules);
++
++	if (mode_h & RTL826X_VEND1_LED_MODE_H_LINK_EN) {
++		if (mode_l & (RTL826X_VEND1_LED_MODE_L_10G |
++			      RTL826X_VEND1_LED_MODE_L_10G_LITE))
++			__set_bit(TRIGGER_NETDEV_LINK_10000, rules);
++		if (mode_l & (RTL826X_VEND1_LED_MODE_L_5G |
++			      RTL826X_VEND1_LED_MODE_L_5G_LITE))
++			__set_bit(TRIGGER_NETDEV_LINK_5000, rules);
++		if (mode_l & (RTL826X_VEND1_LED_MODE_L_2500 |
++			      RTL826X_VEND1_LED_MODE_L_2500_LITE))
++			__set_bit(TRIGGER_NETDEV_LINK_2500, rules);
++		if (mode_l & RTL826X_VEND1_LED_MODE_L_1000)
++			__set_bit(TRIGGER_NETDEV_LINK_1000, rules);
++		if (mode_l & RTL826X_VEND1_LED_MODE_L_100)
++			__set_bit(TRIGGER_NETDEV_LINK_100, rules);
++
++		if ((*rules & all_speeds) == all_speeds)
++			__set_bit(TRIGGER_NETDEV_LINK, rules);
++	}
++
++	return 0;
++}
++
++static int rtl826x_led_restore(struct phy_device *phydev)
++{
++	struct rtl826x_priv *priv = phydev->priv;
++	int ret = 0;
++	u8 i;
++
++	if (!priv)
++		return 0;
++
++	mutex_lock(&priv->led_lock);
++	for (i = 0; i < RTL826X_MAX_LEDS; i++) {
++		const struct rtl826x_led_cfg *cfg = &priv->leds[i];
++
++		if (cfg->polarity_set) {
++			u16 mask = RTL826X_VEND1_LED_PARA_EN(i) |
++				   RTL826X_VEND1_LED_ACTIVE_L(i);
++			u16 val = RTL826X_VEND1_LED_PARA_EN(i) |
++				  (cfg->active_low ?
++				   RTL826X_VEND1_LED_ACTIVE_L(i) : 0);
++
++			ret = phy_modify_mmd(phydev, MDIO_MMD_VEND1,
++					     RTL826X_VEND1_LED_IO_CFG,
++					     mask, val);
++			if (ret)
++				break;
++		}
++
++		if (!cfg->configured)
++			continue;
++
++		if (cfg->force_mode)
++			ret = rtl826x_led_apply_force_locked(phydev, i,
++							     cfg->force_on);
++		else
++			ret = rtl826x_led_apply_utp_locked(phydev, i,
++							   cfg->mode_l,
++							   cfg->mode_h);
++		if (ret)
++			break;
++	}
++	mutex_unlock(&priv->led_lock);
++
++	return ret;
++}
++
+ static int rtl826x_config_init(struct phy_device *phydev)
+ {
+ 	struct rtl826x_priv *priv = phydev->priv;
+@@ -4029,7 +4397,11 @@
+ 		priv->rtk_serdes_deadline = 0;
+ 	}
+ 
+-	return rtl826x_config_serdes_polarity(phydev);
++	ret = rtl826x_config_serdes_polarity(phydev);
++	if (ret)
++		return ret;
++
++	return rtl826x_led_restore(phydev);
+ }
+ 
+ static int rtl826x_suspend(struct phy_device *phydev)
+@@ -4907,6 +5279,11 @@
+ 		.get_wol        = rtl826x_get_wol,
+ 		.get_tunable    = rtl826x_get_tunable,
+ 		.set_tunable    = rtl826x_set_tunable,
++		.led_brightness_set = rtl826x_led_brightness_set,
++		.led_hw_is_supported = rtl826x_led_hw_is_supported,
++		.led_hw_control_set = rtl826x_led_hw_control_set,
++		.led_hw_control_get = rtl826x_led_hw_control_get,
++		.led_polarity_set = rtl826x_led_polarity_set,
+ 	}, {
+ 		.name           = "RTL8254B 5Gbps PHY",
+ 		.config_init    = rtl826x_config_init,
+@@ -4924,6 +5301,11 @@
+ 		.get_wol        = rtl826x_get_wol,
+ 		.get_tunable    = rtl826x_get_tunable,
+ 		.set_tunable    = rtl826x_set_tunable,
++		.led_brightness_set = rtl826x_led_brightness_set,
++		.led_hw_is_supported = rtl826x_led_hw_is_supported,
++		.led_hw_control_set = rtl826x_led_hw_control_set,
++		.led_hw_control_get = rtl826x_led_hw_control_get,
++		.led_polarity_set = rtl826x_led_polarity_set,
+ 	}, {
+ 		.name           = "RTL8261BE 10Gbps PHY",
+ 		.config_init    = rtl826x_config_init,
+@@ -4942,6 +5324,11 @@
+ 		.get_wol        = rtl826x_get_wol,
+ 		.get_tunable    = rtl826x_get_tunable,
+ 		.set_tunable    = rtl826x_set_tunable,
++		.led_brightness_set = rtl826x_led_brightness_set,
++		.led_hw_is_supported = rtl826x_led_hw_is_supported,
++		.led_hw_control_set = rtl826x_led_hw_control_set,
++		.led_hw_control_get = rtl826x_led_hw_control_get,
++		.led_polarity_set = rtl826x_led_polarity_set,
+ 	}, {
+ 		.name           = "RTL8261N 10Gbps PHY",
+ 		.config_init    = rtl826x_config_init,
+@@ -4960,6 +5347,11 @@
+ 		.get_wol        = rtl826x_get_wol,
+ 		.get_tunable    = rtl826x_get_tunable,
+ 		.set_tunable    = rtl826x_set_tunable,
++		.led_brightness_set = rtl826x_led_brightness_set,
++		.led_hw_is_supported = rtl826x_led_hw_is_supported,
++		.led_hw_control_set = rtl826x_led_hw_control_set,
++		.led_hw_control_get = rtl826x_led_hw_control_get,
++		.led_polarity_set = rtl826x_led_polarity_set,
+ 	}, {
+ 		PHY_ID_MATCH_EXACT(RTL_8264),
+ 		.name           = "RTL8264 10Gbps PHY",
+@@ -4977,6 +5369,11 @@
+ 		.get_wol        = rtl826x_get_wol,
+ 		.get_tunable    = rtl826x_get_tunable,
+ 		.set_tunable    = rtl826x_set_tunable,
++		.led_brightness_set = rtl826x_led_brightness_set,
++		.led_hw_is_supported = rtl826x_led_hw_is_supported,
++		.led_hw_control_set = rtl826x_led_hw_control_set,
++		.led_hw_control_get = rtl826x_led_hw_control_get,
++		.led_polarity_set = rtl826x_led_polarity_set,
+ 	}, {
+ 		.name           = "RTL8264B 10Gbps PHY",
+ 		.config_init    = rtl826x_config_init,
+@@ -4994,6 +5391,11 @@
+ 		.get_wol        = rtl826x_get_wol,
+ 		.get_tunable    = rtl826x_get_tunable,
+ 		.set_tunable    = rtl826x_set_tunable,
++		.led_brightness_set = rtl826x_led_brightness_set,
++		.led_hw_is_supported = rtl826x_led_hw_is_supported,
++		.led_hw_control_set = rtl826x_led_hw_control_set,
++		.led_hw_control_get = rtl826x_led_hw_control_get,
++		.led_polarity_set = rtl826x_led_polarity_set,
+ 	},
+ };
+ 

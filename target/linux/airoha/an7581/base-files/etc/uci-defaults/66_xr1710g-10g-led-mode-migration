@@ -1,0 +1,54 @@
+#!/bin/sh
+# Drop unsupported link_10 from preserved XR1710G 10G PHY (RTL8261BE) yellow LED configs.
+
+# shellcheck disable=SC1090,SC1091
+. "${IPKG_INSTROOT:-}/lib/functions.sh"
+
+case "$(board_name)" in
+gemtek,xr1710g*) ;;
+*) exit 0 ;;
+esac
+
+[ -e "${IPKG_INSTROOT:-}/etc/config/system" ] || exit 0
+
+changed=0
+
+strip_link10() {
+	local cfg="$1"
+	local sysfs mode new_mode item had_link10
+
+	config_get sysfs "$cfg" sysfs
+	case "$sysfs" in
+	mt7530-0:05:yellow:lan-2|mt7530-0:08:yellow:wan) ;;
+	*) return 0 ;;
+	esac
+
+	config_get mode "$cfg" mode
+	[ -n "$mode" ] || return 0
+
+	new_mode=''
+	had_link10=0
+	set -f
+	# shellcheck disable=SC2086
+	for item in $mode; do
+		if [ "$item" = 'link_10' ]; then
+			had_link10=1
+		else
+			new_mode="${new_mode:+$new_mode }$item"
+		fi
+	done
+	set +f
+
+	[ "$had_link10" = 1 ] || return 0
+
+	uci -q delete "system.${cfg}.mode"
+	[ -n "$new_mode" ] && uci -q set "system.${cfg}.mode=${new_mode}"
+	changed=1
+}
+
+config_load system
+config_foreach strip_link10 led
+
+[ "$changed" = 1 ] && uci commit system
+
+exit 0

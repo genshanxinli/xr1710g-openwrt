@@ -85,6 +85,7 @@
 			color = <LED_COLOR_ID_YELLOW>;
 			function = LED_FUNCTION_LAN;
 			function-enumerator = <2>;
+			active-low;
 		};
 
 		led@3 {
@@ -92,6 +93,7 @@
 			color = <LED_COLOR_ID_GREEN>;
 			function = LED_FUNCTION_LAN;
 			function-enumerator = <2>;
+			active-low;
 		};
 	};
 };
@@ -108,12 +110,14 @@
 			reg = <2>;
 			color = <LED_COLOR_ID_YELLOW>;
 			function = LED_FUNCTION_WAN;
+			active-low;
 		};
 
 		led@3 {
 			reg = <3>;
 			color = <LED_COLOR_ID_GREEN>;
 			function = LED_FUNCTION_WAN;
+			active-low;
 		};
 	};
 };
