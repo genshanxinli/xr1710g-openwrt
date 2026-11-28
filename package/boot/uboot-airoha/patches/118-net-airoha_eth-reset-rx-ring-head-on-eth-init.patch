@@ -1,32 +1,142 @@
 From: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
-Date: Sat, 28 Nov 2026 13:20:00 +0800
-Subject: [PATCH] net: airoha_eth: quiesce QDMA and sync RX ring head from HW on eth init
+Date: Sat, 28 Nov 2026 14:40:00 +0800
+Subject: [PATCH] net: airoha_eth: gate GDM ingress and drain RX ring across eth stop/init
 
-airoha_eth_init() reinitializes all RX descriptors via
-airoha_qdma_init_rx_desc(), clearing QDMA_DESC_DONE_MASK across the
-ring, without first ensuring TX/RX DMA has drained and without syncing
-q->head and REG_RX_CPU_IDX(0) to the hardware REG_RX_DMA_IDX(0). After
-eth_halt() and a subsequent eth_init(), hardware REG_RX_DMA_IDX(0)
-retains its previous non-zero ring position (and cannot be relied upon
-to reset via software write), leaving software q->head out of sync with
-hardware DMA and causing airoha_eth_recv() to stall returning -EAGAIN.
+On AN7581/AN7583 silicon, QDMA RX hardware prefetches up to 2 descriptors
+into an internal FIFO ahead of packet reception and retains that state
+across RX_DMA_EN disable/re-enable transitions. Calling
+airoha_qdma_init_rx_desc() or overwriting q->head from REG_RX_DMA_IDX(0)
+on subsequent airoha_eth_init() calls breaks synchronization with the
+prefetched slots, losing or misaligning the first frames after restart.
 
-Add airoha_qdma_stop_dma() to clear TX/RX DMA enable bits and poll until
-GLOBAL_CFG_TX_DMA_BUSY_MASK | GLOBAL_CFG_RX_DMA_BUSY_MASK deassert
-(bounded 50 ms timeout with warning). Call it in both airoha_eth_stop()
-and airoha_eth_init() before resetting RX descriptors, then read
-REG_RX_DMA_IDX(qid) to align q->head and reprogram REG_RX_CPU_IDX(qid)
-to (q->head + q->ndesc - 1) % q->ndesc before re-enabling DMA.
+Furthermore, airoha_fe_maccr_init() leaves REG_GDM_FWD_CFG(port->id)
+forwarding all queues to FE_PSE_PORT_CDM1 (0) before QDMA RX DMA is
+enabled or after airoha_eth_stop(), allowing LAN background frames to
+accumulate in PSE/CDM1 and keep GLOBAL_CFG_RX_DMA_BUSY_MASK stuck high.
+
+Fix both issues by gating GDM ingress with FE_PSE_PORT_DROP whenever the
+port is idle and preserving RX ring state across start/stop cycles:
+- Add airoha_fe_set_gdm_fwd() and initialize GDM1/port forwarding to
+  FE_PSE_PORT_DROP (keeping GDM_PAD_EN) until airoha_eth_init() enables
+  QDMA and switches the active port to FE_PSE_PORT_CDM1.
+- Track one-time RX descriptor ring setup via qdma->rx_init_done and
+  only invoke airoha_qdma_init_rx_desc() on the first airoha_eth_init().
+- Extract airoha_qdma_free_rx_desc() to share the exact even/odd 64B
+  cacheline descriptor recycling logic between arht_eth_free_pkt() and a
+  new bounded airoha_qdma_drain_rx() helper.
+- In airoha_eth_stop(), switch GDM to FE_PSE_PORT_DROP first, drain the
+  RX ring while RX_DMA_EN is still active to clear any full-ring backlog,
+  wait for DMA idle via airoha_qdma_stop_dma(), and drain any tail frames
+  that landed in the shutdown window.
 
 Origin: local, xr1710g (#386, #441)
 Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
 ---
 --- a/drivers/net/airoha_eth.c
 +++ b/drivers/net/airoha_eth.c
-@@ -1006,6 +1006,21 @@
+@@ -318,6 +318,8 @@
+ 		void *desc;
+ 		void *q;
+ 	} hfwd;
++
++	bool rx_init_done;
+ };
+ 
+ struct airoha_gdm_port {
+@@ -444,13 +446,26 @@
+ 	}
+ }
+ 
++static void airoha_fe_set_gdm_fwd(struct airoha_eth *eth, int port_id,
++				  u32 pse_port)
++{
++	u32 val = GDM_PAD_EN |
++		  FIELD_PREP(GDM_UCFQ_MASK, pse_port) |
++		  FIELD_PREP(GDM_BCFQ_MASK, pse_port) |
++		  FIELD_PREP(GDM_MCFQ_MASK, pse_port) |
++		  FIELD_PREP(GDM_OCFQ_MASK, pse_port);
++
++	airoha_fe_wr(eth, REG_GDM_FWD_CFG(port_id), val);
++}
++
+ static void airoha_fe_maccr_init(struct airoha_gdm_port *port)
+ {
+ 	/*
+ 	 * Disable any kind of CRC drop or offload.
+ 	 * Enable padding of short TX packets to 60 bytes.
++	 * Keep GDM ingress dropped until airoha_eth_init() enables QDMA.
+ 	 */
+-	airoha_fe_wr(port->qdma->eth, REG_GDM_FWD_CFG(port->id), GDM_PAD_EN);
++	airoha_fe_set_gdm_fwd(port->qdma->eth, port->id, FE_PSE_PORT_DROP);
+ }
+ 
+ static int airoha_fe_init(struct airoha_gdm_port *port)
+@@ -761,6 +776,9 @@
+ 
+ 	mdelay(20);
+ 
++	/* Drop switch-side GDM1 ingress before enabling switch/QDMA */
++	airoha_fe_set_gdm_fwd(eth, 1, FE_PSE_PORT_DROP);
++
+ 	for (i = 0; i < ARRAY_SIZE(eth->qdma); i++) {
+ 		ret = airoha_qdma_init(dev, eth, &eth->qdma[i]);
+ 		if (ret)
+@@ -1006,6 +1024,73 @@
  	return 0;
  }
  
++static void airoha_qdma_free_rx_desc(struct airoha_qdma *qdma,
++				     struct airoha_queue *q)
++{
++	int qid = q - &qdma->q_rx[0];
++
++	/*
++	 * Due to cpu cache issue the airoha_qdma_reset_rx_desc() function
++	 * will always touch 2 descriptors placed on the same cacheline:
++	 *   - if current descriptor is even, then current and next
++	 *     descriptors will be touched
++	 *   - if current descriptor is odd, then current and previous
++	 *     descriptors will be touched
++	 *
++	 * Thus, to prevent possible destroying of rx queue, we should:
++	 *   - do nothing in the even descriptor case,
++	 *   - utilize 2 descriptors (current and previous one) in the
++	 *     odd descriptor case.
++	 *
++	 * WARNING: Observations shows that PKTBUFSRX must be even and
++	 *          larger than 7 for reliable driver operations.
++	 */
++	if (q->head & 0x01) {
++		airoha_qdma_reset_rx_desc(q, q->head - 1);
++		airoha_qdma_reset_rx_desc(q, q->head);
++
++		airoha_qdma_rmw(qdma, REG_RX_CPU_IDX(qid), RX_RING_CPU_IDX_MASK,
++				FIELD_PREP(RX_RING_CPU_IDX_MASK, q->head));
++	}
++
++	q->head = (q->head + 1) % q->ndesc;
++}
++
++static void airoha_qdma_drain_rx(struct airoha_qdma *qdma)
++{
++	struct airoha_queue *q = &qdma->q_rx[0];
++	int i;
++
++	if (!qdma->rx_init_done)
++		return;
++
++	for (i = 0; i < q->ndesc; i++) {
++		struct airoha_qdma_desc *desc = &q->desc[q->head];
++
++		dma_unmap_unaligned(virt_to_phys(desc), sizeof(*desc),
++				    DMA_FROM_DEVICE);
++		if (!(le32_to_cpu(READ_ONCE(desc->ctrl)) & QDMA_DESC_DONE_MASK))
++			break;
++
++		airoha_qdma_free_rx_desc(qdma, q);
++	}
++}
++
 +static void airoha_qdma_stop_dma(struct airoha_qdma *qdma)
 +{
 +	u32 status;
@@ -45,29 +155,83 @@ Signed-off-by: genshanxinli <127909456+genshanxinli@users.noreply.github.com>
  static int airoha_eth_init(struct udevice *dev)
  {
  	struct airoha_gdm_port *port = dev_get_priv(dev);
-@@ -1016,7 +1031,14 @@
+@@ -1016,7 +1101,14 @@
  	qid = 0;
  	q = &qdma->q_rx[qid];
  
+-	airoha_qdma_init_rx_desc(q);
++	airoha_fe_set_gdm_fwd(qdma->eth, port->id, FE_PSE_PORT_DROP);
 +	airoha_qdma_stop_dma(qdma);
- 	airoha_qdma_init_rx_desc(q);
-+	q->head = FIELD_GET(RX_RING_DMA_IDX_MASK,
-+			    airoha_qdma_rr(qdma, REG_RX_DMA_IDX(qid))) %
-+		  q->ndesc;
-+	airoha_qdma_rmw(qdma, REG_RX_CPU_IDX(qid), RX_RING_CPU_IDX_MASK,
-+			FIELD_PREP(RX_RING_CPU_IDX_MASK,
-+				   (q->head + q->ndesc - 1) % q->ndesc));
++	if (!qdma->rx_init_done) {
++		airoha_qdma_init_rx_desc(q);
++		qdma->rx_init_done = true;
++	} else {
++		airoha_qdma_drain_rx(qdma);
++	}
  
  	airoha_qdma_set(qdma, REG_QDMA_GLOBAL_CFG,
  			GLOBAL_CFG_TX_DMA_EN_MASK |
-@@ -1082,9 +1104,7 @@
+@@ -1065,6 +1157,8 @@
+ 	}
+ #endif
+ 
++	airoha_fe_set_gdm_fwd(qdma->eth, port->id, FE_PSE_PORT_CDM1);
++
+ 	return 0;
+ }
+ 
+@@ -1073,6 +1167,8 @@
+ 	struct airoha_gdm_port *port = dev_get_priv(dev);
+ 	struct airoha_qdma *qdma = port->qdma;
+ 
++	airoha_fe_set_gdm_fwd(qdma->eth, port->id, FE_PSE_PORT_DROP);
++
+ #if defined(CONFIG_PCS_AIROHA)
+ 	if (port->id > 1) {
+ 		if (port->phydev)
+@@ -1082,9 +1178,9 @@
  	}
  #endif
  
 -	airoha_qdma_clear(qdma, REG_QDMA_GLOBAL_CFG,
 -			  GLOBAL_CFG_TX_DMA_EN_MASK |
 -			  GLOBAL_CFG_RX_DMA_EN_MASK);
++	airoha_qdma_drain_rx(qdma);
 +	airoha_qdma_stop_dma(qdma);
++	airoha_qdma_drain_rx(qdma);
  }
  
  static int airoha_eth_send(struct udevice *dev, void *packet, int length)
+@@ -1193,31 +1289,7 @@
+ 	qid = 0;
+ 	q = &qdma->q_rx[qid];
+ 
+-	/*
+-	 * Due to cpu cache issue the airoha_qdma_reset_rx_desc() function
+-	 * will always touch 2 descriptors placed on the same cacheline:
+-	 *   - if current descriptor is even, then current and next
+-	 *     descriptors will be touched
+-	 *   - if current descriptor is odd, then current and previous
+-	 *     descriptors will be touched
+-	 *
+-	 * Thus, to prevent possible destroying of rx queue, we should:
+-	 *   - do nothing in the even descriptor case,
+-	 *   - utilize 2 descriptors (current and previous one) in the
+-	 *     odd descriptor case.
+-	 *
+-	 * WARNING: Observations shows that PKTBUFSRX must be even and
+-	 *          larger than 7 for reliable driver operations.
+-	 */
+-	if (q->head & 0x01) {
+-		airoha_qdma_reset_rx_desc(q, q->head - 1);
+-		airoha_qdma_reset_rx_desc(q, q->head);
+-
+-		airoha_qdma_rmw(qdma, REG_RX_CPU_IDX(qid), RX_RING_CPU_IDX_MASK,
+-				FIELD_PREP(RX_RING_CPU_IDX_MASK, q->head));
+-	}
+-
+-	q->head = (q->head + 1) % q->ndesc;
++	airoha_qdma_free_rx_desc(qdma, q);
+ 
+ 	return 0;
+ }
